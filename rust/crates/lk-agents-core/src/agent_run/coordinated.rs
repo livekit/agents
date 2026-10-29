@@ -48,7 +48,13 @@ pub enum StepVerdict {
 impl AgentRun {
     /// The coordinator's verdict on a settled step: it may end or forbid what the run would do
     /// next, never undo a failure or an accepted output.
-    pub(super) fn verdict(&mut self, step: StepId, verdict: StepVerdict, now: Ts, fx: &mut Vec<Effect>) {
+    pub(super) fn verdict(
+        &mut self,
+        step: StepId,
+        verdict: StepVerdict,
+        now: Ts,
+        fx: &mut Vec<Effect>,
+    ) {
         if !matches!(&self.phase, Phase::Settling { step: s, .. } if *s == step) {
             return;
         }

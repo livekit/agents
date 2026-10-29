@@ -37,7 +37,7 @@ use serde_json::{Map, Value};
 
 use crate::agent::{self, AgentError, first_string_parameter};
 use crate::request::{RequestSnapshot, plan_request};
-use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, ToolCalls};
+use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
 use crate::tool_outcome;
 use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
@@ -67,7 +67,8 @@ pub struct RunInput {
     pub delegated: bool,
     /// The coordinator reading the outcome table.
     pub mode: tool_outcome::Mode,
-    /// The agent's model as the runtime resolved it; an invocation without one cannot run a step.
+    /// The agent's model as the runtime resolved it; an invocation opening on a message cannot
+    /// run a step without one (a coordinated one's coordinator starts its streams).
     pub llm: Option<lk_agents_abi::resources::LlmRef>,
     /// Maps supplied instants to wall stamps on recorded items.
     pub wall: WallAnchor,
@@ -318,10 +319,12 @@ enum Phase {
         validation: ValidationId,
         text: String,
     },
-    /// Coordinated: the step settled; the coordinator's verdict decides `next`.
+    /// Coordinated: the step settled; the coordinator's verdict decides `next`. `calls` are the
+    /// step's calls as recorded, in model order.
     Settling {
         step: StepId,
         next: Next,
+        calls: Vec<Recorded>,
     },
     /// Settling cancelled work after `error`.
     Aborting {
@@ -523,10 +526,16 @@ impl AgentRun {
                 }
             }
             Event::ToolSettled { call, outcome } => {
-                let cancelled = if let Some(a) = self.phase.acting() {
-                    a.calls.body_settled(call, outcome, &mut fx)
-                } else {
-                    false
+                // On a call, the body's first update answers its step; the body runs on detached.
+                let detaches = self.input.mode == tool_outcome::Mode::Voice
+                    && matches!(outcome, ToolOutcome::Update { .. });
+                let cancelled = match self.phase.acting() {
+                    Some(a) if detaches => {
+                        a.calls.detached(call, outcome, &mut fx);
+                        false
+                    }
+                    Some(a) => a.calls.body_settled(call, outcome, &mut fx),
+                    None => false,
                 };
                 if cancelled {
                     self.abort(RunError::Cancelled, now, &mut fx);
@@ -567,9 +576,9 @@ impl AgentRun {
         if !matches!(self.phase, Phase::Idle) {
             return;
         }
-        let Some(_) = &self.input.llm else {
+        if self.input.llm.is_none() && !self.input.opening.coordinated() {
             return self.finish(Err(RunError::NoModel), fx);
-        };
+        }
         self.history = std::mem::take(&mut self.input.history);
         let message = match &mut self.input.opening {
             Opening::Message(message) => message.clone(),
@@ -655,11 +664,6 @@ impl AgentRun {
         now: Ts,
         fx: &mut Vec<Effect>,
     ) {
-        let Some(llm) = self.input.llm.as_ref().map(|l| l.id) else {
-            return self.finish(Err(RunError::NoModel), fx);
-        };
-        let instructions =
-            agent::instructions_with(&self.agent, dynamic.as_deref().unwrap_or_default());
         let mut tools: Vec<ToolSpec> = Vec::new();
         let mut phrase = None;
         match &purpose {
@@ -685,6 +689,11 @@ impl AgentRun {
             self.phase = Phase::Requesting(step, Acting::new(&self.approval_answers));
             return;
         }
+        let Some(llm) = self.input.llm.as_ref().map(|l| l.id) else {
+            return self.finish(Err(RunError::NoModel), fx);
+        };
+        let instructions =
+            agent::instructions_with(&self.agent, dynamic.as_deref().unwrap_or_default());
         let planned = plan_request(RequestSnapshot {
             history: &self.history,
             instructions: &instructions,
@@ -901,7 +910,8 @@ impl AgentRun {
         let mut terminal: Option<Terminal> = None;
         let mut replies = false;
         let mut items = Vec::with_capacity(recorded.len() * 2);
-        for Recorded { id, item, settled } in recorded {
+        for Recorded { id, item, settled } in &recorded {
+            let (id, item) = (*id, item.clone());
             let outcome = &settled.outcome;
             let shape = tool_outcome::shape(outcome, self.input.mode);
             let mut text = tool_outcome::delivered(outcome).unwrap_or(shape.text);
@@ -966,7 +976,30 @@ impl AgentRun {
         let continues = matches!(next, Next::Continue);
         fx.push(Effect::StepSettled { step, items: items.clone(), continues });
         self.history.extend(items);
-        self.phase = Phase::Settling { step, next };
+        self.phase = Phase::Settling { step, next, calls: recorded };
+    }
+
+    /// The current step's call the model made as `call_id` (the latest of that id).
+    pub fn step_call_id(&self, call_id: &str) -> Option<CallId> {
+        match &self.phase {
+            Phase::Requesting(_, a) | Phase::Acting(a) => a.calls.find(call_id),
+            _ => None,
+        }
+    }
+
+    /// A call of the current step as recorded (its approval marks included), with its settlement
+    /// once it has one; a settled step's calls stay readable until the coordinator's verdict.
+    pub fn step_call(&self, call: CallId) -> Option<(&FunctionCall, Option<&Settled>)> {
+        match &self.phase {
+            Phase::Requesting(_, a) | Phase::Acting(a) => {
+                Some((a.calls.item(call)?, a.calls.settled(call)))
+            }
+            Phase::Settling { calls, .. } => {
+                let r = calls.iter().find(|r| r.id == call)?;
+                Some((&r.item, Some(&r.settled)))
+            }
+            _ => None,
+        }
     }
 
     fn proceed(&mut self, next: Next, now: Ts, fx: &mut Vec<Effect>) {

@@ -297,6 +297,15 @@ impl ToolCalls {
         cancelled
     }
 
+    /// A body that released its step with its first update (`ctx.update()` on a call): the
+    /// update answers the call, and the body runs on outside the step.
+    pub fn detached<E: From<Effect>>(&mut self, id: CallId, update: ToolOutcome, fx: &mut Vec<E>) {
+        let Some(call) = self.call_mut(id) else { return };
+        if matches!(call.phase, Phase::Running { .. }) {
+            settle(call, update, false, fx);
+        }
+    }
+
     /// The parent's verdict on a `final_result` candidate: `None` accepted.
     pub(crate) fn final_settled<E: From<Effect>>(
         &mut self,
@@ -334,6 +343,11 @@ impl ToolCalls {
             }
         }
         owed
+    }
+
+    /// The latest call the model made as `call_id`.
+    pub fn find(&self, call_id: &str) -> Option<CallId> {
+        self.calls.iter().rev().find(|c| c.item.call_id == call_id).map(|c| c.id)
     }
 
     /// The call as recorded so far, its approval marks included.

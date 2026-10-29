@@ -4,7 +4,11 @@
 use super::*;
 
 fn coordinated(agent: AgentDefinition) -> Driver {
-    let input = RunInput {
+    Driver::with_input(agent, coordinated_input())
+}
+
+fn coordinated_input() -> RunInput {
+    RunInput {
         invocation_id: "reply_1".into(),
         opening: Opening::Coordinated { approval_answers: Default::default() },
         history: vec![user("msg_1", "Book me Monday").into()],
@@ -14,8 +18,7 @@ fn coordinated(agent: AgentDefinition) -> Driver {
         llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
         wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
         cleanup_timeout: Duration::from_secs(5),
-    };
-    Driver::with_input(agent, input)
+    }
 }
 
 struct Plan {
@@ -147,4 +150,45 @@ fn an_accepted_output_survives_an_interrupting_verdict() {
     assert!(!continues);
     d.send(Event::StepVerdict { step, verdict: StepVerdict::Interrupted });
     assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Validated(validation) });
+}
+
+// Catches: a coordinated run refusing to start without a model of its own (a realtime session's
+// coordinator streams from its server), or a call's first update leaving its step unsettled.
+#[test]
+fn a_call_detaching_with_its_first_update_settles_its_step() {
+    let mut input = coordinated_input();
+    input.llm = None;
+    let mut d = Driver::with_input(text_agent(vec![string_tool("find_slot", "day")]), input);
+    let request = d.plans()[0].request;
+    d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
+    d.run_tools(|_| ToolOutcome::Update {
+        message: "Still looking.".into(),
+        raw: "looking".into(),
+    });
+    let (_, items, continues) = d.step_settled();
+    assert!(continues);
+    assert_eq!(transcript(&items)[1], ("output".to_owned(), "Still looking.".to_owned()));
+}
+
+// Catches: a coordinator unable to find a call it fed by the model's id, or a call that settled
+// with the step (a validated `final_result`) unreadable before the verdict.
+#[test]
+fn a_settled_steps_calls_stay_readable_until_the_verdict() {
+    let mut d =
+        coordinated(agent(vec![], OutputSpec::Structured { schema: json!({"type": "integer"}) }));
+    let request = d.plans()[0].request;
+    d.respond(request, "", &[("final_result", json!({"result": 4}))]);
+    let call = d.run.step_call_id(&format!("call_{}_0", request.0)).expect("the call");
+    assert!(matches!(d.run.step_call(call), Some((_, None))), "validating");
+    let validation = (d.effects.iter())
+        .find_map(|e| match e {
+            Effect::OutputValidate { validation, .. } => Some(*validation),
+            _ => None,
+        })
+        .expect("the candidate is validated");
+    d.send(Event::OutputValidated { validation, verdict: OutputVerdict::Accepted { text: None } });
+    d.step_settled();
+    let (item, settled) = d.run.step_call(call).expect("readable until the verdict");
+    assert_eq!(item.name, "final_result");
+    assert!(settled.is_some());
 }
