@@ -53,7 +53,7 @@ pub struct Turn {
     thread: Thread,
     lane: String,
     host: Arc<dyn TurnHost>,
-    /// The host stream's clock, for the bound on closing it.
+    /// The turn's clock: the machine's waits and the bound on closing the host stream.
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
     stream: Option<StreamInfo>,
@@ -136,7 +136,8 @@ impl Turn {
     ) -> Result<TurnResult, StorageError> {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
         let caller_history = caller_history_of(&message)?;
-        let epoch = tokio::time::Instant::now();
+        let epoch = self.clock.now();
+        let elapsed = || self.clock.now().saturating_duration_since(epoch);
         let wall = lk_agents_abi::unix_now();
         let msg = Message::from_a2a(&message, wall, None)?;
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
@@ -150,7 +151,7 @@ impl Turn {
         );
         let lane = self.thread.lane(&self.lane);
         let mut call = Call { lane, run: None, lease: None, handler: None, caller_history };
-        let mut effects = machine.handle(Event::Start, epoch.elapsed());
+        let mut effects = machine.handle(Event::Start, elapsed());
         loop {
             match effects.pop() {
                 Some(Effect::Execute { id, operation }) => {
@@ -158,18 +159,18 @@ impl Turn {
                     if result.is_err() {
                         self.close_handler(&mut call).await;
                     }
-                    effects = machine.handle(Event::Completed { id, result }, epoch.elapsed());
+                    effects = machine.handle(Event::Completed { id, result }, elapsed());
                 }
                 Some(Effect::Finished(answer)) => {
-                    let now = epoch.elapsed();
+                    let now = elapsed();
                     return answer.map(|answer| machine.result(answer, self.thread.id(), now));
                 }
                 None => {
                     let at = machine.wake_at().ok_or_else(|| {
                         StorageError::Invalid("the A2A task stalled with nothing to wait on".into())
                     })?;
-                    tokio::time::sleep_until(epoch + at).await;
-                    effects = machine.handle(Event::Wake, epoch.elapsed());
+                    self.clock.wait_until(epoch.saturating_add(at)).await;
+                    effects = machine.handle(Event::Wake, elapsed());
                 }
             }
         }
@@ -443,6 +444,7 @@ impl Turn {
         };
         match lease {
             Some(lease) => tokio::select! {
+                biased;
                 event = read => event,
                 e = lease.lost() => Err(e),
             },
