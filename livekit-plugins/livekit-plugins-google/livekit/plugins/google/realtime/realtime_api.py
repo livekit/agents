@@ -341,14 +341,14 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
-        if use_vertexai and is_given(tool_response_scheduling):
-            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
                 if use_vertexai
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
+        if use_vertexai and "3.8" not in model and is_given(tool_response_scheduling):
+            _warn_vertex_scheduling_unsupported()
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -568,6 +568,7 @@ class RealtimeSession(llm.RealtimeSession):
         # a context_update changed the instructions/tools of this session. a resumed
         # session keeps the ones it was created with, so they are sent again on resume
         self._context_updated = False
+        self._pending_tool_continuation = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -612,6 +613,7 @@ class RealtimeSession(llm.RealtimeSession):
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
+        self._pending_tool_continuation = False
 
     def update_options(
         self,
@@ -640,7 +642,7 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
-            if self._opts.vertexai:
+            if self._opts.vertexai and "3.8" not in self._opts.model:
                 _warn_vertex_scheduling_unsupported()
             # no need to restart
 
@@ -749,9 +751,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
+            supports_scheduling = not self._opts.vertexai or "3.8" in self._opts.model
             supports_silent_scheduling = (
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+                supports_scheduling and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             )
             if not supports_silent_scheduling and (
                 silenced := [
@@ -770,6 +772,7 @@ class RealtimeSession(llm.RealtimeSession):
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
+                supports_scheduling=supports_scheduling,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
                 synthetic_call_ids=self._synthetic_call_ids,
@@ -1021,6 +1024,7 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            self._pending_tool_continuation = False
             session = None
             try:
                 config = self._build_connect_config()
@@ -1195,6 +1199,19 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
+                    if (
+                        self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+                        and not any(
+                            r.scheduling == types.FunctionResponseScheduling.INTERRUPT
+                            for r in msg.function_responses
+                        )
+                        and not all(
+                            r.scheduling == types.FunctionResponseScheduling.SILENT
+                            for r in msg.function_responses
+                        )
+                    ):
+                        # a WHEN_IDLE continuation will follow; keep the filler audio playing
+                        self._pending_tool_continuation = True
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1445,6 +1462,8 @@ class RealtimeSession(llm.RealtimeSession):
             generation_event.user_initiated = True
             self._pending_generation_fut.set_result(generation_event)
             self._pending_generation_fut = None
+        elif self._pending_tool_continuation:
+            self._pending_tool_continuation = False
         else:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
@@ -1599,6 +1618,7 @@ class RealtimeSession(llm.RealtimeSession):
             gen.audio_ch.close()
 
     def _handle_input_speech_started(self) -> None:
+        self._pending_tool_continuation = False
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_speech_stopped(self) -> None:
@@ -1624,6 +1644,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         logger.warning("rejecting tool call requested while tool_choice='none'", extra=extra)
+        supports_scheduling = not self._opts.vertexai or "3.8" in self._opts.model
         responses = [
             create_function_response(
                 llm.FunctionCallOutput(
@@ -1633,6 +1654,7 @@ class RealtimeSession(llm.RealtimeSession):
                     is_error=True,
                 ),
                 vertexai=self._opts.vertexai,
+                supports_scheduling=supports_scheduling,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 send_id=bool(fnc_call.id),
             )
@@ -1669,6 +1691,8 @@ class RealtimeSession(llm.RealtimeSession):
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
+        # the cancelled call will not produce a continuation turn
+        self._pending_tool_continuation = False
 
     def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
         current_gen = self._current_generation
