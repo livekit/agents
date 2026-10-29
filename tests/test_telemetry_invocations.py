@@ -1,4 +1,4 @@
-"""Standard SDK spans inside application callbacks through the generated AgentHost adapter."""
+"""Standard SDK spans inside application callbacks through the generated AgentCallbacks adapter."""
 
 from __future__ import annotations
 

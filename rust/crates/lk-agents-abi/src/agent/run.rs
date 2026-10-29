@@ -1,13 +1,13 @@
 //! One agent invocation as the host runs it (agents.md "Agent", "Streaming runs"): the request,
 //! the updates it streams, its settled result, and [`AgentRunner`], the class that runs an
-//! [`AgentDefinition`] against its model and [`AgentHost`]. `lk-agents-core`'s `AgentRun` decides;
-//! the runtime implements the runner.
+//! [`AgentDefinition`] against its model and [`AgentCallbacks`]. `lk-agents-core`'s `AgentRun`
+//! decides; the runtime implements the runner.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{AgentDefinition, AgentHost};
+use super::{AgentCallbacks, AgentDefinition};
 use crate::utils::stream::StreamSource;
 use crate::{ApiConnectOptions, ChatItem, HostRef, Llm};
 
@@ -229,7 +229,7 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
         env: &Self::Env,
         definition: AgentDefinition,
         llm: Arc<dyn Llm>,
-        host: Arc<dyn AgentHost>,
+        host: Arc<dyn AgentCallbacks>,
     ) -> Result<Self, InvalidRun>;
 
     /// Starts one invocation; nothing runs until the first pull.

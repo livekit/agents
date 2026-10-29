@@ -64,7 +64,7 @@ class UpdateAgentArgs:
     tools: list[dict[str, object]] | None = None
     tools_host: object | None = None
     voice_agent: VoiceAgent
-    """The agent as its tools are hosted: its definition (retry budgets) and its `AgentHost`."""
+    """The agent as its tools are hosted: its definition (retry budgets) and its callbacks."""
     chat_ctx: list[ChatItem] | None = None
     llm: NotGivenOr[LLM | None] = NOT_GIVEN
     tts: NotGivenOr[TTS | None] = NOT_GIVEN
@@ -125,7 +125,7 @@ class VoiceSessionArgs:
     """Every tool of the first agent and the session, as `_core_setup_tools` reported them."""
     tools_host: object | None = None
     voice_agent: VoiceAgent | None = None
-    """The first agent as its tools are hosted: its definition and its `AgentHost`."""
+    """The first agent as its tools are hosted: its definition and its `AgentCallbacks`."""
     transcription_node: AgentNodes | None = None
     realtime_audio_output_node: AgentNodes | None = None
     llm_node: AgentNodes | None = None

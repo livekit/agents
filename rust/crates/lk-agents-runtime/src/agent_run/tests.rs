@@ -168,7 +168,7 @@ impl FakeHost {
     }
 }
 
-impl AgentHost for FakeHost {
+impl AgentCallbacks for FakeHost {
     fn list_tools<'a>(
         &'a self,
         invocation: &'a Invocation,

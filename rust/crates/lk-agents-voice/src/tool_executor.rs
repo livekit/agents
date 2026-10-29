@@ -522,7 +522,8 @@ impl Toolset {
         let specs = tools.iter().map(|t| t.spec.clone()).collect();
         let agent = agent.map(|frame| {
             let mut definition = frame.definition().clone();
-            definition.tools = tools.into_iter().filter(|t| t.spec.provider_tool.is_none()).collect();
+            definition.tools =
+                tools.into_iter().filter(|t| t.spec.provider_tool.is_none()).collect();
             Arc::new(VoiceAgentFrame {
                 definition,
                 host: Arc::clone(frame.host()),
@@ -549,7 +550,7 @@ pub use lk_agents_abi::agent::{AgentFrame, FunctionToolInfo};
 /// The [`AgentFrame`] a host builds (`_core.VoiceAgent`): the parts as given.
 pub struct VoiceAgentFrame {
     definition: lk_agents_abi::agent::AgentDefinition,
-    host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+    host: Arc<dyn lk_agents_abi::agent::AgentCallbacks>,
     host_context: lk_agents_abi::HostRef,
 }
 
@@ -558,7 +559,7 @@ impl AgentFrame for VoiceAgentFrame {
         &self.definition
     }
 
-    fn host(&self) -> &Arc<dyn lk_agents_abi::agent::AgentHost> {
+    fn host(&self) -> &Arc<dyn lk_agents_abi::agent::AgentCallbacks> {
         &self.host
     }
 
@@ -570,7 +571,7 @@ impl AgentFrame for VoiceAgentFrame {
 impl lk_agents_abi::agent::VoiceAgent for VoiceAgentFrame {
     fn new(
         definition: lk_agents_abi::agent::AgentDefinition,
-        host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+        host: Arc<dyn lk_agents_abi::agent::AgentCallbacks>,
         host_context: lk_agents_abi::HostRef,
     ) -> Self {
         VoiceAgentFrame { definition, host, host_context }
@@ -581,7 +582,7 @@ impl lk_agents_abi::agent::VoiceAgent for VoiceAgentFrame {
 /// names. The invocation's `speech` is the runtime's to fill: it holds the host's objects.
 #[derive(Clone)]
 pub struct HostedTool {
-    pub host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+    pub host: Arc<dyn lk_agents_abi::agent::AgentCallbacks>,
     pub speech: SpeechId,
     pub invocation: lk_agents_abi::agent::Invocation,
 }

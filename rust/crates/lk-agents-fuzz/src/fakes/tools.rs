@@ -1,12 +1,12 @@
 //! Tool bodies: every call the product hands to the runner is an invocation with the actual
 //! `call_id`, name, speech and step; the body waits for whatever the case delivers. The runner is
-//! the host's (`AgentHost`), classifying what the body did, as a Python agent's host does.
+//! the host's (`AgentCallbacks`), classifying what the body did, as a Python agent's host does.
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::agent::{
-    AgentDefinition, AgentFrame, AgentHost, ArgumentIdentity, FunctionToolInfo, Invocation,
+    AgentCallbacks, AgentDefinition, AgentFrame, ArgumentIdentity, FunctionToolInfo, Invocation,
     OutputCandidate, OutputSpec, PreparedArguments, ReadBack, ReadBackAnswer, ToolArgumentError,
     ToolTemplate, ValidatedOutput, VoiceAgent,
 };
@@ -60,7 +60,7 @@ pub struct FakeTools {
     /// detach afterwards (seed 5818).
     cancelled: Mutex<std::collections::BTreeSet<String>>,
     /// The bodies still running, by call id: a cancel ends one at once, as the host cancels the
-    /// callback's task (`AgentHost.cancel`), unless the bodies refuse it.
+    /// callback's task (`AgentCallbacks.cancel`), unless the bodies refuse it.
     running: Mutex<BTreeMap<String, oneshot::Sender<()>>>,
 }
 
@@ -91,7 +91,7 @@ pub fn frame(registry: &Arc<Registry>, agent: &str, tools: &[String]) -> Arc<dyn
         retries: Default::default(),
     };
     let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
-    let host: Arc<dyn AgentHost> = FakeTools::new(Arc::clone(registry));
+    let host: Arc<dyn AgentCallbacks> = FakeTools::new(Arc::clone(registry));
     Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs)))
 }
 
@@ -159,7 +159,7 @@ pub enum Body {
     AwaitOwnSpeech(ToolOutcome),
 }
 
-impl AgentHost for FakeTools {
+impl AgentCallbacks for FakeTools {
     fn render_instructions<'a>(
         &'a self,
         _invocation: &'a Invocation,
@@ -412,8 +412,8 @@ mod tests {
     use lk_agents_runtime::net::task::TokioSpawner;
     use lk_agents_runtime::voice::session::Timebase;
     use lk_agents_runtime::voice::session::Tx;
-    use lk_agents_voice::tool_executor::HostedTool;
     use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::tool_executor::HostedTool;
 
     #[tokio::test]
     async fn dropping_started_preparation_does_not_release_a_later_call() {

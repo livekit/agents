@@ -31,7 +31,7 @@ class Invocation:
     """
 
     operation: int
-    """This callback, unique within its agent invocation: what [`AgentHost::cancel`] names."""
+    """This callback, unique within its agent invocation: what [`AgentCallbacks::cancel`] names."""
     invocation_id: str
     """The agent invocation this callback belongs to."""
     agent_name: str

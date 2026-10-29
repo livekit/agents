@@ -4971,7 +4971,7 @@ pub mod text_session {
             Ok(::lk_agents_abi::text_session::TextSessionAgent {
                 definition: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "definition", |v| crate::generated::records::agent_run::agent_definition_from_py(v))?,
                 llm: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "llm", |v| crate::generated::llm::LlmProxy::from_host(&v))?,
-                host: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host", |v| crate::generated::agent::AgentHostProxy::from_host(&v))?,
+                host: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host", |v| crate::generated::agent::AgentCallbacksProxy::from_host(&v))?,
                 output_type_explicit: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "output_type_explicit", |v| v.extract::<bool>())?,
                 agent_tools: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "agent_tools", |v| v.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, crate::generated::records::text_session::local_agent_tool_from_py(item)?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())?,
                 host_context: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host_context", |v| v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into))?,

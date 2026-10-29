@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use lk_agents_abi::agent::AgentDefinition;
 use lk_agents_abi::agent::run::{Output, RunError, RunSettled, RunUpdate, ValidationId};
-use lk_agents_abi::agent::{AgentHost, Invocation, PreparedArguments, ValidatedOutput};
+use lk_agents_abi::agent::{AgentCallbacks, Invocation, PreparedArguments, ValidatedOutput};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::resources::ResourceId;
@@ -36,7 +36,7 @@ const PROGRESS_QUEUE: usize = 32;
 pub struct RunSetup {
     pub llm: Arc<dyn Llm>,
     pub tools_host: Option<HostRef>,
-    pub host: Arc<dyn AgentHost>,
+    pub host: Arc<dyn AgentCallbacks>,
     pub clock: Arc<dyn Clock>,
     pub conn_options: ApiConnectOptions,
     /// Captured at the `run()` entry.

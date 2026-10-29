@@ -136,7 +136,7 @@ pub struct UpdateAgentArgs {
     pub tools: Option<Vec<ToolSpec>>,
     #[host(default = None)]
     pub tools_host: Option<HostRef>,
-    /// The agent as its tools are hosted: its definition (retry budgets) and its `AgentHost`.
+    /// The agent as its tools are hosted: its definition (retry budgets) and its callbacks.
     pub voice_agent: Arc<dyn crate::agent::AgentFrame>,
     #[host(default = None)]
     pub chat_ctx: Option<Vec<ChatItem>>,
@@ -230,7 +230,7 @@ pub struct VoiceSessionArgs {
     pub tools: Option<Vec<crate::agent::FunctionToolInfo>>,
     #[host(default = None)]
     pub tools_host: Option<HostRef>,
-    /// The first agent as its tools are hosted: its definition and its `AgentHost`.
+    /// The first agent as its tools are hosted: its definition and its `AgentCallbacks`.
     #[host(default = None)]
     pub voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
     #[host(default = None)]

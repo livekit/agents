@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, RunUpdate};
-use lk_agents_abi::agent::{AgentDefinition, AgentHost, Invocation};
+use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::utils::stream::StreamSource;
@@ -13,7 +13,7 @@ use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
 use tokio::sync::mpsc;
 
-use super::{ActiveRun, PROGRESS_QUEUE, RunSetup, Progress, ProgressRefused, start};
+use super::{ActiveRun, PROGRESS_QUEUE, Progress, ProgressRefused, RunSetup, start};
 use lk_agents_net::env::ProcessEnv;
 
 /// Updates the consumer may lag behind by before the run waits for it.
@@ -22,7 +22,7 @@ const UPDATE_QUEUE: usize = 16;
 pub struct Runner {
     definition: AgentDefinition,
     llm: Arc<dyn Llm>,
-    host: Arc<dyn AgentHost>,
+    host: Arc<dyn AgentCallbacks>,
     clock: Arc<dyn Clock>,
     /// Each running invocation's progress port, by invocation id; ended ones are pruned.
     running: Mutex<Vec<(String, Progress)>>,
@@ -37,7 +37,7 @@ impl AgentRunner for Runner {
         env: &ProcessEnv,
         definition: AgentDefinition,
         llm: Arc<dyn Llm>,
-        host: Arc<dyn AgentHost>,
+        host: Arc<dyn AgentCallbacks>,
     ) -> Result<Self, InvalidRun> {
         lk_agents_core::agent::validate(&definition).map_err(|e| InvalidRun(e.to_string()))?;
         Ok(Runner {

@@ -249,7 +249,7 @@ pub enum Effect {
     ToolArgumentsRelease {
         prepared: ResourceId,
     },
-    /// Render the call's `tool_handling` template (`AgentHost.render_template`), answered by
+    /// Render the call's `tool_handling` template (`AgentCallbacks.render_template`), answered by
     /// [`Event::TemplateRendered`].
     TemplateRender {
         call: CallId,

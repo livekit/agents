@@ -21,7 +21,7 @@ use std::sync::Arc;
 #[crate::host(record(module = "agent_run", emit))]
 #[derive(Debug, Clone)]
 pub struct Invocation {
-    /// This callback, unique within its agent invocation: what [`AgentHost::cancel`] names.
+    /// This callback, unique within its agent invocation: what [`AgentCallbacks::cancel`] names.
     pub operation: u64,
     /// The agent invocation this callback belongs to.
     pub invocation_id: String,
@@ -180,7 +180,7 @@ pub enum ToolTemplate {
 /// carries its [`Invocation`] and runs in a copy of the host context it captured; the caller's
 /// context is never entered or changed.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentCallbacks"))]
-pub trait AgentHost: Send + Sync {
+pub trait AgentCallbacks: Send + Sync {
     /// The surrounding managed turn's verdict; true yields before a model call or delivery.
     #[host(await)]
     fn checkpoint<'a>(
@@ -282,7 +282,7 @@ pub struct AgentDefinition {
 #[crate::host(native(refused = "expected an agent's voice frame (`_core.VoiceAgent`)"))]
 pub trait AgentFrame: Send + Sync {
     fn definition(&self) -> &AgentDefinition;
-    fn host(&self) -> &Arc<dyn AgentHost>;
+    fn host(&self) -> &Arc<dyn AgentCallbacks>;
     fn host_context(&self) -> &HostRef;
 }
 
@@ -297,7 +297,11 @@ impl std::fmt::Debug for dyn AgentFrame {
 #[crate::host(class(name = "VoiceAgent", native = AgentFrame))]
 pub trait VoiceAgent: AgentFrame + Sized + 'static {
     #[host(new)]
-    fn new(definition: AgentDefinition, host: Arc<dyn AgentHost>, host_context: HostRef) -> Self;
+    fn new(
+        definition: AgentDefinition,
+        host: Arc<dyn AgentCallbacks>,
+        host_context: HostRef,
+    ) -> Self;
 }
 
 /// `FunctionToolInfo`: one tool as the model and the gate see it.

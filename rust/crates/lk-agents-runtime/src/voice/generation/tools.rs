@@ -1,11 +1,11 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::FunctionCall;
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_voice::agent_session::Answer;
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
     HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, ToolReport, answer,
 };
@@ -82,7 +82,7 @@ impl ToolStep {
     }
 }
 
-/// One call's host work through its agent's `AgentHost`, each move decided by its reply's run
+/// One call's host work through its agent's `AgentCallbacks`, each move decided by its reply's run
 /// in the loop.
 struct HostedCall<'a> {
     shared: &'a Arc<SessionShared>,

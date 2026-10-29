@@ -1,7 +1,7 @@
-//! The generated `AgentHostProxy` against a live interpreter: what the host object receives,
+//! The generated `AgentCallbacksProxy` against a live interpreter: what the host object receives,
 //! the context each call runs in, refusals versus failures, and notifications.
 
-use _core::generated::agent::AgentHostProxy;
+use _core::generated::agent::AgentCallbacksProxy;
 use lk_agents_abi::agent::{Invocation, OutputCandidate, ValidatedOutput};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -136,7 +136,7 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
         let context = lk_agents_abi::python::intern_host(pair.unbind());
         let host = globals.get_item("host").unwrap().unwrap();
-        (globals.unbind(), AgentHostProxy::from_host(&host).unwrap(), invocation(context))
+        (globals.unbind(), AgentCallbacksProxy::from_host(&host).unwrap(), invocation(context))
     });
     let runtime = lk_agents_runtime::process::handle().unwrap();
     runtime.block_on(async {
@@ -223,13 +223,13 @@ fn a_tool_callback_without_a_tool_call_scope_is_refused_before_the_host() {
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
         let context = lk_agents_abi::python::intern_host(pair.unbind());
         let host = globals.get_item("host").unwrap().unwrap();
-        (globals.unbind(), AgentHostProxy::from_host(&host).unwrap(), invocation(context))
+        (globals.unbind(), AgentCallbacksProxy::from_host(&host).unwrap(), invocation(context))
     });
     let runtime = lk_agents_runtime::process::handle().unwrap();
     let error = runtime.block_on(proxy.prepare_tool(&inv, serde_json::Map::new())).unwrap_err();
     assert_eq!(error.kind, "RuntimeError");
     assert!(
-        error.message.contains("AgentHost.prepare_tool: the call requires a tool call scope"),
+        error.message.contains("AgentCallbacks.prepare_tool: the call requires a tool call scope"),
         "{error}"
     );
     Python::attach(|py| {

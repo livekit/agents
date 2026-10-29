@@ -1,5 +1,5 @@
 //! `voice/tool_executor.py`'s option `TypedDict`s and the marshal's wire dicts. The templates are
-//! rendered host-side (`AgentHost.render_template`), so no core code reads them.
+//! rendered host-side (`AgentCallbacks.render_template`), so no core code reads them.
 
 use lk_agents_host_derive::Host;
 

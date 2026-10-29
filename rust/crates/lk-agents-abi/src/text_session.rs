@@ -170,7 +170,7 @@ impl std::fmt::Display for TextSessionError {
 impl std::error::Error for TextSessionError {}
 
 use crate::agent::run::{InvalidRun, RunUsage, StreamEvent};
-use crate::agent::{AgentDefinition, AgentHost};
+use crate::agent::{AgentCallbacks, AgentDefinition};
 use crate::utils::stream::StreamSource;
 use crate::{ApiConnectOptions, HostRef, Llm};
 use std::sync::Arc;
@@ -181,7 +181,7 @@ use std::sync::Arc;
 pub struct TextSessionAgent {
     pub definition: AgentDefinition,
     pub llm: Arc<dyn Llm>,
-    pub host: Arc<dyn AgentHost>,
+    pub host: Arc<dyn AgentCallbacks>,
     pub output_type_explicit: bool,
     pub agent_tools: BTreeMap<String, LocalAgentTool>,
     /// A callback context for this agent, captured at session entry.
