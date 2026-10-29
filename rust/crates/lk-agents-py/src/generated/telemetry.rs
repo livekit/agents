@@ -504,10 +504,10 @@ impl Tagger {
 
     /// The judgments recorded by judge groups.
     #[getter]
-    fn evaluations(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::EvaluationRecord>> {
+    fn evaluations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::evaluations(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::evaluation_record_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// ``"success"``, ``"fail"`` or ``None``.
@@ -545,12 +545,12 @@ impl Tagger {
     /// ``disabled``. A raise in ``project_item`` (a chat item's span attribute) is re-raised once
     /// the records are built.
     #[pyo3(signature = (report, disabled, project_item, capture_content = false))]
-    fn _core_session_records(&self, report: Bound<'_, PyAny>, disabled: bool, project_item: Bound<'_, PyAny>, capture_content: bool) -> PyResult<::std::vec::Vec<::lk_agents_abi::LogRecordWire>> {
+    fn _core_session_records<'py>(&self, py: Python<'py>, report: Bound<'_, PyAny>, disabled: bool, project_item: Bound<'_, PyAny>, capture_content: bool) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let report = crate::generated::records::telemetry::session_report_input_from_py(&report)?;
         let project_item = crate::generated::telemetry::ChatItemProjectionProxy::from_host(&project_item)?;
         let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::log_record_wire_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 }
 
@@ -625,10 +625,10 @@ pub fn recording_enabled(options: ::lk_agents_abi::telemetry::report::RecordingO
 /// ``disabled`` or the transcript is not recorded.
 #[pyfunction]
 #[pyo3(signature = (disabled, options, item, projected, capture_content, identity))]
-pub fn _core_session_chat_record(disabled: bool, options: ::lk_agents_abi::telemetry::report::RecordingOptions, item: ::lk_agents_abi::ChatItem, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<::lk_agents_abi::LogRecordWire>> {
+pub fn _core_session_chat_record<'py>(py: Python<'py>, disabled: bool, options: ::lk_agents_abi::telemetry::report::RecordingOptions, item: ::lk_agents_abi::ChatItem, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     let projected = ::lk_agents_abi::python::value_from_py(&projected, "projected")?;
     let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity);
-    Ok(out)
+    Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::log_record_wire_to_py(py, value)?)).transpose()?)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
@@ -721,11 +721,11 @@ impl _core_SessionReportProjection {
     }
 
     #[pyo3(signature = (event, identity, timestamp, disabled))]
-    fn event_record(&self, event: Bound<'_, PyAny>, identity: (::std::string::String, ::std::string::String, ::std::string::String), #[pyo3(from_py_with = _extract_session_report_projection_event_record_timestamp)] timestamp: f64, disabled: bool) -> PyResult<::std::option::Option<::lk_agents_abi::LogRecordWire>> {
+    fn event_record<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>, identity: (::std::string::String, ::std::string::String, ::std::string::String), #[pyo3(from_py_with = _extract_session_report_projection_event_record_timestamp)] timestamp: f64, disabled: bool) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         ::lk_agents_abi::python::check_pid()?;
         let event = crate::generated::records::telemetry::projected_report_event_from_py(&event)?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_record(&self.0, event, identity, timestamp, disabled);
-        Ok(out)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::log_record_wire_to_py(py, value)?)).transpose()?)
     }
 }
 
