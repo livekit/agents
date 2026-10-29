@@ -17,9 +17,9 @@ use lk_agents_abi::storage::{
     ThreadPage, ThreadTask,
 };
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::TaskSet;
 use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
-use tokio_util::task::TaskTracker;
 
 use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
 use crate::context::store::ContextStore;
@@ -62,7 +62,7 @@ impl Backend {
 pub struct HostStorage {
     config: Config,
     backend: OnceCell<Backend>,
-    a2a_tasks: TaskTracker,
+    a2a_tasks: Arc<TaskSet>,
 }
 
 /// The holder of a read-only handle: it never takes a lease.
@@ -100,8 +100,8 @@ impl HostStorage {
 
     /// The A2A work accepted over this namespace, which [`aclose`](HostStorageClass::aclose)
     /// settles before closing.
-    pub fn a2a_tasks(&self) -> TaskTracker {
-        self.a2a_tasks.clone()
+    pub fn a2a_tasks(&self) -> Arc<TaskSet> {
+        Arc::clone(&self.a2a_tasks)
     }
 }
 
@@ -291,7 +291,7 @@ impl HostStorageClass for HostStorage {
                 ));
             }
         };
-        Ok(Self { config, backend: OnceCell::new(), a2a_tasks: TaskTracker::new() })
+        Ok(Self { config, backend: OnceCell::new(), a2a_tasks: Arc::default() })
     }
 
     fn location(&self) -> String {
@@ -442,11 +442,10 @@ impl HostStorageClass for HostStorage {
     }
 
     async fn aclose(&self) {
-        self.a2a_tasks.close();
-        if tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, self.a2a_tasks.wait())
-            .await
-            .is_err()
-        {
+        use lk_agents_abi::Clock as _;
+        let clock = lk_agents_abi::RealClock::new();
+        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if !self.a2a_tasks.wait_empty(&clock, Some(deadline)).await {
             log::error!(target: "livekit.agents", "storage is closing while accepted A2A work settles");
         }
 

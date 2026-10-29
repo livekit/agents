@@ -1,5 +1,7 @@
 //! One call's native lane lease, transport reload and fenced history/context commit.
 
+use lk_agents_abi::RealClock;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,7 +28,8 @@ pub struct VoiceStore {
     lease: Mutex<Option<Lease>>,
     generation: tokio::sync::watch::Sender<u64>,
     lost: Arc<AtomicBool>,
-    tasks: tokio_util::task::TaskTracker,
+    /// Settles, aborts and loss observations, which `aclose` waits out.
+    tasks: Arc<TaskSet>,
     closing: Mutex<bool>,
 }
 
@@ -95,7 +98,7 @@ impl VoiceStore {
             lease: Mutex::new(None),
             generation: tokio::sync::watch::channel(0).0,
             lost: Arc::new(AtomicBool::new(false)),
-            tasks: tokio_util::task::TaskTracker::new(),
+            tasks: Arc::default(),
             closing: Mutex::new(false),
         })
     }
@@ -300,7 +303,7 @@ impl VoiceStorage for VoiceStore {
         match command {
             VoiceStorageCommand::Settle { speech, history } => {
                 let store = self.clone();
-                self.tasks.spawn(async move {
+                self.tasks.spawn(&TokioSpawner::current(), "voice storage settle", async move {
                     let result = store.finish(speech, history).await;
                     let _ = events.push(VoiceStorageEvent::Settled {
                         speech,
@@ -311,14 +314,14 @@ impl VoiceStorage for VoiceStore {
             }
             VoiceStorageCommand::Abort { speech } => {
                 let store = self.clone();
-                self.tasks.spawn(async move {
+                self.tasks.spawn(&TokioSpawner::current(), "voice storage abort", async move {
                     let result = store.abandon(speech).await;
                     let _ = events.push(VoiceStorageEvent::Abandoned { speech, result });
                 });
             }
             VoiceStorageCommand::ObserveLoss { speech } => {
                 let observation = self.observe_loss();
-                self.tasks.spawn(async move {
+                self.tasks.spawn(&TokioSpawner::current(), "voice lease loss", async move {
                     if observation.await.unwrap_or(false) {
                         let _ = events.push(VoiceStorageEvent::LeaseLost { speech });
                     }
@@ -361,7 +364,6 @@ impl HostVoiceStore for VoiceStore {
         {
             let mut closing = self.closing.lock().expect("voice storage admission");
             *closing = true;
-            self.tasks.close();
         }
         let mut state = self.state.lock().await;
         if let Some(mut active) = state.active.take() {
@@ -386,13 +388,13 @@ impl HostVoiceStore for VoiceStore {
             self.activation.end_managed(result.is_ok() && resolving, fields);
             self.activation.close();
             drop(state);
-            self.tasks.wait().await;
+            self.tasks.wait_empty(&RealClock::new(), None).await;
             result?;
         } else {
             self.released();
             self.activation.close();
             drop(state);
-            self.tasks.wait().await;
+            self.tasks.wait_empty(&RealClock::new(), None).await;
         }
         Ok(())
     }

@@ -11,7 +11,7 @@ license.workspace = true
 [dependencies]
 rmcp.workspace = true
 sse-stream = "0.2"
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = "0.7"
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
 lk-agents-net = { path = "../lk-agents-net" }

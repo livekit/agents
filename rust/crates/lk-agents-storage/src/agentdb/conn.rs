@@ -17,12 +17,12 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use livekit_api::access_token::{AccessToken, AgentGrants};
 pub use livekit_protocol::agent_db::wire;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::transport::TransportError;
 use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};
 use prost::Message as _;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use wire as pb;
 
 mod results;
@@ -266,8 +266,8 @@ struct Inner {
     phase: watch::Sender<Phase>,
     /// The runtime the connection's supervisor, heartbeat and writer run on.
     runtime: Handle,
-    tasks: TaskTracker,
-    cancel: CancellationToken,
+    /// The supervisor, heartbeat and socket writers; closing the connection cancels them.
+    tasks: Arc<TaskSet>,
 }
 
 /// One authenticated connection to one database; cheap to clone, closed by [`Conn::close`] or
@@ -298,7 +298,6 @@ impl Inner {
             st.tx = None;
         }
         self.phase.send_replace(Phase::Closed);
-        self.cancel.cancel();
         self.tasks.close();
     }
 }
@@ -335,36 +334,19 @@ impl Conn {
             }),
             phase,
             runtime,
-            tasks: TaskTracker::new(),
-            cancel: CancellationToken::new(),
+            tasks: Arc::default(),
         });
         let guard = Arc::new(CloseOnDrop(Arc::downgrade(&inner)));
         let conn = Conn(inner, Some(guard));
         let socket = conn.connect().await?;
         let ping_interval = socket.ping_interval;
         let owner = conn.unguarded();
-        let cancel = conn.0.cancel.clone();
-        conn.0.tasks.spawn_on(
-            async move {
-                tokio::select! {
-                    _ = cancel.cancelled() => {},
-                    _ = owner.supervise(socket) => {},
-                }
-            },
-            &conn.0.runtime,
-        );
+        let spawner = TokioSpawner::new(conn.0.runtime.clone());
+        // Refused once the connection closed: the work is then dropped unstarted.
+        conn.0.tasks.try_spawn(&spawner, "agentdb supervisor", owner.supervise(socket));
         if !ping_interval.is_zero() {
             let owner = conn.unguarded();
-            let cancel = conn.0.cancel.clone();
-            conn.0.tasks.spawn_on(
-                async move {
-                    tokio::select! {
-                        _ = cancel.cancelled() => {},
-                        _ = owner.ping_loop(ping_interval) => {},
-                    }
-                },
-                &conn.0.runtime,
-            );
+            conn.0.tasks.try_spawn(&spawner, "agentdb heartbeat", owner.ping_loop(ping_interval));
         }
         Ok(conn)
     }
@@ -455,28 +437,20 @@ impl Conn {
         // socket
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (gone, writer_gone) = tokio::sync::oneshot::channel();
-        let cancel = self.0.cancel.clone();
-        self.0.tasks.spawn_on(
-            async move {
-                let write = async {
-                    while let Some(bytes) = rx.recv().await {
-                        let sent =
-                            tokio::time::timeout(ping_timeout, sink.send(Message::binary(bytes)));
-                        if !matches!(sent.await, Ok(Ok(()))) {
-                            return;
-                        }
-                    }
-                    let _ = tokio::time::timeout(ping_timeout, sink.close()).await;
-                };
-                tokio::select! {
-                    _ = cancel.cancelled() => {},
-                    _ = write => {},
+        let spawner = TokioSpawner::new(self.0.runtime.clone());
+        // Refused once the connection closed: the sink and `gone` then drop unstarted.
+        self.0.tasks.try_spawn(&spawner, "agentdb writer", async move {
+            // Declared first, so `gone` reports the writer stopped after the sink dropped.
+            let _gone = gone;
+            let mut sink = sink;
+            while let Some(bytes) = rx.recv().await {
+                let sent = tokio::time::timeout(ping_timeout, sink.send(Message::binary(bytes)));
+                if !matches!(sent.await, Ok(Ok(()))) {
+                    return;
                 }
-                drop(sink);
-                drop(gone);
-            },
-            &self.0.runtime,
-        );
+            }
+            let _ = tokio::time::timeout(ping_timeout, sink.close()).await;
+        });
         {
             let mut st = self.0.state.lock().expect("state");
             st.tip = st.tip.max(ok.tip); // a reconnect can only observe a later tip
@@ -622,7 +596,7 @@ impl Conn {
     /// Cancellation of this waiter leaves those tasks owned by the connection tracker.
     pub async fn aclose(&self) {
         self.close();
-        self.0.tasks.wait().await;
+        self.0.tasks.wait_empty(&lk_agents_abi::RealClock::new(), None).await;
     }
 
     /// Why a closed connection refuses a call: what made it give up, else `Closed`.

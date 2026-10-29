@@ -8,8 +8,8 @@ pub mod door;
 
 use std::sync::Arc;
 
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use serde_json::Value;
-use tokio_util::task::TaskTracker;
 
 use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
@@ -61,7 +61,7 @@ pub struct Turn {
     publisher: Option<Arc<door::stream::Publisher>>,
     host_context: Option<lk_agents_abi::HostRef>,
     /// The resolvers of commits left uncertain, owned by the door.
-    resolvers: TaskTracker,
+    resolvers: Arc<TaskSet>,
 }
 
 impl Turn {
@@ -81,7 +81,7 @@ impl Turn {
             stream: None,
             publisher: None,
             host_context: None,
-            resolvers: TaskTracker::new(),
+            resolvers: Arc::default(),
         }
     }
 
@@ -90,7 +90,7 @@ impl Turn {
         self
     }
 
-    pub fn with_owner(mut self, owner: TaskTracker) -> Self {
+    pub fn with_owner(mut self, owner: Arc<TaskSet>) -> Self {
         self.resolvers = owner;
         self
     }
@@ -387,7 +387,7 @@ impl Turn {
     /// Hands a run whose commit stayed uncertain to a background resolver, which fails its task
     /// with `failed` when the commit was rejected.
     fn resolve_later(&self, lane: Lane, run: Run, answer: String, failed: a2a::Message) {
-        self.resolvers.spawn(async move {
+        self.resolvers.spawn(&TokioSpawner::current(), "a2a commit resolver", async move {
             match run.resolve_later().await {
                 Some(Err(e)) if rejected_commit(&e) => {
                     if let Err(e) = lane.fail_orphan(&answer, &failed).await {

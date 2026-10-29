@@ -33,7 +33,6 @@ thiserror.workspace = true
 log.workspace = true
 async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
-tokio-util = { version = "0.7", features = ["rt"] }
 # AgentDB's streams API (HTTP; the data plane's WebSocket is lk-agents-net's); one crypto
 # provider (`ring`).
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }

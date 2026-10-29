@@ -16,13 +16,13 @@ use lk_agents_abi::storage::{StorageError, StorageNamespace};
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::host::HostStorage;
 use lk_agents_storage::schema::TaskRow;
 use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
 use crate::a2a::Turn;
 use lk_agents_net::env::ProcessEnv;
@@ -34,10 +34,12 @@ pub const MAX_PAYLOAD_BYTES: usize = 16 << 20;
 
 pub struct Door {
     inner: Arc<Inner>,
-    tasks: TaskTracker,
+    /// Accepted operations, which `aclose` waits out.
+    tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
     budget: Arc<StdMutex<EndpointBudget>>,
-    owner: TaskTracker,
+    /// The namespace's A2A work, which counts this door's operations too.
+    owner: Arc<TaskSet>,
 }
 
 /// Where a door's storage comes from: an open backend, or a host namespace opening its own on
@@ -53,7 +55,7 @@ struct Inner {
     holder: String,
     host: Arc<dyn TurnHost>,
     options: lk_agents_core::a2a::TurnOptions,
-    owner: TaskTracker,
+    owner: Arc<TaskSet>,
     clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
@@ -63,7 +65,7 @@ impl Door {
         storage: Arc<dyn Storage>,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
-        owner: TaskTracker,
+        owner: Arc<TaskSet>,
     ) -> Result<Self, StorageError> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
@@ -75,7 +77,7 @@ impl Door {
         storage: Store,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
-        owner: TaskTracker,
+        owner: Arc<TaskSet>,
         runtime: tokio::runtime::Handle,
         clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Result<Self, StorageError> {
@@ -94,7 +96,7 @@ impl Door {
                 owner: owner.clone(),
                 clock,
             }),
-            tasks: TaskTracker::new(),
+            tasks: Arc::default(),
             runtime,
             budget: Arc::new(StdMutex::new(EndpointBudget::new(EndpointLimits::default()))),
             owner,
@@ -168,33 +170,29 @@ impl A2ADoor for Door {
         };
         let inner = self.inner.clone();
         let observer = cancel.clone();
-        let ownership = self.owner.token();
-        self.tasks.spawn_on(
-            async move {
-                let _ownership = ownership;
-                let _admission = admission;
-                let id = request.id.clone();
-                if let Err(error) = inner
-                    .execute(request, principal, offset, sender.clone(), observer, host_context)
-                    .await
-                {
-                    let _ = sender.try_send(match error {
-                        DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
-                        auth => Err(auth),
-                    });
-                }
-            },
-            &self.runtime,
-        );
+        let ownership = self.owner.track("a2a operation");
+        let spawner = TokioSpawner::new(self.runtime.clone());
+        self.tasks.spawn(&spawner, "a2a operation", async move {
+            let _ownership = ownership;
+            let _admission = admission;
+            let id = request.id.clone();
+            if let Err(error) = inner
+                .execute(request, principal, offset, sender.clone(), observer, host_context)
+                .await
+            {
+                let _ = sender.try_send(match error {
+                    DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
+                    auth => Err(auth),
+                });
+            }
+        });
         Response { streaming, receiver: Mutex::new(receiver), cancel }
     }
 
     async fn aclose(&self) {
-        self.tasks.close();
-        if tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, self.tasks.wait())
-            .await
-            .is_err()
-        {
+        let clock = &*self.inner.clock;
+        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if !self.tasks.wait_empty(clock, Some(deadline)).await {
             log::error!(target: "livekit.agents", "A2A door cleanup missed its deadline; runtime retains accepted operations");
         }
     }
