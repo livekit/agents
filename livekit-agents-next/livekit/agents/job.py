@@ -35,6 +35,7 @@ import aiohttp
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent
+from livekit.protocol.sip import TransferSIPParticipantResponse
 
 from . import _core
 from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, SessionReportSnapshot
@@ -409,7 +410,7 @@ class JobContext:
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
                     metadata=self._otel_metadata(
-                        report.options["recording_options"],
+                        session._recording_options,
                         redaction_enabled=self._redaction_enabled,
                     ),
                 )
@@ -841,7 +842,7 @@ class JobContext:
         participant: rtc.RemoteParticipant | str,
         transfer_to: str,
         play_dialtone: bool = False,
-    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
+    ) -> asyncio.Future[TransferSIPParticipantResponse]:
         """Transfer a SIP participant to another number.
 
         Args:
@@ -859,13 +860,14 @@ class JobContext:
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
 
-        def _transfer() -> Awaitable[api.SIPParticipantInfo]:
-            identity = participant
+        def _transfer() -> Awaitable[TransferSIPParticipantResponse]:
             if isinstance(participant, rtc.RemoteParticipant):
                 assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
                     "Participant must be a SIP participant"
                 )
                 identity = participant.identity
+            else:
+                identity = participant
             return self.api.sip.transfer_sip_participant(
                 api.TransferSIPParticipantRequest(
                     room_name=self._room.name,
@@ -876,8 +878,10 @@ class JobContext:
             )
 
         return cast(
-            asyncio.Future[api.SIPParticipantInfo],
-            self._run.api_call(_transfer, "transfer_sip_participant", api.SIPParticipantInfo()),
+            asyncio.Future[TransferSIPParticipantResponse],
+            self._run.api_call(
+                _transfer, "transfer_sip_participant", TransferSIPParticipantResponse()
+            ),
         )
 
     def shutdown(self, reason: str = "user requested") -> None:
@@ -1113,7 +1117,7 @@ class SessionReport:
                 await asyncio.to_thread(append_event, event)
         return replace(snapshot, omitted_events=omitted), events
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         from .voice.events import event_dict
 
         events_dict = [event_dict(event) for event in self.events]
@@ -1134,7 +1138,7 @@ class SessionReport:
             "sdk_version": self.sdk_version,
         }
 
-    def _usage_to_dict(self) -> list[dict] | None:
+    def _usage_to_dict(self) -> list[dict[str, Any]] | None:
         if self.model_usage is None:
             return None
         return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]
