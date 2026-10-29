@@ -10,7 +10,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
+
+if TYPE_CHECKING:
+    from .llm import CompletionUsage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -66,7 +69,7 @@ class IntentJudgment:
 
     success: bool
     reason: str
-    usage: dict[str, object] | None
+    usage: CompletionUsage | None
     """The judge request's usage, when the model reported it."""
 
 

@@ -308,9 +308,9 @@ impl Resolver<'_> {
                 .transpose()?;
             let skip = voc::find(&entries, "skip").is_some();
             let factory = voc::text(&at, &entries, "default_factory")?;
-            if factory.as_ref().is_some_and(|f| !f.contains('.')) {
+            if factory.as_ref().is_some_and(|f| !f.contains('.') && !["list", "dict"].contains(&f.as_str())) {
                 return Err(format!(
-                    "{at}: default_factory names a host callable by `module.name`"
+                    "{at}: default_factory names a host callable by `module.name`, or `list`/`dict`"
                 ));
             }
             let omitted = voc::rust(&at, &entries, "omitted")?.map(|path| {

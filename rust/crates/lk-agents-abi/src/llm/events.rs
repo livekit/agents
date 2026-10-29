@@ -2,136 +2,91 @@
 //! reference's docstring verbatim; notes for a Rust reader are `//`.
 
 use crate::llm::chat_context::{Extra, Role};
-use lk_agents_host_derive::Host;
+
+// The Python `module` and `path` of every record here.
+#[crate::host(file(module = "llm", path = "livekit.agents.llm"))]
+const _: () = ();
 
 // `llm/llm.py:35`. Field `///`s are the reference's, verbatim.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "CompletionUsage")]
-#[binding(emit, extract)]
+#[crate::host(record(module = "llm", pydantic, emit, extract))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionUsage {
     /// The number of tokens in the completion.
     pub completion_tokens: u32,
     /// The number of input tokens used (includes cached tokens).
     pub prompt_tokens: u32,
     /// The number of cached input tokens used.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub prompt_cached_tokens: u32,
     /// The number of tokens used to create the cache.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub cache_creation_tokens: u32,
     /// The number of tokens read from the cache.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub cache_read_tokens: u32,
     /// The number of completion tokens spent on hidden reasoning.
     /// Already counted in ``completion_tokens``; do not add it to totals. Only reported by
     /// providers that break reasoning out separately (e.g. OpenAI-compatible responses
     /// carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub reasoning_tokens: u32,
     /// The total number of tokens used (completion + prompt tokens).
     // Reported by the provider, not derived: providers disagree on cache reads.
     pub total_tokens: u32,
     /// The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
     /// Returned by providers that support tiered processing (e.g. OpenAI).
-    #[python(default = "None")]
+    #[host(default = None)]
     pub service_tier: Option<String>,
 }
 
 // `llm/llm.py:53`. `arguments` is the raw, possibly partial JSON text; validated after the stream.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    pydantic,
-    module = "llm",
-    path = "livekit.agents.llm",
-    name = "FunctionToolCall",
-    tag = "type",
-    tag_value = "function"
-)]
-#[binding(emit, extract)]
+#[crate::host(record(module = "llm", pydantic, constant(type = "function"), emit, extract))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FunctionToolCall {
     pub name: String,
     pub arguments: String,
     pub call_id: String,
     /// Provider-specific extra data (e.g., Google thought signatures).
-    // Read but not emitted: a Google thought signature must survive; the binding dict takes three
-    // fields. The Python class still declares the key.
-    #[binding(skip)]
-    #[python(ty = "dict[str, Any] | None", import = "typing:Any", default = "None")]
+    #[host(default = None)]
     pub extra: Option<Extra>,
 }
 
 // `llm/llm.py:71`.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "ChoiceDelta")]
-// Read by hand (`FromPyObject` below): an unknown role reads as absent.
-#[binding(emit)]
+#[crate::host(record(module = "llm", pydantic, emit, extract))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChoiceDelta {
-    // An unknown role reads as absent, as the reference's `delta.get("role") or "assistant"`.
-    #[python(ty = "ChatRole | None", import = "..llm.chat_context:ChatRole", default = "None")]
+    #[host(default = None, host_type = "..llm.chat_context.ChatRole")]
     pub role: Option<Role>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub content: Option<String>,
-    #[python(default_factory = "list")]
+    #[host(default_factory = "list")]
     pub tool_calls: Vec<FunctionToolCall>,
     /// Provider-specific extra data (e.g., Google thought signatures).
-    // Not emitted (`_chunk_from_core` takes three fields); read, as `FunctionToolCall::extra`.
-    #[binding(skip)]
-    #[python(ty = "dict[str, Any] | None", import = "typing:Any", default = "None")]
+    #[host(default = None)]
     pub extra: Option<Extra>,
 }
 
-// What `LLMStream.collect()` gathers. Host only: the reference has no class docstring.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "CollectedResponse")]
+// What `LLMStream.collect()` gathers: built by the host, the generated stream's `collect()`.
+// The reference has no class docstring.
+#[crate::host(record(module = "llm", pydantic))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CollectedResponse {
-    #[python(default = "\"\"")]
+    #[host(default = "")]
     pub text: String,
-    #[python(default_factory = "list")]
+    #[host(default_factory = "list")]
     pub tool_calls: Vec<FunctionToolCall>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub usage: Option<CompletionUsage>,
     /// Provider-specific extra data accumulated across chunks
     /// (e.g., xAI encrypted reasoning, Google thought signatures).
-    #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
+    #[host(default_factory = "dict")]
     pub extra: Extra,
-}
-
-/// A `role` this build does not know reads as `None`.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ChoiceDelta {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr, attr_with, extra_from_py};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "ChoiceDeltaFromPy";
-        let obj = &*obj;
-        Ok(ChoiceDelta {
-            role: attr_with(obj, OWNER, "role", |v| {
-                Ok(v.extract::<String>().ok().and_then(|s| s.parse().ok()))
-            })?,
-            content: attr(obj, OWNER, "content")?,
-            tool_calls: attr(obj, OWNER, "tool_calls")?,
-            extra: attr_with(obj, OWNER, "extra", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    extra_from_py(v.cast::<pyo3::types::PyDict>()?).map(Some)
-                }
-            })?,
-        })
-    }
 }
 
 // `llm/llm.py:79`. `has_response` is a host method hook: a core call per token would be a GIL
 // crossing per token.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[crate::host(record(module = "llm", name = "ChatChunk", pydantic, emit, extract))]
 #[python(
-    pydantic,
-    zero_defaults,
-    module = "llm",
-    path = "livekit.agents.llm",
-    name = "ChatChunk",
     method(
         name = "has_response",
         ret = "bool",
@@ -139,24 +94,21 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ChoiceDelta {
         doc = "Whether this chunk delivered generation the caller can see.\n\nToken counts and provider metadata (a gateway deployment stamp, a thought\nsignature) reach the caller without being output: they neither start the\nclock on time-to-first-token nor give a retry anything to duplicate."
     )
 )]
-#[binding(emit, extract)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LlmChunk {
     pub id: String,
-    // Emitted as `None` rather than omitted; `_chunk_from_core` treats both alike.
+    #[host(default = None)]
     pub delta: Option<ChoiceDelta>,
+    #[host(default = None)]
     pub usage: Option<CompletionUsage>,
     /// `FlushSentinel`: finish the current TTS segment at this point in the stream.
     ///
-    /// Only an `Agent.llm_node` override produces one. Read on the provider path with `default`
-    /// (a `ChatChunk` has no `flush` attribute); never emitted on the inference path.
-    // Excluded from the Python class: the reference has no `flush` field.
-    #[binding(skip, default)]
-    #[python(skip)]
+    /// Only an `Agent.llm_node` override produces one; never crosses as a field.
+    #[host(skip)]
     pub flush: bool,
     /// Text an `Agent.llm_node` answered itself (a `str`), not a model's: spoken, never metered as
     /// a model call (the reference meters the `LLMStream`, and such a node opened none).
-    #[binding(skip, default)]
-    #[python(skip)]
+    #[host(skip)]
     pub node_text: bool,
 }
 

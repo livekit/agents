@@ -196,12 +196,19 @@ impl Writer<'_> {
 
     /// The Python class a declared record is, importing it when another module holds it.
     fn record(&mut self, rust: &str) -> Option<String> {
-        let d = self.decls.iter().find(|d| d.rust_name == rust)?;
-        let t = d.target(Host::Python)?;
-        if t.module != self.p.module {
-            self.need(&format!(".{}", t.module), &t.name);
+        let (module, name) = match self.decls.iter().find(|d| d.rust_name == rust) {
+            Some(d) => d.target(Host::Python).map(|t| (t.module.clone(), t.name.clone()))?,
+            None => self
+                .declared
+                .records
+                .iter()
+                .find(|r| r.rust.rsplit("::").next() == Some(rust))
+                .map(|r| (r.module.clone(), r.name.clone()))?,
+        };
+        if module != self.p.module {
+            self.need(&format!(".{module}"), &name);
         }
-        Some(t.name.clone())
+        Some(name)
     }
 
     /// A Rust type as the core hands it to (or reads it from) a `_core_` method.

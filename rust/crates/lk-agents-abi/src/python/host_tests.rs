@@ -7,7 +7,7 @@ mod provider_bridge {
     //! package must not be imported here, so `livekit.agents.types` and `livekit.rtc` are stubs;
     //! nextest's process per test keeps each type's cached class on these.
     use crate::python::extract_generated;
-    use crate::{LlmChunk, Role, SpeechEvent, VadEvent};
+    use crate::{SpeechEvent, VadEvent};
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
 
@@ -75,30 +75,6 @@ class VADEvent:
         self.speaking = kw.get('speaking', False)
         self.raw_accumulated_silence = kw.get('raw_accumulated_silence', 0.0)
         self.raw_accumulated_speech = kw.get('raw_accumulated_speech', 0.0)
-
-class FunctionToolCall:
-    def __init__(self, name, arguments, call_id, extra=None):
-        self.name = name; self.arguments = arguments; self.call_id = call_id; self.extra = extra
-
-class ChoiceDelta:
-    def __init__(self, role=None, content=None, tool_calls=(), extra=None):
-        self.role = role; self.content = content
-        self.tool_calls = list(tool_calls); self.extra = extra
-
-class CompletionUsage:
-    def __init__(self, **kw):
-        self.completion_tokens = kw.get('completion_tokens', 0)
-        self.prompt_tokens = kw.get('prompt_tokens', 0)
-        self.prompt_cached_tokens = kw.get('prompt_cached_tokens', 0)
-        self.cache_creation_tokens = kw.get('cache_creation_tokens', 0)
-        self.cache_read_tokens = kw.get('cache_read_tokens', 0)
-        self.reasoning_tokens = kw.get('reasoning_tokens', 0)
-        self.total_tokens = kw.get('total_tokens', 0)
-        self.service_tier = kw.get('service_tier')
-
-class ChatChunk:
-    def __init__(self, id='c', delta=None, usage=None):
-        self.id = id; self.delta = delta; self.usage = usage
 "#;
 
     /// Run `code` after the stubs, and return the object it bound to `out`.
@@ -185,45 +161,6 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
                 eval_with_stubs(py, "out = VADEvent('end_of_speech', frames=[frame(), frame()])");
             let ev: VadEvent = extract_generated::<VadEvent>(obj.bind(py)).unwrap();
             assert_eq!(ev.frames.len(), 2);
-        });
-    }
-
-    // Catches: failing on `ChoiceDelta.role = None` (every chunk after the first) or on a role the
-    // reference reads as absent, losing `tool_calls[].extra` (Google's thought signatures), or
-    // inventing a delta for the final usage-only chunk of an OpenAI stream.
-    #[test]
-    fn an_llm_chunk_carries_its_tool_calls_role_and_usage() {
-        attach(|py| {
-            let chunk = |code: &str| -> LlmChunk {
-                let obj = eval_with_stubs(py, code);
-                extract_generated::<LlmChunk>(obj.bind(py)).unwrap()
-            };
-            let full = chunk(
-                "out = ChatChunk(id='x', \
-                 delta=ChoiceDelta(role='assistant', content='', tool_calls=[\
-                     FunctionToolCall('f', '{\"a\":1}', 'call-1', extra={'sig': 'abc'})]), \
-                 usage=CompletionUsage(completion_tokens=3, prompt_tokens=5, total_tokens=8))",
-            );
-            let delta = full.delta.as_ref().unwrap();
-            assert_eq!(delta.role, Some(Role::Assistant));
-            assert_eq!(delta.tool_calls[0].call_id, "call-1");
-            assert_eq!(delta.tool_calls[0].extra.as_ref().unwrap()["sig"], "abc");
-            assert_eq!(full.usage.as_ref().unwrap().total_tokens, 8);
-            assert!(full.has_response(), "a tool call is a response even with empty content");
-
-            let role_less = chunk("out = ChatChunk(delta=ChoiceDelta(content=''))");
-            assert_eq!(
-                role_less.delta.as_ref().unwrap().role,
-                None,
-                "role is absent after the first chunk"
-            );
-            let odd = chunk("out = ChatChunk(delta=ChoiceDelta(role='narrator', content='hi'))");
-            assert_eq!(odd.delta.as_ref().unwrap().role, None, "an unknown role reads as absent");
-
-            let usage_only =
-                chunk("out = ChatChunk(delta=None, usage=CompletionUsage(total_tokens=11))");
-            assert!(usage_only.delta.is_none(), "there is no delta to invent");
-            assert_eq!(usage_only.usage.unwrap().total_tokens, 11);
         });
     }
 

@@ -504,7 +504,7 @@ pub mod agent_nodes {
             return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Flush);
         }
         if obj.is_instance(NODE_CHUNK__CHAT_CHUNK.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.llm")?.getattr("ChatChunk")?.unbind()))?.bind(obj.py()))? {
-            return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Chunk(obj.extract::<::lk_agents_abi::LlmChunk>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Chunk(crate::generated::records::llm::chat_chunk_from_py(obj)?));
         }
         Err(super::not_a(obj, "NodeChunk"))
     }
@@ -1361,7 +1361,7 @@ pub mod evals {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("success", ::pyo3::IntoPyObjectExt::into_bound_py_any(success, py)?)?;
             kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
-            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::llm::completion_usage_to_py(py, x)? })?;
             crate::host::construct(INTENT_JUDGMENT.import(py, "livekit.agents._generated.evals", "IntentJudgment")?.as_any(), (), Some(&kwargs))
     }
 
@@ -1723,6 +1723,126 @@ pub mod keyterms {
             kwargs.set_item("model", match model { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("tool_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_name, py)?)?;
             crate::host::construct(RESOLVED_KEYTERM_DETECTION.import(py, "livekit.agents._generated.keyterms", "ResolvedKeytermDetection")?.as_any(), (), Some(&kwargs))
+    }
+}
+
+pub mod llm {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/events.rs.
+    static COMPLETION_USAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn completion_usage_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::CompletionUsage> {
+        let py = obj.py();
+            if !obj.is_instance(COMPLETION_USAGE.import(py, "livekit.agents._generated.llm", "CompletionUsage")?)? {
+                return Err(super::not_a(obj, "CompletionUsage"));
+            }
+            Ok(::lk_agents_abi::CompletionUsage {
+                completion_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "completion_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.completion_tokens"))?,
+                prompt_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "prompt_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.prompt_tokens"))?,
+                prompt_cached_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "prompt_cached_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.prompt_cached_tokens"))?,
+                cache_creation_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "cache_creation_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.cache_creation_tokens"))?,
+                cache_read_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "cache_read_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.cache_read_tokens"))?,
+                reasoning_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "reasoning_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.reasoning_tokens"))?,
+                total_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "total_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.total_tokens"))?,
+                service_tier: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "service_tier", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+            })
+    }
+
+    pub fn completion_usage_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::CompletionUsage) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::CompletionUsage { completion_tokens, prompt_tokens, prompt_cached_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens, service_tier } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("completion_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(completion_tokens, py)?)?;
+            kwargs.set_item("prompt_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt_tokens, py)?)?;
+            kwargs.set_item("prompt_cached_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt_cached_tokens, py)?)?;
+            kwargs.set_item("cache_creation_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(cache_creation_tokens, py)?)?;
+            kwargs.set_item("cache_read_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(cache_read_tokens, py)?)?;
+            kwargs.set_item("reasoning_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(reasoning_tokens, py)?)?;
+            kwargs.set_item("total_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_tokens, py)?)?;
+            kwargs.set_item("service_tier", match service_tier { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(COMPLETION_USAGE.import(py, "livekit.agents._generated.llm", "CompletionUsage")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/events.rs.
+    static FUNCTION_TOOL_CALL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn function_tool_call_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::FunctionToolCall> {
+        let py = obj.py();
+            if !obj.is_instance(FUNCTION_TOOL_CALL.import(py, "livekit.agents._generated.llm", "FunctionToolCall")?)? {
+                return Err(super::not_a(obj, "FunctionToolCall"));
+            }
+            Ok(::lk_agents_abi::FunctionToolCall {
+                name: ::lk_agents_abi::python::attr_with(obj, "FunctionToolCall", "name", |v| v.extract::<::std::string::String>())?,
+                arguments: ::lk_agents_abi::python::attr_with(obj, "FunctionToolCall", "arguments", |v| v.extract::<::std::string::String>())?,
+                call_id: ::lk_agents_abi::python::attr_with(obj, "FunctionToolCall", "call_id", |v| v.extract::<::std::string::String>())?,
+                extra: ::lk_agents_abi::python::attr_with(obj, "FunctionToolCall", "extra", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "FunctionToolCall.extra")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FunctionToolCall.extra: expected a dict")) }).map(Some) })?,
+            })
+    }
+
+    pub fn function_tool_call_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::FunctionToolCall) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::FunctionToolCall { name, arguments, call_id, extra } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+            kwargs.set_item("arguments", ::pyo3::IntoPyObjectExt::into_bound_py_any(arguments, py)?)?;
+            kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
+            kwargs.set_item("extra", match extra { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+            crate::host::construct(FUNCTION_TOOL_CALL.import(py, "livekit.agents._generated.llm", "FunctionToolCall")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/events.rs.
+    static CHOICE_DELTA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn choice_delta_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::ChoiceDelta> {
+        let py = obj.py();
+            if !obj.is_instance(CHOICE_DELTA.import(py, "livekit.agents._generated.llm", "ChoiceDelta")?)? {
+                return Err(super::not_a(obj, "ChoiceDelta"));
+            }
+            Ok(::lk_agents_abi::ChoiceDelta {
+                role: ::lk_agents_abi::python::attr_with(obj, "ChoiceDelta", "role", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::Role>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+                content: ::lk_agents_abi::python::attr_with(obj, "ChoiceDelta", "content", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                tool_calls: ::lk_agents_abi::python::attr_with(obj, "ChoiceDelta", "tool_calls", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::llm::function_tool_call_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
+                extra: ::lk_agents_abi::python::attr_with(obj, "ChoiceDelta", "extra", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "ChoiceDelta.extra")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("ChoiceDelta.extra: expected a dict")) }).map(Some) })?,
+            })
+    }
+
+    pub fn choice_delta_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::ChoiceDelta) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::ChoiceDelta { role, content, tool_calls, extra } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("role", match role { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("content", match content { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("tool_calls", ::pyo3::types::PyList::new(py, tool_calls.into_iter().map(|x| PyResult::Ok(crate::generated::records::llm::function_tool_call_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("extra", match extra { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+            crate::host::construct(CHOICE_DELTA.import(py, "livekit.agents._generated.llm", "ChoiceDelta")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/events.rs.
+    static CHAT_CHUNK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn chat_chunk_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::LlmChunk> {
+        let py = obj.py();
+            if !obj.is_instance(CHAT_CHUNK.import(py, "livekit.agents._generated.llm", "ChatChunk")?)? {
+                return Err(super::not_a(obj, "ChatChunk"));
+            }
+            Ok(::lk_agents_abi::LlmChunk {
+                id: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "id", |v| v.extract::<::std::string::String>())?,
+                delta: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "delta", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::llm::choice_delta_from_py(v)).map(Some) })?,
+                usage: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "usage", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::llm::completion_usage_from_py(v)).map(Some) })?,
+                flush: ::std::default::Default::default(),
+                node_text: ::std::default::Default::default(),
+            })
+    }
+
+    pub fn chat_chunk_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::LlmChunk) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::LlmChunk { id, delta, usage, flush: _, node_text: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
+            kwargs.set_item("delta", match delta { None => py.None().into_bound(py), Some(x) => crate::generated::records::llm::choice_delta_to_py(py, x)? })?;
+            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::llm::completion_usage_to_py(py, x)? })?;
+            crate::host::construct(CHAT_CHUNK.import(py, "livekit.agents._generated.llm", "ChatChunk")?.as_any(), (), Some(&kwargs))
     }
 }
 

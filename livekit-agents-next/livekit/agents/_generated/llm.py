@@ -1,7 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
-#     rust/crates/lk-agents-abi/src/llm/events.rs
 #     rust/crates/lk-agents-abi/src/llm/llm.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -30,6 +29,9 @@ from .chat_items import MetricsMetadata
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
     from ..llm.tool_context import Tool, ToolChoice
+
+
+# The declared records.
 
 
 class CompletionUsage(BaseModel):
@@ -97,6 +99,13 @@ class ChatChunk(BaseModel):
         clock on time-to-first-token nor give a retry anything to duplicate.
         """
         return _bindings.chat_chunk_has_response(self)
+
+
+CompletionUsage.__module__ = "livekit.agents.llm"
+FunctionToolCall.__module__ = "livekit.agents.llm"
+ChoiceDelta.__module__ = "livekit.agents.llm"
+CollectedResponse.__module__ = "livekit.agents.llm"
+ChatChunk.__module__ = "livekit.agents.llm"
 
 
 class LLMError(BaseModel):
@@ -421,11 +430,6 @@ class LLMStream(ABC):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-CompletionUsage.__module__ = "livekit.agents.llm"
-FunctionToolCall.__module__ = "livekit.agents.llm"
-ChoiceDelta.__module__ = "livekit.agents.llm"
-CollectedResponse.__module__ = "livekit.agents.llm"
-ChatChunk.__module__ = "livekit.agents.llm"
 LLMError.__module__ = "livekit.agents.llm"
 LLM.__module__ = "livekit.agents.llm"
 LLMStream.__module__ = "livekit.agents.llm"

@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from .. import _bindings, _core
-from .._generated.llm import LLM, ChatChunk, LLMStream
+from .._generated.llm import LLM, LLMStream
 from .._generated.llm_fallback import AvailabilityChanged
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -160,6 +160,6 @@ class FallbackLLMStream(LLMStream):
         )
         try:
             while (chunk := await native.recv()) is not None:
-                self.send(ChatChunk.model_validate(chunk))
+                self.send(chunk)
         finally:
             await native.aclose()

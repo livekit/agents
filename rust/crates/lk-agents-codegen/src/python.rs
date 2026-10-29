@@ -25,9 +25,9 @@ pub fn emit_with(
             modules.push(t.module.clone());
         }
     }
-    for c in constants {
-        if !modules.contains(&c.module) {
-            modules.push(c.module.clone());
+    for m in constants.iter().map(|c| &c.module).chain(bases.iter().map(|b| &b.module)) {
+        if !modules.contains(m) {
+            modules.push(m.clone());
         }
     }
     let mut out: Vec<Out> = modules
@@ -37,9 +37,6 @@ pub fn emit_with(
             module(decls, m, bases.iter().find(|b| &b.module == m), &mine)
         })
         .collect::<Result<_, _>>()?;
-    if let Some(b) = bases.iter().find(|b| !modules.contains(&b.module)) {
-        return Err(format!("{}: a base class's module holds no record", b.module));
-    }
     for d in decls {
         if let Some(m) = &d.dispatch {
             if modules.contains(m) || out.iter().any(|o| o.path == format!("{m}.py")) {

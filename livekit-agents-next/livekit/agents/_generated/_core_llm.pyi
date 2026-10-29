@@ -19,6 +19,7 @@ from livekit.agents.types import APIConnectOptions
 from livekit.rtc import AudioFrame
 
 from .._core import ChatItem, FallbackTtsStream
+from .llm import ChatChunk
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
@@ -131,7 +132,7 @@ class FallbackLlm:
     ) -> FallbackLlmChunks: ...
 
 class FallbackLlmChunks:
-    async def recv(self) -> dict[str, object] | None: ...
+    async def recv(self) -> ChatChunk | None: ...
     async def aclose(self) -> None: ...
 
 class FallbackTts:
@@ -227,7 +228,7 @@ class InferenceLlm:
         """
 
 class InferenceLlmChunks:
-    async def recv(self) -> dict[str, object] | None: ...
+    async def recv(self) -> ChatChunk | None: ...
     async def aclose(self) -> None: ...
 
 class LlmChoiceParser:
@@ -235,10 +236,10 @@ class LlmChoiceParser:
     the model's thinking tags: `inference.LLMStream` over a plugin's own client.
     """
     def __init__(self, model: str) -> None: ...
-    def parse(self, id: str, choice: object) -> dict[str, object] | None:
+    def parse(self, id: str, choice: object) -> ChatChunk | None:
         """The chunk `choice` (one streamed choice of completion `id`) completes, if any."""
 
-def llm_usage_chunk(chunk: object) -> dict[str, object] | None:
+def llm_usage_chunk(chunk: object) -> ChatChunk | None:
     """The usage chunk of a streamed completion chunk, when it reports usage."""
 
 class McpSession:

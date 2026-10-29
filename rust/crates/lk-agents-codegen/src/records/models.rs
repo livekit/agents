@@ -353,7 +353,9 @@ fn model(
             Some(_) => runtime.add("pydantic", "Field"),
             None => runtime.add("dataclasses", "field"),
         }
-        runtime.add_module(factory.rsplit_once('.').map_or(factory, |(m, _)| m));
+        if let Some((m, _)) = factory.rsplit_once('.') {
+            runtime.add_module(m);
+        }
     }
     // A pydantic model's discriminator constants lead its fields, as pydantic declares them.
     let constants: String = r

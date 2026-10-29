@@ -4,7 +4,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/host.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/provider.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/chat_context.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/llm/events.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/llm.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/realtime.rs",

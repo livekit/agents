@@ -224,7 +224,8 @@ impl LlmMetricState {
 
     /// Whether `chunk` is the first with a response.
     #[pyo3(signature = (now, chunk))]
-    fn observe(&mut self, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: ::lk_agents_abi::LlmChunk) -> PyResult<bool> {
+    fn observe(&mut self, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: Bound<'_, PyAny>) -> PyResult<bool> {
+        let chunk = crate::generated::records::llm::chat_chunk_from_py(&chunk)?;
         let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk);
         Ok(out)
     }
