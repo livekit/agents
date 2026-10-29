@@ -270,6 +270,15 @@ pub struct Core {
     silence: Option<SilenceArm>,
 }
 
+/// AMD's own STT tap follows the phase: pre-answer audio is never transcribed, and the tap is
+/// removed once a verdict is out or the machine closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapPhase {
+    Muted,
+    Open,
+    Over,
+}
+
 /// The variant is the phase.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Amd {
@@ -314,6 +323,15 @@ impl Amd {
     /// The audio gate: a query read at frame rate, not an effect.
     pub fn listening(&self) -> bool {
         matches!(self, Amd::Listening(_))
+    }
+
+    /// What AMD's own STT tap does in this phase.
+    pub fn tap(&self) -> TapPhase {
+        match self {
+            Amd::Dormant(_) => TapPhase::Muted,
+            Amd::Listening(_) => TapPhase::Open,
+            Amd::Emitted(_) | Amd::Closed(_) => TapPhase::Over,
+        }
     }
 
     /// `AMD._on_end_of_turn`'s answer: a machine verdict is out under `interrupt_on_machine`, and

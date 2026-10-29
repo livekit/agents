@@ -12,7 +12,7 @@ use lk_agents_voice::agent_session::{
 };
 pub use lk_agents_voice::amd::AmdSetup;
 use lk_agents_voice::amd::classifier::{
-    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, In, Out,
+    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, In, Out, TapPhase,
 };
 use lk_agents_voice::amd::{Callee, feed_input, tap_input};
 use lk_agents_voice::events::SessionEvent;
@@ -484,25 +484,17 @@ impl AmdSystem {
         }
     }
 
-    /// The tap follows the machine's phase: frames while listening, the row cleared once a verdict
-    /// is out or the machine closed.
     fn sync_tap(&mut self) {
-        let over = matches!(self.machine, Some(Amd::Emitted(_) | Amd::Closed(_)));
-        let removed = match &self.stt {
-            SttLeg::Installed { gate, .. } if self.machine.as_ref().is_some_and(Amd::listening) => {
-                gate.store(true, Ordering::Relaxed);
-                None
-            }
-            SttLeg::Installed { .. } | SttLeg::Opening if over => {
-                let tap =
-                    if let SttLeg::Installed { tap, .. } = self.stt { Some(tap) } else { None };
+        let Some(phase) = self.machine.as_ref().map(Amd::tap) else { return };
+        match (phase, &self.stt) {
+            (TapPhase::Open, SttLeg::Installed { gate, .. }) => gate.store(true, Ordering::Relaxed),
+            (TapPhase::Over, SttLeg::Installed { tap, .. }) => {
+                let tap = *tap;
                 self.stt = SttLeg::Done;
-                tap
+                self.peer.remove_audio_tap(tap);
             }
-            _ => None,
-        };
-        if let Some(tap) = removed {
-            self.peer.remove_audio_tap(tap);
+            (TapPhase::Over, SttLeg::Opening) => self.stt = SttLeg::Done,
+            _ => {}
         }
     }
 }
