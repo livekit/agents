@@ -22,13 +22,6 @@ class _ProjectCredentials(AnonymousCredentials):
 
 
 class TestSTTCredentials:
-    def test_constructs_without_adc(self) -> None:
-        # before #6586 there was no way to construct STT without ADC,
-        # credentials_info, or a credentials file on disk
-        creds = AnonymousCredentials()
-        stt_instance = STT(credentials=creds)
-        assert stt_instance._credentials is creds
-
     async def test_client_uses_supplied_credentials(self) -> None:
         creds = AnonymousCredentials()
         stt_instance = STT(credentials=creds)

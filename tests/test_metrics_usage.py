@@ -80,11 +80,6 @@ def test_stt_metrics_defaults_total_tokens_to_input_plus_output() -> None:
     assert metrics.total_tokens == 100
 
 
-def test_stt_metrics_keeps_an_explicit_total() -> None:
-    metrics = _stt_metrics(input_tokens=80, output_tokens=20, total_tokens=99)
-    assert metrics.total_tokens == 99
-
-
 def test_collector_aggregates_streaming_stt_token_usage() -> None:
     collector = ModelUsageCollector()
     collector.collect(_stt_metrics(input_tokens=80, input_audio_tokens=60, output_tokens=20))

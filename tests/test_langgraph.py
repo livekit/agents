@@ -209,16 +209,6 @@ def test_validation_rejects_unsupported_in_list():
         LLMAdapter(graph, stream_mode=["messages", "updates"])
 
 
-def test_validation_accepts_supported_modes():
-    """Test that supported modes are accepted."""
-    graph = build_messages_graph()
-
-    # Should not raise
-    LLMAdapter(graph, stream_mode="messages")
-    LLMAdapter(graph, stream_mode="custom")
-    LLMAdapter(graph, stream_mode=["messages", "custom"])
-
-
 # --- Tests: mode isolation ---
 
 

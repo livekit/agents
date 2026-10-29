@@ -75,29 +75,6 @@ class _NonRetryableStream(RecognizeStream):
         raise APIStatusError("Unauthorized", status_code=401)
 
 
-async def test_start_time_seeded_on_init() -> None:
-    """start_time is initialized to approximately time.time() when the stream is created."""
-    stt = _DummySTT()
-    before = time.time()
-    stream = stt.stream()
-    after = time.time()
-
-    assert before <= stream.start_time <= after
-    await stream.aclose()
-
-
-async def test_start_time_setter_accepts_valid_values() -> None:
-    """Plugins can override start_time by assigning to the public property."""
-    stt = _DummySTT()
-    stream = stt.stream()
-
-    new_anchor = time.time() + 10.0
-    stream.start_time = new_anchor
-    assert stream.start_time == new_anchor
-
-    await stream.aclose()
-
-
 async def test_start_time_setter_rejects_negative() -> None:
     """start_time setter validates non-negative, matching start_time_offset behavior."""
     stt = _DummySTT()

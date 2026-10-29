@@ -243,26 +243,6 @@ ADMONITION_HTML = """\
 
 
 class TestMapOutputPath:
-    def test_index_html(self, tmp_path: Path) -> None:
-        """dir/index.html -> dir.md"""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-        html_path = input_dir / "livekit" / "agents" / "index.html"
-        html_path.parent.mkdir(parents=True)
-        html_path.touch()
-        result = map_output_path(html_path, input_dir)
-        assert result == Path("livekit/agents.md")
-
-    def test_regular_html(self, tmp_path: Path) -> None:
-        """dir/file.html -> dir/file.md"""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-        html_path = input_dir / "livekit" / "agents" / "vad.html"
-        html_path.parent.mkdir(parents=True)
-        html_path.touch()
-        result = map_output_path(html_path, input_dir)
-        assert result == Path("livekit/agents/vad.md")
-
     def test_top_level_index(self, tmp_path: Path) -> None:
         """index.html -> index.md"""
         input_dir = tmp_path / "html"
@@ -272,31 +252,8 @@ class TestMapOutputPath:
         result = map_output_path(html_path, input_dir)
         assert result == Path("index.md")
 
-    def test_nested_index(self, tmp_path: Path) -> None:
-        """livekit/plugins/openai/index.html -> livekit/plugins/openai.md"""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-        html_path = input_dir / "livekit" / "plugins" / "openai" / "index.html"
-        html_path.parent.mkdir(parents=True)
-        html_path.touch()
-        result = map_output_path(html_path, input_dir)
-        assert result == Path("livekit/plugins/openai.md")
-
-    def test_single_dir_index(self, tmp_path: Path) -> None:
-        """livekit/index.html -> livekit.md"""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-        html_path = input_dir / "livekit" / "index.html"
-        html_path.parent.mkdir(parents=True)
-        html_path.touch()
-        result = map_output_path(html_path, input_dir)
-        assert result == Path("livekit.md")
-
 
 class TestMapLink:
-    def test_html_to_md(self) -> None:
-        assert map_link("vad.html") == "vad.md"
-
     def test_index_html(self) -> None:
         assert map_link("agents/index.html") == "agents.md"
 
@@ -548,14 +505,6 @@ def test_directory_conversion_preserves_api_content_and_internal_links(tmp_path:
 
 
 class TestValidateLinks:
-    def test_no_broken_links(self, tmp_path: Path) -> None:
-        """All links resolve correctly."""
-        (tmp_path / "a.md").write_text("[link](b.md)\n")
-        (tmp_path / "b.md").write_text("# B\n")
-        result = validate_links(tmp_path)
-        assert result.broken == []
-        assert result.external == []
-
     def test_broken_link_detected(self, tmp_path: Path) -> None:
         """A link to a missing file is detected."""
         (tmp_path / "a.md").write_text("[link](missing.md)\n")

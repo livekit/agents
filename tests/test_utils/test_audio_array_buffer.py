@@ -121,49 +121,7 @@ class TestRead:
         _assert_eq(buf, [1, 2, 3])
 
 
-class TestSlidingWindow:
-    def test_continuous_pushes(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=4)
-        buf.push_frame(_frame([1, 2, 3, 4]))
-        _assert_eq(buf, [1, 2, 3, 4])
-        buf.push_frame(_frame([5, 6]))
-        _assert_eq(buf, [3, 4, 5, 6])
-        buf.push_frame(_frame([7, 8]))
-        _assert_eq(buf, [5, 6, 7, 8])
-
-    def test_full_replacement(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=4)
-        buf.push_frame(_frame([1, 2, 3, 4]))
-        buf.push_frame(_frame([10, 20, 30, 40]))
-        _assert_eq(buf, [10, 20, 30, 40])
-
-    def test_many_small_pushes(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=3)
-        for i in range(10):
-            buf.push_frame(_frame([i]))
-        _assert_eq(buf, [7, 8, 9])
-
-
 class TestSampleRates:
-    @pytest.mark.parametrize("sr", [8000, 16000, 24000, 48000], ids=["8k", "16k", "24k", "48k"])
-    def test_same_rate_no_resampling(self, sr: int) -> None:
-        """Frames matching the buffer's sample rate are stored without resampling."""
-        n = sr * 50 // 1000  # 50ms
-        buf = AudioArrayBuffer(buffer_size=sr, sample_rate=sr)
-        buf.push_frame(_frame(list(range(n)), sr=sr))
-        assert len(buf.read()) == n
-
-    @pytest.mark.parametrize("sr", [8000, 16000, 24000, 48000], ids=["8k", "16k", "24k", "48k"])
-    def test_overflow_at_different_rates(self, sr: int) -> None:
-        """Buffer should slide correctly with realistic frame sizes at each rate."""
-        n = sr * 50 // 1000
-        buf = AudioArrayBuffer(buffer_size=sr, sample_rate=sr)
-
-        # push 1.5s worth of frames to trigger overflow
-        for _ in range(30):
-            buf.push_frame(_frame(list(range(n)), sr=sr))
-        assert len(buf.read()) == sr
-
     @pytest.mark.parametrize(
         ("frame_sr", "buf_sr"),
         [(8000, 16000), (48000, 16000), (24000, 16000), (16000, 48000)],

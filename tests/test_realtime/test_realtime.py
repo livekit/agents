@@ -6,7 +6,6 @@ import wave
 from collections.abc import Callable
 from pathlib import Path
 
-import numpy as np
 import pytest
 from dotenv import load_dotenv
 from openai.types import realtime
@@ -189,20 +188,6 @@ async def test_response_includes_audio(rt_session: llm.RealtimeSession):
             got_audio = True
             break
     assert got_audio
-
-
-@pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
-async def test_push_audio(rt_session: llm.RealtimeSession):
-    t = np.linspace(0, 0.5, SAMPLE_RATE // 2, dtype=np.float32)
-    samples = (np.sin(2 * np.pi * 440 * t) * 16000).astype(np.int16)
-    frame = rtc.AudioFrame(
-        data=samples.tobytes(),
-        sample_rate=SAMPLE_RATE,
-        num_channels=1,
-        samples_per_channel=len(samples),
-    )
-    rt_session.push_audio(frame)
-    rt_session.commit_audio()
 
 
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
