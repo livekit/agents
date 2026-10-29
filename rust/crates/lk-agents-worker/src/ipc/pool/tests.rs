@@ -280,7 +280,14 @@ async fn a_launch_raises_when_every_spawn_fails() {
         Err(LaunchError::AcquireExhausted { attempts: MAX_ACQUIRE_ATTEMPTS })
     ));
     assert_eq!(pool.jobs_waiting(), 0);
-    assert!(pool.processes().is_empty());
+    // Every failed process is closed and reaped.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !pool.processes().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     pool.aclose().await;
 }
 

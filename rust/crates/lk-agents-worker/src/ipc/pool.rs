@@ -1,8 +1,9 @@
-//! The warm process pool: host execution and cleanup ownership around [`Allocation`].
-//! Admission and process eligibility are changed under the same lock as owned resources;
-//! host operations run after that lock is released.
+//! The warm process pool: admission, process eligibility, joins and the close deadline, with the
+//! host's steps run as tasks the pool owns. Every change happens under one lock; a host step only
+//! reports back into it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use futures_util::FutureExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, watch};
+use tokio::time::Instant;
 
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::HostError;
@@ -17,15 +19,52 @@ use lk_agents_abi::errors::HostError;
 use super::lock;
 use super::process_pool::Executor;
 
-mod allocation;
-use allocation::{
-    Allocation, PoolEffect, PoolFailure, PoolInput, PoolLimits, ProcessPhase, ReservationId,
-    ReservationState,
-};
-pub use allocation::{
-    MAX_ACQUIRE_ATTEMPTS, MAX_LAUNCH_ATTEMPTS, PoolAdmissionError, PoolCleanupObservation,
-    PoolJoinOutcome, ProcessId, REFILL_INTERVAL,
-};
+pub const MAX_ACQUIRE_ATTEMPTS: u32 = 3;
+pub const MAX_LAUNCH_ATTEMPTS: u32 = 3;
+/// How often the pool tops the warm processes up, and how long it waits before retrying a failed
+/// spawn, join or exit observation.
+pub const REFILL_INTERVAL: Duration = Duration::from_millis(100);
+const CONCURRENT_INITIALIZATIONS: usize = 4;
+const PENDING_JOBS: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProcessId(pub u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ReservationId(u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolJoinOutcome {
+    Reaped,
+    NotLaunched,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolAdmissionError {
+    NotStarted,
+    Draining,
+    Closed,
+    Full,
+    DuplicateJob,
+}
+
+impl std::fmt::Display for PoolAdmissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotStarted => "process pool has not started",
+            Self::Draining => "process pool is draining",
+            Self::Closed => "process pool is closed",
+            Self::Full => "process pool pending job limit reached",
+            Self::DuplicateJob => "job is already admitted to the process pool",
+        })
+    }
+}
+
+/// The processes still owned when the close deadline passed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolCleanupObservation {
+    pub processes: Vec<ProcessId>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolEvent {
@@ -82,23 +121,6 @@ pub struct PoolOptions {
     pub close_timeout: Duration,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Readiness {
-    Pending,
-    Ready,
-    Closed,
-}
-
-struct Inner {
-    host: Arc<dyn Executors>,
-    opts: PoolOptions,
-    state: Mutex<Shared>,
-    changed: Notify,
-    idle_ready: watch::Sender<Readiness>,
-    closed: watch::Sender<bool>,
-    close_ready: watch::Sender<bool>,
-}
-
 #[derive(Debug)]
 pub enum LaunchError {
     NoProcess,
@@ -124,18 +146,116 @@ impl std::fmt::Display for PoolStartError {
     }
 }
 
-pub struct ProcPool(Arc<Inner>);
-
-struct Waiting {
-    pool: ProcPool,
-    request: ReservationId,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Creating,
+    Initializing,
+    Ready,
+    Reserved,
+    Running,
+    Retiring,
 }
 
-impl Drop for Waiting {
-    fn drop(&mut self) {
-        self.pool.handle(PoolInput::Cancel(self.request));
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Failure {
+    AcquireExhausted { attempts: u32 },
+    LaunchExhausted,
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReservationState {
+    Waiting,
+    Reserved(ProcessId),
+    Completed,
+    Failed(Failure),
+}
+
+struct Process {
+    executor: Option<Executor>,
+    phase: Phase,
+    /// The reservation this process is created, initialized or reserved for.
+    request: Option<ReservationId>,
+    /// The job it was reserved for, released when it retires.
+    job: Option<(String, ReservationId)>,
+    /// The host's close returned.
+    closed: bool,
+    /// The reaping receipt, once a join returned one.
+    receipt: Option<PoolJoinOutcome>,
+    /// A join is running or scheduled.
+    joining: bool,
+    /// An exit observation is running or scheduled.
+    watching: bool,
+}
+
+struct Reservation {
+    job_id: String,
+    state: ReservationState,
+    acquire_attempts: u32,
+    launch_attempts: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Readiness {
+    Pending,
+    Ready,
+    Closed,
+}
+
+/// Everything the pool decides on and owns, changed under one lock.
+struct State {
+    target_idle: usize,
+    started: bool,
+    draining: bool,
+    closed: bool,
+    next_process: u64,
+    next_request: u64,
+    processes: BTreeMap<ProcessId, Process>,
+    initializing: BTreeSet<ProcessId>,
+    ready: VecDeque<ProcessId>,
+    pending: VecDeque<ReservationId>,
+    requests: BTreeMap<ReservationId, Reservation>,
+    jobs: BTreeMap<String, ReservationId>,
+    /// A spawn failed: no warm process is added before this.
+    refill_paused_until: Option<Instant>,
+    tasks: Vec<OwnedTask>,
+    /// The close's join of `tasks`, started by the first close.
+    cleanup: Option<OwnedTask>,
+}
+
+impl State {
+    fn reservation(&self, id: ReservationId) -> Option<ReservationState> {
+        self.requests.get(&id).map(|request| request.state)
+    }
+
+    fn executor(&self, id: ProcessId) -> Option<Executor> {
+        self.processes.get(&id).and_then(|process| process.executor.clone())
+    }
+
+    fn has_jobs(&self) -> bool {
+        !self.pending.is_empty()
+            || self.processes.values().any(|p| matches!(p.phase, Phase::Reserved | Phase::Running))
+    }
+
+    fn release_job(&mut self, job: &str, request: ReservationId) {
+        if self.jobs.get(job) == Some(&request) {
+            self.jobs.remove(job);
+        }
     }
 }
+
+struct Inner {
+    host: Arc<dyn Executors>,
+    opts: PoolOptions,
+    cleanup_timeout: Duration,
+    state: Mutex<State>,
+    changed: Notify,
+    idle_ready: watch::Sender<Readiness>,
+    closed: watch::Sender<bool>,
+    close_ready: watch::Sender<bool>,
+}
+
+pub struct ProcPool(Arc<Inner>);
 
 impl Clone for ProcPool {
     fn clone(&self) -> Self {
@@ -143,25 +263,41 @@ impl Clone for ProcPool {
     }
 }
 
+/// A launch's reservation, cancelled when the launch is dropped before it completed.
+struct Waiting {
+    pool: ProcPool,
+    request: ReservationId,
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.pool.update(|pool, st| pool.cancel(st, self.request));
+    }
+}
+
 impl ProcPool {
     pub fn new(host: Arc<dyn Executors>, opts: PoolOptions) -> Self {
         // CPU discovery is runtime configuration; constructing a pool performs no filesystem I/O.
-        let limits = PoolLimits {
-            idle_processes: opts.num_idle_processes,
-            concurrent_initializations: 4,
-            pending_jobs: 64,
-            cleanup_timeout: opts.close_timeout * 3 + super::supervisor::KILL_GRACE,
-        };
         Self(Arc::new(Inner {
             host,
             opts,
-            state: Mutex::new(Shared {
-                allocation: Allocation::new(limits),
-                executors: BTreeMap::new(),
+            cleanup_timeout: opts.close_timeout * 3 + super::supervisor::KILL_GRACE,
+            state: Mutex::new(State {
+                target_idle: opts.num_idle_processes,
+                started: false,
+                draining: false,
+                closed: false,
+                next_process: 0,
+                next_request: 0,
+                processes: BTreeMap::new(),
+                initializing: BTreeSet::new(),
+                ready: VecDeque::new(),
+                pending: VecDeque::new(),
+                requests: BTreeMap::new(),
+                jobs: BTreeMap::new(),
+                refill_paused_until: None,
                 tasks: Vec::new(),
                 cleanup: None,
-                next_request: 0,
-                now: Duration::ZERO,
             }),
             changed: Notify::new(),
             idle_ready: watch::channel(Readiness::Pending).0,
@@ -171,32 +307,51 @@ impl ProcPool {
     }
 
     pub fn processes(&self) -> Vec<Executor> {
-        lock(&self.0.state).executors.values().cloned().collect()
+        lock(&self.0.state).processes.values().filter_map(|p| p.executor.clone()).collect()
     }
 
     pub fn jobs_waiting(&self) -> usize {
-        lock(&self.0.state).allocation.waiting()
+        lock(&self.0.state).pending.len()
     }
 
     pub fn target_idle(&self) -> usize {
-        lock(&self.0.state).allocation.target_idle()
+        lock(&self.0.state).target_idle
     }
 
     pub fn set_target_idle(&self, n: usize) {
-        self.handle(PoolInput::TargetIdle(n));
+        let idle = self.0.opts.num_idle_processes;
+        self.update(|_, st| st.target_idle = n.min(idle));
     }
 
-    fn track(&self, task: OwnedTask) {
-        let completed = {
-            let mut state = lock(&self.0.state);
-            let (completed, active) = std::mem::take(&mut state.tasks)
-                .into_iter()
-                .partition::<Vec<_>, _>(|task| task.is_finished());
-            state.tasks = active;
-            state.tasks.push(task);
-            completed
+    /// Changes the state, then allocates, publishes readiness and wakes the waiters.
+    fn update<R>(&self, f: impl FnOnce(&Self, &mut State) -> R) -> R {
+        let result = {
+            let mut st = lock(&self.0.state);
+            if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
+                st.refill_paused_until = None;
+            }
+            let result = f(self, &mut st);
+            self.allocate(&mut st);
+            if st.closed {
+                self.0.closed.send_replace(true);
+                self.0.idle_ready.send_replace(Readiness::Closed);
+            } else if st.ready.len() >= self.0.opts.num_idle_processes {
+                self.0.idle_ready.send_replace(Readiness::Ready);
+            }
+            result
         };
-        for task in completed {
+        self.0.changed.notify_waiters();
+        result
+    }
+
+    /// Runs `step` as a task the pool owns until its close joined it.
+    fn own(&self, st: &mut State, step: impl Future<Output = ()> + Send + 'static) {
+        let (finished, active) = std::mem::take(&mut st.tasks)
+            .into_iter()
+            .partition::<Vec<_>, _>(|task| task.is_finished());
+        st.tasks = active;
+        st.tasks.push(TokioSpawner::current().spawn(step));
+        for task in finished {
             if let Some(Err(error)) = task.now_or_never() {
                 crate::diagnostics::emit(
                     log::Level::Error,
@@ -206,38 +361,19 @@ impl ProcPool {
         }
     }
 
-    fn handle(&self, input: PoolInput) {
-        let effects = {
-            let mut state = lock(&self.0.state);
-            let now = state.now;
-            let effects = state.allocation.handle(input, now);
-            if state.allocation.is_closed() {
-                self.0.closed.send_replace(true);
-                self.0.idle_ready.send_replace(Readiness::Closed);
-            } else if state.allocation.ready() >= self.0.opts.num_idle_processes {
-                self.0.idle_ready.send_replace(Readiness::Ready);
-            }
-            effects
-        };
-        self.0.changed.notify_waiters();
-        self.spawn(effects);
-    }
-
     pub async fn start(&self) -> Result<(), PoolStartError> {
-        let (start, effects) = {
-            let mut state = lock(&self.0.state);
-            if state.allocation.is_closed() {
+        let first = {
+            let st = lock(&self.0.state);
+            if st.closed {
                 return Err(PoolStartError::Closed);
             }
-            let start = !state.allocation.is_started();
-            let now = state.now;
-            (start, state.allocation.handle(PoolInput::Start, now))
+            !st.started
         };
-        self.spawn(effects);
-        self.handle(PoolInput::Wake);
-        if start {
+        self.update(|_, st| st.started = true);
+        if first {
             let pool = self.clone();
-            self.track(TokioSpawner::current().spawn(async move { pool.refill().await }));
+            let mut st = lock(&self.0.state);
+            self.own(&mut st, async move { pool.refill().await });
         }
         let mut ready = self.0.idle_ready.subscribe();
         let wait = self.0.opts.initialize_timeout + Duration::from_secs(2);
@@ -246,114 +382,118 @@ impl ProcPool {
             Ok(Ok(readiness)) if *readiness == Readiness::Ready => Ok(()),
             Ok(_) => Err(PoolStartError::Closed),
             Err(_) => Err(PoolStartError::WarmupTimedOut {
-                ready: lock(&self.0.state).allocation.ready(),
+                ready: lock(&self.0.state).ready.len(),
                 required: self.0.opts.num_idle_processes,
             }),
         }
     }
 
-    fn closed(&self) -> bool {
-        *self.0.closed.borrow()
-    }
-
+    /// Tops the warm processes up until the pool closed and released every process.
     async fn refill(&self) {
-        let origin = tokio::time::Instant::now();
         loop {
-            if self.closed() && !lock(&self.0.state).allocation.has_processes() {
-                break;
+            {
+                let st = lock(&self.0.state);
+                if st.closed && st.processes.is_empty() {
+                    break;
+                }
             }
-            let delay = {
-                let mut state = lock(&self.0.state);
-                state.now = tokio::time::Instant::now().duration_since(origin);
-                state
-                    .allocation
-                    .wake_at()
-                    .map_or(REFILL_INTERVAL, |deadline| deadline.saturating_sub(state.now))
+            self.update(|_, _| {});
+            tokio::time::sleep(REFILL_INTERVAL).await;
+        }
+    }
+
+    /// Hands ready processes to waiting reservations in order, creates processes for those still
+    /// waiting, then tops the warm ones up to the target.
+    fn allocate(&self, st: &mut State) {
+        if !st.started || st.closed {
+            return;
+        }
+        let requests = &st.requests;
+        st.pending.retain(|id| {
+            requests.get(id).is_some_and(|request| request.state == ReservationState::Waiting)
+        });
+        while !st.ready.is_empty() && !st.pending.is_empty() {
+            let first = *st.pending.front().unwrap();
+            if st.processes.values().any(|p| p.request == Some(first) && p.phase == Phase::Retiring)
+            {
+                // The head reservation must finish cleanup before any replacement is assigned.
+                // Spawning for later requests here would repeatedly replace their ready processes
+                // while the head remains blocked, starving the runtime and growing the pool.
+                return;
+            }
+            let process_id = st.ready.pop_front().unwrap();
+            let request_id = st.pending.pop_front().unwrap();
+            let request = st.requests.get_mut(&request_id).unwrap();
+            request.state = ReservationState::Reserved(process_id);
+            request.acquire_attempts = 0;
+            let job = (request.job_id.clone(), request_id);
+            for (other, process) in &mut st.processes {
+                if *other != process_id && process.request == Some(request_id) {
+                    process.request = None;
+                }
+            }
+            let process = st.processes.get_mut(&process_id).unwrap();
+            process.phase = Phase::Reserved;
+            process.request = Some(request_id);
+            process.job = Some(job);
+        }
+        for request_id in st.pending.iter().copied().collect::<Vec<_>>() {
+            if st.processes.values().any(|p| p.request == Some(request_id)) {
+                continue;
+            }
+            let initializing = st.processes.iter().find_map(|(id, p)| {
+                (st.initializing.contains(id) && p.request.is_none() && p.phase != Phase::Retiring)
+                    .then_some(*id)
+            });
+            let process_id = match initializing {
+                Some(id) => id,
+                None if st.initializing.len() < CONCURRENT_INITIALIZATIONS => self.create(st),
+                None => break,
             };
-            self.handle(PoolInput::Wake);
-            tokio::time::sleep(delay).await;
+            st.requests.get_mut(&request_id).unwrap().acquire_attempts += 1;
+            st.processes.get_mut(&process_id).unwrap().request = Some(request_id);
         }
-    }
-
-    fn spawn(&self, effects: Vec<PoolEffect>) {
-        for effect in effects {
-            match effect {
-                PoolEffect::Create(id) => {
-                    let pool = self.clone();
-                    self.track(
-                        TokioSpawner::current().spawn(async move { pool.spawn_proc(id).await }),
-                    );
+        if !st.draining && st.refill_paused_until.is_none() {
+            let unassigned = st
+                .processes
+                .values()
+                .filter(|p| {
+                    p.request.is_none()
+                        && matches!(p.phase, Phase::Creating | Phase::Initializing | Phase::Ready)
+                })
+                .count();
+            for _ in unassigned..st.target_idle {
+                if st.initializing.len() >= CONCURRENT_INITIALIZATIONS {
+                    break;
                 }
-                PoolEffect::Close(id) => {
-                    let process = lock(&self.0.state).executors.get(&id).cloned();
-                    if let Some(process) = process {
-                        let pool = self.clone();
-                        self.track(TokioSpawner::current().spawn(async move {
-                            if let Err(error) = pool.0.host.close(&process).await {
-                                pool.0.host.emit(PoolEvent::CleanupIncomplete, &process);
-                                pool.0.host.failed(&process, "error closing process", error);
-                            }
-                            pool.handle(PoolInput::Closed(id));
-                        }));
-                    }
-                }
-                PoolEffect::WatchExit(id) => {
-                    let process = lock(&self.0.state).executors.get(&id).cloned();
-                    if let Some(process) = process {
-                        let pool = self.clone();
-                        self.track(TokioSpawner::current().spawn(async move {
-                            match pool.0.host.wait_exit(&process).await {
-                                Ok(()) => pool.handle(PoolInput::Exited(id)),
-                                Err(error) => {
-                                    pool.0.host.emit(PoolEvent::ExitFailed, &process);
-                                    pool.0.host.failed(
-                                        &process,
-                                        "error observing process exit",
-                                        error,
-                                    );
-                                    pool.handle(PoolInput::ExitFailed(id));
-                                }
-                            }
-                        }));
-                    }
-                }
-                PoolEffect::Join(id) => {
-                    let process = lock(&self.0.state).executors.get(&id).cloned();
-                    if let Some(process) = process {
-                        let pool = self.clone();
-                        self.track(TokioSpawner::current().spawn(async move {
-                            match pool.0.host.join(&process).await {
-                                Ok(outcome) => {
-                                    pool.handle(PoolInput::Joined { process: id, outcome })
-                                }
-                                Err(error) => {
-                                    pool.0.host.emit(PoolEvent::JoinFailed, &process);
-                                    pool.0.host.failed(&process, "error joining process", error);
-                                    pool.handle(PoolInput::JoinFailed(id));
-                                }
-                            }
-                        }));
-                    }
-                }
-                PoolEffect::Released { process: id, outcome: _ } => {
-                    let process = lock(&self.0.state).executors.remove(&id);
-                    if let Some(process) = process {
-                        self.0.host.emit(PoolEvent::Closed, &process);
-                    }
-                }
-                PoolEffect::Refused { .. } => {}
-                PoolEffect::CleanupIncomplete(observation) => {
-                    self.0.host.cleanup_incomplete(observation);
-                    self.0.close_ready.send_replace(true);
-                }
-                PoolEffect::CloseComplete => {
-                    self.0.close_ready.send_replace(true);
-                }
+                self.create(st);
             }
         }
     }
 
-    async fn spawn_proc(&self, id: ProcessId) {
+    fn create(&self, st: &mut State) -> ProcessId {
+        let id = ProcessId(st.next_process);
+        st.next_process += 1;
+        st.processes.insert(
+            id,
+            Process {
+                executor: None,
+                phase: Phase::Creating,
+                request: None,
+                job: None,
+                closed: false,
+                receipt: None,
+                joining: false,
+                watching: false,
+            },
+        );
+        st.initializing.insert(id);
+        let pool = self.clone();
+        self.own(st, async move { pool.spawn_process(id).await });
+        id
+    }
+
+    async fn spawn_process(&self, id: ProcessId) {
         let process = match self.0.host.create().await {
             Ok(process) => process,
             Err(error) => {
@@ -361,14 +501,31 @@ impl ProcPool {
                     log::Level::Error,
                     format!("error creating process: {error}"),
                 );
-                self.handle(PoolInput::SpawnFailed(id));
-                self.handle(PoolInput::Cleaned(id));
+                self.update(|pool, st| {
+                    pool.spawn_failed(st, id);
+                    // Never created: nothing to close or join.
+                    st.initializing.remove(&id);
+                    st.processes.remove(&id);
+                });
                 return;
             }
         };
-        lock(&self.0.state).executors.insert(id, process.clone());
-        self.handle(PoolInput::Created(id));
-        if lock(&self.0.state).allocation.phase(id) != ProcessPhase::Initializing {
+        let initializing = self.update(|pool, st| {
+            let Some(entry) = st.processes.get_mut(&id) else { return false };
+            entry.executor = Some(process.clone());
+            match entry.phase {
+                Phase::Creating => {
+                    entry.phase = Phase::Initializing;
+                    true
+                }
+                Phase::Retiring => {
+                    pool.close_process(st, id);
+                    false
+                }
+                _ => false,
+            }
+        });
+        if !initializing {
             return;
         }
         let mut closed = self.0.closed.subscribe();
@@ -391,28 +548,201 @@ impl ProcPool {
             },
         };
         if !initialized {
-            self.handle(PoolInput::SpawnFailed(id));
+            self.update(|pool, st| pool.spawn_failed(st, id));
             return;
         }
         self.0.host.emit(PoolEvent::Ready, &process);
-        self.handle(PoolInput::Ready(id));
+        self.update(|pool, st| {
+            let Some(entry) = st.processes.get_mut(&id) else { return };
+            if entry.phase != Phase::Initializing {
+                return;
+            }
+            entry.phase = Phase::Ready;
+            entry.request = None;
+            entry.joining = true;
+            entry.watching = true;
+            st.initializing.remove(&id);
+            st.ready.push_back(id);
+            pool.join(st, id, Duration::ZERO);
+            pool.watch_exit(st, id, Duration::ZERO);
+        });
     }
 
-    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, Executor), PoolFailure> {
+    fn spawn_failed(&self, st: &mut State, id: ProcessId) {
+        st.refill_paused_until = Some(Instant::now() + REFILL_INTERVAL);
+        self.retire(st, id);
+    }
+
+    /// Takes the process out of service and closes it; its reservation waits for another one
+    /// unless its attempts are spent.
+    fn retire(&self, st: &mut State, id: ProcessId) {
+        let Some(process) = st.processes.get_mut(&id) else { return };
+        if process.phase == Phase::Retiring {
+            return;
+        }
+        let reserved = process.phase == Phase::Reserved;
+        process.phase = Phase::Retiring;
+        let request_id = process.request;
+        st.ready.retain(|ready| *ready != id);
+        let waiting = request_id.filter(|request_id| {
+            st.reservation(*request_id).is_some_and(|state| {
+                state == ReservationState::Waiting || state == ReservationState::Reserved(id)
+            })
+        });
+        if let Some(request_id) = waiting {
+            let request = st.requests.get_mut(&request_id).unwrap();
+            if reserved {
+                request.launch_attempts += 1;
+            }
+            let failure = if request.launch_attempts >= MAX_LAUNCH_ATTEMPTS {
+                Some(Failure::LaunchExhausted)
+            } else if request.acquire_attempts >= MAX_ACQUIRE_ATTEMPTS {
+                Some(Failure::AcquireExhausted { attempts: request.acquire_attempts })
+            } else {
+                None
+            };
+            match failure {
+                Some(failure) => {
+                    request.state = ReservationState::Failed(failure);
+                    let job_id = request.job_id.clone();
+                    st.release_job(&job_id, request_id);
+                }
+                None => {
+                    request.state = ReservationState::Waiting;
+                    if !st.pending.contains(&request_id) {
+                        st.pending.push_back(request_id);
+                    }
+                }
+            }
+        } else if let Some((job_id, request_id)) =
+            st.processes.get_mut(&id).and_then(|process| process.job.take())
+        {
+            st.release_job(&job_id, request_id);
+        }
+        self.close_process(st, id);
+    }
+
+    /// The host's close of a created process; then its reaping receipt releases it.
+    fn close_process(&self, st: &mut State, id: ProcessId) {
+        let Some(executor) = st.executor(id) else { return };
+        let pool = self.clone();
+        self.own(st, async move {
+            if let Err(error) = pool.0.host.close(&executor).await {
+                pool.0.host.emit(PoolEvent::CleanupIncomplete, &executor);
+                pool.0.host.failed(&executor, "error closing process", error);
+            }
+            pool.update(|pool, st| {
+                let Some(process) = st.processes.get_mut(&id) else { return };
+                process.closed = true;
+                if process.receipt.is_some() {
+                    pool.release(st, id);
+                } else if !process.joining {
+                    process.joining = true;
+                    pool.join(st, id, Duration::ZERO);
+                }
+            });
+        });
+    }
+
+    /// Waits for the process's reaping receipt, `after` a delay; a failed join is retried.
+    fn join(&self, st: &mut State, id: ProcessId, after: Duration) {
+        let Some(executor) = st.executor(id) else { return };
+        let pool = self.clone();
+        self.own(st, async move {
+            tokio::time::sleep(after).await;
+            match pool.0.host.join(&executor).await {
+                Ok(outcome) => pool.update(|pool, st| {
+                    let Some(process) = st.processes.get_mut(&id) else { return };
+                    process.joining = false;
+                    process.receipt = Some(outcome);
+                    pool.retire(st, id);
+                    if st.processes.get(&id).is_some_and(|process| process.closed) {
+                        pool.release(st, id);
+                    }
+                }),
+                Err(error) => {
+                    pool.0.host.emit(PoolEvent::JoinFailed, &executor);
+                    pool.0.host.failed(&executor, "error joining process", error);
+                    pool.update(|pool, st| {
+                        if st.processes.contains_key(&id) {
+                            pool.retire(st, id);
+                            pool.join(st, id, REFILL_INTERVAL);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /// The process's OS exit, `after` a delay, takes it out of service; a failed observation is
+    /// retried.
+    fn watch_exit(&self, st: &mut State, id: ProcessId, after: Duration) {
+        let Some(executor) = st.executor(id) else { return };
+        let pool = self.clone();
+        self.own(st, async move {
+            tokio::time::sleep(after).await;
+            match pool.0.host.wait_exit(&executor).await {
+                Ok(()) => pool.update(|pool, st| {
+                    if let Some(process) = st.processes.get_mut(&id) {
+                        process.watching = false;
+                        pool.retire(st, id);
+                    }
+                }),
+                Err(error) => {
+                    pool.0.host.emit(PoolEvent::ExitFailed, &executor);
+                    pool.0.host.failed(&executor, "error observing process exit", error);
+                    pool.update(|pool, st| {
+                        if st.processes.contains_key(&id) {
+                            pool.retire(st, id);
+                            pool.watch_exit(st, id, REFILL_INTERVAL);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    fn release(&self, st: &mut State, id: ProcessId) {
+        st.initializing.remove(&id);
+        st.ready.retain(|ready| *ready != id);
+        if let Some(process) = st.processes.remove(&id)
+            && let Some(executor) = process.executor
+        {
+            self.0.host.emit(PoolEvent::Closed, &executor);
+        }
+    }
+
+    fn cancel(&self, st: &mut State, id: ReservationId) {
+        let Some(request) = st.requests.remove(&id) else { return };
+        st.pending.retain(|pending| *pending != id);
+        if let ReservationState::Reserved(process) = request.state {
+            self.retire(st, process);
+        }
+        if request.state != ReservationState::Completed {
+            st.release_job(&request.job_id, id);
+        }
+        for process in st.processes.values_mut() {
+            if process.request == Some(id) {
+                process.request = None;
+            }
+        }
+    }
+
+    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, Executor), Failure> {
         loop {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             {
-                let state = lock(&self.0.state);
-                match state.allocation.reservation(request) {
+                let st = lock(&self.0.state);
+                match st.reservation(request) {
                     Some(ReservationState::Reserved(id)) => {
-                        if let Some(process) = state.executors.get(&id) {
-                            return Ok((id, process.clone()));
+                        if let Some(executor) = st.executor(id) {
+                            return Ok((id, executor));
                         }
                     }
                     Some(ReservationState::Failed(error)) => return Err(error),
-                    None => return Err(PoolFailure::Closed),
+                    None => return Err(Failure::Closed),
                     _ => {}
                 }
             }
@@ -421,62 +751,88 @@ impl ProcPool {
     }
 
     pub async fn launch_job(&self, job_id: &str, job: HostRef) -> Result<(), LaunchError> {
-        let (request, effects) = {
-            let mut state = lock(&self.0.state);
-            let request = ReservationId(state.next_request);
-            state.next_request += 1;
-            let now = state.now;
-            let effects = state
-                .allocation
-                .handle(PoolInput::Admit { request, job_id: job_id.to_owned() }, now);
-            (request, effects)
-        };
-        if let Some(reason) = effects.iter().find_map(|effect| match effect {
-            PoolEffect::Refused { reason, .. } => Some(*reason),
-            _ => None,
-        }) {
-            return Err(LaunchError::Admission(reason));
-        }
+        let admitted = self.update(|_, st| {
+            let request = ReservationId(st.next_request);
+            st.next_request += 1;
+            let refused = if st.closed {
+                Some(PoolAdmissionError::Closed)
+            } else if st.draining {
+                Some(PoolAdmissionError::Draining)
+            } else if !st.started {
+                Some(PoolAdmissionError::NotStarted)
+            } else if st.jobs.contains_key(job_id) {
+                Some(PoolAdmissionError::DuplicateJob)
+            } else if st.requests.len() >= PENDING_JOBS {
+                Some(PoolAdmissionError::Full)
+            } else {
+                None
+            };
+            if let Some(reason) = refused {
+                return Err(reason);
+            }
+            st.jobs.insert(job_id.to_owned(), request);
+            st.requests.insert(
+                request,
+                Reservation {
+                    job_id: job_id.to_owned(),
+                    state: ReservationState::Waiting,
+                    acquire_attempts: 0,
+                    launch_attempts: 0,
+                },
+            );
+            st.pending.push_back(request);
+            Ok(request)
+        });
+        let request = admitted.map_err(LaunchError::Admission)?;
         let _waiting = Waiting { pool: self.clone(), request };
-        self.spawn(effects);
-        self.0.changed.notify_waiters();
         let mut last_error = None;
         loop {
             let (id, process) = self.acquire(request).await.map_err(|error| match error {
-                PoolFailure::AcquireExhausted { attempts } => {
-                    LaunchError::AcquireExhausted { attempts }
-                }
-                PoolFailure::LaunchExhausted { .. } => {
+                Failure::AcquireExhausted { attempts } => LaunchError::AcquireExhausted { attempts },
+                Failure::LaunchExhausted => {
                     last_error.take().map_or(LaunchError::NoProcess, LaunchError::Launch)
                 }
-                PoolFailure::Closed => LaunchError::Admission(PoolAdmissionError::Closed),
+                Failure::Closed => LaunchError::Admission(PoolAdmissionError::Closed),
             })?;
             match self.0.host.launch(&process, &job).await {
                 Ok(()) => {
-                    self.handle(PoolInput::LaunchSucceeded { request, process: id });
-                    if lock(&self.0.state).allocation.reservation(request)
-                        == Some(ReservationState::Completed)
-                    {
+                    let completed = self.update(|_, st| {
+                        if st.reservation(request) != Some(ReservationState::Reserved(id)) {
+                            return false;
+                        }
+                        st.requests.remove(&request);
+                        let entry = st.processes.get_mut(&id).unwrap();
+                        entry.phase = Phase::Running;
+                        entry.request = None;
+                        true
+                    });
+                    if completed {
                         self.0.host.emit(PoolEvent::JobLaunched, &process);
-                        self.handle(PoolInput::Forget(request));
                         return Ok(());
                     }
                 }
                 Err(error) => {
                     last_error = Some(error);
-                    self.handle(PoolInput::LaunchFailed { request, process: id });
+                    self.update(|pool, st| {
+                        if st.reservation(request) == Some(ReservationState::Reserved(id)) {
+                            pool.retire(st, id);
+                        }
+                    });
                 }
             }
         }
     }
 
     pub async fn join_jobs(&self) {
-        self.handle(PoolInput::Drain);
+        self.update(|_, st| {
+            st.draining = true;
+            st.refill_paused_until = None;
+        });
         loop {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if !lock(&self.0.state).allocation.has_jobs() {
+            if !lock(&self.0.state).has_jobs() {
                 return;
             }
             changed.await;
@@ -484,15 +840,26 @@ impl ProcPool {
     }
 
     pub async fn aclose(&self) {
-        let (first, effects, deadline) = {
-            let mut state = lock(&self.0.state);
-            let first = !state.allocation.is_closed();
-            let now = state.now;
-            let effects = state.allocation.handle(PoolInput::Close, now);
-            (first, effects, state.allocation.close_deadline())
-        };
-        self.spawn(effects);
-        self.handle(PoolInput::Wake);
+        let first = self.update(|pool, st| {
+            let first = !st.closed;
+            st.closed = true;
+            st.refill_paused_until = None;
+            st.pending.clear();
+            let reservations: Vec<_> = st.requests.keys().copied().collect();
+            for id in reservations {
+                let request = st.requests.get_mut(&id).unwrap();
+                if request.state != ReservationState::Completed {
+                    request.state = ReservationState::Failed(Failure::Closed);
+                    let job_id = request.job_id.clone();
+                    st.release_job(&job_id, id);
+                }
+            }
+            let processes: Vec<_> = st.processes.keys().copied().collect();
+            for id in processes {
+                pool.retire(st, id);
+            }
+            first
+        });
         if first {
             let pool = self.clone();
             // A caller's cancellation cannot discard the join obligations: the pool owns them.
@@ -504,7 +871,7 @@ impl ProcPool {
                         changed.as_mut().enable();
                         let tasks = std::mem::take(&mut lock(&pool.0.state).tasks);
                         if tasks.is_empty() {
-                            if !lock(&pool.0.state).allocation.has_processes() {
+                            if lock(&pool.0.state).processes.is_empty() {
                                 break;
                             }
                             changed.await;
@@ -521,34 +888,18 @@ impl ProcPool {
                     }
                 };
                 tokio::pin!(cleanup);
-                // Refill can finish before other owned tasks; keep the cleanup deadline serviceable.
-                let deadline = deadline.expect("first close owns a deadline");
-                let timeout = deadline.saturating_sub(lock(&pool.0.state).now);
-                if tokio::time::timeout(timeout, &mut cleanup).await.is_err() {
-                    {
-                        let mut state = lock(&pool.0.state);
-                        state.now = state.now.max(deadline);
-                    }
-                    pool.handle(PoolInput::Wake);
+                if tokio::time::timeout(pool.0.cleanup_timeout, &mut cleanup).await.is_err() {
+                    let processes = lock(&pool.0.state).processes.keys().copied().collect();
+                    pool.0.host.cleanup_incomplete(PoolCleanupObservation { processes });
+                    pool.0.close_ready.send_replace(true);
                     cleanup.await;
                 }
-                pool.handle(PoolInput::CleanupComplete);
+                pool.0.close_ready.send_replace(true);
             });
             lock(&self.0.state).cleanup = Some(cleanup);
         }
         let _ = self.0.close_ready.subscribe().wait_for(|done| *done).await;
     }
-}
-
-/// The allocation and the resources the pool owns beside it, changed under one lock.
-struct Shared {
-    allocation: Allocation,
-    executors: BTreeMap<ProcessId, Executor>,
-    tasks: Vec<OwnedTask>,
-    /// The close's join of `tasks`, started by the first close.
-    cleanup: Option<OwnedTask>,
-    next_request: u64,
-    now: Duration,
 }
 
 #[cfg(test)]
