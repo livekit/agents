@@ -58,12 +58,51 @@ pub use output::{
 pub use realtime::{FakeDuplex, FakeRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
-pub use tts::FakeTts;
+pub use tts::{FakeTts, MS_PER_WORD};
 pub use vad::FakeVad;
 
 pub const SAMPLE_RATE: u32 = 24_000;
 /// One fixture chunk is 10 ms of mono audio.
 pub const SAMPLES_PER_CHUNK: usize = (SAMPLE_RATE / 100) as usize;
+
+/// A provider quantity by its deciles as real providers showed it: the least, p10 to p90, the
+/// most. The crate's `calibration.json` holds what was measured from real providers through
+/// LiveKit Inference; it is reference only, and nothing reads it.
+pub type Measured = [u64; 11];
+
+/// What a run's provider delays are drawn against: the share of draws that stray from the
+/// measured spread, and the deadlines armed in the run, in ms.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Timing {
+    pub stray: f64,
+    pub deadlines: Vec<u64>,
+}
+
+/// A value across the whole measured span, distributed as measured.
+pub fn measured(rng: &mut fastrand::Rng, m: &Measured) -> u64 {
+    let at = rng.f64() * 10.0;
+    let i = (at as usize).min(9);
+    let (low, high) = (m[i] as f64, m[i + 1] as f64);
+    (low + (high - low) * (at - i as f64)).round() as u64
+}
+
+/// A provider delay in ms. Most draws are [`measured`]; a stray one is either a boundary (none,
+/// a tick, a frame, or a tick around a deadline in play) or a stall up to twenty times the most
+/// ever measured.
+pub fn delay(rng: &mut fastrand::Rng, m: &Measured, timing: &Timing) -> u64 {
+    if rng.f64() >= timing.stray {
+        return measured(rng, m);
+    }
+    if rng.bool() {
+        return match rng.usize(0..3 + 3 * timing.deadlines.len()) {
+            0 => 0,
+            1 => 1,
+            2 => 10,
+            k => (timing.deadlines[(k - 3) / 3] + (k - 3) as u64 % 3).saturating_sub(1),
+        };
+    }
+    (m[10].max(1) as f64 * 20f64.powf(rng.f64())).round() as u64
+}
 
 /// One thing the fakes opened: which boundary it sits at, and which one of its kind it is.
 ///

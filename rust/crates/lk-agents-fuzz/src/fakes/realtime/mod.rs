@@ -1,7 +1,6 @@
 //! The realtime model at the `Realtime` port the voice session consumes: a provider fake, its
 //! session a thin pass between the driver and [`server::Server`], the realtime server as the
-//! corpus shows the real one doing (`corpus/calibration.json`, `corpus/probes/` in
-//! lk-agents-test-support).
+//! real one was measured doing (`calibration.json`).
 //!
 //! The driver's commands reach the server as it sends them, and what the server does reaches the
 //! driver as the port's `Event`s: the response it was asked for or opened on its own, its message,
@@ -77,7 +76,7 @@ const SWAP_MS: u64 = 50;
 const DELTA_SAMPLES: usize = (server::DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 
 /// How a realtime setup's server is configured.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ServerSetup {
     /// Server-side turn detection, and which; `None` is turn detection explicitly off.
     pub vad: Option<Vad>,
@@ -85,12 +84,14 @@ pub struct ServerSetup {
     pub seed: u64,
     /// How long the session takes to connect.
     pub connect: Duration,
-    /// How often a response calls a tool, in percent; `None` is the corpus's rate.
+    /// How often a response calls a tool, in percent; `None` is the measured rate.
     pub tool_calls: Option<u8>,
     /// The model answers in text (`modalities=["text"]`).
     pub text_only: bool,
     /// A fallback adapter's model: a fatal error swaps to a fresh model rather than ending.
     pub fallback: bool,
+    /// What the server's delays are drawn against.
+    pub timing: crate::fakes::Timing,
 }
 
 pub struct FakeRealtime {
@@ -152,7 +153,8 @@ impl Realtime for FakeRealtime {
         Box::pin(async move {
             let nth = self.sessions.fetch_add(1, Ordering::SeqCst);
             let vad = self.setup.vad.filter(|_| !disabled);
-            let setup = ServerSetup { vad, seed: self.setup.seed ^ (nth << 32), ..self.setup };
+            let seed = self.setup.seed ^ (nth << 32);
+            let setup = ServerSetup { vad, seed, ..self.setup.clone() };
             let caps = capabilities(vad, self.setup.vad.is_some(), self.setup.text_only);
             let now = self.clock.now();
             // A connection slower than the client's bound is reported as timed out.
@@ -160,13 +162,14 @@ impl Realtime for FakeRealtime {
             let gives_up = bound
                 .filter(|b| setup.connect >= *b)
                 .map(|b| (now.saturating_add(b), ApiError::timed_out(TimeoutPhase::Connect)));
+            let opened = now.saturating_add(setup.connect);
             let socket = Arc::new(Socket {
                 setup,
                 caps,
                 clock: self.clock.clone(),
                 registry: self.registry.clone(),
                 slot: OnceLock::new(),
-                state: Mutex::new(State::new(now.saturating_add(setup.connect), gives_up)),
+                state: Mutex::new(State::new(opened, gives_up)),
                 wake: tokio::sync::Notify::new(),
                 ready: tokio::sync::Notify::new(),
             });
@@ -349,7 +352,12 @@ impl Socket {
     fn new_server(&self, connection: u64) -> Server {
         let ids = format!("{}s{connection}c", self.slot.get().map_or(0, |s| s.nth));
         let mut server = Server::new(self.setup.seed ^ connection, ids);
-        server.configure(self.setup.vad, !self.setup.text_only, self.setup.tool_calls);
+        server.configure(
+            self.setup.vad,
+            !self.setup.text_only,
+            self.setup.tool_calls,
+            self.setup.timing.clone(),
+        );
         server
     }
 

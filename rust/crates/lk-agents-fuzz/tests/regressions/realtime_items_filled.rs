@@ -15,7 +15,11 @@ use lk_agents_voice::tts::markup::ChatMessageExt;
 #[test]
 fn server_items_reach_history_filled() {
     let setup = Setup {
-        realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+        realtime: Some(RealtimeSetup {
+            turn_detection: false,
+            tool_calls: Some(0),
+            ..RealtimeSetup::default()
+        }),
         ..Setup::default()
     };
     let inputs = [

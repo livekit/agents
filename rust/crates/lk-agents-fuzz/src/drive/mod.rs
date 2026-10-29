@@ -216,9 +216,9 @@ pub struct Setup {
     pub avatar_fps: u64,
     pub avatar_latency_ms: u64,
     /// Which recorded recogniser the person's transcripts behave like, by its index in
-    /// `corpus::STT_MODELS`: its timing, its cuts, its quirks.
+    /// `search::STT_MODELS`: its timing, its cuts, its quirks.
     pub stt_model: usize,
-    /// The voice takes as long to its first audio as the recorded one did, drawn from this seed;
+    /// The voice takes as long to its first audio as a real one does, drawn from this seed;
     /// `None` answers at once.
     pub tts_latency: Option<u64>,
     /// `conn_options=SessionConnectOptions(..)`: each leg's retry budget. `None` is the defaults.
@@ -236,6 +236,48 @@ pub struct Setup {
     /// Every tool body catches its cancellation and runs on (`except CancelledError:` in a
     /// Python tool): the host's cancel is refused, and the body still waits for its answer.
     pub tools_refuse_cancel: bool,
+    /// The share of provider delays that stray from the measured ones to a deadline or a stall
+    /// (`fakes::delay`): the search's randomness, so a pure conversation keeps real timings.
+    pub stray: f64,
+}
+
+/// The pre-connect buffer wait the room's legs run with: shorter than the half second of frames
+/// the track's queue holds, so the frames spoken while the session waits for a buffer that never
+/// comes are not dropped.
+pub const PRE_CONNECT_TIMEOUT_MS: u64 = 200;
+
+impl Setup {
+    /// What the run's provider delays are drawn against: the deadlines a session built from this
+    /// setup arms, at their defaults where the setup leaves them.
+    pub fn timing(&self) -> fakes::Timing {
+        let conn = self.conn.unwrap_or(ConnSetup::DEFAULT);
+        let mut deadlines = vec![
+            PRE_CONNECT_TIMEOUT_MS,
+            // Endpointing's default min and max delays.
+            500,
+            3_000,
+            conn.interval_ms,
+            // The connect options' phase timeout, the close's transcript wait, the away timer.
+            10_000,
+            2_000,
+            15_000,
+        ];
+        deadlines.extend(
+            [
+                self.speech_gap_ms,
+                self.transcription_timeout_ms,
+                self.user_turn_max_ms,
+                self.hook_bound_ms,
+                self.connect_ms,
+                self.keyterm_detection.and_then(|k| k.timeout_ms),
+            ]
+            .into_iter()
+            .flatten(),
+        );
+        deadlines.sort_unstable();
+        deadlines.dedup();
+        fakes::Timing { stray: self.stray, deadlines }
+    }
 }
 
 /// Each leg's `max_retry`, and the interval between retries.
@@ -342,7 +384,7 @@ pub struct RealtimeSetup {
     /// What the server's delays and choices are drawn from.
     pub seed: u64,
     /// How often the model calls a tool when it has some, in percent: the developer's prompt
-    /// decides it. `None` is the corpus's rate.
+    /// decides it. `None` is the measured rate.
     pub tool_calls: Option<u8>,
     /// `RealtimeModel(modalities=["text"])`: the server answers in text, which the session's TTS
     /// speaks when the setup has one.
@@ -447,6 +489,7 @@ impl Default for Setup {
             conn: None,
             chunked_tts: false,
             tools_refuse_cancel: false,
+            stray: 0.0,
         }
     }
 }

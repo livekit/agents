@@ -76,9 +76,7 @@ impl Run {
             audio_input: legs.map(|legs| AudioInputConfig {
                 sample_rate: SAMPLE_RATE,
                 pre_connect_audio: legs.pre_connect.is_some(),
-                // Shorter than the half second of frames the track's queue holds, so the frames
-                // spoken while the session waits for a buffer that never comes are not dropped.
-                pre_connect_audio_timeout: Duration::from_millis(200),
+                pre_connect_audio_timeout: Duration::from_millis(super::PRE_CONNECT_TIMEOUT_MS),
                 ..AudioInputConfig::default()
             }),
             audio_output: legs.map(|_| AudioOutputConfig {
@@ -104,6 +102,7 @@ impl Run {
             fakes::FakeTts::new(
                 registry.clone(),
                 setup.tts_latency,
+                setup.timing(),
                 !setup.chunked_tts,
                 setup.tts_alignment,
             ) as Arc<Tts>
@@ -150,6 +149,7 @@ impl Run {
                     tool_calls: server.tool_calls,
                     text_only: server.text_only,
                     fallback: server.fallback,
+                    timing: setup.timing(),
                 };
                 fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
                     as Arc<dyn Realtime>

@@ -23,7 +23,9 @@ mod conversation;
 mod setup;
 mod uniform;
 
-pub use conversation::{Dials, explore, explore_at, explore_with, randomness, stt_kinds};
+pub use conversation::{
+    Dials, STT_MODELS, SttModel, explore, explore_at, explore_with, randomness,
+};
 pub use setup::sample_setup;
 
 #[cfg(test)]
@@ -75,7 +77,7 @@ mod tests {
     /// The generator's own invariant, which no driver rule can hold it to: every final the
     /// recogniser reports has microphone audio behind it, forwarded to that recogniser's stream
     /// in the seconds before the final. A real recogniser opens its utterance with its first
-    /// words (the corpus), so the audio comes before the start of speech, not after it. A
+    /// words (as measured), so the audio comes before the start of speech, not after it. A
     /// generator that broke this would be blaming the driver for transcripts of nothing.
     /// How long before its final a recogniser's words may have been spoken: the slowest final
     /// the person's providers send (a late one, 3 s) and a second final after it.

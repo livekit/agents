@@ -16,15 +16,19 @@ use lk_agents_abi::{
 };
 use tokio::sync::mpsc;
 
-use super::{Control, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot};
+use super::{
+    Control, Measured, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot, Timing, delay, measured,
+};
 use crate::{
     drive::TtsAlignment,
     input::Input,
     record::{Detail, Kind, Tag},
 };
 
-/// The recorded voice the latency and the pace are drawn from.
-const TTS_MODEL: &str = "cartesia/sonic-3";
+// A real voice as measured (`calibration.json`, `tts/cartesia/sonic-3/<name>`): its time to
+// first audio in ms, and its pace in ms a word.
+const FIRST_AUDIO: Measured = [183, 190, 196, 200, 205, 214, 217, 227, 240, 250, 658];
+pub const MS_PER_WORD: Measured = [197, 233, 248, 258, 274, 295, 311, 348, 415, 462, 557];
 
 /// The longest frame the voice sends, as a streaming voice sends audio in short frames.
 const FRAME_MS: usize = 100;
@@ -35,26 +39,28 @@ const CHARS_PER_WORD: f64 = 5.3;
 
 pub struct FakeTts {
     registry: Arc<Registry>,
-    /// The voice's time to first audio, drawn per stream from the corpus (`tts/first_audio`),
-    /// when the setup gives the voice latency; `None` answers at once.
+    /// The voice's time to first audio, drawn per stream (`FIRST_AUDIO`), when the setup gives
+    /// the voice latency; `None` answers at once.
     latency: Option<Mutex<fastrand::Rng>>,
+    timing: Timing,
     /// Off, the voice only synthesizes whole texts: the session adapts it sentence by sentence.
     streaming: bool,
     alignment: TtsAlignment,
 }
 
 impl FakeTts {
-    /// `latency`: a voice that takes as long to start as the recorded one did, drawn from this
-    /// seed. `streaming` off, the voice only synthesizes whole texts: the session adapts it
+    /// `latency`: a voice that takes as long to start as a real one does, drawn from this seed
+    /// against `timing`. `streaming` off, the voice only synthesizes whole texts: the session adapts it
     /// sentence by sentence.
     pub fn new(
         registry: Arc<Registry>,
         latency: Option<u64>,
+        timing: Timing,
         streaming: bool,
         alignment: TtsAlignment,
     ) -> Arc<Self> {
         let latency = latency.map(|seed| Mutex::new(fastrand::Rng::with_seed(seed)));
-        Arc::new(FakeTts { registry, latency, streaming, alignment })
+        Arc::new(FakeTts { registry, latency, timing, streaming, alignment })
     }
 }
 
@@ -238,18 +244,14 @@ impl Tts for FakeTts {
             let slot =
                 self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
             let _ = synthesis.slot.set(slot);
-            // Each stream speaks at a pace the recorded voice had: its milliseconds a word, over the
+            // Each stream speaks at a pace a real voice has: its milliseconds a word, over the
             // characters a word of the agent's lines takes.
             let mut pace = fastrand::Rng::with_seed(u64::from(slot.nth) ^ 0x7061_6365);
-            let ms_per_word =
-                lk_agents_test_support::corpus::draw(&mut pace, &["tts", TTS_MODEL, "ms_per_word"]);
+            let ms_per_word = measured(&mut pace, &MS_PER_WORD) as f64;
             synthesis.state.lock().unwrap().samples_per_char =
                 ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
             let first_audio = self.latency.as_ref().map(|rng| {
-                let ms = lk_agents_test_support::corpus::draw_ms(
-                    &mut rng.lock().unwrap(),
-                    &["tts", TTS_MODEL, "first_audio"],
-                );
+                let ms = delay(&mut rng.lock().unwrap(), &FIRST_AUDIO, &self.timing);
                 tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
             });
             if first_audio.is_some() {

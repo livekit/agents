@@ -1,6 +1,10 @@
 //! Microphone segments and the detector verdicts delivered around them.
 
 use super::*;
+use crate::fakes::realtime::server::{
+    SPEECH_STARTED_LAG_SEMANTIC, SPEECH_STARTED_LAG_SERVER, SPEECH_STOPPED_LAG_SEMANTIC,
+    SPEECH_STOPPED_LAG_SERVER,
+};
 
 /// The person's side: a stretch of microphone, and what the providers say about it.
 impl Talk {
@@ -51,25 +55,22 @@ impl Talk {
             out.push(Verdict { at_ms: slow(rng.u64(VAD_START_MS)), word: Word::VadStart });
         }
         let vad_end_at = dur + slow(rng.u64(VAD_END_MS));
-        // The recogniser behaves as the corpus model the setup names does: when its first words
+        // The recogniser behaves as the measured model the setup names does: when its first words
         // come, how often it restates them, how it cuts a long turn into finals, what it sends
         // around each final (a usage report before it, the end of speech with it), and its
         // quirks: Deepgram's empty finals over noise, AssemblyAI's second final for the same
         // words, Flux's preflights.
-        let model = corpus::STT_MODELS[self.run.setup.stt_model % corpus::STT_MODELS.len()];
-        let q = |name: &'static str| ["stt", model, name];
+        let model = &STT_MODELS[self.run.setup.stt_model % STT_MODELS.len()];
+        let timing = self.run.setup.timing();
         let listening = !live.of(Kind::Stt).is_empty();
         if let (true, Some(text)) = (stt, speech.text) {
             let knobs = SttKnobs { latency, late_finals, revisions };
-            out.extend(recogniser(model, text, dur, rng, knobs));
+            out.extend(recogniser(model, text, dur, rng, knobs, &timing));
             if vad {
                 out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
             }
-        } else if listening
-            && speech.text.is_some()
-            && corpus::samples(&q("empty_finals_per_minute")).iter().any(|r| *r > 0.0)
-        {
-            out.extend(recogniser_noise(model, dur, rng, latency));
+        } else if listening && speech.text.is_some() && model.empty_finals {
+            out.extend(recogniser_noise(model, dur, rng, latency, &timing));
             if vad {
                 out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
             }
@@ -77,15 +78,16 @@ impl Talk {
             out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
         }
         // The realtime server hears the person with its own VAD, when it detects turns: its onset
-        // and its end of speech come as late as the corpus has them, its end later still under
+        // and its end of speech come as late as measured, its end later still under
         // semantic detection, which waits for the words to sound finished.
         if let Some(semantic) = self.server_vad() {
-            let kind = if semantic { "semantic" } else { "server" };
-            let rng = &mut self.rng;
-            let started =
-                corpus::draw_ms(rng, &["realtime", &format!("speech_started_lag_{kind}")]);
-            let stopped =
-                corpus::draw_ms(rng, &["realtime", &format!("speech_stopped_lag_{kind}")]);
+            let (started, stopped) = if semantic {
+                (SPEECH_STARTED_LAG_SEMANTIC, SPEECH_STOPPED_LAG_SEMANTIC)
+            } else {
+                (SPEECH_STARTED_LAG_SERVER, SPEECH_STOPPED_LAG_SERVER)
+            };
+            let started = delay(&mut self.rng, &started, &timing);
+            let stopped = delay(&mut self.rng, &stopped, &timing);
             out.push(Verdict { at_ms: started, word: Word::RtStart });
             out.push(Verdict { at_ms: dur + stopped.max(1), word: Word::RtStop });
         }

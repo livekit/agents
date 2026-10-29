@@ -865,15 +865,19 @@ payload. This section is what closed them.
 
 ### 13.1 What the fakes are calibrated from
 
-`corpus/record.py` records LiveKit Inference traffic as event kinds and relative timing, never
-what anybody said; `corpus/derive.py` turns the recordings into `corpus/calibration.json`
-(transition counts between event kinds, delay samples, shares), and `src/corpus.rs` draws from
-those samples per seed. Re-recording needs LiveKit Inference credentials: run `record.py`, then
-`derive.py`, and commit both the recordings and the calibration.
+`calibration.json` (this crate's root) is what real providers were measured doing through
+LiveKit Inference: event kinds and relative timing, never what anybody said. It is reference
+only. Each fake hardcodes the deciles of the quantities it draws, next to the fake, named after
+the calibration quantity. `fakes::delay` draws a delay from them across the whole measured span;
+a share of draws equal to the run's randomness (none in a pure conversation, nearly all in a
+uniform run) strays instead, half to a boundary (none, a tick, a frame, or a tick around a
+deadline the setup arms: pre-connect, endpointing, connect options, retry interval, the close's
+transcript wait, the away timer, speech gap, transcription timeout, turn limit, hook bound) and
+half to a stall up to twenty times the most measured.
 
 | Fake | Calibrated from | Still cannot do |
 |---|---|---|
-| Realtime (`fakes/realtime/`) | The production realtime core (`lk-agents-inference`: the conversation machine and the connection policy, reconnects and all) driven by a pump that mirrors the runtime's (`lk_agents_runtime::realtime::session`: its biased order, the writer's 100 ms audio batches and response receipts), over a stateful simulation of the OpenAI Realtime server in the protocol's typed records (`Outgoing` in, `Incoming` out; section 13.4); the fallback adapter's contract over two of them on the inference fallback policy; held to the real server's answers to the protocol's edge cases (`corpus/probes/`, `corpus/probe_realtime.py`) and, where the probes are silent, the docs. Recorded on `gpt-realtime` (turns, barge-in, backchannel, silence, client cancel, tool call, manual turns; server and semantic VAD; two takes each): speech start and stop lag, response creation after the stop and after `response.create`, item and first-audio latency, delta sizes, done after the last audio, input transcription after commit and its deltas per word, cancel lag, audio per character, the share of responses with function calls and rate limits, error latency; from the probes, the end of a cancelled reply after the cancel and the refusal latency | Other dialects (Gemini, xAI, Azure differences); images; the server's VAD does not judge the audio (it needs some, and the case says when it fires); what a reply says does not depend on what it read (only its usage does); session expiry |
+| Realtime (`fakes/realtime/`) | The production realtime core (`lk-agents-inference`: the conversation machine and the connection policy, reconnects and all) driven by a pump that mirrors the runtime's (`lk_agents_runtime::realtime::session`: its biased order, the writer's 100 ms audio batches and response receipts), over a stateful simulation of the OpenAI Realtime server in the protocol's typed records (`Outgoing` in, `Incoming` out; section 13.4); the fallback adapter's contract over two of them on the inference fallback policy; built after the real server's answers to the protocol's edge cases and, where those are silent, the docs. Recorded on `gpt-realtime` (turns, barge-in, backchannel, silence, client cancel, tool call, manual turns; server and semantic VAD; two takes each): speech start and stop lag, response creation after the stop and after `response.create`, item and first-audio latency, delta sizes, done after the last audio, input transcription after commit and its deltas per word, cancel lag, audio per character, the share of responses with function calls and rate limits, error latency; from the probes, the end of a cancelled reply after the cancel and the refusal latency | Other dialects (Gemini, xAI, Azure differences); images; the server's VAD does not judge the audio (it needs some, and the case says when it fires); what a reply says does not depend on what it read (only its usage does); session expiry |
 | Duplex (`fakes/realtime/duplex.rs`) | The inference duplex core (`Segmenter`, `FixedGate`) driven as the runtime's duplex session drives it, over a model that speaks when asked (an ask while it speaks is answered by its next utterance): 100 ms frames at playback pace, its own silence after, span-stamped word fragments just ahead of their sound, and in 35% of utterances the last words' text after the sound ended (`TranscriptAttribution`); 15% of realtime setups, from the model's own dice | Tool calls, barge-in and input transcription (the model ignores what it hears); an adaptive gate; latencies not recorded from a real duplex provider |
 | Recogniser (`search/conversation.rs`) | Per seed one of Deepgram nova-3, Deepgram Flux, AssemblyAI universal streaming: first words late, start of speech with them, usage before each final, Deepgram's cuts and empty finals, AssemblyAI's second final, Flux's preflights | Confidences and word timings from data; language detection; diarization; the real sockets' reconnects |
 | LLM (`fakes/llm.rs`, `search/conversation.rs`) | `gpt-4.1-mini` streaming: the role on the first chunk, token chunks, a finish chunk, a usage chunk; each request answered on the model's own clock, the first chunk after the recorded delay, then pieces of the recorded size at the recorded gaps, failing anywhere in the answer | Other providers' chunk shapes; refusals and content filters; parallel tool calls, a preamble before a call, streamed arguments, real usage numbers |
@@ -882,9 +886,7 @@ those samples per seed. Re-recording needs LiveKit Inference credentials: run `r
 
 Every provider event the core consumes (`SpeechEventType`, `VadEventType`, the realtime wire and
 events) is a `Vocabulary` (`fakes/vocabulary.rs`): a variant no fake covers or explicitly skips
-is a compile error. `tests/conformance.rs` replays the recordings through the fakes and fails on
-an event kind, a response or utterance shape, a documented ordering or a delay the real provider
-never showed.
+is a compile error.
 
 ### 13.2 Liveness and payload rules
 
@@ -937,20 +939,14 @@ take 1.2 to 1.4 s and 5.4 to 5.6 s.
 
 ### 13.4 The realtime server and its probes
 
-`corpus/probe_realtime.py` drives the protocol's corners on the real server, through LiveKit
-Inference (`openai/gpt-realtime`, the `lk` project's credentials, as `record.py` does), and
-keeps each session's client frames and server events as a fixture in `corpus/probes/` (content
-as its length, ids as ordinals): every frame a server might refuse on an idle session, a reply
+The realtime server was probed on the protocol's corners on the real server, through LiveKit
+Inference (`openai/gpt-realtime`), and the fake server reproduces what it answered (the probes
+are no longer kept): every frame a server might refuse on an idle session, a reply
 asked over an active one, a cancel mid-audio and one in the same breath as a new reply,
 truncations past, at and inside a reply's audio, a reply asked before and after a tool's output
 and in the same breath as it, instructions and the voice changed mid-reply and after, server VAD
 told not to interrupt and not to reply, manual turns with a commit mid-reply and a clear, barge-in
 on both VADs over a reply still generating, replies back to back, and a socket closed mid-reply.
-`tests/conformance.rs` replays every fixture through the fake server frame by frame, each recorded client frame as the typed frame the realtime core sends for it (one the core never sends -- `conversation.item.retrieve`, `output_audio_buffer.clear`, an assistant audio part -- is left out, and a frame the core sends without an `event_id` is read as cited by nothing) (a frame the
-probe sent on an event goes once the fake sent that event): each frame must get the real
-reaction (the acknowledgement or the error code, citing the frame or not, within the real delay's
-envelope), each onset over a reply must end it as the real one did, and the events must keep the
-documented order and the recorded response shapes.
 
 What the fake holds and enforces, from the probes:
 
@@ -1116,7 +1112,7 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   is at 29). With a61e6faa0 reverted the room-legs seeds with background audio run at 1,000.
 - **`tts_connection_reused`** (lk-agents-inference's own test since decision 92, a latency
   contract): the production LiveKit Inference TTS client over a gateway that charges 200 ms of connection setup and draws its time
-  to first audio from the corpus; five replies of a call, each heard within the voice's own delay
+  to first audio from a measured range; five replies of a call, each heard within the voice's own delay
   and 50 ms. With 54c213e74 reverted reply 0 takes 417 ms against 217 ms owed; with only its
   prewarm reverted, the same.
 - **`fuzz.py`** (deleted with the Python virtual-time loop, decision 117): seeded random calls

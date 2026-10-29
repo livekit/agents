@@ -100,6 +100,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         aligned_transcript: None,
         agent_aligned_transcript: None,
         tools_refuse_cancel: false,
+        stray: 0.0,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -142,9 +143,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         transcription: false,
         realtime_audio: false,
     });
-    // The recorded recogniser the transcripts follow, drawn last too.
-    setup.stt_model = rng.usize(0..lk_agents_test_support::corpus::STT_MODELS.len());
-    // Most voices take their recorded time to start; some answer at once.
+    // The measured recogniser the transcripts follow, drawn last too.
+    setup.stt_model = rng.usize(0..super::STT_MODELS.len());
+    // Most voices take a real voice's time to start; some answer at once.
     setup.tts_latency = (rng.u8(0..100) < 80).then(|| rng.u64(..));
     // The realtime server's detector and its own dice, drawn last too.
     if let Some(realtime) = setup.realtime.as_mut() {

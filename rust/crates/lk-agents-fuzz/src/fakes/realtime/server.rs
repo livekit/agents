@@ -1,10 +1,10 @@
 //! One connection's realtime server, at the level the session reports it: what a LiveKit
 //! Inference realtime model (the OpenAI Realtime server behind it) does with the session's
-//! requests, as the corpus shows the real one doing it (`corpus/calibration.json`), and what it
-//! refuses. Inference's own tests hold its realtime core to the recorded server; this model
-//! reproduces the outcomes that reach the driver.
+//! requests, as the real one was measured doing it (`calibration.json`), and what it refuses.
+//! This model reproduces the outcomes that reach the driver.
 //!
-//! Each happening's delay after its cause is drawn from the corpus, so a reply is created about
+//! Each happening's delay after its cause is drawn from those measurements (`fakes::delay`, which
+//! also strays to deadlines and stalls on random runs), so a reply is created about
 //! 100 ms after it is asked, its message 300 ms later, its audio in 400 ms deltas faster than real
 //! time, and its end while the person is still hearing most of it -- which is what makes a server
 //! onset over a finished generation the common barge-in, not a rare one. The server answers
@@ -32,14 +32,14 @@ use fastrand::Rng;
 use lk_agents_abi::{
     ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts, llm::realtime::GenerationStatus,
 };
-use lk_agents_test_support::corpus::{self, draw_ms, share};
 
 use crate::{
+    fakes::{Measured, Timing, delay, measured},
     input::{AGENT_TURNS, USER_TURNS},
     record::{Breach, Tag},
 };
 
-/// The error codes the server refuses a request with, as the real one does (`corpus/probes/`),
+/// The error codes the server refuses a request with, as the real one does,
 /// and the words a speech that failed on one carries: such a speech failed on the server's word.
 pub const REFUSALS: &[&str] = &[
     "conversation_already_has_active_response",
@@ -51,7 +51,7 @@ pub const REFUSALS: &[&str] = &[
     "invalid_value",
 ];
 
-/// The nominal length of a full audio delta, as the corpus has nearly all of them.
+/// The nominal length of a full audio delta, as the real server sends nearly all of them.
 pub const DELTA_MS: u64 = 400;
 
 /// What the server is told to do of its own accord: the person's speech as its VAD hears it, and
@@ -215,9 +215,36 @@ pub struct Response {
     pub source: Option<u32>,
 }
 
+// What the real server was measured doing, in ms: `calibration.json`'s `realtime/<name>` in
+// lower case.
+pub const SPEECH_STARTED_LAG_SEMANTIC: Measured =
+    [238, 278, 299, 316, 329, 335, 345, 385, 404, 451, 1327];
+pub const SPEECH_STARTED_LAG_SERVER: Measured =
+    [262, 307, 319, 335, 365, 398, 1704, 1803, 2409, 2693, 2728];
+pub const SPEECH_STOPPED_LAG_SEMANTIC: Measured =
+    [671, 729, 737, 759, 787, 828, 1168, 1421, 1668, 1853, 3450];
+pub const SPEECH_STOPPED_LAG_SERVER: Measured =
+    [582, 614, 628, 632, 653, 686, 725, 1606, 3016, 3820, 5682];
+const CANCEL_AFTER_SPEECH_STARTED: Measured = [3, 8, 9, 13, 17, 24, 27, 29, 35, 39, 246];
+const CREATED_AFTER_STOPPED: Measured = [0, 4, 6, 6, 7, 7, 8, 9, 9, 10, 15];
+const CREATED_AFTER_CREATE: Measured = [104, 105, 107, 111, 118, 120, 129, 134, 134, 148, 345];
+const TRANSCRIPTION_AFTER_COMMITTED: Measured =
+    [278, 340, 362, 383, 391, 408, 453, 513, 599, 683, 3248];
+const ITEM_AFTER_CREATED: Measured = [164, 214, 290, 349, 386, 419, 475, 536, 572, 723, 1463];
+const FIRST_AUDIO_AFTER_ITEM: Measured = [62, 209, 235, 248, 268, 305, 317, 329, 345, 401, 1482];
+const AUDIO_GAP: Measured = [0, 23, 53, 60, 65, 70, 74, 81, 104, 159, 1108];
+const DONE_AFTER_LAST_AUDIO: Measured = [0, 28, 30, 33, 36, 38, 42, 44, 73, 187, 568];
+const ERROR_AFTER_CLIENT: Measured = [83, 88, 89, 90, 91, 93, 96, 99, 100, 103, 110];
+const DONE_AFTER_CANCEL: Measured = [115, 120, 124, 128, 131, 133, 135, 138, 144, 150, 156];
+/// The audio a character of the reply takes (`audio_ms_per_char`): a pace, never stray.
+const AUDIO_MS_PER_CHAR: Measured = [27, 40, 48, 50, 52, 56, 58, 58, 60, 61, 75];
+/// Responses that called a tool, of all measured (`function_call_share`).
+const FUNCTION_CALL_SHARE: (u64, u64) = (8, 94);
+
 /// One connection's server: its conversation, input buffer and responses.
 pub struct Server {
     rng: Rng,
+    timing: Timing,
     vad: Option<Vad>,
     instructions: usize,
     tools: Vec<String>,
@@ -254,6 +281,7 @@ impl Server {
     pub fn new(seed: u64, ids: String) -> Self {
         Server {
             rng: Rng::with_seed(seed),
+            timing: Timing::default(),
             vad: None,
             instructions: 0,
             tools: Vec::new(),
@@ -279,10 +307,17 @@ impl Server {
     }
 
     /// The session's configuration, as its opening `session.update` gives it.
-    pub fn configure(&mut self, vad: Option<Vad>, audio: bool, tool_calls: Option<u8>) {
+    pub fn configure(
+        &mut self,
+        vad: Option<Vad>,
+        audio: bool,
+        tool_calls: Option<u8>,
+        timing: Timing,
+    ) {
         self.vad = vad;
         self.audio = audio;
         self.tool_calls = tool_calls;
+        self.timing = timing;
     }
 
     pub fn instructions(&mut self, instructions: &str) {
@@ -488,7 +523,7 @@ impl Server {
         }
         let unanswered =
             self.items.last().filter(|i| i.function_call).and_then(|i| i.call_id.clone());
-        let delay = self.answer_after(now, "created_after_create");
+        let delay = self.answer_after(now, &CREATED_AFTER_CREATE);
         let instructions = instructions.map(str::len);
         let r = self.respond(later(now, delay), Some(request), tool_choice, instructions);
         // A reply asked after the outputs reads them.
@@ -544,7 +579,7 @@ impl Server {
         // The conversation is free at once: a reply asked right after the cancel is taken, and
         // created before the cancelled one's end (probe-cancel_then_create).
         self.active = None;
-        let lag = self.answer_after(now, "done_after_cancel");
+        let lag = self.answer_after(now, &DONE_AFTER_CANCEL);
         self.stop(later(now, lag), r, GenerationStatus::Cancelled);
     }
 
@@ -600,7 +635,7 @@ impl Server {
                 self.speaking = Some(item.clone());
                 self.put(now, Happening::SpeechStarted { item });
                 if let Some(r) = self.active {
-                    let lag = draw_ms(&mut self.rng, &["realtime", "cancel_after_speech_started"]);
+                    let lag = self.delay(&CANCEL_AFTER_SPEECH_STARTED);
                     self.active = None;
                     self.stop(later(now, lag), r, GenerationStatus::Cancelled);
                 }
@@ -612,7 +647,7 @@ impl Server {
                 self.own_empty = false;
                 self.commit(now, item);
                 if self.active.is_none() {
-                    let delay = draw_ms(&mut self.rng, &["realtime", "created_after_stopped"]);
+                    let delay = self.delay(&CREATED_AFTER_STOPPED);
                     let r = self.respond(later(now, delay), None, None, None);
                     self.responses[r as usize].turn = true;
                 }
@@ -691,7 +726,7 @@ impl Server {
         self.put(later(now, 1), Happening::ItemAdded { item: user, previous });
         let spoken: Vec<&str> = USER_TURNS.iter().copied().filter(|t| !t.is_empty()).collect();
         let text = spoken[self.rng.usize(0..spoken.len())];
-        let lag = draw_ms(&mut self.rng, &["realtime", "transcription_after_committed"]);
+        let lag = self.delay(&TRANSCRIPTION_AFTER_COMMITTED);
         let words: Vec<&str> = text.split(' ').collect();
         // About one delta a word, streamed over the last fifth of the wait.
         for i in 0..words.len() {
@@ -730,29 +765,24 @@ impl Server {
         self.put(at, Happening::Created { r });
         // Its place in the conversation is taken when the item is added: an item arriving before
         // then comes before it.
-        let mut t = later(at, draw_ms(&mut self.rng, &["realtime", "item_after_created"]));
+        let mut t = later(at, self.delay(&ITEM_AFTER_CREATED));
         self.put(t, Happening::MessageAdded { r, previous: None });
         let item_at = t;
-        let first_audio =
-            later(item_at, draw_ms(&mut self.rng, &["realtime", "first_audio_after_item"]));
+        let first_audio = later(item_at, self.delay(&FIRST_AUDIO_AFTER_ITEM));
         t = later(item_at, 15).min(first_audio);
         self.put(t, Happening::Part { r });
-        let per_char = corpus::draw(&mut self.rng, &["realtime", "audio_ms_per_char"]);
+        let per_char = measured(&mut self.rng, &AUDIO_MS_PER_CHAR) as f64;
         let audio_ms = ((text.chars().count() as f64 * per_char) as u64).max(DELTA_MS);
         let deltas = audio_ms.div_ceil(DELTA_MS) as usize;
         let words: Vec<&str> = text.split_inclusive(' ').collect();
         // The transcript's first words come with the content part, before any audio, as the
-        // corpus has them: a response cut there has words and no audio.
+        // real server sends them: a response cut there has words and no audio.
         let mut said = words.len().min(2);
         if said > 0 {
             self.put(t, Happening::Text { r, delta: words[..said].concat() });
         }
         for chunk in 0..deltas {
-            t = if chunk == 0 {
-                first_audio
-            } else {
-                later(t, draw_ms(&mut self.rng, &["realtime", "audio_gap"]))
-            };
+            t = if chunk == 0 { first_audio } else { later(t, self.delay(&AUDIO_GAP)) };
             // The transcript leads the audio it describes.
             let upto = (words.len() * (chunk + 1)).div_ceil(deltas);
             if upto > said {
@@ -770,7 +800,7 @@ impl Server {
             (Some(ToolChoice::Forbidden), _) => (0, 1),
             (Some(ToolChoice::Required), _) => (1, 1),
             (_, Some(percent)) => (u64::from(percent), 100),
-            (_, None) => share(&["realtime", "function_call_share"]),
+            (_, None) => FUNCTION_CALL_SHARE,
         };
         if !self.tools.is_empty() && self.rng.u64(0..of) < calls {
             let name = self.tools[self.rng.usize(0..self.tools.len())].clone();
@@ -782,10 +812,10 @@ impl Server {
             self.put(t, Happening::MessageDone { r });
             self.put(t, Happening::CallDone { r });
         } else {
-            t = later(t, draw_ms(&mut self.rng, &["realtime", "done_after_last_audio"]) / 2);
+            t = later(t, self.delay(&DONE_AFTER_LAST_AUDIO) / 2);
             self.put(t, Happening::MessageDone { r });
         }
-        let done_at = later(t, draw_ms(&mut self.rng, &["realtime", "done_after_last_audio"]) / 2);
+        let done_at = later(t, self.delay(&DONE_AFTER_LAST_AUDIO) / 2);
         self.put(done_at, Happening::Done { r, status: GenerationStatus::Completed });
         r
     }
@@ -886,17 +916,21 @@ impl Server {
         }
     }
 
-    /// How long the server takes to answer a request: drawn from the corpus, and never before its
+    /// How long the server takes to answer a request: drawn from what was measured, and never before its
     /// answer to an earlier one -- it takes the session's requests in order.
     fn answer_lag(&mut self, now: Ts) -> u64 {
-        self.answer_after(now, "error_after_client")
+        self.answer_after(now, &ERROR_AFTER_CLIENT)
     }
 
-    fn answer_after(&mut self, now: Ts, quantity: &str) -> u64 {
-        let lag = draw_ms(&mut self.rng, &["realtime", quantity]);
+    fn answer_after(&mut self, now: Ts, measured: &Measured) -> u64 {
+        let lag = self.delay(measured);
         let at = later(now, lag).max(self.answered);
         self.answered = at;
         at.saturating_duration_since(now).as_millis() as u64
+    }
+
+    fn delay(&mut self, measured: &Measured) -> u64 {
+        delay(&mut self.rng, measured, &self.timing)
     }
 
     fn mint_item(&mut self, kind: &str) -> String {

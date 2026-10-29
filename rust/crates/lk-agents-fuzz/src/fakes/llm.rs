@@ -101,8 +101,8 @@ impl StreamSource<LlmChunk> for Response {
 /// The completion tokens every reply reports.
 pub const COMPLETION_TOKENS: u32 = 10;
 
-/// One model delivery onto a registered chat request's stream, in the chunk shapes the corpus
-/// recorded from the inference gateway: each `LlmText` is one wire chunk naming the assistant role
+/// One model delivery onto a registered chat request's stream, in the chunk shapes the inference
+/// gateway sends: each `LlmText` is one wire chunk naming the assistant role
 /// (the case cuts a reply into the token-sized pieces the model streams, at the model's pace), a
 /// tool call comes whole in one chunk, and the end is an empty chunk (the finish) followed by one
 /// carrying only the usage. True when the stream still had a reader. `End` and `Fail` close the

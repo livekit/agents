@@ -42,7 +42,7 @@ pub const VOICE: Boundary = Boundary {
         "fakes::output",
         "fakes::avatar (generator/media/RTC ports under the real runtime runner and stream executors)",
         "fakes::realtime (a realtime model at the Realtime port: the server model drawn from \
-         the corpus, its happenings as the port's events, a fallback setup's swap as one; no \
+         measured timings, its happenings as the port's events, a fallback setup's swap as one; no \
          session or fallback logic); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
         "lk_agents_test_support::rtc::FakeRoom",
@@ -54,7 +54,7 @@ pub const VOICE: Boundary = Boundary {
     outside: &[
         "inference's realtime session (machine, pump, wire codec) and fallback adapter \
          (lk_agents_inference::realtime; its own tests over the simulated OpenAI Realtime server, \
-         held to the corpus recordings and probes; the fakes mirror their outcomes)",
+         the fakes mirror their outcomes)",
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",

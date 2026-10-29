@@ -10,7 +10,4 @@ publish = false
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
 tokio = { workspace = true, features = ["test-util"] }
-serde_json.workspace = true
-# The corpus draws: uniform over what a provider was recorded doing.
-fastrand = "2"
 lk-agents-media = {path = "../lk-agents-media"}

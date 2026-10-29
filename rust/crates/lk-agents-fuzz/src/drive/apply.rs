@@ -550,6 +550,7 @@ impl Run {
                         fakes::FakeTts::new(
                             registry.clone(),
                             latency,
+                            self.setup.timing(),
                             !self.setup.chunked_tts,
                             self.setup.tts_alignment,
                         ) as Arc<Tts>

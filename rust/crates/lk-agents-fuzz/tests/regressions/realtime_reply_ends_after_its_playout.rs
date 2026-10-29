@@ -18,14 +18,15 @@ fn the_reply_is_done_once_the_server_ends_it() {
             transcription: true,
             realtime_audio: false,
         }),
-        realtime: Some(RealtimeSetup::default()),
+        // A server whose reply calls no tool and ends 12 ms after its last audio.
+        realtime: Some(RealtimeSetup { seed: 1, ..RealtimeSetup::default() }),
         sync_transcription: true,
         ..Setup::default()
     };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         // The reply's last message is in the sink; the server has not yet said it is done.
-        Input::Advance { ms: Millis(1_210) },
+        Input::Advance { ms: Millis(1_112) },
         Input::PlayoutFinished { segment: Ref::new(0) },
         Input::Advance { ms: Millis(5_000) },
     ];

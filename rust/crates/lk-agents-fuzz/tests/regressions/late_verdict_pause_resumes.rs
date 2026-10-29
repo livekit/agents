@@ -29,7 +29,7 @@ fn a_late_verdicts_pause_resumes() {
         let next_segment = run.record.live().opened(lk_agents_fuzz::record::Kind::Segment);
         let inputs = vec![
             Input::GenerateReply { user_input: None, instructions: None, allow: None },
-            Input::Advance { ms: Millis(1_000) },
+            Input::Advance { ms: Millis(2_500) },
             Input::PlayoutStarted { segment: Ref::new(next_segment) },
             Input::Advance { ms: Millis(500) },
             Input::Drain { wait: false },

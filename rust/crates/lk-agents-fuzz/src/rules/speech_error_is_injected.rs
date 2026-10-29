@@ -2,7 +2,8 @@
 //! closing before it was scheduled, from a synthesis the case failed while it was live, from the
 //! realtime socket the case dropped while it was live, from an error the realtime server sent
 //! while it was live (a refusal, a timeout, a failed connection: the server's, reported by the
-//! session), or from a refusal the driver journals itself.
+//! session), from a server that created no reply within the client's bound, or from a refusal
+//! the driver journals itself.
 use lk_agents_voice::{
     events::{ErrorSource, SessionEvent},
     trace::{PlayoutStep, SpeechStep, Step},
@@ -20,7 +21,7 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, was refused by Close before scheduling, was a say the driver refused on the journal, or lost its own keyed sink completion after its declared deadline with no playback receipt in between.",
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, waited out the reply bound on a stalled server, was refused by Close before scheduling, was a say the driver refused on the journal, or lost its own keyed sink completion after its declared deadline with no playback receipt in between.",
         examples: &[
             failed_by_injection,
             failed_from_its_own_missing_playback,
@@ -85,6 +86,8 @@ impl Rule for SpeechErrorIsInjected {
             }) || crate::fakes::realtime::server::REFUSALS
                 .iter()
                 .any(|code| error.contains(code));
+            // The server is slow as real ones are, now and then past the client's bound.
+            let server_stalled = error.contains("generate_reply timed out");
             let refused_by_close = inputs.close_asked_at().is_some() && !speech.is_scheduled();
             // A `say` the driver refused on its own terms -- words with no voice to speak them --
             // fails without ever making a request; the refusal is on the journal.
@@ -128,6 +131,7 @@ impl Rule for SpeechErrorIsInjected {
                 || voice_down
                 || socket_dropped
                 || server_erred
+                || server_stalled
                 || refused_by_close
                 || refused_by_driver
                 || missing_playback

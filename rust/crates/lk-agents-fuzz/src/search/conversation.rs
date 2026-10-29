@@ -37,10 +37,10 @@ use lk_agents_voice::{
 };
 
 use super::uniform;
-use lk_agents_test_support::corpus;
 
 use crate::{
     drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
+    fakes::{MS_PER_WORD, Measured, Timing, delay, measured},
     input::{
         AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,
         Millis, NAMES, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode,
@@ -53,7 +53,7 @@ mod microphone;
 mod providers;
 mod speaker;
 
-pub use providers::stt_kinds;
+pub use providers::{STT_MODELS, SttModel};
 use providers::{SttKnobs, recogniser, recogniser_noise};
 
 use speaker::Playback;
@@ -423,12 +423,6 @@ const ENDPOINT_MS: Range<u64> = 300..1500;
 /// A model's time to its first token.
 const THINK_MS: Range<u64> = 100..600;
 
-/// The recorded model's stream: its first chunk's delay, the gap between chunks, the characters in
-/// a chunk.
-const LLM_FIRST_CHUNK: [&str; 3] = ["llm", "openai/gpt-4.1-mini", "first_chunk"];
-const LLM_CHUNK_GAP: [&str; 3] = ["llm", "openai/gpt-4.1-mini", "chunk_gap"];
-const LLM_CHARS_PER_CHUNK: [&str; 3] = ["llm", "openai/gpt-4.1-mini", "chars_per_chunk"];
-
 /// Rounds of answering what the agent's reply owes: the model, then synthesis, then playout.
 const REPLY_ROUNDS: usize = 3;
 
@@ -489,12 +483,14 @@ impl Dials {
 }
 
 async fn converse_in(
-    setup: Setup,
+    mut setup: Setup,
     seed: u64,
     budget: usize,
     dials: Dials,
     policy: Policy,
 ) -> Outcome {
+    // A provider delay strays from the measured ones as often as the run makes a uniform move.
+    setup.stray = dials.randomness / (1.0 + dials.randomness);
     let mut talk = Talk {
         run: Run::start(&setup, seed, policy).await,
         outcome: Outcome {
@@ -508,10 +504,7 @@ async fn converse_in(
         planned: BTreeSet::new(),
         streams: BTreeMap::new(),
         delivered: 0,
-        ms_per_word: corpus::draw_ms(
-            &mut Rng::with_seed(seed ^ 0x0076_6f69_6365),
-            &["tts", "cartesia/sonic-3", "ms_per_word"],
-        ),
+        ms_per_word: measured(&mut Rng::with_seed(seed ^ 0x0076_6f69_6365), &MS_PER_WORD),
         turn_words: 0,
         speaker: None,
         current_speaker: None,
