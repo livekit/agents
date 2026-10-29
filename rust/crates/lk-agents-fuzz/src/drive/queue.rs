@@ -38,7 +38,7 @@ pub enum Policy {
     /// of its own, with its own priority, rather than one turn the pool shares, so the order of
     /// two tasks is sampled too; after its turn a task draws a new priority. Transitional: it
     /// schedules the voice policy tasks that are not core machines yet, and goes with the last
-    /// of them (owner decision 28).
+    /// of them.
     TaskBridge,
 }
 
@@ -347,7 +347,7 @@ const ORDER_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 /// awaits something itself (a host call, the session's start, a player's close) or the session
 /// is gone, what is ready runs as tokio schedules it, as the host's loop outlives the session's.
 ///
-/// Transitional (owner decision 28): it exists because voice policy tasks still run as tasks; it
+/// Transitional: it exists because voice policy tasks still run as tasks; it
 /// is deleted with the last of them.
 pub struct Gate {
     state: Mutex<GateState>,

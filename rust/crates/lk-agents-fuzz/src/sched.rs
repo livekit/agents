@@ -11,7 +11,7 @@
 //! partial-order sampling (Yuan, Yang and Gu, CAV 2018, Algorithm 2), as gosim implements it
 //! (livekit/gosim#28): every queued item and every process draws an independent priority, the
 //! enabled step with the highest runs, and a process that ran draws a new one; no footprints and
-//! no race-based reassignment (owner decisions 21 and 28). Its tests are the small programs at the
+//! no race-based reassignment. Its tests are the small programs at the
 //! bottom.
 use std::collections::BTreeMap;
 use std::convert::Infallible;

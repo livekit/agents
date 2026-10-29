@@ -12,7 +12,7 @@
 //! never something a fake derives. A run is deterministic: paused virtual time, a seeded
 //! scheduler the case carries, ids scoped to the session.
 //!
-//! Scope (owner decision 28): the DST exercises sans-IO cores with realistic fakes, BasicPOS (and
+//! Scope: the DST exercises sans-IO cores with realistic fakes, BasicPOS (and
 //! the arrival baseline) over the cores' event deliveries; it depends only on cores and the ABI in
 //! its final form, and runs no deterministic executor or POS over runtime adapter tasks. Runtime
 //! adapters are verified outside it (conformance with cancellation at every await point, stress,

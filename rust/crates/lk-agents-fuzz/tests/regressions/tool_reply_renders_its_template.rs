@@ -4,7 +4,7 @@ use lk_agents_fuzz::fakes::{TEMPLATED_REPLY, TEMPLATED_TOOL};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer};
 use lk_agents_voice::trace::{Step, ToolStep};
 
-// Catches (decision 109): the deferred reply scheduled with the framework's default instructions
+// Catches: the deferred reply scheduled with the framework's default instructions
 // whatever the agent's or the tool's toolset's `reply_at_tail_template` /
 // `reply_maybe_covered_template` said.
 #[test]

@@ -1,5 +1,5 @@
 //! What the DST simulates and what it leaves outside, stated once and printed by every campaign
-//! (owner decision 28, K-1, K-9).
+//! (K-1, K-9).
 //!
 //! The DST exercises sans-IO cores with realistic fakes: BasicPOS (and the arrival baseline) over
 //! the core's event deliveries. It never claims runtime-task interleavings: runtime adapters are

@@ -1,4 +1,4 @@
-//! The A2A simulation (K-4, decisions 28, 82): clients sending messages to one agent's text door,
+//! The A2A simulation (K-4): clients sending messages to one agent's text door,
 //! every decision `lk_agents_core::a2a::task::TaskMachine`'s, every storage operation executed by
 //! the fake storage port ([`port`]) that injects each typed error (`Unavailable`, `Uncertain`
 //! before and after the commit applied, `Rejected` from a held lane, `LeaseLost`,
@@ -15,7 +15,7 @@
 //! The rules ([`rules`]) hold over the whole run: a message is executed once and answered by its
 //! own task or the one it was merged into; every request is answered unless its worker died; an
 //! error answer is one the client can act on; a terminal task never changes; a commit that
-//! applied is never answered as a failure (decision 39); every answer to one message names its
+//! applied is never answered as a failure; every answer to one message names its
 //! task; every received inbox message is drained; at most one question waits on the lane; a
 //! commit leaves every terminal row it staged as staged, unless a client canceled it.
 
