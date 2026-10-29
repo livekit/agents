@@ -16,13 +16,22 @@ def hold_playout(source: type = rtc.AudioSource, hold: float = HOLD_SECONDS) -> 
     # realtime frame the moment it arrives; drop once the SDK buffers realtime playback itself
     if getattr(source, "_playout_hold", None):
         return
-    capture, clear = source.capture_frame, source.clear_queue
+    capture, clear, queued = (
+        source.capture_frame,
+        source.clear_queue,
+        source.queued_duration,
+    )
     clears: dict[int, int] = {}
+    held: dict[int, float] = {}
 
     async def capture_frame(self: rtc.AudioSource, frame: rtc.AudioFrame) -> None:
-        if self.queued_duration == 0.0:
+        if queued.fget(self) == 0.0:
             cleared = clears.get(id(self), 0)
-            await asyncio.sleep(hold)
+            held[id(self)] = frame.duration
+            try:
+                await asyncio.sleep(hold)
+            finally:
+                del held[id(self)]
             if clears.get(id(self), 0) != cleared:
                 return
         await capture(self, frame)
@@ -33,4 +42,8 @@ def hold_playout(source: type = rtc.AudioSource, hold: float = HOLD_SECONDS) -> 
 
     source.capture_frame = capture_frame
     source.clear_queue = clear_queue
+    # a held frame is queued and unplayed, so the room output's playhead accounting sees it so
+    source.queued_duration = property(
+        lambda self: queued.fget(self) + held.get(id(self), 0.0)
+    )
     source._playout_hold = hold
