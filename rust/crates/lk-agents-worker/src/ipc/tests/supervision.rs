@@ -283,3 +283,100 @@ async fn memory_warnings_include_the_job_baseline() {
     assert_eq!(field("growth_memory_mb"), ExtraValue::Float(500.0));
     assert_eq!(field("has_running_job"), ExtraValue::Bool(true));
 }
+
+/// What the child reads within `within`, pings skipped; `None` when it reads nothing else.
+async fn next_within(child: &mut DuplexStream, within: Duration) -> Option<ToChild> {
+    tokio::time::timeout(within, recv_skipping_pings(child)).await.ok()
+}
+
+// Catches: a pong read at the instant the health deadline expires reviving the process: what is
+// due runs before the input.
+#[tokio::test(start_paused = true)]
+async fn the_due_health_deadline_precedes_a_same_instant_pong() {
+    let opts = SupervisorOptions { ping_interval: 0.5, ping_timeout: 1.0, ..short(60.0) };
+    let (sup, host, mut child) = setup(opts);
+    sup.supervise().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
+    settle().await;
+    assert_eq!(host.kills.load(Ordering::SeqCst), 1);
+    assert!(host.find("process is unresponsive, killing process").is_some());
+}
+
+// Catches: a job whose protobuf or timestamps are invalid reaching the child.
+#[tokio::test(start_paused = true)]
+async fn invalid_job_protobuf_and_timestamps_are_refused_at_the_launch_boundary() {
+    use super::supervisor::validate_start_job as validate;
+    let refused = |job: &StartJob, field: &str| {
+        matches!(validate(job), Err(StartJobError::InvalidFields(reason)) if reason.contains(field))
+    };
+    let mut invalid = StartJob { job: vec![0xff], ..job() };
+    assert!(refused(&invalid, "protobuf"));
+    invalid.job.clear();
+    invalid.launched_at = f64::NAN;
+    assert!(refused(&invalid, "launched_at"));
+    invalid.launched_at = -1.0;
+    assert!(validate(&invalid).is_err());
+    invalid.launched_at = 0.0;
+    assert!(validate(&invalid).is_ok());
+
+    let (sup, _host, mut child) = setup(short(60.0));
+    ready(&sup, &mut child).await;
+    let refused = sup.start_job(StartJob { job: vec![0xff], ..job() }).await;
+    assert!(matches!(refused, Err(StartJobError::InvalidFields(_))));
+    assert_eq!(next_within(&mut child, Duration::from_secs(1)).await, None);
+}
+
+// Catches: a job sent to a child that has not answered `Ready`.
+#[tokio::test(start_paused = true)]
+async fn work_is_refused_until_a_compatible_ready_reply() {
+    let (sup, _host, mut child) = setup(short(60.0));
+    let _init = waits(&sup).await;
+    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
+    assert!(matches!(sup.start_job(job()).await, Err(StartJobError::NotReady)));
+    assert_eq!(next_within(&mut child, Duration::from_millis(500)).await, None);
+}
+
+// Catches: a child that refused the protocol version still given a job.
+#[tokio::test(start_paused = true)]
+async fn no_job_is_accepted_after_a_version_refusal() {
+    let (sup, host, mut child) = setup(short(60.0));
+    let init = waits(&sup).await;
+    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
+    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION + 1, error: None })
+        .await
+        .unwrap();
+    assert!(matches!(init.await.unwrap(), Err(InitError::Version(_))));
+    assert!(sup.start_job(job()).await.is_err());
+    settle().await;
+    assert_eq!(host.kills.load(Ordering::SeqCst), 1, "the refusal starts the cleanup");
+    assert!(!matches!(
+        next_within(&mut child, Duration::from_millis(500)).await,
+        Some(ToChild::StartJob { .. })
+    ));
+}
+
+// Catches: a memory sample that failed because the process is gone (or was interrupted) being
+// retried every interval.
+#[tokio::test(start_paused = true)]
+async fn unavailable_or_interrupted_memory_sampling_stops_without_retrying() {
+    let unavailable = || MemoryError::Unavailable("process no longer exists".into());
+    for failed in [unavailable(), MemoryError::Interrupted] {
+        let logged = matches!(failed, MemoryError::Unavailable(_));
+        let opts = SupervisorOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..short(60.0) };
+        let (sup, host, mut child) = setup(opts);
+        // A retry would read the second sample and warn.
+        host.samples.lock().unwrap().extend([Err(failed), Ok((600.0, "uss".into()))]);
+        ready(&sup, &mut child).await;
+        sup.supervise().await;
+        let drain =
+            tokio::spawn(async move { while read::<ToChild, _>(&mut child).await.is_ok() {} });
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        settle().await;
+        let messages = host.messages();
+        let failures = messages.iter().filter(|m| m.contains("failed to get memory info")).count();
+        assert_eq!(failures, usize::from(logged));
+        assert!(!messages.iter().any(|m| m.contains("above the warning threshold")), "retried");
+        drop(drain);
+    }
+}
