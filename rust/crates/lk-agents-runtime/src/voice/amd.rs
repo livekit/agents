@@ -4,17 +4,17 @@ use lk_agents_abi::voice::amd::{
 };
 use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{
-    AudioFrame, FunctionToolCall, HostRef, Llm, SpawnerExt, SpeechEvent, SpeechEventType,
-    StreamSink, Stt, SttSink, SttSource, TimerSet, Ts,
+    AudioFrame, FunctionToolCall, HostRef, Llm, SpawnerExt, SpeechEvent, StreamSink, Stt, SttSink,
+    SttSource, TimerSet, Ts,
 };
 use lk_agents_voice::agent_session::{
     Command, IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
 };
 pub use lk_agents_voice::amd::AmdSetup;
 use lk_agents_voice::amd::classifier::{
-    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out, Start, TranscriptSource,
-    Verdict,
+    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, In, Out, Start, Verdict,
 };
+use lk_agents_voice::amd::{feed_input, tap_input};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{
     ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
@@ -260,54 +260,26 @@ impl AmdSystem {
         }
     }
 
-    /// One item off the feed: what the reference's `AudioRecognition` hands the classifier.
+    /// One item off the session feed.
     pub fn on_watched(&mut self, now: Ts, item: SystemTap) {
-        match item {
-            SystemTap::Vad(ev) => match ev.kind {
-                lk_agents_abi::VadEventType::StartOfSpeech => {
-                    self.step(now, In::Human(Human::SpeechStarted))
-                }
-                lk_agents_abi::VadEventType::EndOfSpeech => {
-                    let silence = std::time::Duration::try_from_secs_f64(ev.silence_duration)
-                        .unwrap_or_default();
-                    self.step(now, In::Human(Human::SpeechEnded { silence }));
-                }
-                lk_agents_abi::VadEventType::InferenceDone => {}
-            },
-            // The session's finals once each; the empty clearing final is no words.
-            SystemTap::Stt(ev) => {
-                if ev.kind == SpeechEventType::FinalTranscript
-                    && let Some(text) = ev.best_alternative().map(|a| a.text.clone())
-                    && !text.trim().is_empty()
-                {
-                    self.step(
-                        now,
-                        In::Human(Human::Transcript { text, source: TranscriptSource::SessionStt }),
-                    );
-                }
-            }
-            // `amd._on_end_of_turn`, before the commit verdict.
-            SystemTap::Session(SessionEvent::UserTurnCompleted(_)) => {
-                self.step(now, In::Human(Human::EndOfTurn))
-            }
-            SystemTap::Session(_) | SystemTap::Ivr(_) => {}
-            // `self._amd.aclose()`; a verdict still owed is never released.
-            SystemTap::CloseRequested => {
-                self.step(now, In::Close);
-                self.closed = true;
-            }
+        if let Some(input) = feed_input(item) {
+            self.input(now, input);
+        }
+    }
+
+    /// A close (the session's or the host's) ends the loop; a verdict still owed is never
+    /// released.
+    fn input(&mut self, now: Ts, input: In) {
+        let closing = matches!(input, In::Close);
+        self.step(now, input);
+        if closing {
+            self.closed = true;
         }
     }
 
     fn on_msg(&mut self, now: Ts, msg: Msg) {
         match msg {
-            Msg::Input(input) => {
-                let closing = matches!(input, In::Close);
-                self.step(now, input);
-                if closing {
-                    self.closed = true;
-                }
-            }
+            Msg::Input(input) => self.input(now, input),
             Msg::Answer { req, transcript, calls, failed, metrics } => {
                 if let Some(m) = metrics {
                     let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m));
@@ -522,16 +494,10 @@ impl AmdSystem {
         });
     }
 
-    /// `_receive`: a non-empty final reaches the machine; everything else is dropped.
     fn on_tap_transcript(&mut self, now: Ts, ev: SpeechEvent) {
-        if ev.kind != SpeechEventType::FinalTranscript {
-            return;
+        if let Some(input) = tap_input(&ev) {
+            self.step(now, input);
         }
-        let Some(text) = ev.best_alternative().map(|a| a.text.clone()).filter(|t| !t.is_empty())
-        else {
-            return;
-        };
-        self.step(now, In::Human(Human::Transcript { text, source: TranscriptSource::AmdStt }));
     }
 
     /// The tap follows the machine's phase: frames while listening, the row cleared once a verdict

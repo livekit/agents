@@ -2,10 +2,13 @@
 
 pub mod classifier;
 
-use classifier::AmdConfig;
+use crate::agent_session::SystemTap;
+use crate::events::SessionEvent;
+use classifier::{AmdConfig, Human, In, TranscriptSource};
 use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdPort};
-use lk_agents_abi::{HostRef, Llm, Stt};
 use lk_agents_abi::voice::rtc::RtcRoom;
+use lk_agents_abi::{HostRef, Llm, Stt};
+use lk_agents_abi::{SpeechEvent, SpeechEventType, VadEventType};
 use std::{fmt, sync::Arc};
 
 pub type AmdFactory = fn(crate::agent_session::PeerHandle, AmdSetup) -> Arc<dyn AmdPort>;
@@ -48,4 +51,42 @@ impl fmt::Debug for AmdSetup {
             .field("stt", &self.stt.as_ref().map(|s| s.label()))
             .finish()
     }
+}
+
+/// One item off the session feed, as the reference's `AudioRecognition` hands it to the
+/// classifier: VAD bounds, the session's non-blank finals, the end of turn (`_on_end_of_turn`,
+/// before the commit verdict) and the session's close (`self._amd.aclose()`).
+pub fn feed_input(item: SystemTap) -> Option<In> {
+    match item {
+        SystemTap::Vad(ev) => match ev.kind {
+            VadEventType::StartOfSpeech => Some(In::Human(Human::SpeechStarted)),
+            VadEventType::EndOfSpeech => {
+                let silence =
+                    std::time::Duration::try_from_secs_f64(ev.silence_duration).unwrap_or_default();
+                Some(In::Human(Human::SpeechEnded { silence }))
+            }
+            VadEventType::InferenceDone => None,
+        },
+        // The empty clearing final is no words.
+        SystemTap::Stt(ev) => final_text(&ev).filter(|text| !text.trim().is_empty()).map(|text| {
+            In::Human(Human::Transcript { text, source: TranscriptSource::SessionStt })
+        }),
+        SystemTap::Session(SessionEvent::UserTurnCompleted(_)) => Some(In::Human(Human::EndOfTurn)),
+        SystemTap::Session(_) | SystemTap::Ivr(_) => None,
+        SystemTap::CloseRequested => Some(In::Close),
+    }
+}
+
+/// `_receive`: a non-empty final of AMD's own STT reaches the machine; everything else is dropped.
+pub fn tap_input(ev: &SpeechEvent) -> Option<In> {
+    final_text(ev)
+        .filter(|text| !text.is_empty())
+        .map(|text| In::Human(Human::Transcript { text, source: TranscriptSource::AmdStt }))
+}
+
+fn final_text(ev: &SpeechEvent) -> Option<String> {
+    if ev.kind != SpeechEventType::FinalTranscript {
+        return None;
+    }
+    ev.best_alternative().map(|a| a.text.clone())
 }
