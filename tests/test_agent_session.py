@@ -53,6 +53,7 @@ from livekit.agents.voice.events import (
     UserState,
 )
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.room_io import RoomOptions
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_realtime import FakeRealtimeModel
@@ -3084,3 +3085,59 @@ async def test_failed_start_tears_down_partial_session() -> None:
         assert retry._started
     finally:
         await asyncio.wait_for(retry.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_in_room_bring_up_is_still_closed() -> None:
+    """aclose() must also tear down a start() that failed before the activity existed.
+
+    Room IO is started (and stored on the session) before the activity is published.
+    If room bring-up raises, there is no activity, but the session span and the
+    half-started RoomIO still need to be released.
+    """
+
+    class _UnavailableRoom:
+        name = "unavailable-room"
+
+        def on(self, event: str, callback: object) -> None:
+            raise RuntimeError("room unavailable")
+
+        def off(self, event: str, callback: object) -> None:
+            pass
+
+        def isconnected(self) -> bool:
+            return False
+
+    session = AgentSession(llm=FakeRealtimeModel())
+    closes: list[CloseReason] = []
+    session.on("close", lambda ev: closes.append(ev.reason))
+
+    with pytest.raises(RuntimeError, match="room unavailable"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=_UnavailableRoom(),  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=False,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    # no activity was published, but room io and the session span exist
+    assert session._activity is None
+    assert session._room_io is not None
+    assert session._session_span is not None
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert closes == [CloseReason.USER_INITIATED]
+    assert session._room_io is None
+    assert session._session_span is None
+
+    # closing twice stays safe
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert closes == [CloseReason.USER_INITIATED]
