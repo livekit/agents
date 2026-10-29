@@ -1035,94 +1035,100 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             # started meanwhile must see the awaiter resume
             suspension = _RunSuspension(handles=[current_task], until=self.__fut)
             session._run_suspensions.append(suspension)
-            self.__fut.add_done_callback(lambda _: session._run_suspensions.remove(suspension))
-            if (run_state := session._global_run_state) and not run_state.done():
-                run_state._watch_handle(current_task)
             try:
-                # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
-                # AgentTasks that require user input, but session.run() can't return until
-                # all watched handles complete — creating a circular wait.
-                await session._update_activity(
-                    self,
-                    previous_activity="pause",
-                    blocked_tasks=blocked_tasks,
-                    wait_on_enter=False,
-                )
-
-                if not self._activity and not self.done():
-                    self.complete(
-                        ToolError(
-                            f"activity doesn't start for {self.id}, likely due to session closing"
-                        )
-                    )
-
-                run_state = session._global_run_state
-
-                on_enter_task = self._activity._on_enter_task if self._activity else None
-                if on_enter_task and run_state and not run_state.done():
-                    # watch the on_enter task as a guard so RunResult won't complete
-                    # before on_enter has registered its own speech handles
-                    run_state._watch_handle(on_enter_task)
-                    pending_on_enter_task = on_enter_task
-
-                # now suspend the parent speech handle and blocked tasks that belong to the
-                # old activity — they can't complete while this AgentTask is running, and
-                # holding the run open on them would block RunResult from completing. A
-                # foreground hold waiting on this task is in the same position, so its guard
-                # suspends too.
-                if run_state and not run_state.done():
-                    suspension.handles += [
-                        handle
-                        for handle in [speech_handle, *blocked_tasks, *session._foreground_guards]
-                        if handle is not None
-                        and handle is not current_task
-                        and handle in run_state._handles
-                    ]
-                suspension.active = True
-                if run_state and not run_state.done():
-                    run_state._mark_done_if_needed(None)
-
-                if on_enter_task and not pending_on_enter_task:
-                    # no active run to guard — just wait for on_enter directly
-                    await asyncio.shield(on_enter_task)
-            # asyncio.CancelledError derives from BaseException, not Exception
-            except BaseException:
-                self.__inactive_ev.set()
-                raise
-
-            try:
-                return await asyncio.shield(self.__fut)
-
-            finally:
-                if pending_on_enter_task:
-                    try:
-                        await asyncio.shield(pending_on_enter_task)
-                    except BaseException:
-                        logger.exception("error in on_enter task of agent %s", self.id)
-
-                if session._closing and self._activity is None:
-                    # the activity never started (session closing), skip the handoff;
-                    # the close path owns the previous activity
-                    pass
-                elif session.current_agent != self:
-                    logger.warning(
-                        f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                        "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
-                    )
-                    await old_activity.aclose()
-                else:
-                    merged_chat_ctx = old_agent.chat_ctx.copy().merge(
-                        self.chat_ctx,
-                        exclude_function_call=not self._preserve_function_call_history,
-                        exclude_instructions=True,
-                    )
-                    # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
-                    old_agent._chat_ctx.items[:] = merged_chat_ctx.items
-
+                if (run_state := session._global_run_state) and not run_state.done():
+                    run_state._watch_handle(current_task)
+                try:
+                    # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
+                    # AgentTasks that require user input, but session.run() can't return until
+                    # all watched handles complete — creating a circular wait.
                     await session._update_activity(
-                        old_agent, new_activity="resume", wait_on_enter=False
+                        self,
+                        previous_activity="pause",
+                        blocked_tasks=blocked_tasks,
+                        wait_on_enter=False,
                     )
-                self.__inactive_ev.set()
+
+                    if not self._activity and not self.done():
+                        self.complete(
+                            ToolError(
+                                f"activity doesn't start for {self.id}, likely due to session closing"
+                            )
+                        )
+
+                    run_state = session._global_run_state
+
+                    on_enter_task = self._activity._on_enter_task if self._activity else None
+                    if on_enter_task and run_state and not run_state.done():
+                        # watch the on_enter task as a guard so RunResult won't complete
+                        # before on_enter has registered its own speech handles
+                        run_state._watch_handle(on_enter_task)
+                        pending_on_enter_task = on_enter_task
+
+                    # now suspend the parent speech handle and blocked tasks that belong to the
+                    # old activity — they can't complete while this AgentTask is running, and
+                    # holding the run open on them would block RunResult from completing. A
+                    # foreground hold waiting on this task is in the same position, so its guard
+                    # suspends too.
+                    if run_state and not run_state.done():
+                        suspension.handles += [
+                            handle
+                            for handle in [
+                                speech_handle,
+                                *blocked_tasks,
+                                *session._foreground_guards,
+                            ]
+                            if handle is not None
+                            and handle is not current_task
+                            and handle in run_state._handles
+                        ]
+                    suspension.active = True
+                    if run_state and not run_state.done():
+                        run_state._mark_done_if_needed(None)
+
+                    if on_enter_task and not pending_on_enter_task:
+                        # no active run to guard — just wait for on_enter directly
+                        await asyncio.shield(on_enter_task)
+                # asyncio.CancelledError derives from BaseException, not Exception
+                except BaseException:
+                    self.__inactive_ev.set()
+                    raise
+
+                try:
+                    return await asyncio.shield(self.__fut)
+
+                finally:
+                    if pending_on_enter_task:
+                        try:
+                            await asyncio.shield(pending_on_enter_task)
+                        except BaseException:
+                            logger.exception("error in on_enter task of agent %s", self.id)
+
+                    if session._closing and self._activity is None:
+                        # the activity never started (session closing), skip the handoff;
+                        # the close path owns the previous activity
+                        pass
+                    elif session.current_agent != self:
+                        logger.warning(
+                            f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                            "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+                        )
+                        await old_activity.aclose()
+                    else:
+                        merged_chat_ctx = old_agent.chat_ctx.copy().merge(
+                            self.chat_ctx,
+                            exclude_function_call=not self._preserve_function_call_history,
+                            exclude_instructions=True,
+                        )
+                        # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
+                        old_agent._chat_ctx.items[:] = merged_chat_ctx.items
+
+                        await session._update_activity(
+                            old_agent, new_activity="resume", wait_on_enter=False
+                        )
+                    self.__inactive_ev.set()
+            finally:
+                session._run_suspensions.remove(suspension)
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()

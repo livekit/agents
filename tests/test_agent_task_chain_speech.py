@@ -21,6 +21,7 @@ from livekit.agents.beta.workflows import TaskGroup
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_realtime import FakeRealtimeModel
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -177,3 +178,45 @@ async def test_tool_resumes_in_the_run_after_task_completes_in_on_enter() -> Non
         assert [e.item.text_content for e in result.events if e.type == "message"] == [
             "one moment while I pull that up."
         ]
+
+
+@pytest.mark.virtual_time
+async def test_caught_task_startup_failure_does_not_block_later_run() -> None:
+    recovered = asyncio.Event()
+    release_parent = asyncio.Event()
+    failed_task = AgentTask[None](
+        instructions="Invalid realtime configuration.",
+        llm=FakeRealtimeModel(),
+        turn_handling={"interruption": {"enabled": False}},
+    )
+
+    class Parent(Agent):
+        async def on_enter(self) -> None:
+            with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+                await failed_task
+            recovered.set()
+            await release_parent.wait()
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="Hello.", ttft=0, duration=0),
+        ]
+    )
+    async with AgentSession(llm=llm) as session:
+        try:
+            await session.start(
+                Parent(instructions="Recover from startup failure."), session_host=False
+            )
+            await asyncio.wait_for(recovered.wait(), timeout=5)
+
+            result = await asyncio.wait_for(session.run(user_input="hello"), timeout=5)
+            assert [
+                event.item.text_content
+                for event in result.events
+                if event.type == "message" and event.item.role == "assistant"
+            ] == ["Hello."]
+            assert not session._run_suspensions
+            assert not failed_task.done()
+        finally:
+            failed_task.cancel()
+            release_parent.set()
