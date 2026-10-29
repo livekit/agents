@@ -157,9 +157,6 @@ impl McpSessionPort for McpSession {
     fn set_allowed_tools(&self, allowed: Vec<String>) {
         self.listing.lock().unwrap().set_allowed(allowed);
     }
-    fn invalidate_cache(&self) {
-        self.listing.lock().unwrap().invalidate();
-    }
 
     async fn connect_http(
         &self,
@@ -296,7 +293,7 @@ impl McpSessionPort for McpSession {
             connection.close();
             *self.previous.lock().unwrap() = Some(connection.clone());
         }
-        self.invalidate_cache();
+        self.listing.lock().unwrap().invalidate();
         let previous = self.previous.lock().unwrap().clone();
         if let Some(connection) = previous
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()

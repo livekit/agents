@@ -36,12 +36,11 @@ pub fn raw_schema(
     schema
 }
 
-pub fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> SetupPlan {
-    match (reload, toolset_initialized, server_connected) {
-        (false, true, true) => SetupPlan::Skip,
-        (_, _, false) => SetupPlan::ConnectThenList,
-        (true, _, true) => SetupPlan::InvalidateThenList,
-        (false, false, true) => SetupPlan::ListOnly,
+pub fn plan_setup(toolset_initialized: bool, server_connected: bool) -> SetupPlan {
+    match (toolset_initialized, server_connected) {
+        (true, true) => SetupPlan::Skip,
+        (_, false) => SetupPlan::ConnectThenList,
+        (false, true) => SetupPlan::ListOnly,
     }
 }
 
@@ -49,7 +48,6 @@ pub fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: boo
 pub enum SetupPlan {
     Skip,
     ConnectThenList,
-    InvalidateThenList,
     ListOnly,
 }
 
@@ -355,10 +353,6 @@ pub fn timeout_duration(field: &str, seconds: f64) -> Result<std::time::Duration
         .ok_or_else(|| McpError::InvalidTimeout(field.to_owned()))
 }
 
-pub fn check_result(result: &Value) -> Result<(), McpError> {
-    content(result).map(drop)
-}
-
 pub fn render_result(tool_name: &str, result: &Value) -> Result<String, McpError> {
     Ok(match content(result)? {
         [] => return Err(McpError::EmptyResult(tool_name.into())),
@@ -402,11 +396,10 @@ impl McpToolsPort for McpTools {
     ) -> Value {
         raw_schema(&name, description.as_deref(), &input_schema, meta.as_ref())
     }
-    fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> String {
-        match plan_setup(reload, toolset_initialized, server_connected) {
+    fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String {
+        match plan_setup(toolset_initialized, server_connected) {
             SetupPlan::Skip => "skip",
             SetupPlan::ConnectThenList => "connect_then_list",
-            SetupPlan::InvalidateThenList => "invalidate_then_list",
             SetupPlan::ListOnly => "list_only",
         }
         .into()
@@ -420,9 +413,6 @@ impl McpToolsPort for McpTools {
     }
     fn render_result(tool_name: String, result: Value) -> Result<String, McpError> {
         render_result(&tool_name, &result)
-    }
-    fn check_result(result: Value) -> Result<(), McpError> {
-        check_result(&result)
     }
     fn timeout_check(field: &str, seconds: f64) -> Result<(), McpError> {
         timeout_duration(field, seconds).map(drop)

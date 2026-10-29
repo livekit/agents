@@ -7,7 +7,6 @@ import asyncio
 import contextvars
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,19 +27,6 @@ __all__ = [
 ]
 
 MCPTool = RawFunctionTool
-
-
-@dataclass
-class MCPToolResultContext:
-    """What an ``MCPToolResultResolver`` is called with."""
-
-    tool_name: str
-    arguments: dict[str, Any]
-    result: Any
-    """The ``CallToolResult``, as its wire JSON."""
-
-
-MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
 
 
 class _Progress:
@@ -96,21 +82,12 @@ class _Streams:
 class MCPServer:
     """An MCP server; subclasses connect it (``initialize``) or give its ``client_streams()``."""
 
-    def __init__(
-        self,
-        *,
-        client_session_timeout_seconds: float,
-        tool_result_resolver: MCPToolResultResolver | None = None,
-    ) -> None:
+    def __init__(self, *, client_session_timeout_seconds: float) -> None:
         self._session = _core.McpSession(client_session_timeout_seconds)
-        self._tool_result_resolver = tool_result_resolver
 
     @property
     def initialized(self) -> bool:
         return self._session.connected  # type: ignore[no-any-return]
-
-    def invalidate_cache(self) -> None:
-        self._session.invalidate_cache()
 
     async def initialize(self) -> None:
         await self._session.connect_host(
@@ -152,13 +129,7 @@ class MCPServer:
                 progress,
                 (asyncio.get_running_loop(), contextvars.copy_context()),
             )
-            if self._tool_result_resolver is None:
-                return _core.mcp_render_result(name, result)
-            _core.mcp_check_result(result)
-            resolved = self._tool_result_resolver(
-                MCPToolResultContext(tool_name=name, arguments=raw_arguments, result=result)
-            )
-            return await resolved if asyncio.iscoroutine(resolved) else resolved
+            return _core.mcp_render_result(name, result)
 
         impl: Callable[..., Awaitable[Any]]
         if options["report_progress"]:
@@ -195,7 +166,6 @@ class MCPServerHTTP(MCPServer):
         timeout: The connect timeout in finite, non-negative seconds; zero expires immediately.
         sse_read_timeout: The read timeout in finite, non-negative seconds.
         client_session_timeout_seconds: The timeout of one request in finite, non-negative seconds.
-        tool_result_resolver: Turns a tool's result into what the model reads.
     """
 
     def __init__(
@@ -207,13 +177,8 @@ class MCPServerHTTP(MCPServer):
         timeout: float = 5,
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,
-        *,
-        tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
-        super().__init__(
-            client_session_timeout_seconds=client_session_timeout_seconds,
-            tool_result_resolver=tool_result_resolver,
-        )
+        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
         _core._core_mcp_timeout_check("timeout", timeout)
         _core._core_mcp_timeout_check("sse_read_timeout", sse_read_timeout)
         self.url = url
@@ -248,13 +213,8 @@ class MCPServerStdio(MCPServer):
         env: dict[str, str] | None = None,
         cwd: str | Path | None = None,
         client_session_timeout_seconds: float = 5,
-        *,
-        tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
-        super().__init__(
-            client_session_timeout_seconds=client_session_timeout_seconds,
-            tool_result_resolver=tool_result_resolver,
-        )
+        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
         self.command = command
         self.args = args
         self.env = env
@@ -302,19 +262,16 @@ class MCPToolset(AsyncToolset):
         self._initialized = False
         self._lock = asyncio.Lock()
 
-    async def setup(self, *, reload: bool = False) -> Self:
-        """Connect the server when it is not, then fetch its tools; a no-op once done unless
-        ``reload``."""
+    async def setup(self) -> Self:
+        """Connect the server when it is not, then fetch its tools; a no-op once done."""
         await super().setup()
         async with self._lock:
-            plan = _core.mcp_plan_setup(reload, self._initialized, self._mcp_server.initialized)
+            plan = _core.mcp_plan_setup(self._initialized, self._mcp_server.initialized)
             if plan == "skip":
                 return self
             try:
                 if plan == "connect_then_list":
                     await self._mcp_server.initialize()
-                elif plan == "invalidate_then_list":
-                    self._mcp_server.invalidate_cache()
                 self._tools = list(
                     await self._mcp_server.list_tools(tool_options=self._tool_options)
                 )

@@ -657,12 +657,6 @@ impl McpSession {
         Ok(())
     }
 
-    fn invalidate_cache(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
-        <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::invalidate_cache(&self.0);
-        Ok(())
-    }
-
     #[pyo3(signature = (url, headers, transport, timeout, sse_read_timeout))]
     fn connect_http<'py>(&self, py: Python<'py>, url: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, transport: ::std::string::String, #[pyo3(from_py_with = _extract_mcp_session_connect_http_timeout)] timeout: f64, #[pyo3(from_py_with = _extract_mcp_session_connect_http_sse_read_timeout)] sse_read_timeout: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
@@ -765,10 +759,10 @@ pub fn mcp_raw_schema<'py>(py: Python<'py>, name: ::std::string::String, descrip
 }
 
 #[pyfunction]
-#[pyo3(signature = (reload, toolset_initialized, server_connected))]
-pub fn mcp_plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> PyResult<::std::string::String> {
+#[pyo3(signature = (toolset_initialized, server_connected))]
+pub fn mcp_plan_setup(toolset_initialized: bool, server_connected: bool) -> PyResult<::std::string::String> {
     ::lk_agents_abi::python::check_pid()?;
-    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::plan_setup(reload, toolset_initialized, server_connected);
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::plan_setup(toolset_initialized, server_connected);
     Ok(out)
 }
 
@@ -787,15 +781,6 @@ pub fn mcp_render_result(tool_name: ::std::string::String, result: Bound<'_, PyA
     let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::render_result(tool_name, result).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (result))]
-pub fn mcp_check_result(result: Bound<'_, PyAny>) -> PyResult<()> {
-    ::lk_agents_abi::python::check_pid()?;
-    let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
-    <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::check_result(result).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(())
 }
 
 /// Validate public MCP constructor arguments before a transport can be opened.

@@ -251,7 +251,6 @@
     "local_models_native",
     "match_mood",
     "max_input_len",
-    "mcp_check_result",
     "mcp_http_transport",
     "mcp_plan_setup",
     "mcp_raw_schema",

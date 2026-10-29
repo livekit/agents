@@ -187,8 +187,6 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     fn connected(&self) -> bool;
     #[host(call)]
     fn set_allowed_tools(&self, allowed: Vec<String>);
-    #[host(call)]
-    fn invalidate_cache(&self);
     #[host(await)]
     async fn connect_http(
         &self,
@@ -242,13 +240,11 @@ pub trait McpTools {
         meta: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> serde_json::Value;
     #[host(function, name = "mcp_plan_setup")]
-    fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> String;
+    fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String;
     #[host(function, name = "mcp_http_transport")]
     fn http_transport(url: String, transport_type: Option<String>) -> Result<String, McpError>;
     #[host(function, name = "mcp_render_result")]
     fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
-    #[host(function, name = "mcp_check_result")]
-    fn check_result(result: serde_json::Value) -> Result<(), McpError>;
     /// Validate public MCP constructor arguments before a transport can be opened.
     #[host(function, name = "_core_mcp_timeout_check", pid = false)]
     fn timeout_check(field: &str, seconds: f64) -> Result<(), McpError>;
