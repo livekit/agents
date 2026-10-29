@@ -24,14 +24,7 @@ lk-agents-test-support = { path = "../lk-agents-test-support" }
 lk-agents-runtime = { path = "../lk-agents-runtime", default-features = false }
 # The avatar fake's video frames hold their tag as shared bytes.
 bytes = "1"
-# The realtime fake runs the production native session (its wire machine, reconnects and all)
-# over a socket whose far end is the simulated OpenAI Realtime server.
-lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
-lk-agents-net = { path = "../lk-agents-net" }
-base64.workspace = true
 tokio = { workspace = true, features = ["test-util", "io-util"] }
-prost.workspace = true
-async-trait.workspace = true
 serde_json.workspace = true
 fastrand = "2"
 livekit-protocol.workspace = true

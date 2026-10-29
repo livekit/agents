@@ -4,16 +4,12 @@
 //! here implements `Covers` for every one of its variants: `Covered` with what produces it, or
 //! `Skipped` with why no fake does. A variant the core gains is a compile error here until
 //! someone decides how the fakes produce it (TEST_STRATEGY.md section 5, for provider events as
-//! for commands). `tests/conformance.rs` checks the realtime claims against what the simulated
-//! server actually emits.
+//! for commands).
 use lk_agents_abi::{
     llm::realtime::{assert_event_is_covered, event_coverage, event_vocabulary as event},
     stt::events::{assert_speech_event_type_is_covered, speech_event_type_vocabulary as stt},
     utils::vocabulary::{Coverage, Covers},
     vad::events::{assert_vad_event_type_is_covered, vad_event_type_vocabulary as vad},
-};
-use lk_agents_inference::realtime::protocol::{
-    assert_incoming_is_covered, incoming_coverage, incoming_vocabulary as wire,
 };
 
 macro_rules! table {
@@ -48,34 +44,8 @@ table! { Vad:
     vad::EndOfSpeech => Covered("VadEnd");
 }
 
-/// The realtime wire the core decodes (`lk_agents_inference::realtime::protocol::Incoming`), by the
-/// server event type the simulated server sends for it.
-pub struct RealtimeWire;
-table! { RealtimeWire:
-    wire::SpeechStarted => Covered("input_audio_buffer.speech_started");
-    wire::SpeechStopped => Covered("input_audio_buffer.speech_stopped");
-    wire::ResponseCreated => Covered("response.created");
-    wire::OutputItemAdded => Covered("response.output_item.added");
-    wire::ContentPartAdded => Covered("response.content_part.added");
-    wire::ItemAdded => Covered("conversation.item.added");
-    wire::ItemDeleted => Covered("conversation.item.deleted");
-    wire::TranscriptionDelta => Covered("conversation.item.input_audio_transcription.delta");
-    wire::TranscriptionCompleted => Covered("conversation.item.input_audio_transcription.completed");
-    wire::TranscriptionFailed => Covered("conversation.item.input_audio_transcription.failed");
-    wire::TranscriptionUpdated => Skipped("xAI only; the fake server speaks OpenAI's dialect");
-    wire::TextDelta => Covered("response.output_text.delta");
-    wire::AudioTranscriptDelta => Covered("response.output_audio_transcript.delta");
-    wire::AudioDelta => Covered("response.output_audio.delta");
-    wire::OutputItemDone => Covered("response.output_item.done");
-    wire::ResponseDone => Covered("response.done");
-    wire::Error => Covered("error");
-    wire::IdleTimeoutTriggered => Skipped("xAI only; the fake server speaks OpenAI's dialect");
-    wire::SessionCreated => Covered("session.created");
-    wire::Unhandled => Covered("session.updated");
-}
-
-/// The realtime events the driver consumes (`lk_agents_abi::llm::realtime::Event`), as the native
-/// session derives them from the simulated server's traffic.
+/// The realtime events the driver consumes (`lk_agents_abi::llm::realtime::Event`), as the
+/// realtime fake reports them.
 pub struct RealtimeEvents;
 table! { RealtimeEvents:
     event::InputSpeechStarted => Covered("input_audio_buffer.speech_started");
@@ -104,13 +74,7 @@ table! { RealtimeEvents:
 pub fn every_provider_event_is_producible() {
     assert_speech_event_type_is_covered::<Stt, &'static str>();
     assert_vad_event_type_is_covered::<Vad, &'static str>();
-    assert_incoming_is_covered::<RealtimeWire, &'static str>();
     assert_event_is_covered::<RealtimeEvents, &'static str>();
-}
-
-/// The wire events the simulated server must be seen to send, by the server event type.
-pub fn realtime_wire_claims() -> Vec<(&'static str, Coverage<&'static str>)> {
-    incoming_coverage::<RealtimeWire, &'static str>()
 }
 
 /// The driver-facing realtime events, covered or skipped.
@@ -127,7 +91,7 @@ mod tests {
     #[test]
     fn every_skip_says_why() {
         every_provider_event_is_producible();
-        for (name, coverage) in realtime_wire_claims().into_iter().chain(realtime_event_claims()) {
+        for (name, coverage) in realtime_event_claims() {
             if let Skipped(why) = coverage {
                 assert!(why.len() > 10, "{name}: {why}");
             }

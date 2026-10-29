@@ -10,7 +10,7 @@ pub struct RealtimeServerAcceptsRequests;
 impl Rule for RealtimeServerAcceptsRequests {
     const CONTRACT: Contract = Contract {
         id: "realtime_server_accepts_requests",
-        guarantee: "The realtime server (fakes/realtime/server.rs, held to the real one by corpus/probes) refuses no client frame the client had already been told was invalid: no cancel of a response it heard was done, no reply asked over one it heard was created, no commit of a buffer it emptied itself, no item, truncation or event the server could never take. A refusal racing an event still on the wire is the protocol's, not the driver's.",
+        guarantee: "The realtime server (fakes/realtime/server.rs, refusing what the real one refuses) refuses no request the driver had already been told was invalid: no cancel of a response it heard was done, no reply asked over one it heard was created, no truncation past the audio it was sent. A refusal racing an event still on its way is the protocol's, not the driver's.",
         examples: &[raced_cancel],
         counterexamples: &[knowing_cancel, duplicate_item],
         probe: None,

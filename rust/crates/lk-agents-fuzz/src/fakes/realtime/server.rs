@@ -1,90 +1,58 @@
-//! The OpenAI Realtime server, as the real one answers the protocol's edge cases
-//! (`corpus/probes/`, `corpus/probe_realtime.py`), the corpus shows it behaving, and, where both
-//! are silent, the docs say.
+//! One connection's realtime server, at the level the session reports it: what a LiveKit
+//! Inference realtime model (the OpenAI Realtime server behind it) does with the session's
+//! requests, as the corpus shows the real one doing it (`corpus/calibration.json`), and what it
+//! refuses. Inference's own tests hold its realtime core to the recorded server; this model
+//! reproduces the outcomes that reach the driver.
 //!
-//! Sans-IO, in the protocol's typed records: the realtime core's client frames
-//! ([`Outgoing`]) go in with the instant they arrived ([`Server::client`]), what the server does
-//! on its own accord goes in as an [`Exo`], and every server event comes out of [`Server::pop`]
-//! once it is due, as the [`Incoming`] the client decodes from it. Each event's delay after its
-//! cause is drawn from the corpus (`lk_agents_test_support::corpus`), so a reply is
-//! created about 100 ms after its `response.create`, its first item 300 ms later, its audio in
-//! 400 ms deltas faster than real time, and `response.done` while the client is still playing
-//! most of it -- which is what made a server onset over a finished generation the common
-//! barge-in, not a rare one. The server answers the client's frames in the order they came.
+//! Each happening's delay after its cause is drawn from the corpus, so a reply is created about
+//! 100 ms after it is asked, its message 300 ms later, its audio in 400 ms deltas faster than real
+//! time, and its end while the person is still hearing most of it -- which is what makes a server
+//! onset over a finished generation the common barge-in, not a rare one. The server answers
+//! requests in the order they came.
 //!
-//! It holds the conversation: items by id and kind, placed where the real server places them (a
-//! reply's item when it is added, after any client item that arrived first), deleted and
-//! truncated on the client's word (a truncation cuts what the item holds); a reply reads what the
-//! conversation holds when it is asked. One reply at a time: a second `response.create` over an
-//! active one is refused, a cancel frees the conversation at once (a reply asked in the same
-//! breath is created before the cancelled one's tail and `response.done`), and a cancelled reply
-//! keeps streaming what it had generated before the cancel landed. Under server VAD an onset needs
-//! audio the client sent; it cancels the reply in progress when `interrupt_response`
-//! (`cancelled`/`turn_detected`, its message `incomplete`), and the end of the turn commits the
-//! buffer and, with `create_response` and no reply active, opens one. The transcription completes
-//! asynchronously, before or after the reply's events.
+//! It holds the conversation: items by id and kind, a reply's message placed when it is added
+//! (after any item that arrived first), deleted and truncated on the session's word (a truncation
+//! cuts what the message holds); a reply reads what the conversation holds when it is asked. One
+//! reply at a time: a second request over an active one is refused, a cancel frees the
+//! conversation at once (a reply asked in the same breath is created before the cancelled one's
+//! end), and a cancelled reply keeps streaming what it had generated before the cancel landed.
+//! Under server VAD an onset needs audio the session sent; it cancels the reply in progress, and
+//! the end of the turn commits the buffer and, with no reply active, opens one. The transcription
+//! completes asynchronously, before or after the reply's events.
 //!
-//! What the real server refuses it refuses, with the real code and the real choice of citing the
-//! frame or not, and reports each refusal as a [`Breach`] with whether the client already knew
-//! better when it sent the frame (it had been told the state that makes the frame invalid) or
-//! merely raced an event on the wire. So are two answers the server gives from the wrong state: a
-//! reply asked in the same breath before the tool output it should read, and a cancel landing on
-//! the server's reply to the person's turn before anything prompted it.
-//!
-//! The audio a response carries is tagged per delta ([`Tag::generated`]) and compressed: a
-//! delta's PCM is 10 ms whatever its nominal length, as the TTS fake's chunks are; its nominal
-//! length is what truncation is judged against.
-use std::{collections::BTreeMap, time::SystemTime};
+//! What the real server refuses it refuses, with the real code, and reports each refusal as a
+//! [`Breach`] with whether the driver already knew better when it asked (it had been told the
+//! state that makes the request invalid) or merely raced an event on its way. So are two answers
+//! the server gives from the wrong state: a reply asked in the same breath before the tool output
+//! it should read, and a cancel landing on the server's reply to the person's turn before
+//! anything prompted it.
+use std::{collections::BTreeMap, time::Duration};
 
 use fastrand::Rng;
 use lk_agents_abi::{
-    AudioFrame, ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts,
-    llm::realtime::{GenerationStatus, TokenUsage},
+    ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts, llm::realtime::GenerationStatus,
 };
-use lk_agents_inference::realtime::{
-    Incoming, TurnDetection,
-    protocol::{ResponseDone, ServerError, TranscriptionCompleted, TranscriptionUsage},
-};
+use lk_agents_test_support::corpus::{self, draw_ms, share};
 
-mod client;
-
-pub use client::{event_id_of, wire_name};
-
-use lk_agents_test_support::corpus::{draw_ms, share};
-
-use super::super::SAMPLE_RATE;
 use crate::{
     input::{AGENT_TURNS, USER_TURNS},
     record::{Breach, Tag},
 };
 
-/// The error codes the server refuses a client event with, as the real one does
-/// (`corpus/probes/`), and the words a speech that failed on one carries: such a speech failed on
-/// the server's word.
+/// The error codes the server refuses a request with, as the real one does (`corpus/probes/`),
+/// and the words a speech that failed on one carries: such a speech failed on the server's word.
 pub const REFUSALS: &[&str] = &[
     "conversation_already_has_active_response",
     "Conversation already has an active response",
     "response_cancel_not_active",
     "response_cancel_not_found",
     "input_audio_buffer_commit_empty",
-    "item_create_duplicate_item_id",
-    "item_create_invalid_previous_item_id",
-    "invalid_tool_call_id",
-    "item_delete_invalid_item_id",
     "item_truncate_invalid_item_id",
-    "unsupported_content_type",
-    "cannot_update_voice",
     "invalid_value",
 ];
 
 /// The nominal length of a full audio delta, as the corpus has nearly all of them.
-const DELTA_MS: u64 = 400;
-
-/// What a delta's PCM is long: the client plays all of it, as long as the server counts it.
-const PCM_MS: u64 = DELTA_MS;
-
-/// The samples a delta carries.
-const DELTA_SAMPLES: usize = (DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
+pub const DELTA_MS: u64 = 400;
 
 /// What the server is told to do of its own accord: the person's speech as its VAD hears it, and
 /// the ways a real server goes wrong. Mirrors `RtEvent`, which is how a case says it.
@@ -92,18 +60,16 @@ const DELTA_SAMPLES: usize = (DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 pub enum Exo {
     SpeechStarted,
     SpeechStopped,
-    /// A delta for a response nobody created.
-    StrayDelta,
     /// The server opens a response on its own (`input_audio_buffer.timeout_triggered` and the
-    /// like): no `client_event_id`.
+    /// like).
     ServerResponse,
     /// The oldest response still generating finishes now, all of it at once.
     FinishNow,
-    /// A server-side `error` event, the session staying open.
+    /// A server-side `error`, the session staying open.
     ServerError,
-    /// An `error` the session cannot go on after (`insufficient_quota`).
+    /// An `error` the session cannot go on after (the account's quota).
     FatalError,
-    /// The response in progress fails: `response.done` with `status: failed`.
+    /// The response in progress fails.
     ResponseFailed,
     /// The last user item's transcription fails.
     TranscriptionFailed,
@@ -116,466 +82,523 @@ pub enum Vad {
     Server,
 }
 
-/// One server event as the client receives it.
+/// One thing the server tells the session, at its instant. `r` is the response it belongs to.
 #[derive(Clone, Debug)]
-pub struct Delivered {
-    pub event: Incoming,
-    /// The response it belongs to (its `response_id`, or `response.id`).
-    pub response: Option<String>,
-    /// A `response.done`'s `status_details.reason`.
-    pub reason: Option<&'static str>,
-    /// The item an event names on the wire where the client reads no further (`item_id`).
-    pub item: Option<String>,
-}
-
-/// An event the client reads no further than its type.
-fn unhandled(event_type: &str) -> Incoming {
-    Incoming::Unhandled { event_type: event_type.to_owned() }
-}
-
-#[derive(Clone, Debug, Default)]
-struct Config {
-    vad: Option<Vad>,
-    instructions: Option<String>,
-    voice: Option<String>,
-    create_response: bool,
-    interrupt_response: bool,
-    transcription: bool,
-    audio: bool,
-    tools: Vec<String>,
-    /// The session's `tool_choice`: `none` forbids calls, `required` makes every response one.
-    tool_choice: Option<ToolChoice>,
-}
-
-impl Config {
-    fn turn_detection(&mut self, td: Option<&TurnDetection>) {
-        let (vad, create, interrupt) = match td {
-            Some(TurnDetection::ServerVad { create_response, interrupt_response, .. }) => {
-                (Some(Vad::Server), *create_response, *interrupt_response)
-            }
-            Some(TurnDetection::SemanticVad { create_response, interrupt_response, .. }) => {
-                (Some(Vad::Semantic), *create_response, *interrupt_response)
-            }
-            Some(TurnDetection::Raw(v)) => {
-                let vad = match v["type"].as_str() {
-                    Some("semantic_vad") => Some(Vad::Semantic),
-                    Some("server_vad") => Some(Vad::Server),
-                    _ => None,
-                };
-                let flag = |k: &str| v[k].as_bool().unwrap_or(true);
-                (vad, flag("create_response"), flag("interrupt_response"))
-            }
-            None => (None, true, true),
-        };
-        self.vad = vad;
-        self.create_response = create;
-        self.interrupt_response = interrupt;
-    }
-}
-
-/// A server event and what delivering it means to the server's own bookkeeping.
-#[derive(Clone, Debug)]
-enum Body {
-    Event(Incoming),
-    /// An audio delta, built when it is delivered: its PCM names the generation that carries it.
+pub enum Happening {
+    Created {
+        r: u32,
+    },
+    /// The reply's message item.
+    MessageAdded {
+        r: u32,
+        previous: Option<String>,
+    },
+    /// Its content part: the modalities settle.
+    Part {
+        r: u32,
+    },
+    Text {
+        r: u32,
+        delta: String,
+    },
     Audio {
-        item: String,
+        r: u32,
         chunk: u16,
     },
+    CallAdded {
+        r: u32,
+    },
+    MessageDone {
+        r: u32,
+    },
+    CallDone {
+        r: u32,
+    },
+    Done {
+        r: u32,
+        status: GenerationStatus,
+    },
+    /// An item the session created, or the person's committed turn, now in the conversation.
+    ItemAdded {
+        item: ChatItem,
+        previous: Option<String>,
+    },
+    SpeechStarted {
+        item: String,
+    },
+    SpeechStopped,
+    /// The person's committed turn's transcript so far, or all of it.
+    Transcript {
+        item: String,
+        text: String,
+        last: bool,
+    },
+    /// The transcription failed: what had come of it stands.
+    TranscriptFailed {
+        item: String,
+    },
+    /// An `error` event; `request` when it refuses a reply request.
+    Error {
+        code: Option<&'static str>,
+        message: &'static str,
+        request: Option<String>,
+    },
+    /// An `error` the session cannot go on after.
+    Fatal,
 }
 
-#[derive(Clone, Debug)]
-struct Pending {
-    resp: Option<u32>,
-    body: Body,
-    reason: Option<&'static str>,
-    item: Option<String>,
-}
-
-/// One conversation item the server holds.
+/// What the server holds of an item.
 #[derive(Clone, Debug)]
 struct Item {
     id: String,
-    /// `message`, `function_call` or `function_call_output`.
-    kind: &'static str,
-    role: Option<Role>,
     call_id: Option<String>,
-    /// Audio delivered for an assistant message, nominal ms: what truncation is judged against.
+    function_call: bool,
+    assistant: bool,
+    /// Audio delivered for an assistant message, ms: what truncation is judged against and what
+    /// the message keeps, a truncation cutting it where the session says.
     audio_ms: u64,
-    /// The same audio as the client plays it (a delta's PCM is shorter than its nominal length):
-    /// what the item keeps of it, a truncation cutting it where the client says.
-    pcm_ms: u64,
-    /// Where a truncation cut it: audio the server had generated and not yet delivered is cut too.
     cut_ms: Option<u64>,
-    /// The generation that made it (`Hooks::created`'s id), for the server's own messages.
+    /// The generation that made it, for the server's own messages.
     source: Option<u32>,
 }
 
 impl Item {
     fn of(item: &ChatItem) -> Self {
-        let (kind, role, call_id) = match item {
-            ChatItem::Message(m) => ("message", Some(m.role), None),
-            ChatItem::FunctionCall(f) => ("function_call", None, Some(f.call_id.clone())),
-            ChatItem::FunctionCallOutput(f) => {
-                ("function_call_output", None, Some(f.call_id.clone()))
-            }
-            ChatItem::AgentHandoff(_) | ChatItem::AgentConfigUpdate(_) => ("other", None, None),
+        let (call_id, function_call, assistant) = match item {
+            ChatItem::Message(m) => (None, false, m.role == Role::Assistant),
+            ChatItem::FunctionCall(f) => (Some(f.call_id.clone()), true, false),
+            ChatItem::FunctionCallOutput(f) => (Some(f.call_id.clone()), false, false),
+            ChatItem::AgentHandoff(_) | ChatItem::AgentConfigUpdate(_) => (None, false, false),
         };
         Item {
             id: item.id().to_owned(),
-            kind,
-            role,
             call_id,
+            function_call,
+            assistant,
             audio_ms: 0,
-            pcm_ms: 0,
             cut_ms: None,
             source: None,
         }
     }
-
-    fn assistant(&self) -> bool {
-        self.role == Some(Role::Assistant)
-    }
 }
 
-/// A message as the server sends it, its content left out as the decoder reads it; stamped with
-/// its arrival when delivered.
-fn message(id: &str, role: Role) -> ChatItem {
-    ChatItem::Message(ChatMessage::new(id, role, Vec::new(), SystemTime::UNIX_EPOCH))
-}
-
-fn function_call(id: &str, name: &str, arguments: &str) -> ChatItem {
-    ChatItem::FunctionCall(FunctionCall {
-        id: id.to_owned(),
-        call_id: format!("call_{id}"),
-        arguments: arguments.to_owned(),
-        name: name.to_owned(),
-        created_at: SystemTime::UNIX_EPOCH,
-        extra: Default::default(),
-        group_id: None,
-    })
-}
-
-/// An item's `created_at` is the client's clock when the event arrived, as the decoder reads it.
-fn stamp(event: &mut Incoming, wall: SystemTime) {
-    if let Incoming::ItemAdded { item, .. } | Incoming::OutputItemDone { item } = event {
-        match item {
-            ChatItem::Message(m) => m.created_at = wall,
-            ChatItem::FunctionCall(f) => f.created_at = wall,
-            ChatItem::FunctionCallOutput(f) => f.created_at = wall,
-            ChatItem::AgentHandoff(_) | ChatItem::AgentConfigUpdate(_) => {}
-        }
-    }
-}
-
+/// A response, from its request to its end.
 #[derive(Clone, Debug, Default)]
-struct Response {
-    id: String,
-    /// The `client_event_id` the client tagged it with.
-    request: Option<String>,
-    /// The server's answer to the person's turn its VAD ended (`create_response`).
+pub struct Response {
+    pub id: String,
+    /// The request it answers.
+    pub request: Option<String>,
+    /// The server's answer to the person's turn its VAD ended.
     turn: bool,
-    /// What it reads: the session's instructions (or the request's own) and how many items.
-    instructions: Option<String>,
+    instructions: usize,
     read_items: usize,
-    /// The message item, once minted (it is announced later).
-    item: Option<String>,
-    /// `response.output_item.added` for the message was delivered.
-    announced: bool,
-    /// `response.output_item.done` for the message was delivered: it is complete.
-    closed: bool,
-    /// When its `response.created` and its `response.done` were delivered. The client knows of
-    /// either only once it had a moment to read it: a frame it sends in that same instant crossed
-    /// the event on the wire.
-    told_created: Option<Ts>,
-    finished: Option<Ts>,
-    /// The client was told the person started speaking while it was generating: a reason to
-    /// cancel it.
-    prompted: bool,
-    /// `response.created` delivered: the generation exists for the client.
-    created: bool,
-    /// Delivered audio, nominal ms.
-    audio_ms: u64,
-    /// The generation's source id, from the hook at creation.
-    source: Option<u32>,
+    /// Its message item, once minted, and the words it says.
+    pub item: Option<String>,
+    pub text: String,
     /// The tool call it makes, `(item, name)`.
-    function_call: Option<(String, String)>,
-    /// The call's `response.output_item.added` was delivered.
+    pub function_call: Option<(String, String)>,
+    /// What the session was told: created, the message, its end.
+    told_created: Option<Ts>,
+    announced: bool,
+    message_done: bool,
     call_announced: bool,
-    /// The call's `response.output_item.done` was delivered: it is complete.
-    call_closed: bool,
-}
-
-/// What the glue does when the server delivers an event: give the response its source id at
-/// creation, hear the person's audio, close a generation.
-pub trait Hooks {
-    /// A response the client now knows of: the id its audio is tagged with.
-    fn created(&mut self, response: &str) -> u32;
-    /// A response finished, whatever its status.
-    fn done(&mut self, source: u32);
-    /// One audio delta delivered, as the chunk it is of its generation.
-    fn produced(&mut self, source: u32, chunk: u16);
-    /// The person's audio the client appended, as PCM.
-    fn heard(&mut self, pcm: &[u8]);
-    /// A client frame the real server would refuse or answer from the wrong state.
-    fn breach(&mut self, breach: Breach);
-}
-
-/// Hooks that do nothing: what the conformance check runs the server with.
-pub struct NoHooks(pub u32);
-
-impl Hooks for NoHooks {
-    fn created(&mut self, _: &str) -> u32 {
-        self.0 += 1;
-        self.0
-    }
-    fn done(&mut self, _: u32) {}
-    fn produced(&mut self, _: u32, _: u16) {}
-    fn heard(&mut self, _: &[u8]) {}
-    fn breach(&mut self, _: Breach) {}
+    call_done: bool,
+    finished: Option<Ts>,
+    /// The session was told the person started speaking while it generated: a reason to cancel.
+    prompted: bool,
+    /// Delivered audio, ms.
+    audio_ms: u64,
+    /// The run's generation, registered when the session was told it was created.
+    pub source: Option<u32>,
 }
 
 /// One connection's server: its conversation, input buffer and responses.
 pub struct Server {
     rng: Rng,
-    config: Config,
-    /// Events due, by instant then by the order they were scheduled.
-    pending: BTreeMap<(Ts, u64), Pending>,
+    vad: Option<Vad>,
+    instructions: usize,
+    tools: Vec<String>,
+    tool_choice: Option<ToolChoice>,
+    audio: bool,
+    tool_calls: Option<u8>,
+    ids: String,
+    /// What is due, by instant then by the order it was scheduled.
+    pending: BTreeMap<(Ts, u64), Happening>,
     seq: u64,
     items: Vec<Item>,
     next_item: u32,
-    next_resp: u32,
-    next_event: u32,
-    responses: Vec<Response>,
-    /// The response the server is generating, by index: at most one.
+    pub responses: Vec<Response>,
+    /// The response the server is generating: at most one.
     active: Option<u32>,
     /// The user item the VAD opened with `speech_started`.
     speaking: Option<String>,
-    /// Audio appended since the last commit or clear, and since the connection opened, in ms.
+    /// Audio sent since the last commit or clear, ms.
     buffer_ms: u64,
-    heard_ms: u64,
-    /// The response the client was last told of and not yet told is done: what it knows is
-    /// active, from the events delivered so far.
-    told_active: Option<u32>,
-    /// The buffer was last emptied by the client's own commit or clear (or never), so the client
-    /// can count what it holds; a server VAD commit empties it behind the client's back.
+    /// The buffer was last emptied by the session's own commit or clear (or never), so it can
+    /// count what the buffer holds; a VAD commit empties it behind the session's back.
     own_empty: bool,
-    /// Commits and clears whose event the client has not been delivered yet.
-    untold_empties: u32,
-    /// Assistant audio delivered on this connection: the voice is fixed from then on.
-    voiced: bool,
-    /// Replies asked while the conversation ended in a call without its output: `(response,
-    /// call_id, when)`. The client asking for the tools' follow-up sends the outputs and the
-    /// `response.create` in one breath; an output arriving in that breath after the reply, with
-    /// no reply asked after it, was meant to be read by a reply that was asked too early.
+    /// Replies asked while the conversation ended in a call without its output, `(response,
+    /// call, when)`; outputs that arrived after one in its breath, until the breath ends.
     unanswered: Vec<(String, String, Ts)>,
-    /// Outputs that arrived after such a reply in its breath, until the breath ends without
-    /// another reply asked: then each is an [`Breach::AskedBeforeOutput`].
     early: Vec<(String, String, Ts)>,
-    /// What the client did wrong, for the glue to record.
     breaches: Vec<Breach>,
-    /// When the server answers the last client frame it took: the next answer comes after.
+    /// When the server answers the last request it took: the next answer comes after.
     answered: Ts,
-    /// The last user item, for a failed transcription.
     last_user: Option<String>,
-    /// How often a response calls a tool, in percent, when the session offers tools: the
-    /// developer's prompt decides it. `None` is the corpus's rate.
-    tool_calls: Option<u8>,
-    /// What this connection's ids are minted under: a real server's ids are unique across
-    /// sessions, so a reconnect never names a new item as an old one.
-    ids: String,
 }
 
 impl Server {
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: u64, ids: String) -> Self {
         Server {
             rng: Rng::with_seed(seed),
-            config: Config::default(),
+            vad: None,
+            instructions: 0,
+            tools: Vec::new(),
+            tool_choice: None,
+            audio: true,
+            tool_calls: None,
+            ids,
             pending: BTreeMap::new(),
             seq: 0,
             items: Vec::new(),
             next_item: 0,
-            next_resp: 0,
-            next_event: 0,
             responses: Vec::new(),
             active: None,
             speaking: None,
             buffer_ms: 0,
-            heard_ms: 0,
-            told_active: None,
             own_empty: true,
-            untold_empties: 0,
-            voiced: false,
             unanswered: Vec::new(),
             early: Vec::new(),
             breaches: Vec::new(),
             answered: Ts::ZERO,
             last_user: None,
-            tool_calls: None,
-            ids: String::new(),
         }
     }
 
-    /// This connection's id namespace.
-    pub fn with_ids(mut self, prefix: impl Into<String>) -> Self {
-        self.ids = prefix.into();
-        self
+    /// The session's configuration, as its opening `session.update` gives it.
+    pub fn configure(&mut self, vad: Option<Vad>, audio: bool, tool_calls: Option<u8>) {
+        self.vad = vad;
+        self.audio = audio;
+        self.tool_calls = tool_calls;
     }
 
-    /// A model whose prompt has it call tools this often, in percent.
-    pub fn with_tool_calls(mut self, percent: Option<u8>) -> Self {
-        self.tool_calls = percent;
-        self
+    pub fn instructions(&mut self, instructions: &str) {
+        self.instructions = instructions.len();
     }
 
-    /// The connection opened: `session.created`, before anything else.
-    pub fn connect(&mut self, now: Ts) {
-        self.put(now, None, Incoming::SessionCreated { model: None });
+    pub fn tools(&mut self, tools: Vec<String>) {
+        self.tools = tools;
     }
 
     pub fn next_due(&self) -> Option<Ts> {
         self.pending.keys().next().map(|(t, _)| *t)
     }
 
-    /// The next event due at `now`, delivered at wall time `wall`.
-    pub fn pop(&mut self, now: Ts, wall: SystemTime, hooks: &mut dyn Hooks) -> Option<Delivered> {
+    /// The next happening due at `now`, as the session is told it: what telling it means to the
+    /// server's own bookkeeping is done here.
+    pub fn pop(&mut self, now: Ts) -> Option<Happening> {
         self.breathe(now);
-        self.report(hooks);
         let (&key, _) = self.pending.iter().next().filter(|((t, _), _)| *t <= now)?;
-        let Pending { resp, body, reason, item: about } =
-            self.pending.remove(&key).expect("just seen");
-        let mut event = match body {
-            Body::Event(event) => event,
-            Body::Audio { item, chunk } => {
-                let r = resp.map(|r| &mut self.responses[r as usize]);
-                let source = r.as_ref().and_then(|r| r.source).unwrap_or(0);
-                if let Some(r) = r {
-                    r.audio_ms += DELTA_MS;
-                }
-                if let Some(i) = self.items.iter_mut().find(|i| i.id == item) {
-                    i.audio_ms += DELTA_MS;
-                    i.pcm_ms = (i.pcm_ms + PCM_MS).min(i.cut_ms.unwrap_or(u64::MAX));
-                }
-                self.voiced = true;
-                hooks.produced(source, chunk);
-                let pcm = Tag::generated(source, chunk).to_le_bytes().repeat(DELTA_SAMPLES);
-                let frame = AudioFrame::new(pcm, SAMPLE_RATE, 1, DELTA_SAMPLES as u32);
-                Incoming::AudioDelta { item_id: item, frame }
+        let mut happening = self.pending.remove(&key).expect("just seen");
+        match &mut happening {
+            Happening::Created { r } => {
+                let resp = &mut self.responses[*r as usize];
+                resp.told_created = Some(now);
             }
-        };
-        stamp(&mut event, wall);
-        if resp.is_some()
-            && let Incoming::ItemAdded { previous_item_id, item } = &mut event
-        {
-            *previous_item_id = self.items.last().map(|i| i.id.clone());
-            let mut held = Item::of(item);
-            held.source = resp.and_then(|r| self.responses[r as usize].source);
-            self.items.push(held);
-        }
-        match &event {
-            Incoming::SpeechStarted { .. } => {
-                for r in [self.active, self.told_active].into_iter().flatten() {
-                    self.responses[r as usize].prompted = true;
+            Happening::MessageAdded { r, previous } => {
+                *previous = self.items.last().map(|i| i.id.clone());
+                let resp = &self.responses[*r as usize];
+                let mut item =
+                    Item::of(&message(resp.item.as_deref().unwrap_or(""), Role::Assistant));
+                item.source = resp.source;
+                self.items.push(item);
+                self.responses[*r as usize].announced = true;
+            }
+            Happening::Audio { r, .. } => {
+                let resp = &mut self.responses[*r as usize];
+                resp.audio_ms += DELTA_MS;
+                if let Some(item) = resp.item.clone()
+                    && let Some(i) = self.items.iter_mut().find(|i| i.id == item)
+                {
+                    i.audio_ms = (i.audio_ms + DELTA_MS).min(i.cut_ms.unwrap_or(u64::MAX));
                 }
             }
-            Incoming::Unhandled { event_type }
-                if matches!(
-                    event_type.as_str(),
-                    "input_audio_buffer.committed" | "input_audio_buffer.cleared"
-                ) =>
-            {
-                self.untold_empties = self.untold_empties.saturating_sub(1);
+            Happening::CallAdded { r } => {
+                let resp = &mut self.responses[*r as usize];
+                resp.call_announced = true;
+                if let Some((item, name)) = resp.function_call.clone() {
+                    self.items.push(Item::of(&function_call(&item, &name)));
+                }
+            }
+            Happening::MessageDone { r } => self.responses[*r as usize].message_done = true,
+            Happening::CallDone { r } => self.responses[*r as usize].call_done = true,
+            Happening::Done { r, .. } => {
+                self.responses[*r as usize].finished = Some(now);
+                if self.active == Some(*r) {
+                    self.active = None;
+                }
+            }
+            Happening::SpeechStarted { .. } => {
+                for resp in self.responses.iter_mut().filter(|r| r.finished.is_none()) {
+                    resp.prompted = true;
+                }
             }
             _ => {}
         }
-        if let Some(r) = resp {
-            let resp = &mut self.responses[r as usize];
-            match &event {
-                Incoming::ResponseCreated { .. } => {
-                    resp.source = Some(hooks.created(&resp.id));
-                    resp.created = true;
-                    resp.told_created = Some(now);
-                    self.told_active = Some(r);
-                }
-                Incoming::OutputItemAdded { item_type, .. } if item_type == "message" => {
-                    resp.announced = true;
-                }
-                Incoming::OutputItemAdded { item_type, .. } if item_type == "function_call" => {
-                    resp.call_announced = true;
-                }
-                Incoming::OutputItemDone { item: ChatItem::Message(_) } => resp.closed = true,
-                Incoming::OutputItemDone { item: ChatItem::FunctionCall(_) } => {
-                    resp.call_closed = true;
-                }
-                Incoming::ResponseDone(_) => {
-                    resp.finished = Some(now);
-                    if let Some(source) = resp.source {
-                        hooks.done(source);
-                    }
-                    if self.active == Some(r) {
-                        self.active = None;
-                    }
-                    if self.told_active == Some(r) {
-                        self.told_active = None;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let response = resp.map(|r| self.responses[r as usize].id.clone());
-        Some(Delivered { event, response, reason, item: about })
+        Some(happening)
     }
 
-    // --- what the server does of its own accord ------------------------------------------------
+    /// The generation the run registered for a response the session was told of.
+    pub fn registered(&mut self, r: u32, source: u32) {
+        self.responses[r as usize].source = Some(source);
+    }
+
+    /// What it breached since asked last.
+    pub fn take_breaches(&mut self) -> Vec<Breach> {
+        std::mem::take(&mut self.breaches)
+    }
+
+    /// The assistant messages it generated and still holds: by generation, the audio each keeps.
+    pub fn held(&self) -> Vec<(u32, u64)> {
+        self.items
+            .iter()
+            .filter(|i| i.assistant)
+            .filter_map(|i| Some((i.source?, i.audio_ms)))
+            .collect()
+    }
+
+    pub fn holds(&self, id: &str) -> bool {
+        self.items.iter().any(|i| i.id == id)
+    }
+
+    pub fn holds_call(&self, call_id: &str) -> bool {
+        self.items.iter().any(|i| i.function_call && i.call_id.as_deref() == Some(call_id))
+    }
+
+    // --- what the session asks ------------------------------------------------------------
+
+    /// An item the session creates after `previous` (`None`: at the end).
+    pub fn create(&mut self, now: Ts, item: &ChatItem, previous: Option<String>) {
+        self.breathe(now);
+        let at = match &previous {
+            Some(p) => {
+                self.items.iter().position(|i| i.id == *p).map_or(self.items.len(), |i| i + 1)
+            }
+            None => self.items.len(),
+        };
+        let held = Item::of(item);
+        if let (false, Some(call)) = (held.function_call, held.call_id.clone()) {
+            for (response, c, asked) in &self.unanswered {
+                if *c == call && *asked == now {
+                    self.early.push((response.clone(), call.clone(), now));
+                }
+            }
+        }
+        self.items.insert(at, held);
+        let lag = self.answer_lag(now);
+        let previous = at.checked_sub(1).map(|p| self.items[p].id.clone());
+        self.put(later(now, lag), Happening::ItemAdded { item: item.clone(), previous });
+    }
+
+    pub fn delete(&mut self, id: &str) {
+        self.items.retain(|i| i.id != id);
+    }
+
+    pub fn append_audio(&mut self, ms: u64) {
+        self.buffer_ms += ms;
+    }
+
+    pub fn buffered(&self) -> bool {
+        self.buffer_ms > 0
+    }
+
+    /// The session's commit of what it sent.
+    pub fn commit_audio(&mut self, now: Ts) {
+        if self.buffer_ms < 100 {
+            // The session could count what it sent unless the VAD emptied the buffer on its own.
+            let knowing = self.own_empty;
+            let why = "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio.";
+            // The session takes the refusal of a commit over its VAD's own as nothing.
+            let told = self.vad.is_none();
+            return self.refuse(
+                now,
+                "input_audio_buffer.commit",
+                "input_audio_buffer_commit_empty",
+                why,
+                knowing,
+                told,
+            );
+        }
+        let item = self.speaking.take().unwrap_or_else(|| self.mint_item("user"));
+        let lag = self.answer_lag(now);
+        self.own_empty = true;
+        self.commit(later(now, lag), item);
+    }
+
+    pub fn clear_audio(&mut self) {
+        self.buffer_ms = 0;
+        self.own_empty = true;
+    }
+
+    /// A reply asked for; refused while one is active.
+    pub fn respond_to(
+        &mut self,
+        now: Ts,
+        request: String,
+        instructions: Option<&str>,
+        tool_choice: Option<ToolChoice>,
+    ) {
+        self.breathe(now);
+        if let Some(r) = self.active {
+            // Knowing only if the session had been told of the response refusing it.
+            let knowing = self.responses[r as usize].told_created.is_some_and(|at| at < now);
+            let code = "conversation_already_has_active_response";
+            let why = "Conversation already has an active response in progress. Wait until the response is finished before creating a new one.";
+            self.breaches.push(Breach::Refused {
+                event: "response.create".into(),
+                code,
+                why,
+                knowing,
+            });
+            let lag = self.answer_lag(now);
+            let error = Happening::Error { code: Some(code), message: why, request: Some(request) };
+            return self.put(later(now, lag), error);
+        }
+        let unanswered =
+            self.items.last().filter(|i| i.function_call).and_then(|i| i.call_id.clone());
+        let delay = self.answer_after(now, "created_after_create");
+        let instructions = instructions.map(str::len);
+        let r = self.respond(later(now, delay), Some(request), tool_choice, instructions);
+        // A reply asked after the outputs reads them.
+        self.early.retain(|(.., at)| *at != now);
+        if let Some(call) = unanswered {
+            self.unanswered.push((self.responses[r as usize].id.clone(), call, now));
+        }
+    }
+
+    /// A `response.cancel`, of `named` or of whatever is in progress.
+    pub fn cancel(&mut self, now: Ts, named: Option<&str>) {
+        if let Some(id) = named
+            && !self.responses.iter().any(|r| r.id == id)
+        {
+            let why = "Response with id not found";
+            return self.refuse(
+                now,
+                "response.cancel",
+                "response_cancel_not_found",
+                why,
+                true,
+                false,
+            );
+        }
+        let target =
+            self.active.filter(|r| named.is_none_or(|id| self.responses[*r as usize].id == id));
+        let Some(r) = target else {
+            // Knowing when the session had been told the end of the response it names (of every
+            // one, unnamed); a response it has not heard the end of makes the cancel a race.
+            let told_done = |r: &Response| r.finished.is_some_and(|at| at < now);
+            let knowing = match named {
+                Some(id) => self.responses.iter().any(|r| r.id == id && told_done(r)),
+                None => self.responses.iter().all(told_done),
+            };
+            // "Cancellation failed": the session takes it as nothing.
+            let why = "Cancellation failed: no active response found";
+            return self.refuse(
+                now,
+                "response.cancel",
+                "response_cancel_not_active",
+                why,
+                knowing,
+                false,
+            );
+        };
+        // The server's answer to the person's turn, nobody has heard a word of, no onset told
+        // over it: the session cancels it on nothing the server saw.
+        let resp = &self.responses[r as usize];
+        if resp.turn && !resp.prompted && resp.audio_ms == 0 {
+            let (response, generation) = (resp.id.clone(), resp.source);
+            self.breaches.push(Breach::CancelledUnprompted { response, generation });
+        }
+        // The conversation is free at once: a reply asked right after the cancel is taken, and
+        // created before the cancelled one's end (probe-cancel_then_create).
+        self.active = None;
+        let lag = self.answer_after(now, "done_after_cancel");
+        self.stop(later(now, lag), r, GenerationStatus::Cancelled);
+    }
+
+    /// A truncation of a message the session played part of.
+    pub fn truncate(&mut self, now: Ts, item: &str, end_ms: u64) {
+        let Some(at) = self.items.iter().position(|i| i.id == item) else {
+            let why = "Item with item_id not found";
+            return self.refuse(
+                now,
+                "conversation.item.truncate",
+                "item_truncate_invalid_item_id",
+                why,
+                true,
+                true,
+            );
+        };
+        // Within the audio it holds, a millisecond of rounding allowed.
+        let held = &mut self.items[at];
+        if end_ms > held.audio_ms + 1 {
+            let why = "Audio content is already shorter than audio_end_ms";
+            return self.refuse(
+                now,
+                "conversation.item.truncate",
+                "invalid_value",
+                why,
+                true,
+                true,
+            );
+        }
+        held.audio_ms = end_ms;
+        held.cut_ms = Some(end_ms);
+    }
+
+    /// A message the session put back as text: it holds no audio.
+    pub fn as_text(&mut self, item: &str) {
+        if let Some(held) = self.items.iter_mut().find(|i| i.id == item) {
+            held.audio_ms = 0;
+            held.cut_ms = Some(0);
+        }
+    }
+
+    // --- what the server does of its own accord ------------------------------------------
 
     /// True when a real server could do this now.
     pub fn exo(&mut self, now: Ts, what: Exo) -> bool {
         match what {
             Exo::SpeechStarted => {
-                // The VAD hears only audio the client appended since the buffer was last emptied.
-                if self.config.vad.is_none() || self.speaking.is_some() || self.buffer_ms == 0 {
+                // The VAD hears only audio the session sent since the buffer was last emptied.
+                if self.vad.is_none() || self.speaking.is_some() || self.buffer_ms == 0 {
                     return false;
                 }
                 let item = self.mint_item("user");
                 self.speaking = Some(item.clone());
-                self.put(now, None, Incoming::SpeechStarted { item_id: Some(item) });
-                if self.config.interrupt_response
-                    && let Some(r) = self.active
-                {
+                self.put(now, Happening::SpeechStarted { item });
+                if let Some(r) = self.active {
                     let lag = draw_ms(&mut self.rng, &["realtime", "cancel_after_speech_started"]);
-                    self.cancel(later(now, lag), r, "turn_detected");
+                    self.active = None;
+                    self.stop(later(now, lag), r, GenerationStatus::Cancelled);
                 }
                 true
             }
             Exo::SpeechStopped => {
                 let Some(item) = self.speaking.take() else { return false };
-                self.seq += 1;
-                let body = Body::Event(Incoming::SpeechStopped);
-                let pending = Pending { resp: None, body, reason: None, item: Some(item.clone()) };
-                self.pending.insert((now, self.seq), pending);
+                self.put(now, Happening::SpeechStopped);
                 self.own_empty = false;
                 self.commit(now, item);
-                if self.config.create_response && self.active.is_none() {
+                if self.active.is_none() {
                     let delay = draw_ms(&mut self.rng, &["realtime", "created_after_stopped"]);
                     let r = self.respond(later(now, delay), None, None, None);
                     self.responses[r as usize].turn = true;
                 }
                 true
             }
-            Exo::StrayDelta => {
-                let delta = Incoming::AudioTranscriptDelta {
-                    item_id: "item_stray".into(),
-                    delta: "...".into(),
-                    start_time: None,
-                };
-                self.put(now, None, delta);
-                true
-            }
             Exo::ServerResponse => {
-                // Only the server's own turn detection opens a response unasked (its idle
-                // timeout, with `create_response`): with detection off it never does (seed 56103).
-                let detects = self.config.vad.is_some() && self.config.create_response;
-                if self.active.is_some() || !detects {
+                // Only the server's own turn detection opens a response unasked.
+                if self.active.is_some() || self.vad.is_none() {
                     return false;
                 }
                 self.respond(now, None, None, None);
@@ -583,304 +606,194 @@ impl Server {
             }
             Exo::FinishNow => {
                 let Some(r) = self.active else { return false };
-                let keys: Vec<(Ts, u64)> = self
+                let mine: Vec<(Ts, u64)> = self
                     .pending
                     .iter()
-                    .filter(|(_, p)| p.resp == Some(r))
+                    .filter(|(_, h)| response_of(h) == Some(r))
                     .map(|(k, _)| *k)
                     .collect();
                 // Everything still to come of it, at once and in order.
-                let moved: Vec<Pending> =
-                    keys.iter().filter_map(|k| self.pending.remove(k)).collect();
-                for p in moved {
-                    self.seq += 1;
-                    self.pending.insert((now, self.seq), p);
+                for k in mine {
+                    let h = self.pending.remove(&k).expect("just seen");
+                    self.put(now, h);
                 }
                 true
             }
             Exo::ServerError => {
-                let error = ServerError {
-                    event_id: None,
-                    code: None,
-                    type_: Some("server_error".into()),
-                    message: "The server had an error while processing your request.".into(),
-                };
-                self.put(now, None, Incoming::Error(error));
+                let message = "The server had an error while processing your request.";
+                self.put(now, Happening::Error { code: None, message, request: None });
                 true
             }
             Exo::FatalError => {
-                let message =
-                    "You exceeded your current quota, please check your plan and billing details.";
-                let error = ServerError {
-                    event_id: None,
-                    code: Some("insufficient_quota".into()),
-                    type_: Some("insufficient_quota".into()),
-                    message: message.into(),
-                };
-                self.put(now, None, Incoming::Error(error));
+                self.put(now, Happening::Fatal);
                 true
             }
             Exo::ResponseFailed => {
                 let Some(r) = self.active else { return false };
-                self.end(now, r, GenerationStatus::Failed, None);
+                self.active = None;
+                self.stop(now, r, GenerationStatus::Failed);
                 true
             }
             Exo::TranscriptionFailed => {
-                let Some(item_id) = self.last_user.clone().filter(|_| self.config.transcription)
-                else {
+                let Some(item) = self.last_user.clone() else { return false };
+                // What is still to come of its transcript never comes.
+                let mine: Vec<(Ts, u64)> = self
+                    .pending
+                    .iter()
+                    .filter(
+                        |(_, h)| matches!(h, Happening::Transcript { item: i, .. } if *i == item),
+                    )
+                    .map(|(k, _)| *k)
+                    .collect();
+                if mine.is_empty() {
                     return false;
-                };
-                self.put(now, None, Incoming::TranscriptionFailed { item_id, content_index: 0 });
+                }
+                for k in mine {
+                    self.pending.remove(&k);
+                }
+                self.put(now, Happening::TranscriptFailed { item });
                 true
             }
         }
     }
 
-    // --- the pieces ----------------------------------------------------------------------------
+    // --- the pieces ------------------------------------------------------------------------
 
-    /// The buffer becomes a user item: `committed`, the item, and its transcription later.
+    /// The buffer becomes a user item, and its transcription follows.
     fn commit(&mut self, now: Ts, item: String) {
         self.buffer_ms = 0;
-        self.untold_empties += 1;
         let previous = self.items.last().map(|i| i.id.clone());
         let user = message(&item, Role::User);
         self.items.push(Item::of(&user));
         self.last_user = Some(item.clone());
-        self.put_about(later(now, 0), None, "input_audio_buffer.committed", &item);
-        self.after(now, 1, Incoming::ItemAdded { previous_item_id: previous, item: user });
-        self.put_about(later(now, 2), None, "conversation.item.done", &item);
-        if !self.config.transcription {
-            return;
-        }
-        let text = USER_TURNS[self.rng.usize(0..USER_TURNS.len() - 1)];
+        self.put(later(now, 1), Happening::ItemAdded { item: user, previous });
+        let spoken: Vec<&str> = USER_TURNS.iter().copied().filter(|t| !t.is_empty()).collect();
+        let text = spoken[self.rng.usize(0..spoken.len())];
         let lag = draw_ms(&mut self.rng, &["realtime", "transcription_after_committed"]);
         let words: Vec<&str> = text.split(' ').collect();
         // About one delta a word, streamed over the last fifth of the wait.
-        for (i, word) in words.iter().enumerate() {
-            let at = lag * 4 / 5 + (lag / 5) * i as u64 / words.len().max(1) as u64;
-            let delta = if i == 0 { (*word).to_owned() } else { format!(" {word}") };
-            let item_id = item.clone();
-            self.after(now, at, Incoming::TranscriptionDelta { item_id, content_index: 0, delta });
+        for i in 0..words.len() {
+            let at = lag * 4 / 5 + (lag / 5) * i as u64 / words.len() as u64;
+            let text = words[..=i].join(" ");
+            let item = item.clone();
+            self.put(later(now, at), Happening::Transcript { item, text, last: false });
         }
-        let output = words.len() as u32;
-        let completed = TranscriptionCompleted {
-            item_id: item,
-            content_index: 0,
-            transcript: text.to_owned(),
-            confidence: None,
-            in_progress: false,
-            event_id: self.event_id(),
-            usage: Some(TranscriptionUsage::Tokens {
-                input: 20,
-                output,
-                total: 20 + output,
-                input_audio: 20,
-            }),
-        };
-        self.after(now, lag, Incoming::TranscriptionCompleted(completed));
+        let text = text.to_owned();
+        self.put(later(now, lag), Happening::Transcript { item, text, last: true });
     }
 
-    /// A response, from its `response.created` at `at` to its `response.done`, reading the
-    /// conversation as it stands now.
+    /// A response, from its creation at `at` to its end, reading the conversation as it stands.
     fn respond(
         &mut self,
         at: Ts,
-        client_event_id: Option<String>,
+        request: Option<String>,
         tool_choice: Option<ToolChoice>,
-        instructions: Option<String>,
+        instructions: Option<usize>,
     ) -> u32 {
         let r = self.responses.len() as u32;
-        let id = format!("resp_{}{}", self.ids, self.next_resp);
-        self.next_resp += 1;
+        let id = format!("resp_{}{}", self.ids, r);
+        let spoken: Vec<&str> = AGENT_TURNS.iter().copied().filter(|t| !t.is_empty()).collect();
+        let text = spoken[self.rng.usize(0..spoken.len())].to_owned();
+        let item = self.mint_item("msg");
         self.responses.push(Response {
-            id: id.clone(),
-            request: client_event_id.clone(),
-            instructions: instructions.or_else(|| self.config.instructions.clone()),
+            id,
+            request,
+            instructions: instructions.unwrap_or(self.instructions),
             read_items: self.items.len(),
+            item: Some(item),
+            text: text.clone(),
             ..Response::default()
         });
         self.active = Some(r);
-        self.put(at, Some(r), Incoming::ResponseCreated { response_id: id, client_event_id });
-
-        let text = AGENT_TURNS[self.rng.usize(0..AGENT_TURNS.len() - 1)];
-        let item = self.mint_item("msg");
-        self.responses[r as usize].item = Some(item.clone());
-        // Its place in the conversation is taken when the item is added (`pop`): a client item
-        // arriving before then, a tool output or a commit, comes before it, as on the real server.
+        self.put(at, Happening::Created { r });
+        // Its place in the conversation is taken when the item is added: an item arriving before
+        // then comes before it.
         let mut t = later(at, draw_ms(&mut self.rng, &["realtime", "item_after_created"]));
-        let item_type = "message".to_owned();
-        self.put(t, Some(r), Incoming::OutputItemAdded { item_id: item.clone(), item_type });
-        let assistant = message(&item, Role::Assistant);
-        self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: None, item: assistant });
-        // The first audio, after the item as the corpus measured it; the content part and the
-        // transcript's first words before it.
+        self.put(t, Happening::MessageAdded { r, previous: None });
         let item_at = t;
         let first_audio =
             later(item_at, draw_ms(&mut self.rng, &["realtime", "first_audio_after_item"]));
         t = later(item_at, 15).min(first_audio);
-        let audio = self.config.audio;
-        let part_type = if audio { "audio" } else { "text" }.to_owned();
-        self.put(t, Some(r), Incoming::ContentPartAdded { item_id: item.clone(), part_type });
-
-        // The words, as transcript (or text) deltas, and the audio they become.
-        let per_char =
-            lk_agents_test_support::corpus::draw(&mut self.rng, &["realtime", "audio_ms_per_char"]);
+        self.put(t, Happening::Part { r });
+        let per_char = corpus::draw(&mut self.rng, &["realtime", "audio_ms_per_char"]);
         let audio_ms = ((text.chars().count() as f64 * per_char) as u64).max(DELTA_MS);
         let deltas = audio_ms.div_ceil(DELTA_MS) as usize;
         let words: Vec<&str> = text.split_inclusive(' ').collect();
-        let delta = |delta: String| {
-            let item_id = item.clone();
-            if audio {
-                Incoming::AudioTranscriptDelta { item_id, delta, start_time: None }
-            } else {
-                Incoming::TextDelta { item_id, delta }
-            }
-        };
         // The transcript's first words come with the content part, before any audio, as the
         // corpus has them: a response cut there has words and no audio.
-        let mut sent_words = words.len().min(2);
-        if sent_words > 0 {
-            self.put(t, Some(r), delta(words[..sent_words].concat()));
+        let mut said = words.len().min(2);
+        if said > 0 {
+            self.put(t, Happening::Text { r, delta: words[..said].concat() });
         }
-        for chunk in 0..deltas.max(1) {
+        for chunk in 0..deltas {
             t = if chunk == 0 {
                 first_audio
             } else {
                 later(t, draw_ms(&mut self.rng, &["realtime", "audio_gap"]))
             };
             // The transcript leads the audio it describes.
-            let upto = (words.len() * (chunk + 1)).div_ceil(deltas.max(1));
-            if upto > sent_words {
-                self.put(t, Some(r), delta(words[sent_words..upto].concat()));
-                sent_words = upto;
+            let upto = (words.len() * (chunk + 1)).div_ceil(deltas);
+            if upto > said {
+                self.put(t, Happening::Text { r, delta: words[said..upto].concat() });
+                said = upto;
             }
-            if audio {
-                let chunk = chunk.min(Tag::MAX_CHUNK as usize) as u16;
-                self.put_body(t, Some(r), Body::Audio { item: item.clone(), chunk }, None);
+            if self.audio {
+                let chunk = (chunk as u16).min(Tag::MAX_CHUNK);
+                self.put(t, Happening::Audio { r, chunk });
             }
         }
-        // Now and then the server restates its rate limits, past the last audio and before the
-        // message closes, as the corpus caught it doing.
-        let (limits, of) = share(&["realtime", "rate_limits_share"]);
-        if self.rng.u64(0..of) < limits {
-            self.put(t, Some(r), unhandled("rate_limits.updated"));
-        }
-        // A tool call now and then, when the session offers tools: after the words, as the
-        // corpus has them.
-        let choice = tool_choice.or_else(|| self.config.tool_choice.clone());
+        // A tool call now and then, when the session offers tools: after the words.
+        let choice = tool_choice.or_else(|| self.tool_choice.clone());
         let (calls, of) = match (choice, self.tool_calls) {
             (Some(ToolChoice::Forbidden), _) => (0, 1),
             (Some(ToolChoice::Required), _) => (1, 1),
             (_, Some(percent)) => (u64::from(percent), 100),
             (_, None) => share(&["realtime", "function_call_share"]),
         };
-        if !self.config.tools.is_empty() && self.rng.u64(0..of) < calls {
-            let name = self.config.tools[self.rng.usize(0..self.config.tools.len())].clone();
+        if !self.tools.is_empty() && self.rng.u64(0..of) < calls {
+            let name = self.tools[self.rng.usize(0..self.tools.len())].clone();
             let fc = self.mint_item("fc");
-            self.responses[r as usize].function_call = Some((fc.clone(), name.clone()));
+            self.responses[r as usize].function_call = Some((fc, name));
             t = later(t, 30);
-            let item_type = "function_call".to_owned();
-            self.put(t, Some(r), Incoming::OutputItemAdded { item_id: fc.clone(), item_type });
-            let call = function_call(&fc, &name, "");
-            self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: Some(item), item: call });
-            self.put_about(t, Some(r), "response.function_call_arguments.delta", &fc);
-            let t2 = later(t, 30);
-            self.message_done(t2, r);
-            self.call_done(t2, r);
-            t = t2;
+            self.put(t, Happening::CallAdded { r });
+            t = later(t, 30);
+            self.put(t, Happening::MessageDone { r });
+            self.put(t, Happening::CallDone { r });
         } else {
             t = later(t, draw_ms(&mut self.rng, &["realtime", "done_after_last_audio"]) / 2);
-            self.message_done(t, r);
+            self.put(t, Happening::MessageDone { r });
         }
         let done_at = later(t, draw_ms(&mut self.rng, &["realtime", "done_after_last_audio"]) / 2);
-        self.end_body(done_at, r, GenerationStatus::Completed, None);
+        self.put(done_at, Happening::Done { r, status: GenerationStatus::Completed });
         r
     }
 
-    /// The message's closing events: audio, transcript, part, item.
-    fn message_done(&mut self, t: Ts, r: u32) {
-        let Some(item) = self.responses[r as usize].item.clone() else { return };
-        let mut closing = Vec::new();
-        if self.config.audio {
-            closing.push("response.output_audio.done");
-            closing.push("response.output_audio_transcript.done");
-        } else {
-            closing.push("response.output_text.done");
-        }
-        closing.extend(["response.content_part.done", "conversation.item.done"]);
-        for event_type in closing {
-            self.put_about(t, Some(r), event_type, &item);
-        }
-        self.put(t, Some(r), Incoming::OutputItemDone { item: message(&item, Role::Assistant) });
-    }
-
-    /// The tool call's closing events: its arguments, item and output item.
-    fn call_done(&mut self, t: Ts, r: u32) {
-        let Some((fc, name)) = self.responses[r as usize].function_call.clone() else { return };
-        self.put_about(t, Some(r), "response.function_call_arguments.done", &fc);
-        self.put_about(t, Some(r), "conversation.item.done", &fc);
-        self.put(t, Some(r), Incoming::OutputItemDone { item: function_call(&fc, &name, "{}") });
-    }
-
-    fn end_body(&mut self, t: Ts, r: u32, status: GenerationStatus, reason: Option<&'static str>) {
-        let resp = &self.responses[r as usize];
-        let failed = status == GenerationStatus::Failed;
-        // What it read: the instructions and the items the conversation held when it was asked.
-        let text = resp.instructions.as_ref().map_or(0, |i| i.len() as u64 / 4) + 40;
-        let audio = 20 * resp.read_items as u64;
-        let input = text + audio;
-        let done = ResponseDone {
-            response_id: resp.id.clone(),
-            status,
-            error_type: failed.then(|| "server_error".into()),
-            error_code: failed.then(|| "server_error".into()),
-            usage: TokenUsage {
-                input_tokens: input,
-                output_tokens: 40,
-                total_tokens: input + 40,
-                input_audio_tokens: audio,
-                input_text_tokens: text,
-                output_audio_tokens: 30,
-                output_text_tokens: 10,
-                ..TokenUsage::default()
-            },
+    /// Stop a response at `t`: what it had generated before then still streams, what was still
+    /// to come is withdrawn, and it ends as `status`.
+    fn stop(&mut self, t: Ts, r: u32, status: GenerationStatus) {
+        let streams = |h: &Happening| {
+            matches!(
+                h,
+                Happening::Audio { .. }
+                    | Happening::Text { .. }
+                    | Happening::Part { .. }
+                    | Happening::MessageAdded { .. }
+                    | Happening::CallAdded { .. }
+            )
         };
-        self.put_body(t, Some(r), Body::Event(Incoming::ResponseDone(done)), reason);
-    }
-
-    /// Stop a response at `t`: what was still to come is withdrawn, and it closes as `status`.
-    fn end(&mut self, t: Ts, r: u32, status: GenerationStatus, reason: Option<&'static str>) {
-        let keep_created = !self.responses[r as usize].created;
-        // What the model generated before the stop still streams out (the probes show audio
-        // deltas arriving after a cancel): the message's opening and its deltas due before `t`.
-        let streams = |p: &Pending| match &p.body {
-            Body::Audio { .. } => true,
-            Body::Event(
-                Incoming::AudioTranscriptDelta { .. }
-                | Incoming::TextDelta { .. }
-                | Incoming::ContentPartAdded { .. }
-                | Incoming::OutputItemAdded { .. }
-                | Incoming::ItemAdded { .. },
-            ) => true,
-            Body::Event(Incoming::Unhandled { event_type }) => {
-                event_type == "response.function_call_arguments.delta"
-            }
-            Body::Event(_) => false,
-        };
+        let not_created = self.responses[r as usize].told_created.is_none();
         let (mut opened, mut called) = (false, false);
         let withdrawn: Vec<(Ts, u64)> = self
             .pending
             .iter()
-            .filter(|((due, _), p)| {
-                if p.resp != Some(r) {
+            .filter(|((due, _), h)| {
+                if response_of(h) != Some(r) {
                     return false;
                 }
-                let created = matches!(&p.body, Body::Event(Incoming::ResponseCreated { .. }));
-                let kept = (*due < t && streams(p)) || (keep_created && created);
-                if kept && let Body::Event(Incoming::OutputItemAdded { item_type, .. }) = &p.body {
-                    opened |= item_type == "message";
-                    called |= item_type == "function_call";
-                }
+                let created = matches!(h, Happening::Created { .. });
+                let kept = (*due < t && streams(h)) || (not_created && created);
+                opened |= kept && matches!(h, Happening::MessageAdded { .. });
+                called |= kept && matches!(h, Happening::CallAdded { .. });
                 !kept
             })
             .map(|(k, _)| *k)
@@ -888,45 +801,75 @@ impl Server {
         for k in withdrawn {
             self.pending.remove(&k);
         }
-        // A response stopped before the client heard of it still opens before it closes.
-        let created_due =
-            self.pending.iter().filter(|(_, p)| p.resp == Some(r)).map(|((due, _), _)| *due).max();
-        let t = created_due.map_or(t, |due| t.max(due));
-        // An item the client was told of closes `incomplete`; one it was not, never appears.
-        let announced = self.responses[r as usize].announced || opened;
-        // One already complete stays so.
-        if announced && !self.responses[r as usize].closed {
-            self.message_done(t, r);
-        } else if !announced && let Some(item) = self.responses[r as usize].item.take() {
-            self.items.retain(|i| i.id != item);
-        }
-        // A call already complete stays so: its item is never done twice.
+        // A response stopped before the session heard of it still opens before it ends.
+        let last = self
+            .pending
+            .iter()
+            .filter(|(_, h)| response_of(h) == Some(r))
+            .map(|((due, _), _)| *due)
+            .max();
+        let t = last.map_or(t, |due| t.max(due));
         let resp = &self.responses[r as usize];
-        if !resp.call_closed && (resp.call_announced || called) {
-            self.call_done(t, r);
-        } else if !resp.call_closed {
+        if (resp.announced || opened) && !resp.message_done {
+            self.put(t, Happening::MessageDone { r });
+        } else if !(resp.announced || opened) {
+            self.responses[r as usize].item = None;
+        }
+        let resp = &self.responses[r as usize];
+        if (resp.call_announced || called) && !resp.call_done {
+            self.put(t, Happening::CallDone { r });
+        } else if !(resp.call_announced || called) {
             self.responses[r as usize].function_call = None;
         }
-        self.end_body(t, r, status, reason);
+        self.put(t, Happening::Done { r, status });
     }
 
-    fn cancel(&mut self, t: Ts, r: u32, reason: &'static str) {
-        // The conversation is free at once: a reply asked right after the cancel is taken, and
-        // created before the cancelled one's `response.done` (probe-cancel_then_create).
-        if self.active == Some(r) {
-            self.active = None;
+    /// The token usage a finished response reports: what it read and what it said.
+    pub fn usage(&self, r: u32) -> (u64, u64) {
+        let resp = &self.responses[r as usize];
+        let input = resp.instructions as u64 / 4 + 40 + 20 * resp.read_items as u64;
+        (input, 40)
+    }
+
+    /// The breath before `now` is over: an output that arrived after a reply asked in it, and no
+    /// reply was asked after it, was read by none.
+    fn breathe(&mut self, now: Ts) {
+        self.unanswered.retain(|(.., at)| *at == now);
+        let (over, open): (Vec<_>, Vec<_>) = self.early.drain(..).partition(|(.., at)| *at < now);
+        self.early = open;
+        for (response, call_id, _) in over {
+            let request =
+                self.responses.iter().find(|r| r.id == response).and_then(|r| r.request.clone());
+            self.breaches.push(Breach::AskedBeforeOutput { response, request, call_id });
         }
-        self.end(t, r, GenerationStatus::Cancelled, Some(reason));
     }
 
-    /// How long the server takes to answer a client frame: drawn from the corpus, and never
-    /// before its answer to an earlier frame -- it processes the client's frames in order, and
-    /// the client's mirror of the conversation is built on that order.
+    /// A refused request: the breach noted, and the `error` the session hears when `told`.
+    fn refuse(
+        &mut self,
+        now: Ts,
+        event: &str,
+        code: &'static str,
+        why: &'static str,
+        knowing: bool,
+        told: bool,
+    ) {
+        self.breaches.push(Breach::Refused { event: event.into(), code, why, knowing });
+        if told {
+            let lag = self.answer_lag(now);
+            self.put(
+                later(now, lag),
+                Happening::Error { code: Some(code), message: why, request: None },
+            );
+        }
+    }
+
+    /// How long the server takes to answer a request: drawn from the corpus, and never before its
+    /// answer to an earlier one -- it takes the session's requests in order.
     fn answer_lag(&mut self, now: Ts) -> u64 {
         self.answer_after(now, "error_after_client")
     }
 
-    /// As [`Self::answer_lag`], drawn from another of the corpus's quantities.
     fn answer_after(&mut self, now: Ts, quantity: &str) -> u64 {
         let lag = draw_ms(&mut self.rng, &["realtime", quantity]);
         let at = later(now, lag).max(self.answered);
@@ -939,40 +882,44 @@ impl Server {
         format!("item_{kind}_{}{}", self.ids, self.next_item)
     }
 
-    fn event_id(&mut self) -> String {
-        self.next_event += 1;
-        format!("event_{}{}", self.ids, self.next_event)
-    }
-
-    /// An answer `delay_ms` after `now`, of no response.
-    fn after(&mut self, now: Ts, delay_ms: u64, event: Incoming) {
-        self.put(later(now, delay_ms), None, event);
-    }
-
-    fn put(&mut self, t: Ts, resp: Option<u32>, event: Incoming) {
-        self.put_body(t, resp, Body::Event(event), None);
-    }
-
-    fn put_body(&mut self, t: Ts, resp: Option<u32>, body: Body, reason: Option<&'static str>) {
+    fn put(&mut self, t: Ts, happening: Happening) {
         self.seq += 1;
-        self.pending.insert((t, self.seq), Pending { resp, body, reason, item: None });
-    }
-
-    /// An event the client reads no further than its type, about `item`.
-    fn put_about(&mut self, t: Ts, resp: Option<u32>, event_type: &str, item: &str) {
-        self.seq += 1;
-        let body = Body::Event(unhandled(event_type));
-        let item = Some(item.to_owned());
-        self.pending.insert((t, self.seq), Pending { resp, body, reason: None, item });
-    }
-
-    /// The assistant messages it generated and still holds: by generation, the audio each keeps.
-    pub fn held(&self) -> Vec<(u32, u64)> {
-        let assistant = |i: &&Item| i.assistant() && i.kind == "message";
-        self.items.iter().filter(assistant).filter_map(|i| Some((i.source?, i.pcm_ms))).collect()
+        self.pending.insert((t, self.seq), happening);
     }
 }
 
-fn later(t: Ts, ms: u64) -> Ts {
-    t.saturating_add(std::time::Duration::from_millis(ms))
+fn response_of(h: &Happening) -> Option<u32> {
+    match h {
+        Happening::Created { r }
+        | Happening::MessageAdded { r, .. }
+        | Happening::Part { r }
+        | Happening::Text { r, .. }
+        | Happening::Audio { r, .. }
+        | Happening::CallAdded { r }
+        | Happening::MessageDone { r }
+        | Happening::CallDone { r }
+        | Happening::Done { r, .. } => Some(*r),
+        _ => None,
+    }
+}
+
+/// A message as the server creates it, its content left out; stamped when the session hears it.
+pub fn message(id: &str, role: Role) -> ChatItem {
+    ChatItem::Message(ChatMessage::new(id, role, Vec::new(), std::time::SystemTime::UNIX_EPOCH))
+}
+
+pub fn function_call(id: &str, name: &str) -> ChatItem {
+    ChatItem::FunctionCall(FunctionCall {
+        id: id.to_owned(),
+        call_id: format!("call_{id}"),
+        arguments: "{}".into(),
+        name: name.to_owned(),
+        created_at: std::time::SystemTime::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    })
+}
+
+pub fn later(t: Ts, ms: u64) -> Ts {
+    t.saturating_add(Duration::from_millis(ms))
 }

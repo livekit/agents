@@ -26,8 +26,6 @@ pub const VOICE: Boundary = Boundary {
         "voice decision core (agent_session::Driver), stepped in the real runtime owner by the \
          deterministic harness per delivered event, with effects performed against fake ports",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
-        "realtime conversation machine and connection policy (lk_agents_inference::realtime), \
-         stepped by fakes::realtime's pump per command, server event and deadline",
         "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
          over FakeRoom, on the run's scheduler (decision 92)",
     ],
@@ -42,8 +40,9 @@ pub const VOICE: Boundary = Boundary {
         "fakes::nodes",
         "fakes::output",
         "fakes::avatar",
-        "fakes::realtime (simulated OpenAI Realtime server, in the protocol's typed records; the \
-         fallback adapter over two of them); fakes::realtime::duplex (a duplex model's events at \
+        "fakes::realtime (a LiveKit Inference realtime session's events at the Realtime \
+         boundary, over a server model drawn from the corpus; the fallback adapter over two of \
+         them); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
         "lk_agents_test_support::rtc::FakeRoom",
     ],
@@ -54,8 +53,9 @@ pub const VOICE: Boundary = Boundary {
     ],
     outside: &[
         "the voice runtime arrival-order loop (the harness drives its same actor and effect execution)",
-        "inference's realtime pump, wire codec and fallback adapter (lk_agents_inference::realtime::native; \
-         K-30 conformance; the fake pump and fallback mirror their contracts)",
+        "inference's realtime machine, pump, wire codec and fallback adapter \
+         (lk_agents_inference::realtime; its own tests over the simulated OpenAI Realtime server, \
+         held to the corpus recordings and probes; the fakes mirror their outcomes)",
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",

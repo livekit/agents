@@ -910,7 +910,7 @@ Found by them and fixed, each with a regression test that fails with its fix rev
 |---|---|
 | Work the waiter pass started (a background tool's deferred reply, a filler's `say`) was scheduled only at the next unrelated wake: up to 15 s of dead air | `tool_reply_scheduled_at_once` |
 | A pause decided after the person stopped (a detector's late verdict) never armed its resume | `late_verdict_pause_resumes` |
-| The native realtime session stamped its metrics with seconds since the model was created and its items in 1970 | `realtime_metrics_wall_clock` (500 of 1,024 survey seeds with the fix reverted) |
+| The native realtime session stamped its metrics with seconds since the model was created and its items in 1970 | inference's `server_sync::realtime_metrics_are_stamped_on_the_wall_clock` (500 of 1,024 survey seeds with the fix reverted, when the DST ran the native session) |
 
 `livekit-agents-next/scripts/parity.py` (deleted since, owner decision 22) compared payloads whole against the reference: each
 message's metrics (the models it names, which timings it carries), each metrics record's kind,
@@ -1005,14 +1005,14 @@ Found by it and fixed, each with a regression test that fails with its fix rever
 
 | Defect | Test |
 |---|---|
-| On a reconnect the driver replayed its conversation onto the new connection after the session had replayed it itself: every item went twice, the server refused each second one | `realtime_reconnect` |
-| The native session counted the audio sent before a reconnect as still in the server's buffer, so a commit after it named nothing and was refused | `realtime_reconnect` |
-| A cancelled reply's late `response.done` closed the reply asked after it, whose audio was dropped, and its late deltas were played as the new reply's | `realtime_cancelled_tail` |
+| On a reconnect the driver replayed its conversation onto the new connection after the session had replayed it itself: every item went twice, the server refused each second one | inference's `server_sync` (reconnects) |
+| The native session counted the audio sent before a reconnect as still in the server's buffer, so a commit after it named nothing and was refused | inference's `server_sync` (reconnects) |
+| A cancelled reply's late `response.done` closed the reply asked after it, whose audio was dropped, and its late deltas were played as the new reply's | inference's `server_sync::a_cancelled_response_tail_leaves_the_next_reply_alone` |
 | A reply asked while the server generated one (the host's `generate_reply` or `say`, a deferred tool reply, the tools' follow-up), or crossing a reply the server started on its own, was refused and lost (the reference asks the same and is refused the same). Replies now go one at a time, as speeches are scheduled: a request the server would refuse waits in a queue and goes once the reply it would cross is done, nothing cut; one refused for a reply that crossed it on the wire goes again after it | `realtime_reply_queued` |
 | The outputs reached the server only on the step's later wake, after the commit had let a waiting reply go, which read the call without its result (campaign seed 1978) | `realtime_outputs_before_next_reply` |
-| A tool output for a call the developer's `update_chat_ctx` removed while it ran was sent, naming a call the server no longer held (`invalid_tool_call_id`); a later edit re-sent it too. It is not sent, and an edit leaves out an output whose call neither side holds; a truncation of a message an edit removed is not sent either | `realtime_context_edits` |
-| A context update sent while the previous one was unconfirmed was diffed against what the server had confirmed, and deleted again what that one deleted (`item_delete_invalid_item_id`); it is now diffed against what the server is being brought to | `realtime_context_edits` |
-| A reconnect that crossed an unconfirmed context update replayed the confirmed conversation and then that update's frames, creating twice what it deletes and creates again; an update right after any replay was diffed against nothing (`item_create_duplicate_item_id`). The new connection gets the conversation the server was being brought to, tracked until confirmed | `realtime_reconnect` |
+| A tool output for a call the developer's `update_chat_ctx` removed while it ran was sent, naming a call the server no longer held (`invalid_tool_call_id`); a later edit re-sent it too. It is not sent, and an edit leaves out an output whose call neither side holds; a truncation of a message an edit removed is not sent either | inference's `server_sync` (context edits) |
+| A context update sent while the previous one was unconfirmed was diffed against what the server had confirmed, and deleted again what that one deleted (`item_delete_invalid_item_id`); it is now diffed against what the server is being brought to | inference's `server_sync` (context edits) |
+| A reconnect that crossed an unconfirmed context update replayed the confirmed conversation and then that update's frames, creating twice what it deletes and creates again; an update right after any replay was diffed against nothing (`item_create_duplicate_item_id`). The new connection gets the conversation the server was being brought to, tracked until confirmed | inference's `server_sync` (reconnects) |
 
 None is open: `realtime_server_accepts_requests` is not a known finding.
 

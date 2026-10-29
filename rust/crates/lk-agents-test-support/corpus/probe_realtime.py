@@ -1,5 +1,6 @@
-"""Probe the realtime server's edge cases and keep what it did: the ground truth the fuzz
-server (`src/fakes/realtime/server.rs`) must reproduce, checked by `tests/conformance.rs`.
+"""Probe the realtime server's edge cases and keep what it did: the ground truth the simulated
+server (lk-agents-inference `tests/inference/realtime/server.rs`) must reproduce, checked by
+`tests/inference/realtime/recorded.rs`.
 
 `record.py` records ordinary calls; this drives the protocol's corners on purpose -- a cancel with
 nothing active, a reply asked over an active one or before a tool's output, truncations inside and

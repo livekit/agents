@@ -38,11 +38,9 @@ GRAPH = {
     "lk-agents-net": {"lk-agents-abi"} | {"lk-agents-core"},
     "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
-    # The realtime and duplex fakes still run inference's realtime machine (decision 70); the DST
-    # runs the runtime's real executors over faked ports (decision 92).
-    "lk-agents-fuzz": PURE
-    | {TEST_SUPPORT}
-    | {"lk-agents-inference", "lk-agents-net", "lk-agents-runtime"},
+    # The DST runs the runtime's real executors over faked ports (decision 92); providers and the
+    # network are fakes at their ABI boundary, never inference's or net's code.
+    "lk-agents-fuzz": PURE | {TEST_SUPPORT} | {"lk-agents-runtime"},
     TEST_SUPPORT: PURE,
     "lk-agents-bench-steps": PURE,
     "lk-agents-runtime": PURE | ASYNC,

@@ -1,22 +1,26 @@
-//! The realtime model: the production realtime core (`lk_agents_inference::realtime`, the
-//! conversation machine and connection policy a LiveKit Inference realtime model runs on), driven
-//! the way the runtime's session pump drives it, over [`server::Server`], the OpenAI Realtime
-//! server as the real one answers (`corpus/probes/`) and the corpus shows it.
+//! The realtime model at the `Realtime` boundary: a LiveKit Inference realtime session as the
+//! driver sees it, over [`server::Server`], the realtime server as the corpus shows the real one
+//! doing (`corpus/calibration.json`, `corpus/probes/` in lk-agents-test-support).
 //!
-//! So what reaches the driver is what the production core makes of real server traffic: its
-//! reconnects, its stale-response bookkeeping, its transcripts and its errors are under test with
-//! the driver, not stood in for. The pump is inference's (`lk_agents_inference::realtime::native::session`)
-//! without its I/O: the socket is the server's typed records, the person's audio reaches it in the
-//! writer's 100 ms batches, and the server answers on its own clock with the delays the corpus
-//! measured. What the server does of its own accord -- hears the person start and stop (its VAD),
-//! drops the socket, errs -- is a `RealtimeEvent` the case sends.
+//! The session reports what the server does as the driver's `Event`s, the way the native session
+//! does: the response it was asked for or opened on its own, its message, words and audio, its
+//! end and metrics; the items the server added; the person's speech and transcript; errors, and
+//! the connection's loss, retries and return. It keeps what the native session keeps -- the
+//! conversation the server is being brought to, the replies asked and not yet answered, the
+//! response it told the driver of -- so a reconnect restores the conversation and asks again for
+//! what was not answered, a reply cancelled before it was created never reaches the driver, and
+//! what a response sends after its end is told to nobody. Inference's own tests hold the native
+//! session's machine to the recorded server; this fake reproduces its outcomes, its timings and
+//! its failure shapes.
 //!
 //! The socket is a resource (`Kind::Realtime`), one per session the driver opens, and every
-//! response the client has been told of is one too (`Kind::Generation`), until its
-//! `response.done`. Audio deltas are tagged with the generation and its chunk. What the server
-//! refused, or answered from the wrong state, is recorded as a `Breach` on the socket.
+//! response the session was told of is one too (`Kind::Generation`), until its end. Audio deltas
+//! are tagged with the generation and its chunk. What the server refused, or answered from the
+//! wrong state, is recorded as a `Breach` on the socket. What the server does of its own accord --
+//! hears the person start and stop (its VAD), drops the socket, errs -- is a `RealtimeEvent` the
+//! case sends.
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -25,17 +29,14 @@ use std::{
 };
 
 use lk_agents_abi::{
-    AbortHandle, ApiConnectOptions, AudioFrame, ChatContext, Clock, Realtime, RealtimeCommand,
-    RealtimeSession, Spawner, SpawnerExt, Ts,
-    errors::{ApiError, ProviderError},
-    llm::realtime::{Event, Interrupt, RealtimeCapabilities, RealtimeModelError},
-    utils::byte_stream::AudioByteStream,
+    AbortHandle, ApiConnectOptions, BoxFuture, ChatContext, ChatItem, Clock, Realtime,
+    RealtimeCommand, RealtimeSession, Spawner, SpawnerExt, ToolChoice, Ts,
+    errors::{ApiError, ProviderError, TimeoutPhase},
+    llm::realtime::{
+        Event, GenerateReplyFailed, GenerationDone, GenerationStatus, InputSpeechStopped,
+        RealtimeCapabilities, RealtimeError, SessionReconnected, TokenUsage,
+    },
 };
-use lk_agents_inference::realtime::{
-    ConnectionEffect, INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions,
-    Step, TurnDetection,
-};
-use lk_agents_net::transport::{TransportError, connect_error};
 
 use super::{Control, Registry, SAMPLE_RATE, Slot};
 use crate::{
@@ -44,22 +45,33 @@ use crate::{
 };
 
 pub mod duplex;
+mod events;
 pub mod fallback;
 pub mod server;
 
 pub use duplex::FakeDuplex;
+use events::{message_done, modalities};
 pub use fallback::FallbackRealtime;
 pub use server::{Exo, Server, Vad};
 
 /// The model a session names in its metrics.
 pub const MODEL: &str = "openai/gpt-realtime";
 
+/// The session's input transcription model.
+const TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
+
 /// `RealtimeModel.label` of a LiveKit Inference model: on every error and metric.
 const LABEL: &str = "lk_agents_realtime.LiveKit Inference Realtime";
 
-/// How long before the session the model was built (at the entrypoint, or in a prewarm): the
-/// core runs on the model's own clock (`RealClock` from its construction), never the session's.
+/// What the session's errors call the provider.
+const PROVIDER: &str = "LiveKit Inference Realtime";
+
+/// How long before the session the model was built (at the entrypoint, or in a prewarm): its
+/// errors are stamped on the model's own clock (`RealClock` from its construction).
 const MODEL_BUILT_BEFORE: Duration = Duration::from_secs(3_600);
+
+/// The samples an audio delta carries.
+const DELTA_SAMPLES: usize = (server::DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 
 /// How a realtime setup's server is configured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,37 +106,26 @@ impl FakeRealtime {
     ) -> Arc<Self> {
         Arc::new(FakeRealtime { registry, setup, clock, spawner, sessions: AtomicU64::new(0) })
     }
+}
 
-    /// The model's options, as a LiveKit Inference realtime model built for this setup has them.
-    fn options(&self) -> SessionOptions {
-        let mut opts = SessionOptions::from_dialect(&INFERENCE, false);
-        opts.model = MODEL.into();
-        opts.turn_detection = match self.setup.vad {
-            Some(Vad::Semantic) => opts.turn_detection,
-            Some(Vad::Server) => Some(TurnDetection::ServerVad {
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 500,
-                create_response: true,
-                interrupt_response: true,
-            }),
-            None => None,
-        };
-        opts.audio_output = !self.setup.text_only;
-        opts
-    }
-
-    /// Server detection left at its default is the driver's to switch off when it detects turns
-    /// itself; switched off by the developer, it stays off.
-    fn capabilities_of(&self, opts: &SessionOptions) -> RealtimeCapabilities {
-        let given = self.setup.vad.is_none();
-        let transcription = opts.transcription.is_some();
-        INFERENCE.capabilities(
-            opts.turn_detection.as_ref(),
-            given,
-            opts.audio_output,
-            transcription,
-        )
+/// What a LiveKit Inference realtime model reports: server detection left at its default is the
+/// driver's to switch off when it detects turns itself; switched off by the developer, it stays
+/// off. The session transcribes the person and never speaks a `say` itself.
+fn capabilities(vad: Option<Vad>, configured: bool, text_only: bool) -> RealtimeCapabilities {
+    RealtimeCapabilities {
+        message_truncation: true,
+        turn_detection: vad.is_some(),
+        user_transcription: true,
+        auto_tool_reply_generation: false,
+        audio_output: !text_only,
+        manual_function_calls: true,
+        can_disable_turn_detection: configured,
+        mutable_chat_context: true,
+        mutable_instructions: true,
+        mutable_tools: true,
+        per_response_tool_choice: true,
+        supports_say: false,
+        auto_turn_reply_generation: vad.is_some(),
     }
 }
 
@@ -134,7 +135,8 @@ impl Realtime for FakeRealtime {
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {
-        self.capabilities_of(&self.options())
+        let vad = self.setup.vad;
+        capabilities(vad, vad.is_some(), self.setup.text_only)
     }
 
     /// Running when it returns, as the runtime's session is: a connect failure arrives as an
@@ -142,44 +144,22 @@ impl Realtime for FakeRealtime {
     fn session(
         &self,
         disabled: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+    ) -> BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let nth = self.sessions.fetch_add(1, Ordering::SeqCst);
-            let mut opts = self.options();
-            if disabled && INFERENCE.supports_turn_detection_disabled {
-                opts.turn_detection = None;
-            }
-            let caps = self.capabilities_of(&opts);
-            let conn = ApiConnectOptions::default();
-            let born = self.clock.now().saturating_add(MODEL_BUILT_BEFORE);
-            let machine = RealtimeMachine::new(INFERENCE, opts, caps, "1".into())
-                .with_response_timeout(conn.read_timeout.map(Duration::from_secs_f64))
-                .with_label(LABEL.into())
-                .with_provider("livekit".into())
-                .with_wall_anchor(self.clock.wall() - Duration::from_nanos(born.as_nanos()));
-            let mut connection = RealtimeConnection::new(&conn, born);
-            let effects = connection.start(born).into();
+            let vad = self.setup.vad.filter(|_| !disabled);
+            let caps = capabilities(vad, self.setup.vad.is_some(), self.setup.text_only);
+            let now = self.clock.now();
+            let opts = ApiConnectOptions::default();
             let socket = Arc::new(Socket {
-                tool_calls: self.setup.tool_calls,
+                setup: ServerSetup { vad, ..self.setup },
                 seed: self.setup.seed ^ (nth << 32),
-                connect: self.setup.connect,
+                caps,
+                opts,
                 clock: self.clock.clone(),
                 registry: self.registry.clone(),
                 slot: OnceLock::new(),
-                state: Mutex::new(State {
-                    machine,
-                    connection,
-                    link: Link::Waiting,
-                    effects,
-                    reconnecting: false,
-                    commands: VecDeque::new(),
-                    closing: false,
-                    events: VecDeque::new(),
-                    audio: batches(),
-                    generations: HashMap::new(),
-                    connections: 0,
-                    closed: false,
-                }),
+                state: Mutex::new(State::new(attempt(now, &opts, self.setup.connect))),
                 wake: tokio::sync::Notify::new(),
                 ready: tokio::sync::Notify::new(),
                 up: AtomicBool::new(true),
@@ -197,9 +177,14 @@ impl Realtime for FakeRealtime {
     }
 }
 
-/// The writer's batching of the person's audio: whole 100 ms appends, the rest held back.
-fn batches() -> AudioByteStream {
-    AudioByteStream::new(SAMPLE_RATE, 1, None, false)
+/// A connection attempt from `now`: open after the setup's delay, unless the connect bound ends it.
+fn attempt(now: Ts, opts: &ApiConnectOptions, connect: Duration) -> Link {
+    let bound = opts.connect_timeout.map(Duration::from_secs_f64);
+    Link::Connecting {
+        started: now,
+        opens_at: now.saturating_add(connect),
+        gives_up_at: bound.filter(|b| connect >= *b).map(|b| now.saturating_add(b)),
+    }
 }
 
 /// The session the driver holds.
@@ -210,7 +195,7 @@ struct Session {
 
 impl RealtimeSession for Session {
     fn capabilities(&self) -> RealtimeCapabilities {
-        self.socket.state.lock().unwrap().machine.capabilities()
+        self.socket.caps
     }
 
     /// Never blocks, never fails loudly: queued for the pump, as on the runtime's channel.
@@ -219,51 +204,36 @@ impl RealtimeSession for Session {
         self.socket.wake.notify_one();
     }
 
-    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
-        Box::pin(async move {
-            self.socket
-                .until(|state| match state.events.pop_front() {
-                    Some(event) => Some(Some(event)),
-                    None => matches!(state.link, Link::Over).then_some(None),
-                })
-                .await
-        })
+    fn next_event(&self) -> BoxFuture<'_, Option<Event>> {
+        Box::pin(self.socket.until(|state| match state.events.pop_front() {
+            Some(event) => Some(Some(event)),
+            None => matches!(state.link, Link::Over).then_some(None),
+        }))
     }
 
-    /// The mirror: what the server believes.
-    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
-        Box::pin(async move { self.socket.state.lock().unwrap().machine.chat_ctx() })
+    /// The mirror: what the server is being brought to.
+    fn chat_ctx(&self) -> BoxFuture<'_, ChatContext> {
+        Box::pin(async move { ChatContext::new(self.socket.state.lock().unwrap().desired.clone()) })
     }
 
-    /// The runtime's close: the response in flight interrupted and the close signalled, the pump
-    /// given the teardown bound to settle; then the session is over for the server. A connection
-    /// the pump left open (no close frame) keeps the socket unclosed, as a server still billing
-    /// it would.
-    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+    /// The runtime's close: the pump given the teardown bound to settle; then the session is over.
+    fn aclose(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let socket = &self.socket;
-            {
-                let mut state = socket.state.lock().unwrap();
-                state
-                    .commands
-                    .push_back(RealtimeCommand::Interrupt(Interrupt { response_id: None }));
-                state.closing = true;
-            }
+            socket.state.lock().unwrap().closing = true;
             socket.wake.notify_one();
             let over = socket.until(|state| matches!(state.link, Link::Over).then_some(()));
             let _ =
                 lk_agents_abi::timeout(&*socket.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, over)
                     .await;
             self.abort.abort();
-            let open = {
+            {
                 let mut state = socket.state.lock().unwrap();
-                state.closed = true;
-                let open = matches!(state.link, Link::Open { server: Some(_), .. });
+                socket.hang_up(&mut state);
                 state.link = Link::Over;
-                open
-            };
+            }
             socket.ready.notify_waiters();
-            if !open && let Some(slot) = socket.slot.get() {
+            if let Some(slot) = socket.slot.get() {
                 socket.registry.mark_closed(*slot);
             }
         })
@@ -272,69 +242,128 @@ impl RealtimeSession for Session {
 
 /// Where the session's connection stands.
 enum Link {
-    /// Between attempts: on the connection policy's next deadline, or its next effect.
-    Waiting,
-    /// An attempt in flight, opening at `opens_at` (the run's clock); `started` on the model's.
-    Connecting { generation: u64, started: Ts, opens_at: Ts },
+    /// An attempt in flight, opening at `opens_at` unless the connect bound gives up first.
+    Connecting { started: Ts, opens_at: Ts, gives_up_at: Option<Ts> },
     /// A connection, and the server behind it until the socket drops (`None`).
-    Open { generation: u64, server: Option<Server> },
-    /// The pump ended: no event comes after the queued ones.
+    Open { server: Option<Server> },
+    /// Between attempts: the next at `at`.
+    Retrying { at: Ts },
+    /// The session ended: no event comes after the queued ones.
     Over,
 }
 
-/// What one connection ended in, as the runtime's `connect_and_run` reports it.
-enum Outcome {
-    /// The session closed.
-    Closed,
-    /// The server said the session cannot go on.
-    Fatal(RealtimeModelError),
-    /// The connection policy's deadline ended the attempt.
-    Effects(Vec<ConnectionEffect>),
-    /// The core asked for a fresh connection.
-    Recycle,
-    /// The attempt failed, or the socket was lost.
-    Failed(ApiError),
+/// The response the session told the driver of: its messages, and whether each is still open and
+/// has settled its modalities.
+struct Generation {
+    r: u32,
+    id: String,
+    created_at: Ts,
+    first_token: Option<Ts>,
+    messages: Vec<(String, bool, bool)>,
+}
+
+/// A reply asked for and not yet answered.
+struct Asked {
+    deadline: Option<Ts>,
+    instructions: Option<String>,
+    tool_choice: Option<ToolChoice>,
 }
 
 struct State {
-    machine: RealtimeMachine,
-    connection: RealtimeConnection,
     link: Link,
-    /// Connection effects not yet acted on, in the order the runtime's loop takes them.
-    effects: VecDeque<ConnectionEffect>,
-    /// A connection was attempted before: the next one replays the conversation.
-    reconnecting: bool,
-    /// The core's commands, as the runtime's channel holds them for the pump.
+    /// The driver's commands, as the runtime's channel holds them for the pump.
     commands: VecDeque<RealtimeCommand>,
     /// `aclose` was called.
     closing: bool,
     events: VecDeque<Event>,
-    audio: AudioByteStream,
-    /// Generations the client knows of and has not seen end, by source.
-    generations: HashMap<u32, Slot>,
-    /// Connections opened, for each one's server.
+    /// The conversation the server is being brought to.
+    desired: Vec<ChatItem>,
+    instructions: String,
+    tools: Vec<String>,
+    asked: BTreeMap<String, Asked>,
+    /// Replies cancelled before they were created; `settled` among them: already failed.
+    discarded: BTreeSet<String>,
+    settled: BTreeSet<String>,
+    generation: Option<Generation>,
+    /// Assistant messages heard as audio on this connection: what a truncation may cut.
+    spoken: BTreeSet<String>,
+    /// The person's audio sent since the last commit or clear, in whole 100 ms batches, and what
+    /// is left of the last.
+    pushed: Duration,
+    remainder: Duration,
+    user_speaking: bool,
+    /// When the server heard each turn start, as wall seconds.
+    speech_started: HashMap<String, f64>,
+    /// Each turn's transcript so far.
+    transcripts: HashMap<String, String>,
+    /// Failed attempts since the connection was last open.
+    failures: u32,
+    /// The session was open once: the next connection restores the conversation.
+    reconnecting: bool,
     connections: u64,
-    /// The session is closed for good: the server takes no connection.
-    closed: bool,
+    /// Responses of this connection the run registered, by index.
+    generations: HashMap<u32, Slot>,
 }
 
-/// When the pump runs next.
-enum Wake {
-    At(Ts),
-    Idle,
-    Over,
+impl State {
+    fn new(link: Link) -> Self {
+        State {
+            link,
+            commands: VecDeque::new(),
+            closing: false,
+            events: VecDeque::new(),
+            desired: Vec::new(),
+            instructions: String::new(),
+            tools: Vec::new(),
+            asked: BTreeMap::new(),
+            discarded: BTreeSet::new(),
+            settled: BTreeSet::new(),
+            generation: None,
+            spoken: BTreeSet::new(),
+            pushed: Duration::ZERO,
+            remainder: Duration::ZERO,
+            user_speaking: false,
+            speech_started: HashMap::new(),
+            transcripts: HashMap::new(),
+            failures: 0,
+            reconnecting: false,
+            connections: 0,
+            generations: HashMap::new(),
+        }
+    }
+
+    fn server(&mut self) -> Option<&mut Server> {
+        match &mut self.link {
+            Link::Open { server } => server.as_mut(),
+            _ => None,
+        }
+    }
+
+    /// The response the driver was told of ends unfinished: its messages close, it is cancelled.
+    fn close_generation(&mut self, audio: bool) {
+        let Some(g) = self.generation.take() else { return };
+        for (id, open, settled) in &g.messages {
+            if !settled {
+                self.events.push_back(modalities(id, &g.id, audio));
+            }
+            if *open {
+                self.events.push_back(message_done(id, &g.id));
+            }
+        }
+        self.events.push_back(Event::GenerationDone(GenerationDone {
+            response_id: g.id,
+            status: GenerationStatus::Cancelled,
+            usage: TokenUsage::default(),
+        }));
+    }
 }
 
-/// Whether connection effects end the attempt in flight: anything but a cleanup diagnostic.
-fn ends_attempt(effects: &[ConnectionEffect]) -> bool {
-    effects.iter().any(|e| !matches!(e, ConnectionEffect::CleanupIncomplete { .. }))
-}
-
-/// One session's socket: the core and the server behind it.
+/// One session's socket: the session's state and the server behind it.
 pub struct Socket {
+    setup: ServerSetup,
     seed: u64,
-    tool_calls: Option<u8>,
-    connect: Duration,
+    caps: RealtimeCapabilities,
+    opts: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     registry: Arc<Registry>,
     slot: OnceLock<Slot>,
@@ -352,8 +381,9 @@ impl Socket {
         self.clock.now()
     }
 
-    fn model_now(&self) -> Ts {
-        self.now().saturating_add(MODEL_BUILT_BEFORE)
+    fn wall_secs(&self) -> f64 {
+        let wall = self.clock.wall();
+        wall.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()
     }
 
     /// The first value `read` finds in the state, waiting for the pump between reads.
@@ -377,326 +407,354 @@ impl Socket {
             };
             self.ready.notify_waiters();
             match wake {
-                Wake::Over => return,
-                Wake::At(at) => {
+                None => return,
+                Some(Some(at)) => {
                     tokio::select! {
+                        biased;
                         () = self.clock.wait_until(at) => {}
                         () = self.wake.notified() => {}
                     }
                 }
-                Wake::Idle => self.wake.notified().await,
+                Some(None) => self.wake.notified().await,
             }
         }
     }
 
-    /// Everything the pump can do now; then when it runs next.
-    fn advance(&self, st: &mut State) -> Wake {
+    /// Everything the session does now; then when it runs next (`None`: it is over).
+    fn advance(&self, st: &mut State) -> Option<Option<Ts>> {
         loop {
-            let (now, m) = (self.now(), self.model_now());
-            // The connection policy's next deadline, on the run's clock.
-            let policy =
-                st.connection.next_deadline().map(|at| at.saturating_sub(MODEL_BUILT_BEFORE));
+            let now = self.now();
+            let reply_due = st.asked.values().filter_map(|a| a.deadline).min();
+            if reply_due.is_some_and(|at| at <= now) {
+                self.time_out_replies(st, now);
+                continue;
+            }
             match st.link {
-                Link::Over => return Wake::Over,
-                Link::Waiting => {
-                    if let Some(effect) = st.effects.pop_front() {
-                        self.effect(st, effect);
-                    } else if st.closing {
-                        let _ = st.connection.close(m);
-                        self.end(st, true);
-                    } else {
-                        match policy {
-                            None => self.end(st, false),
-                            Some(at) if at <= now => {
-                                let effects = st.connection.tick(m);
-                                st.effects.extend(effects);
-                            }
-                            Some(at) => return Wake::At(at),
-                        }
-                    }
-                }
-                Link::Connecting { generation, started, opens_at } => {
+                Link::Over => return None,
+                Link::Retrying { at } => {
                     if st.closing {
-                        self.ended(st, generation, Outcome::Closed);
-                    } else if policy.is_some_and(|at| at <= now) {
-                        let effects = st.connection.tick(m);
-                        if ends_attempt(&effects) {
-                            self.ended(st, generation, Outcome::Effects(effects));
-                        }
-                    } else if now >= opens_at {
-                        self.opened(st, generation, started);
+                        self.end(st);
+                    } else if at <= now {
+                        st.link = attempt(now, &self.opts, self.setup.connect);
                     } else {
-                        return Wake::At(policy.map_or(opens_at, |at| at.min(opens_at)));
+                        return Some(Some(reply_due.map_or(at, |r| r.min(at))));
                     }
                 }
-                Link::Open { generation, ref server } => {
-                    let lost = server.is_none();
-                    let server_due = server.as_ref().and_then(Server::next_due);
-                    let deadline = st
-                        .machine
-                        .next_deadline()
-                        .map(|at| at.saturating_sub(MODEL_BUILT_BEFORE))
-                        .into_iter()
-                        .chain(policy)
-                        .min();
-                    // The runtime's biased order: the deadline, the close, the socket, the
-                    // commands, the context work: retired histories go to a cleanup worker,
-                    // a context page continues only once the machine can take it.
-                    if deadline.is_some_and(|at| at <= now) {
-                        let effects = st.connection.tick(m);
-                        if ends_attempt(&effects) {
-                            self.ended(st, generation, Outcome::Effects(effects));
+                Link::Connecting { started, opens_at, gives_up_at } => {
+                    if st.closing {
+                        self.end(st);
+                    } else if gives_up_at.is_some_and(|at| at <= now) {
+                        self.failed(st, ApiError::timed_out(TimeoutPhase::Connect));
+                    } else if opens_at <= now {
+                        if self.up.load(Ordering::SeqCst) {
+                            self.opened(st, started);
                         } else {
-                            let step = st.machine.tick(m);
-                            self.stepped(st, generation, step);
+                            self.failed(st, ApiError::from_http("Service Unavailable", 503, None));
                         }
-                    } else if st.closing {
-                        self.ended(st, generation, Outcome::Closed);
-                    } else if lost {
-                        self.ended(st, generation, Outcome::Failed(lost_connection()));
-                    } else if server_due.is_some_and(|at| at <= now) {
-                        let wall = self.clock.wall();
-                        let State { link, generations, machine, .. } = &mut *st;
-                        let Link::Open { server: Some(server), .. } = link else { unreachable!() };
-                        let mut hooks = Hooks { socket: self, generations };
-                        let step = server.pop(now, wall, &mut hooks).map(|delivered| {
-                            machine.incoming_on(machine.connection_generation(), m, delivered.event)
-                        });
-                        if let Some(step) = step {
-                            self.stepped(st, generation, step);
-                        }
-                    } else if let Some(cmd) = st.commands.pop_front() {
-                        let step = st.machine.command(m, cmd);
-                        self.stepped(st, generation, step);
-                    } else if let Some(retired) = st.machine.take_context_retirement() {
-                        // an admitted cleanup worker reclaims the retired history
-                        drop(retired);
-                    } else if st.machine.context_continuation_ready() {
-                        let step = st.machine.continue_context(m);
-                        self.stepped(st, generation, step);
                     } else {
-                        let at = deadline.into_iter().chain(server_due).min();
-                        return at.map_or(Wake::Idle, Wake::At);
+                        let at = gives_up_at.map_or(opens_at, |g| g.min(opens_at));
+                        return Some(Some(reply_due.map_or(at, |r| r.min(at))));
+                    }
+                }
+                Link::Open { ref server } => {
+                    let server_due = server.as_ref().and_then(Server::next_due);
+                    let lost = server.is_none();
+                    // The runtime's biased order: the close, the socket, the commands.
+                    if st.closing {
+                        self.hang_up(st);
+                        self.end(st);
+                    } else if lost {
+                        self.lost(st);
+                    } else if server_due.is_some_and(|at| at <= now) {
+                        let happening = st.server().and_then(|s| s.pop(now));
+                        if let Some(happening) = happening {
+                            self.told(st, now, happening);
+                        }
+                        self.record_breaches(st);
+                    } else if let Some(cmd) = st.commands.pop_front() {
+                        self.command(st, now, cmd);
+                        self.record_breaches(st);
+                    } else {
+                        let at = server_due.into_iter().chain(reply_due).min();
+                        return Some(at);
                     }
                 }
             }
         }
     }
 
-    /// One connection effect, as the runtime's loop acts on it.
-    fn effect(&self, st: &mut State, effect: ConnectionEffect) {
-        match effect {
-            ConnectionEffect::Connect { generation } => {
-                let opens_at = self.now().saturating_add(self.connect);
-                st.link = Link::Connecting { generation, started: self.model_now(), opens_at };
+    fn record_breaches(&self, st: &mut State) {
+        let breaches = st.server().map(Server::take_breaches).unwrap_or_default();
+        if let Some(slot) = self.slot.get() {
+            for breach in breaches {
+                self.registry.record_breach(slot.nth, breach);
             }
-            ConnectionEffect::Retry { error } => self.emit_error(st, error, true),
-            ConnectionEffect::Failed { error } => {
-                self.emit_error(st, error, false);
-                self.end(st, true);
-            }
-            ConnectionEffect::Close { .. } | ConnectionEffect::CleanupIncomplete { .. } => {}
         }
     }
 
-    /// The attempt's socket opens now: or the server is down, or the session closed for good.
-    fn opened(&self, st: &mut State, generation: u64, started: Ts) {
-        let refused = if st.closed {
-            Some(TransportError::Closed)
-        } else if !self.up.load(Ordering::SeqCst) {
-            Some(TransportError::Status {
-                status: 503,
-                message: "Service Unavailable".into(),
-                headers: Vec::new(),
-                body: None,
-            })
-        } else {
-            None
-        };
-        if let Some(error) = refused {
-            let error = connect_error(INFERENCE.provider_label, error);
-            return self.ended(st, generation, Outcome::Failed(error));
-        }
-        let (now, m) = (self.now(), self.model_now());
+    // --- the connection --------------------------------------------------------------------
+
+    /// The attempt's socket opens now: the session configures the server, and a reconnect
+    /// restores the conversation and asks again for what was not answered.
+    fn opened(&self, st: &mut State, started: Ts) {
+        let now = self.now();
         st.connections += 1;
+        st.failures = 0;
         let ids = format!("{}s{}c", self.slot.get().map_or(0, |s| s.nth), st.connections);
-        let mut server = Server::new(self.seed ^ st.connections)
-            .with_tool_calls(self.tool_calls)
-            // Unique across the session's sockets too, as a real server's ids are.
-            .with_ids(ids);
-        server.connect(now);
-        st.link = Link::Open { generation, server: Some(server) };
-        st.audio = batches();
-        let acquired = m.saturating_duration_since(started);
-        let metrics = st.machine.connection_metrics(m, acquired);
-        st.events.push_back(metrics);
-        let step = if st.reconnecting { st.machine.reconnect(m) } else { st.machine.open(m) };
-        if !st.connection.connected(generation, m) {
-            return self.ended(st, generation, Outcome::Closed);
+        let mut server = Server::new(self.seed ^ st.connections, ids);
+        server.configure(self.setup.vad, !self.setup.text_only, self.setup.tool_calls);
+        server.instructions(&st.instructions);
+        server.tools(st.tools.clone());
+        st.link = Link::Open { server: Some(server) };
+        st.events.push_back(self.connection_metrics(now.saturating_duration_since(started)));
+        if !std::mem::replace(&mut st.reconnecting, true) {
+            return;
         }
-        self.stepped(st, generation, step);
-    }
-
-    /// What the core decided: its frames onto the socket, its events to the driver.
-    fn stepped(&self, st: &mut State, generation: u64, mut step: Step) {
-        let fatal = step.fatal.take();
-        let recycle = step.recycle;
-        self.dispatch(st, step);
-        if let Some(error) = fatal {
-            self.ended(st, generation, Outcome::Fatal(error));
-        } else if recycle {
-            self.ended(st, generation, Outcome::Recycle);
+        // The new connection's VAD heard no onset: the person's speech the old one opened is over
+        // as far as the session can tell. Its buffer holds none of the old one's audio.
+        if std::mem::take(&mut st.user_speaking) {
+            st.events.push_back(Event::InputSpeechStopped(InputSpeechStopped {
+                user_transcription_enabled: true,
+            }));
         }
-    }
-
-    fn dispatch(&self, st: &mut State, step: Step) {
-        let (now, m) = (self.now(), self.model_now());
-        let State { machine, link, audio, generations, events, .. } = st;
-        if let Link::Open { server: Some(server), .. } = link {
-            // The machine's own connection generation, not the policy's attempt's.
-            let generation = machine.connection_generation();
-            let mut hooks = Hooks { socket: self, generations };
-            for frame in step.frames {
-                match frame {
-                    Outgoing::AudioAppend { frame } => {
-                        for chunk in audio.push(&frame.data) {
-                            let samples = chunk.samples_per_channel;
-                            let frame = AudioFrame::new(chunk.data, SAMPLE_RATE, 1, samples);
-                            server.client(now, &Outgoing::AudioAppend { frame }, &mut hooks);
-                        }
-                    }
-                    Outgoing::AudioClear => {
-                        *audio = batches();
-                        server.client(now, &Outgoing::AudioClear, &mut hooks);
-                    }
-                    frame => {
-                        server.client(now, &frame, &mut hooks);
-                        // The writer's receipt: the request is on the wire.
-                        match &frame {
-                            Outgoing::ResponseCreate { req_id, .. } => {
-                                machine.response_sent(generation, m, req_id, false);
-                            }
-                            Outgoing::ForceMessage { req_id, .. } => {
-                                machine.response_sent(generation, m, req_id, true);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+        st.pushed = Duration::ZERO;
+        st.remainder = Duration::ZERO;
+        let desired = st.desired.clone();
+        let server = st.server().expect("just opened");
+        let mut previous = None;
+        for item in &desired {
+            server.create(now, item, previous.take());
+            previous = Some(item.id().to_owned());
+        }
+        for req_id in std::mem::take(&mut st.discarded) {
+            if !st.settled.remove(&req_id) {
+                let error = RealtimeError::new("generate_reply cancelled");
+                st.events
+                    .push_back(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
             }
         }
-        events.extend(step.events);
-    }
-
-    /// One connection ended, as `connect_and_run` returned: the socket closed with a close frame
-    /// if it was still up, and what the connection policy makes of the outcome.
-    fn ended(&self, st: &mut State, generation: u64, outcome: Outcome) {
-        let m = self.model_now();
-        if let Link::Open { server: Some(server), .. } = &st.link {
-            if let Some(slot) = self.slot.get() {
-                self.registry.record_held(slot.nth, server.held());
-            }
-            self.hang_up(st);
+        st.spoken.clear();
+        st.close_generation(!self.setup.text_only);
+        // A reply asked for and not yet created is asked for again.
+        let again: Vec<(String, Option<String>, Option<ToolChoice>)> = st
+            .asked
+            .iter_mut()
+            .rev()
+            .map(|(id, a)| {
+                a.deadline = None;
+                (id.clone(), a.instructions.clone(), a.tool_choice.clone())
+            })
+            .collect();
+        let server = st.server().expect("just opened");
+        for (req_id, instructions, tool_choice) in again {
+            server.respond_to(now, req_id, instructions.as_deref(), tool_choice);
         }
-        st.link = Link::Waiting;
-        st.reconnecting = true;
-        let follow_up = match outcome {
-            Outcome::Closed => {
-                let _ = st.connection.close(m);
-                let _ = st.connection.released(generation, m);
-                // A close the pump took ends the session; a refused handover ends it silently.
-                let close = st.closing;
-                return self.end(st, close);
-            }
-            Outcome::Fatal(error) => {
-                st.events.push_back(Event::Error(error));
-                let _ = st.connection.close(m);
-                let _ = st.connection.released(generation, m);
-                return self.end(st, true);
-            }
-            Outcome::Effects(effects) => effects,
-            Outcome::Recycle => st.connection.failed(generation, m, lost_connection()),
-            Outcome::Failed(error) => st.connection.failed(generation, m, error),
-        };
-        st.effects.extend(follow_up);
-        let released = st.connection.released(generation, m);
-        st.effects.extend(released);
+        st.events.push_back(Event::SessionReconnected(SessionReconnected {}));
     }
 
-    /// The pump ends; `close`: the core closes, failing what still waits.
-    fn end(&self, st: &mut State, close: bool) {
-        if close {
-            let step = st.machine.close(self.model_now());
-            st.events.extend(step.events);
+    /// The socket dropped: the session reports it and tries again at once.
+    fn lost(&self, st: &mut State) {
+        let message = format!("{PROVIDER} connection closed unexpectedly");
+        self.emit_error(st, ApiError::connection(Some(message)), true);
+        st.link = Link::Retrying { at: self.now() };
+    }
+
+    /// An attempt failed: retried after the policy's interval, or the session ends.
+    fn failed(&self, st: &mut State, error: ApiError) {
+        st.failures += 1;
+        if st.failures < self.opts.max_retry {
+            let interval = self.opts.interval_for_retry(st.failures - 1);
+            self.emit_error(st, error, true);
+            st.link =
+                Link::Retrying { at: self.now().saturating_add(Duration::from_secs_f64(interval)) };
+        } else {
+            self.emit_error(st, error, false);
+            self.end(st);
         }
-        st.link = Link::Over;
     }
 
-    fn emit_error(&self, st: &mut State, error: ApiError, recoverable: bool) {
-        st.events.push_back(Event::Error(RealtimeModelError {
-            timestamp: self.model_now(),
-            label: LABEL.into(),
-            message: error.message.clone(),
-            recoverable,
-            req_id: None,
-            code: None,
-            provider_error: Some(error),
-        }));
-    }
-
-    /// The connection ends, every generation on it with it.
+    /// The connection ends, every generation on it with it: what its server held is recorded.
     fn hang_up(&self, st: &mut State) {
-        if let Link::Open { server, .. } = &mut st.link {
-            *server = None;
+        if let Link::Open { server } = &mut st.link
+            && let Some(server) = server.take()
+            && let Some(slot) = self.slot.get()
+        {
+            self.registry.record_held(slot.nth, server.held());
         }
         for (_, slot) in st.generations.drain() {
             self.registry.mark_closed(slot);
         }
-        self.wake.notify_one();
-    }
-}
-
-/// "connection closed unexpectedly": retryable, so the session reconnects.
-fn lost_connection() -> ApiError {
-    let message = format!("{} connection closed unexpectedly", INFERENCE.provider_label);
-    ApiError::connection(Some(message))
-}
-
-/// What the server's deliveries mean to the run's record.
-struct Hooks<'a> {
-    socket: &'a Socket,
-    generations: &'a mut HashMap<u32, Slot>,
-}
-
-impl server::Hooks for Hooks<'_> {
-    fn created(&mut self, _: &str) -> u32 {
-        let slot =
-            self.socket.registry.register(Kind::Generation, Detail::None, Control::Generation);
-        self.generations.insert(slot.nth, slot);
-        slot.nth
     }
 
-    fn done(&mut self, source: u32) {
-        if let Some(slot) = self.generations.remove(&source) {
-            self.socket.registry.mark_closed(slot);
+    /// The session ends: what still waits fails.
+    fn end(&self, st: &mut State) {
+        st.close_generation(!self.setup.text_only);
+        for (req_id, _) in std::mem::take(&mut st.asked) {
+            let error = RealtimeError::new("realtime session closed");
+            st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+        }
+        st.link = Link::Over;
+    }
+
+    fn time_out_replies(&self, st: &mut State, now: Ts) {
+        let expired: Vec<String> = st
+            .asked
+            .iter()
+            .filter(|(_, a)| a.deadline.is_some_and(|at| at <= now))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for req_id in expired {
+            st.asked.remove(&req_id);
+            st.discarded.insert(req_id.clone());
+            st.settled.insert(req_id.clone());
+            let error = RealtimeError::new("response creation timed out");
+            st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
         }
     }
 
-    fn produced(&mut self, source: u32, chunk: u16) {
-        self.socket.registry.record_generated(source, chunk);
-    }
+    // --- the driver's commands -------------------------------------------------------------
 
-    fn breach(&mut self, breach: crate::record::Breach) {
-        if let Some(slot) = self.socket.slot.get() {
-            self.socket.registry.record_breach(slot.nth, breach);
-        }
-    }
-
-    fn heard(&mut self, pcm: &[u8]) {
-        if let Some(slot) = self.socket.slot.get() {
-            let (pairs, _) = pcm.as_chunks::<2>();
-            let tags = pairs.iter().map(|b| Tag::decode(i16::from_le_bytes(*b))).collect();
-            self.socket.registry.record_forwarded(*slot, tags);
+    fn command(&self, st: &mut State, now: Ts, cmd: RealtimeCommand) {
+        match cmd {
+            RealtimeCommand::UpdateInstructions(u) => {
+                st.server().expect("open").instructions(&u.instructions);
+                st.instructions = u.instructions;
+            }
+            RealtimeCommand::UpdateTools(u) => {
+                st.tools = u.tools.iter().map(|t| t.name.clone()).collect();
+                let tools = st.tools.clone();
+                st.server().expect("open").tools(tools);
+            }
+            RealtimeCommand::UpdateChatCtx(u) => {
+                let items = u.chat_ctx.items;
+                // What the conversation loses goes; what it gains is created in its place.
+                let gone: Vec<String> = st
+                    .desired
+                    .iter()
+                    .map(|i| i.id().to_owned())
+                    .filter(|id| !items.iter().any(|i| i.id() == id))
+                    .collect();
+                let server = st.server().expect("open");
+                for id in &gone {
+                    server.delete(id);
+                }
+                let mut previous = None;
+                for item in &items {
+                    let unheld_output = matches!(item, ChatItem::FunctionCallOutput(o) if !server.holds_call(&o.call_id));
+                    if !server.holds(item.id()) && !unheld_output {
+                        server.create(now, item, previous.clone());
+                    }
+                    if server.holds(item.id()) {
+                        previous = Some(item.id().to_owned());
+                    }
+                }
+                st.desired = items;
+            }
+            RealtimeCommand::PushItem(p) => {
+                let item = *p.item;
+                let server = st.server().expect("open");
+                // The output of a call the server does not hold answers nothing: not sent.
+                if let ChatItem::FunctionCallOutput(o) = &item
+                    && !server.holds_call(&o.call_id)
+                {
+                    return;
+                }
+                if !server.holds(item.id()) {
+                    server.create(now, &item, None);
+                    st.desired.push(item);
+                }
+            }
+            RealtimeCommand::PushAudio(p) => {
+                let frame = p.frame;
+                if let Some(slot) = self.slot.get() {
+                    let (pairs, _) = frame.data.as_chunks::<2>();
+                    let tags = pairs.iter().map(|b| Tag::decode(i16::from_le_bytes(*b))).collect();
+                    self.registry.record_forwarded(*slot, tags);
+                }
+                if frame.sample_rate == 0 {
+                    return self.emit_error(
+                        st,
+                        ApiError::connection(Some("invalid audio sample rate".into())),
+                        false,
+                    );
+                }
+                st.remainder += Duration::from_secs_f64(
+                    f64::from(frame.samples_per_channel) / f64::from(frame.sample_rate),
+                );
+                let batch = Duration::from_millis(100);
+                while st.remainder >= batch {
+                    st.remainder -= batch;
+                    st.pushed += batch;
+                    st.server().expect("open").append_audio(100);
+                }
+            }
+            RealtimeCommand::CommitAudio(_) => {
+                // "OpenAI requires at least 100ms of audio": less is not sent.
+                if st.pushed > Duration::from_millis(100) {
+                    st.pushed = Duration::ZERO;
+                    st.server().expect("open").commit_audio(now);
+                }
+            }
+            RealtimeCommand::ClearAudio(_) => {
+                st.pushed = Duration::ZERO;
+                st.remainder = Duration::ZERO;
+                st.server().expect("open").clear_audio();
+            }
+            RealtimeCommand::GenerateReply(g) => {
+                if st.asked.contains_key(&g.req_id) || st.discarded.contains(&g.req_id) {
+                    return;
+                }
+                // The server replaces the session's instructions with a response's own.
+                let instructions =
+                    g.instructions.map(|extra| format!("{}\n{extra}", st.instructions));
+                let deadline =
+                    self.opts.read_timeout.map(|t| now.saturating_add(Duration::from_secs_f64(t)));
+                let asked = Asked {
+                    deadline,
+                    instructions: instructions.clone(),
+                    tool_choice: g.tool_choice.clone(),
+                };
+                st.asked.insert(g.req_id.clone(), asked);
+                st.server().expect("open").respond_to(
+                    now,
+                    g.req_id,
+                    instructions.as_deref(),
+                    g.tool_choice,
+                );
+            }
+            RealtimeCommand::Say(s) => {
+                let error = RealtimeError::new(format!(
+                    "{PROVIDER} does not implement say(). use a TTS model instead"
+                ));
+                st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed {
+                    req_id: s.req_id,
+                    error,
+                }));
+            }
+            RealtimeCommand::CancelReply(c) => {
+                // Nothing is cancelled now: the reply is cancelled by id when it is created.
+                if st.asked.remove(&c.req_id).is_some() {
+                    st.discarded.insert(c.req_id);
+                }
+            }
+            RealtimeCommand::Interrupt(i) => {
+                if st.generation.is_some() {
+                    st.server().expect("open").cancel(now, i.response_id.as_deref());
+                }
+            }
+            RealtimeCommand::Truncate(t) => {
+                // A message gone from the conversation, or held as text (a reconnect restored
+                // it), has nothing to cut. One heard not at all is replaced by its text.
+                if !t.has_audio || !st.spoken.contains(&t.message_id) {
+                    return;
+                }
+                let server = st.server().expect("open");
+                if t.audio_end_ms > 0 {
+                    server.truncate(now, &t.message_id, t.audio_end_ms);
+                } else {
+                    server.as_text(&t.message_id);
+                }
+            }
         }
     }
 }
@@ -704,34 +762,36 @@ impl server::Hooks for Hooks<'_> {
 /// One server-side event onto a registered socket. True when a real server could do it now.
 pub(super) fn deliver(socket: &Socket, what: &Input) -> bool {
     let Input::RealtimeEvent { event, .. } = what else { return false };
-    let accepted = match event {
-        RtEvent::Disconnected => {
-            let mut state = socket.state.lock().unwrap();
-            let open = matches!(state.link, Link::Open { server: Some(_), .. });
-            if open {
-                socket.up.store(false, Ordering::SeqCst);
-                socket.hang_up(&mut state);
+    let now = socket.now();
+    let accepted = {
+        let mut state = socket.state.lock().unwrap();
+        match event {
+            RtEvent::Disconnected => {
+                let open = state.server().is_some();
+                if open {
+                    socket.up.store(false, Ordering::SeqCst);
+                    socket.hang_up(&mut state);
+                }
+                open
             }
-            open
-        }
-        RtEvent::Reconnected => !socket.up.swap(true, Ordering::SeqCst),
-        other => {
-            let exo = match other {
-                RtEvent::SpeechStarted => Exo::SpeechStarted,
-                RtEvent::SpeechStopped => Exo::SpeechStopped,
-                RtEvent::StrayDelta => Exo::StrayDelta,
-                RtEvent::SecondGeneration => Exo::ServerResponse,
-                RtEvent::GenerationDone => Exo::FinishNow,
-                RtEvent::ServerError => Exo::ServerError,
-                RtEvent::FatalError => Exo::FatalError,
-                RtEvent::ResponseFailed => Exo::ResponseFailed,
-                RtEvent::TranscriptionFailed => Exo::TranscriptionFailed,
-                RtEvent::Disconnected | RtEvent::Reconnected => unreachable!("answered above"),
-            };
-            let now = socket.now();
-            match &mut socket.state.lock().unwrap().link {
-                Link::Open { server: Some(server), .. } => server.exo(now, exo),
-                _ => false,
+            RtEvent::Reconnected => !socket.up.swap(true, Ordering::SeqCst),
+            // A delta naming no response the session knows: it is dropped, nothing is told.
+            RtEvent::StrayDelta => state.server().is_some(),
+            other => {
+                let exo = match other {
+                    RtEvent::SpeechStarted => Exo::SpeechStarted,
+                    RtEvent::SpeechStopped => Exo::SpeechStopped,
+                    RtEvent::SecondGeneration => Exo::ServerResponse,
+                    RtEvent::GenerationDone => Exo::FinishNow,
+                    RtEvent::ServerError => Exo::ServerError,
+                    RtEvent::FatalError => Exo::FatalError,
+                    RtEvent::ResponseFailed => Exo::ResponseFailed,
+                    RtEvent::TranscriptionFailed => Exo::TranscriptionFailed,
+                    RtEvent::Disconnected | RtEvent::Reconnected | RtEvent::StrayDelta => {
+                        unreachable!("answered above")
+                    }
+                };
+                state.server().is_some_and(|server| server.exo(now, exo))
             }
         }
     };

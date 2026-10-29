@@ -1438,20 +1438,15 @@ name = "lk-agents-fuzz"
 version = "0.1.0"
 dependencies = [
  "a2a-lf",
- "async-trait",
- "base64 0.22.1",
  "bytes",
  "fastrand",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",
- "lk-agents-inference",
  "lk-agents-media",
- "lk-agents-net",
  "lk-agents-runtime",
  "lk-agents-test-support",
  "lk-agents-voice",
- "prost",
  "serde_json",
  "tokio",
 ]
