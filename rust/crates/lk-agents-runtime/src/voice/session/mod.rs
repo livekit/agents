@@ -477,7 +477,7 @@ impl VoiceSession {
             .unwrap_or_else(|| self.stack().resolve(&self.legs()).turn.interruption.enabled());
         self.running(|r| {
             let id = SpeechId(r.speech_ids.fetch_add(1, Ordering::Relaxed));
-            let speech = SpeechHandle::pending(r.api.clone(), id, allow);
+            let speech = SpeechHandle::pending(self.speeches.requests(r.api.clone()), id, allow);
             self.speeches.register(Arc::clone(&speech));
             let reply_to = ReplyTo::Speech(SpeechReply(Arc::clone(&speech)));
             let call = Call { id: r.next_call(), reply_to };

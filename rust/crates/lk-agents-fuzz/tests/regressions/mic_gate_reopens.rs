@@ -4,11 +4,12 @@ use lk_agents_fuzz::search;
 
 // Catches: the gate reopening through the owner's queue, behind frames already queued, so frames
 // pushed after the speech finished were silenced (a45633b37). The gate's effects settle in their
-// batch, before another frame is forwarded. Seed 30097 is the gate window's only witness: with
-// the effect sent through the queue again, it fails `forwarded_while_enabled`.
+// batch, before another frame is forwarded. Seed 27243 witnesses the gate window: with the effect
+// sent through the queue again, it fails `forwarded_while_enabled` (re-picked from the campaign
+// with the bug restored once the DST held a call's handle from its return; 30097 was).
 #[test]
 fn microphone_is_not_silenced_after_uninterruptible_speech_finishes() {
-    let seed = 30_097;
+    let seed = 27_243;
     let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
     assert!(setup.stt, "the case must gate a recognition leg");
     let outcome = search::explore(setup, seed, 3_000);

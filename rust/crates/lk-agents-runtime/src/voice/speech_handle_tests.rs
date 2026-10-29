@@ -95,7 +95,7 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     assert!(matches!(HostSpeech::exception(&detached), Ok(None)));
 
     // A setter before the loop created the speech is the value it is created with.
-    let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(7), true);
+    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(7), true);
     HostSpeech::set_allow_interruptions(&*pending, false).unwrap();
     assert!(pending.allow_interruptions(), "a queued setter is not yet accepted");
     let mut speech = Speech::over(&pending, SpeechId(7), true);
@@ -105,7 +105,7 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     speech.publish();
     assert!(!pending.allow_interruptions());
 
-    let lost = SpeechHandle::pending(Tx::disconnected(), SpeechId(8), true);
+    let lost = SpeechHandle::pending(Requests::disconnected(), SpeechId(8), true);
     HostSpeech::interrupt(&*lost, false).unwrap();
     assert!(HostSpeech::interrupted(&*lost));
     lost.answered(false);
@@ -129,11 +129,11 @@ fn a_speech_is_itself_across_handles() {
 // Catches: a host `interrupt()` the loop refused leaving the request behind (the speech read
 // `interrupted` forever), the check reading a stale `allow_interruptions` right after the setter,
 // a handle with no id until the loop created it, a host view going back to `False` once the
-// speech ended (1.x's `_interrupt_fut` is sticky), and a request behind the speech's end reading
-// as an interruption the loop never made.
+// speech ended (1.x's `_interrupt_fut` is sticky), and a request a speech created done never
+// heard reading as an interruption the loop never made.
 #[test]
 fn the_host_reads_the_loops_verdict_on_its_interrupt() {
-    let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(3), false);
+    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(3), false);
     assert_eq!(HostSpeech::id(&*pending), "speech_3", "the id exists as the call returns");
     assert!(HostSpeech::interrupt(&*pending, false).is_err(), "disallowed at the call");
 
@@ -162,14 +162,13 @@ fn the_host_reads_the_loops_verdict_on_its_interrupt() {
     speech.publish();
     assert!(HostSpeech::interrupted(&*handle), "the host's interrupted went back to False");
 
-    // Asked behind the input that ends it: a no-op, as on a done speech.
-    let speech = Speech::created(true);
-    let handle = speech.handle();
-    handle.report_end(&Tx::disconnected(), |host_interrupt| GenEvent::Failed {
-        speech: SpeechId(1),
-        error: Box::new(lk_agents_abi::errors::ApiError::new("ended").into()),
-        host_interrupt,
-    });
-    HostSpeech::interrupt(&*handle, false).unwrap();
-    assert!(!HostSpeech::interrupted(&*handle), "a request behind the end was recorded");
+    // Asked of a speech the loop created done (refused, or answered as the session closed): it
+    // never ran, so the request lands nowhere and the host reads the core's verdict.
+    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(4), true);
+    HostSpeech::interrupt(&*pending, false).unwrap();
+    let mut speech = Speech::over(&pending, SpeechId(4), true);
+    speech.state.mark_done(None);
+    speech.publish();
+    pending.answered(true);
+    assert!(!HostSpeech::interrupted(&*pending), "a request the speech never heard was recorded");
 }

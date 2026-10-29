@@ -337,7 +337,13 @@ Synchronous host properties, including speech state and resolved options, are
 runtime-maintained views updated by core effects. `interrupt()` may immediately
 record its request flag; the core determines the speech outcome, and a done
 speech's view reads that outcome. The voice core owns each speech's state; the
-host's requests and a reply's step reach it as queued inputs.
+host's requests and a reply's step reach it as queued inputs. A host request on
+a speech (`interrupt()`, the interruption setters) is ordered at its call: the
+runtime steps every request made before an input ahead of that input, and none
+lands between a step and the speech views it publishes, so however a speech
+ends, an `interrupt()` asked while the host read it running lands on it. A
+speech created done (refused, or answered as the session closed) never ran: an
+interrupt asked before its creation lands nowhere.
 Other option changes become visible after the core accepts them. Tests compare
 host views with settled core state.
 

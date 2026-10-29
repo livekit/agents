@@ -741,8 +741,7 @@ impl Driver {
             // A text-only turn's first frame; with audio output the edge is `PlaybackStarted`'s.
             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
 
-            GenEvent::Done { speech, outcome, interrupted, host_interrupt } => {
-                self.land_host_interrupt(speech, host_interrupt, out);
+            GenEvent::Done { speech, outcome, interrupted } => {
                 if self.session.storage.enabled {
                     self.storage_settle(speech, *outcome, interrupted, out);
                 } else {
@@ -805,8 +804,7 @@ impl Driver {
                 self.requeue_speech(now, speech, out);
             }
 
-            GenEvent::Failed { speech, error, host_interrupt } => {
-                self.land_host_interrupt(speech, host_interrupt, out);
+            GenEvent::Failed { speech, error } => {
                 if self.session.storage.enabled {
                     self.storage_abandon(speech, error, out);
                 } else {
@@ -1022,16 +1020,6 @@ impl Driver {
         }
         if eos.restore_interruption_by_audio_activity {
             self.session.by_audio_activity = true;
-        }
-    }
-
-    /// A host `interrupt()` asked before the speech's task reported its end, which arrived first:
-    /// it lands as the reference's `interrupt()` before done does, on the speech it ends.
-    fn land_host_interrupt(&mut self, speech: SpeechId, asked: bool, out: &mut Out) {
-        let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else { return };
-        if asked && state.land_interrupt() {
-            let cause = InterruptCause::Host;
-            out.trace(InterruptStep::Interrupted { speech, cause, force: false });
         }
     }
 

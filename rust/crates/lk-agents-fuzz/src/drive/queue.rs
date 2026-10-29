@@ -149,6 +149,7 @@ impl Trail {
 fn label(event: &Event) -> &'static str {
     match event {
         Event::Wake => "Wake",
+        Event::HostRequests => "HostRequests",
         Event::Forwarder(_) => "Forwarder",
         Event::LegOpened(_) => "StreamOpened",
         Event::Input(input) | Event::Awaited(input, _) => match input {

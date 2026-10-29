@@ -33,6 +33,7 @@ mod final_over_paused_no_preemptive;
 mod handoff_refused_releases;
 mod held_turn_idle;
 mod hold_at_close;
+mod host_interrupt_lands_on_every_end;
 mod idle_after_untranscribed_turn;
 mod idle_while_closing;
 mod input_required_tool_takes_the_answer;

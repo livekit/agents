@@ -807,8 +807,6 @@ pub enum GenEvent {
         speech: SpeechId,
         outcome: Box<TurnOutcome>,
         interrupted: bool,
-        /// The host's `interrupt()` was asked before this end: it lands on the speech.
-        host_interrupt: bool,
     },
 
     /// Forwarded to the bus, ordered against every other `GenEvent`.
@@ -853,8 +851,6 @@ pub enum GenEvent {
     Failed {
         speech: SpeechId,
         error: Box<ProviderError>,
-        /// The host's `interrupt()` was asked before this end: it lands on the speech.
-        host_interrupt: bool,
     },
 
     Trace(crate::trace::Step),

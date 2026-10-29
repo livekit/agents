@@ -7,11 +7,10 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport, lock};
 use lk_agents_net::monotone::Monotone;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{Command, SpeechCommand};
-use lk_agents_voice::generation::GenEvent;
+use lk_agents_voice::agent_session::{Event, SpeechCommand};
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tokio::sync::{mpsc, watch};
 
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.
@@ -80,9 +79,6 @@ struct Inner {
     view: SpeechView,
     /// `interrupt()` was called from the host and the loop has not refused it.
     requested: bool,
-    /// The speech's task reported its end: a host `interrupt()` from here on is queued behind the
-    /// input that ends the speech, so it lands on a done speech and changes nothing.
-    ended: bool,
     chat_items: Vec<ChatItem>,
     user_metrics: Option<MetricsReport>,
     /// The host's own object for the speech (its `SpeechHandle`), so every event, tool and hook
@@ -90,8 +86,8 @@ struct Inner {
     host: Option<HostRef>,
     /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
     blocking_tools: Vec<(String, String)>,
-    /// A host `interrupt(force)` accepted before the loop created the speech: sent at creation.
-    pending_interrupt: Option<bool>,
+    /// What the host asked before the loop created the speech, in order: sent at creation.
+    pending: Vec<SpeechCommand>,
     say: Option<SayStream>,
 }
 
@@ -104,7 +100,7 @@ pub struct SpeechHandle {
     speech_id: OnceLock<Arc<str>>,
     creation: watch::Sender<Creation>,
     /// The loop, for what the host asks of the speech.
-    api: Tx,
+    requests: Requests,
     scheduled: Monotone<bool>,
     /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
     interrupted: Monotone<bool>,
@@ -129,13 +125,13 @@ impl PartialEq for SpeechHandle {
 impl Eq for SpeechHandle {}
 
 impl SpeechHandle {
-    fn base(creation: Creation, reserved: Option<SpeechId>, allow: bool, api: Tx) -> Self {
+    fn base(creation: Creation, reserved: Option<SpeechId>, allow: bool, requests: Requests) -> Self {
         SpeechHandle {
             id: OnceLock::new(),
             reserved,
             speech_id: OnceLock::new(),
             creation: watch::Sender::new(creation),
-            api,
+            requests,
             scheduled: Monotone::new(false),
             interrupted: Monotone::new(false),
             done: Monotone::new(false),
@@ -144,20 +140,19 @@ impl SpeechHandle {
             inner: Mutex::new(Inner {
                 view: SpeechView::new(allow),
                 requested: false,
-                ended: false,
                 chat_items: Vec::new(),
                 user_metrics: None,
                 host: None,
                 blocking_tools: Vec::new(),
-                pending_interrupt: None,
+                pending: Vec::new(),
                 say: None,
             }),
         }
     }
 
     /// A speech the loop created on its own (a reply, a tool's follow-up).
-    pub fn new(id: SpeechId, allow_interruptions: bool, api: Tx) -> Self {
-        let handle = SpeechHandle::base(Creation::Created, None, allow_interruptions, api);
+    pub fn new(id: SpeechId, allow_interruptions: bool, requests: Requests) -> Self {
+        let handle = SpeechHandle::base(Creation::Created, None, allow_interruptions, requests);
         let _ = handle.speech_id.set(id.to_string().into());
         let _ = handle.id.set(id);
         handle
@@ -165,8 +160,8 @@ impl SpeechHandle {
 
     /// What a host's `say()` / `generate_reply()` answers, before the loop creates the speech:
     /// its id, and the interruptibility it was asked with or the session's as the call returned.
-    pub fn pending(api: Tx, id: SpeechId, allow_interruptions: bool) -> Arc<Self> {
-        let handle = SpeechHandle::base(Creation::Pending, Some(id), allow_interruptions, api);
+    pub fn pending(requests: Requests, id: SpeechId, allow_interruptions: bool) -> Arc<Self> {
+        let handle = SpeechHandle::base(Creation::Pending, Some(id), allow_interruptions, requests);
         let _ = handle.speech_id.set(id.to_string().into());
         Arc::new(handle)
     }
@@ -174,8 +169,8 @@ impl SpeechHandle {
     /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
     /// behind it.
     pub fn detached(speech_id: String, allow_interruptions: bool) -> Self {
-        let handle =
-            SpeechHandle::base(Creation::Detached, None, allow_interruptions, Tx::disconnected());
+        let requests = Requests::disconnected();
+        let handle = SpeechHandle::base(Creation::Detached, None, allow_interruptions, requests);
         let _ = handle.speech_id.set(speech_id.into());
         handle
     }
@@ -238,41 +233,36 @@ impl SpeechHandle {
     }
 
     /// The loop answered the host's call: with the speech it created over this handle, or, when
-    /// the session ended first, not at all. Wakes whoever awaits the creation; an interrupt the
-    /// host asked for meanwhile reaches the created speech now.
+    /// the session ended first, not at all. Wakes whoever awaits the creation; what the host asked
+    /// meanwhile reaches the created speech now. A speech created done (refused, or answered as
+    /// the session closed) never ran: an interrupt asked of it lands nowhere.
     pub fn answered(&self, created: bool) {
-        let pending = {
-            let mut inner = lock(&self.inner);
-            let settled = self.creation.send_if_modified(|creation| {
-                if *creation != Creation::Pending {
-                    return false;
-                }
-                *creation = if created { Creation::Created } else { Creation::Lost };
-                true
-            });
-            // Lost: nothing will read what `say()` streams.
-            if settled && !created {
-                inner.say = None;
+        let mut requests = self.requests.lock();
+        let mut inner = lock(&self.inner);
+        let settled = self.creation.send_if_modified(|creation| {
+            if *creation != Creation::Pending {
+                return false;
             }
-            inner.pending_interrupt.take()
-        };
-        if let (Some(force), Some(speech)) = (pending, self.created()) {
-            self.send_interrupt(speech, force);
+            *creation = if created { Creation::Created } else { Creation::Lost };
+            true
+        });
+        // Lost: nothing will read what `say()` streams.
+        if settled && !created {
+            inner.say = None;
+        }
+        let pending = std::mem::take(&mut inner.pending);
+        if created && inner.view.done {
+            inner.requested &= inner.view.interrupted;
+        } else if created {
+            for command in pending {
+                self.requests.send(&mut requests, command);
+            }
         }
     }
 
-    /// The speech's task reports its end, `report(asked)` naming whether the host asked to
-    /// interrupt it first: under this handle's lock, so a request lands with the end however the
-    /// queue orders the two, and one after it is a no-op the host sees as such.
-    pub fn report_end(&self, queue: &Tx, report: impl FnOnce(bool) -> GenEvent) {
-        let mut inner = lock(&self.inner);
-        inner.ended = true;
-        let _ = queue.send(report(inner.requested));
-    }
-
-    fn send_interrupt(&self, speech: SpeechId, force: bool) {
-        // A closed loop has nothing left to interrupt.
-        let _ = self.api.send(Command::from(SpeechCommand::InterruptSpeech { speech, force }));
+    /// The id a host call's handle was given as the call returned.
+    pub fn reserved(&self) -> Option<SpeechId> {
+        self.reserved
     }
 
     pub fn id(&self) -> SpeechId {
@@ -303,6 +293,21 @@ impl SpeechHandle {
 
     fn attached(&self) -> Result<SpeechId, SpeechRefused> {
         self.created().ok_or(SpeechRefused::Detached)
+    }
+
+    fn request(&self, command: SpeechCommand) {
+        let mut requests = self.requests.lock();
+        let mut inner = lock(&self.inner);
+        self.ask(&mut requests, &mut inner, command);
+    }
+
+    /// The created speech's loop is asked now; an uncreated one's at its creation, in order.
+    fn ask(&self, requests: &mut Vec<SpeechCommand>, inner: &mut Inner, command: SpeechCommand) {
+        if *self.creation.borrow() == Creation::Created {
+            self.requests.send(requests, command);
+        } else {
+            inner.pending.push(command);
+        }
     }
 
     fn view<T>(&self, read: impl FnOnce(&SpeechView) -> T) -> T {
@@ -421,31 +426,67 @@ impl SpeechHandle {
     }
 }
 
+/// Where the host's requests on its speeches go (`interrupt()` and the interruption setters):
+/// the session's list, which the loop steps before anything else it takes, and the queue, which
+/// wakes it. Each request is so ordered at its call (`Runtime::step`).
+#[derive(Clone)]
+pub struct Requests {
+    list: Arc<Mutex<Vec<SpeechCommand>>>,
+    wake: Tx,
+}
+
+impl Requests {
+    /// Requests nobody reads: a handle made outside a session.
+    pub fn disconnected() -> Self {
+        Requests { list: Arc::default(), wake: Tx::disconnected() }
+    }
+
+    /// The list, held by a host call while it checks the speech's view and asks, and by the loop
+    /// from its last request through the views its step publishes.
+    pub fn lock(&self) -> MutexGuard<'_, Vec<SpeechCommand>> {
+        lock(&self.list)
+    }
+
+    fn send(&self, list: &mut Vec<SpeechCommand>, command: SpeechCommand) {
+        list.push(command);
+        // A closed loop has nothing left to ask.
+        let _ = self.wake.send(Event::HostRequests);
+    }
+}
+
 /// A session's speeches by id, from the host's call (or the core's creation) until the core
 /// retires the speech: events, runs and running tools name a speech after the loop let it go.
 #[derive(Default)]
-pub struct Speeches(Mutex<BTreeMap<SpeechId, Arc<SpeechHandle>>>);
+pub struct Speeches {
+    handles: Mutex<BTreeMap<SpeechId, Arc<SpeechHandle>>>,
+    requests: Arc<Mutex<Vec<SpeechCommand>>>,
+}
 
 impl Speeches {
+    /// Where this session's handles send their requests, waking the loop on `wake`.
+    pub fn requests(&self, wake: Tx) -> Requests {
+        Requests { list: Arc::clone(&self.requests), wake }
+    }
+
     /// The handle a host call returns, under the id the loop will create its speech with.
     pub fn register(&self, handle: Arc<SpeechHandle>) {
         let id = handle.reserved.expect("a host call's handle has its id");
-        lock(&self.0).insert(id, handle);
+        lock(&self.handles).insert(id, handle);
     }
 
     pub fn get(&self, id: SpeechId) -> Option<Arc<SpeechHandle>> {
-        lock(&self.0).get(&id).cloned()
+        lock(&self.handles).get(&id).cloned()
     }
 
     /// Nothing names `id` any more: the session lets its handle go (the host keeps its own).
     pub fn retire(&self, id: SpeechId) {
-        lock(&self.0).remove(&id);
+        lock(&self.handles).remove(&id);
     }
 
     /// How many speeches the session holds.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        lock(&self.0).len()
+        lock(&self.handles).len()
     }
 
     /// The host's object for `id`; a speech the session never held reads as a fresh one.
@@ -456,12 +497,12 @@ impl Speeches {
 
     /// What the core published about `id`: its creation makes the handle a loop speech's (over
     /// the host's handle, when a call reserved the id).
-    pub fn apply(&self, id: SpeechId, update: SpeechUpdate, api: &Tx) {
+    pub fn apply(&self, id: SpeechId, update: SpeechUpdate, wake: &Tx) {
         let handle = {
-            let mut speeches = lock(&self.0);
-            let entry = speeches
-                .entry(id)
-                .or_insert_with(|| Arc::new(SpeechHandle::new(id, true, api.clone())));
+            let mut speeches = lock(&self.handles);
+            let entry = speeches.entry(id).or_insert_with(|| {
+                Arc::new(SpeechHandle::new(id, true, self.requests(wake.clone())))
+            });
             Arc::clone(entry)
         };
         handle.apply(id, update);
@@ -553,9 +594,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         let Some(speech) = self.created().or(self.reserved) else {
             return Err(refused(SpeechRefused::Detached));
         };
-        let _ = self
-            .api
-            .send(Command::from(SpeechCommand::SetAllowInterruptions { speech, allow: value }));
+        self.request(SpeechCommand::SetAllowInterruptions { speech, allow: value });
         Ok(())
     }
 
@@ -568,18 +607,19 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
 
     /// Synchronous and in the reference's order (`speech_handle.py:185`).
     fn interrupt(&self, force: bool) -> Result<(), HostRefused> {
-        // Under the lock `answered` takes, so a creation racing this call sends it once.
+        // Under the list's lock: the loop has published every step it took before this request,
+        // so a speech not done here is one the request reaches before anything ends it.
+        let mut requests = self.requests.lock();
         let mut inner = lock(&self.inner);
-        // Behind the speech's end: it lands on a done speech.
-        if inner.ended || !inner.view.host_interrupt(inner.requested, force).map_err(refused)? {
+        if !inner.view.host_interrupt(inner.requested, force).map_err(refused)? {
             return Ok(());
         }
-        let created = self.created();
         inner.requested = true;
-        match (created, *self.creation.borrow()) {
-            (Some(speech), _) => self.send_interrupt(speech, force),
-            (None, Creation::Detached) => {}
-            (None, _) => inner.pending_interrupt = Some(force),
+        if *self.creation.borrow() != Creation::Detached {
+            self.ask(&mut requests, &mut inner, SpeechCommand::InterruptSpeech {
+                speech: self.created().or(self.reserved).expect("an attached handle has its id"),
+                force,
+            });
         }
         Ok(())
     }
@@ -587,15 +627,13 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     fn hold_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached().map_err(refused)?;
         lock(&self.inner).view.host_hold_interruptions().map_err(refused)?;
-        let _ =
-            self.api.send(Command::from(SpeechCommand::HoldInterruptions { speech, hold: true }));
+        self.request(SpeechCommand::HoldInterruptions { speech, hold: true });
         Ok(())
     }
 
     fn release_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached().map_err(refused)?;
-        let _ =
-            self.api.send(Command::from(SpeechCommand::HoldInterruptions { speech, hold: false }));
+        self.request(SpeechCommand::HoldInterruptions { speech, hold: false });
         Ok(())
     }
 

@@ -111,6 +111,9 @@ pub enum Event {
     /// For the data plane, from the decision core.
     Forwarder(crate::data_plane::ForwarderCommand),
     Wake,
+    /// The host asked something of its speeches: the requests wait in their own list, which the
+    /// runtime steps before anything else it takes.
+    HostRequests,
 }
 
 /// The session's decision core: handed every [`Input`] in arrival order by the

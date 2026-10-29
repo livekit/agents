@@ -15,6 +15,7 @@ use lk_agents_voice::agent_session::{
     Command, CommitSuperseded, DrainRefused, DtmfCommand, IvrCommand,
 };
 
+use lk_agents_voice::agent_activity::scheduling::SpeechKind;
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
@@ -278,6 +279,8 @@ impl Run {
         let mut wait = |pending: Pending| waiting = Some(pending);
         // The tool body a `VoiceTask.run()` is awaited in.
         let mut task_from: Option<String> = None;
+        // The handle `say()` / `generate_reply()` returned: the host holds it, uncreated, at once.
+        let mut asked: Option<(Arc<SpeechHandle>, SpeechKind)> = None;
 
         let sent = match input {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
@@ -297,7 +300,12 @@ impl Run {
                             speech
                         }),
                 };
-                speech.map(|speech| wait(Pending::speech(speech))).is_some()
+                speech
+                    .map(|speech| {
+                        asked = Some((Arc::clone(&speech), SpeechKind::Say));
+                        wait(Pending::speech(speech))
+                    })
+                    .is_some()
             }
             Input::GenerateReply { user_input, instructions, allow } => api
                 .generate_reply(
@@ -312,7 +320,10 @@ impl Run {
                     false,
                     None,
                 )
-                .map(|speech| wait(Pending::speech(speech)))
+                .map(|speech| {
+                    asked = Some((Arc::clone(&speech), SpeechKind::GenerateReply));
+                    wait(Pending::speech(speech))
+                })
                 .is_ok(),
             // `interrupt()` always returns its future; `wait` is whether the case awaits it.
             Input::Interrupt { force, wait: awaited } => api
@@ -653,6 +664,12 @@ impl Run {
         };
         if !sent {
             return false;
+        }
+        if let Some((handle, kind)) = asked {
+            let id = handle.reserved().expect("a host call's handle has its id");
+            self.handles.entry(id.0).or_insert(handle);
+            let detail = Detail::Speech { kind, user_initiated: true };
+            self.open_once(at, Kind::Speech, Id::Speech(id), detail);
         }
         if let Some((audio, feeding)) = stream {
             let nth = self.record.open(at, Kind::Stream, Id::Pending, Detail::Stream { audio });

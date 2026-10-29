@@ -12,7 +12,7 @@ use lk_agents_abi::agent::{
 };
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
-use lk_agents_runtime::voice::speech_handle::SpeechHandle;
+use lk_agents_runtime::voice::speech_handle::{Requests, SpeechHandle};
 use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport, VoiceAgentFrame};
 use tokio::sync::oneshot;
 
@@ -421,7 +421,7 @@ mod tests {
         let (registry, mut records) =
             Registry::new(crate::record::Stamps::new(time), Arc::new(TokioSpawner::current()));
         let tools = FakeTools::new(registry.clone());
-        let speech = Arc::new(SpeechHandle::new(SpeechId(1), true, Tx::disconnected()));
+        let speech = Arc::new(SpeechHandle::new(SpeechId(1), true, Requests::disconnected()));
         let call = FunctionCall {
             id: "item_first".into(),
             call_id: "first".into(),

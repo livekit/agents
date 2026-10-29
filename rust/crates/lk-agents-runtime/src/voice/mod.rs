@@ -28,11 +28,12 @@ use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{Driver, Event, Now};
+use lk_agents_voice::agent_session::{Driver, Event, Input, Now, Origin, Sent, SpeechCommand};
 use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::trace::ChannelEndCause;
 use session::{Calls, PeerHandle, QueueOwner, SessionCores, SessionShared};
+use speech_handle::Requests;
 use std::sync::Arc;
 
 pub use lk_agents_voice::agent_activity::options::InterruptionGateRules;
@@ -279,20 +280,55 @@ impl Runtime {
                 if let lk_agents_voice::agent_session::Input::Eot(_, _, thresholds) = &mut input {
                     *thresholds = self.eot.as_ref().and_then(|detector| detector.thresholds());
                 }
-                let effects = self.driver.handle(Some(input), now);
-                self.perform_voice(effects);
+                self.step(Some(input), now);
             }
             Event::Awaited(input, _) => self.handle(Event::Input(input), now),
-            Event::Wake => {
-                let effects = self.driver.handle(None, now);
-                self.perform_voice(effects);
-            }
+            Event::Wake => self.step(None, now),
             Event::LegOpened(opened) => {
                 let input = self.prepare_leg(opened);
+                self.step(Some(input), now);
+            }
+            Event::Forwarder(command) => self.command(command),
+            Event::HostRequests => self.step_host_requests(now),
+        }
+    }
+
+    /// One step of the decision core (`None`: a wake), after every request the host made of its
+    /// speeches before it: a request is ordered at its call, so whatever ends a speech, an
+    /// `interrupt()` asked while the host still read it running lands first. The list stays
+    /// locked until the step's views are published: a later request reads the speech's end.
+    fn step(&mut self, input: Option<Input>, now: Now) {
+        let requests = self.shared.speeches.requests(self.reports.clone());
+        let held = self.step_host_requests_from(&requests, now);
+        let effects = self.driver.handle(input, now);
+        let operations = self.publish_views(effects);
+        drop(held);
+        self.operate(operations);
+    }
+
+    fn step_host_requests(&mut self, now: Now) {
+        let requests = self.shared.speeches.requests(self.reports.clone());
+        drop(self.step_host_requests_from(&requests, now));
+    }
+
+    /// Steps the host's requests until none is left; returns the emptied list, still locked.
+    fn step_host_requests_from<'a>(
+        &mut self,
+        requests: &'a Requests,
+        now: Now,
+    ) -> std::sync::MutexGuard<'a, Vec<SpeechCommand>> {
+        loop {
+            let mut held = requests.lock();
+            if held.is_empty() {
+                return held;
+            }
+            let asked = std::mem::take(&mut *held);
+            drop(held);
+            for command in asked {
+                let input = Input::Host(Sent { origin: Origin::Host, command: command.into() });
                 let effects = self.driver.handle(Some(input), now);
                 self.perform_voice(effects);
             }
-            Event::Forwarder(command) => self.command(command),
         }
     }
 
@@ -310,7 +346,11 @@ impl Runtime {
     /// The decision core stopped. The data plane's commands still queued are applied, so every
     /// replaced sink is ended and the census is journalled; the decision core refuses the rest.
     fn finish(&mut self, undelivered: Vec<Event>) {
-        let mut inputs = Vec::new();
+        let requests = self.shared.speeches.requests(self.reports.clone());
+        let mut inputs: Vec<Input> = std::mem::take(&mut *requests.lock())
+            .into_iter()
+            .map(|command| Input::Host(Sent { origin: Origin::Host, command: command.into() }))
+            .collect();
         for event in undelivered {
             match event {
                 Event::Input(input) => inputs.push(input),
@@ -329,7 +369,7 @@ impl Runtime {
                         }
                     }
                 }
-                Event::Wake => {}
+                Event::Wake | Event::HostRequests => {}
             }
         }
         let effects = self.driver.finish(inputs);

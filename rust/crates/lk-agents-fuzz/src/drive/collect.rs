@@ -281,7 +281,7 @@ impl Run {
     /// Open a driver-owned resource unless that identity is already known. The journal can name one
     /// twice -- a second `SpeechDone`, a hook re-announced -- and a run that opened it twice would
     /// hand the case two references to one thing.
-    fn open_once(&mut self, at: Observed, kind: Kind, id: Id, detail: Detail) {
+    pub(super) fn open_once(&mut self, at: Observed, kind: Kind, id: Id, detail: Detail) {
         if self.record.resources(kind).all(|opened| opened.id() != id) {
             self.record.open(at, kind, id, detail);
         }

@@ -1,24 +1,21 @@
 Reverted by known_bugs.sh to reintroduce the bug fixed by 643e1bed9:
 voice core: a host interrupt() that races the speech's end lands, as the reference's does
-Re-cut against option B (decision 116): the speech task's end report carries the host's request
-(SpeechHandle::report_end) and the core lands it (Driver::land_host_interrupt).
+Re-cut against the ordered host requests: the runtime steps every request the host made of its
+speeches before the input that could end one (Runtime::step); reverted, a request waits for its
+own wake in the queue and lands behind an end queued ahead of it.
 
-diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
---- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-+++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-@@ -742,6 +742,7 @@ impl Driver {
-             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
+diff --git a/rust/crates/lk-agents-runtime/src/voice/mod.rs b/rust/crates/lk-agents-runtime/src/voice/mod.rs
+--- a/rust/crates/lk-agents-runtime/src/voice/mod.rs
++++ b/rust/crates/lk-agents-runtime/src/voice/mod.rs
+@@ -298,8 +298,11 @@
+     /// `interrupt()` asked while the host still read it running lands first. The list stays
+     /// locked until the step's views are published: a later request reads the speech's end.
+     fn step(&mut self, input: Option<Input>, now: Now) {
++        let requests = self.shared.speeches.requests(self.reports.clone());
++        let held = self.step_host_requests_from(&requests, now);
+         let effects = self.driver.handle(input, now);
+         let operations = self.publish_views(effects);
++        drop(held);
+         self.operate(operations);
+     }
  
-             GenEvent::Done { speech, outcome, interrupted, host_interrupt } => {
-+                self.land_host_interrupt(speech, host_interrupt, out);
-                 if self.session.storage.enabled {
-                     self.storage_settle(speech, *outcome, interrupted, out);
-                 } else {
-@@ -805,6 +806,7 @@ impl Driver {
-             }
- 
-             GenEvent::Failed { speech, error, host_interrupt } => {
-+                self.land_host_interrupt(speech, host_interrupt, out);
-                 if self.session.storage.enabled {
-                     self.storage_abandon(speech, error, out);
-                 } else {

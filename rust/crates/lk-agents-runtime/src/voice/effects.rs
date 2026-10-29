@@ -31,10 +31,15 @@ impl Runtime {
     }
 
     pub(crate) fn perform_voice(&mut self, effects: Vec<Effect>) {
+        let operations = self.publish_views(effects);
+        self.operate(operations);
+    }
+
+    /// Views first: a receipt or event performed in the same batch must read what the core
+    /// accepted, not the state before it. Returns the rest.
+    pub(super) fn publish_views(&mut self, effects: Vec<Effect>) -> Vec<Effect> {
         let frames = Arc::clone(&self.shared.frames);
         let _scope = frames.enter(self.driver.frame());
-        // Views first: a receipt or event performed in the same batch must read what the core
-        // accepted, not the state before it.
         let mut operations = Vec::with_capacity(effects.len());
         for effect in effects {
             match effect {
@@ -45,6 +50,12 @@ impl Runtime {
                 effect => operations.push(effect),
             }
         }
+        operations
+    }
+
+    pub(super) fn operate(&mut self, operations: Vec<Effect>) {
+        let frames = Arc::clone(&self.shared.frames);
+        let _scope = frames.enter(self.driver.frame());
         for effect in operations {
             self.perform_voice_effect(effect);
         }

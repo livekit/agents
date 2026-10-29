@@ -34,10 +34,7 @@ pub(crate) async fn pipeline_reply_task(
     let speech = handle.id();
     let error = match run(&shared, &handle, ctx, player, &speeches).await {
         Ok(Finished { outcome, interrupted }) => {
-            let outcome = Box::new(outcome);
-            let done =
-                |host_interrupt| GenEvent::Done { speech, outcome, interrupted, host_interrupt };
-            handle.report_end(&shared.queue, done);
+            shared.report(GenEvent::Done { speech, outcome: Box::new(outcome), interrupted });
             return;
         }
         Err(DriverError::Provider(error)) => error,
@@ -52,12 +49,7 @@ pub(crate) async fn pipeline_reply_task(
     };
     // **Moved, never formatted**: only the binding can release a `ProviderError::Host`'s side-table
     // entry. Not marked here: the loop's `Failed` arm moves the error onto the handle.
-    let error = Box::new(error);
-    handle.report_end(&shared.queue, |host_interrupt| GenEvent::Failed {
-        speech,
-        error,
-        host_interrupt,
-    });
+    shared.report(GenEvent::Failed { speech, error: Box::new(error) });
 }
 
 fn step_spoken(
