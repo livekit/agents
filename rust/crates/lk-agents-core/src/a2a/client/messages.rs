@@ -143,17 +143,9 @@ pub fn part_from_wire(part: a2a::Part) -> MessagePart {
 pub fn metadata_to_wire(metadata: MessageMetadata) -> Result<Map<String, Value>, AgentClientError> {
     let mut output = metadata.application.unwrap_or_default();
     if output.keys().any(|key| {
-        [
-            "kind",
-            "channel",
-            "verbatim",
-            "mergedInto",
-            "reason",
-            "interrupted",
-            "interruptionReason",
-        ]
-        .iter()
-        .any(|field| key == &format!("{EXTENSION_URI}/{field}"))
+        ["kind", "channel", "verbatim", "mergedInto", "reason", "interrupted", "interruptionReason"]
+            .iter()
+            .any(|field| key == &format!("{EXTENSION_URI}/{field}"))
     }) {
         return Err(AgentClientError::InvalidInput(
             "application metadata cannot define typed LiveKit keys".into(),
