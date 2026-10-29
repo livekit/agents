@@ -203,7 +203,7 @@ pub enum DtmfOutcome {
 }
 
 impl DtmfOutcome {
-    /// The record a host reads (`lk_agents_abi::voice::workflows::DtmfOutcomeWire`).
+    /// The outcome as its ABI record (`lk_agents_abi::voice::workflows::DtmfOutcomeWire`).
     pub fn wire(&self) -> lk_agents_abi::voice::workflows::DtmfOutcomeWire {
         use lk_agents_abi::voice::workflows as w;
         match self {

@@ -58,9 +58,9 @@ pub struct GetDtmfResult {
     pub user_input: String,
 }
 
-/// What a driver-run DTMF collection came to: `complete`, `incomplete`, or `stopped`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
+/// What a driver-run DTMF collection came to: `complete`, `incomplete`, or `stopped`. It never
+/// crosses to the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DtmfOutcomeWire {
     Complete(DtmfComplete),
     Incomplete(DtmfIncomplete),
@@ -68,22 +68,19 @@ pub enum DtmfOutcomeWire {
 }
 
 /// `self.complete(GetDtmfResult(user_input))`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "complete")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DtmfComplete {
     pub user_input: String,
 }
 
 /// `self.complete(ToolError(message))`: the debounce fired before `num_digits` arrived.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "incomplete")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DtmfIncomplete {
     pub message: String,
 }
 
 /// The collection was stopped, replaced or closed first.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "stopped")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DtmfStopped {}
 
 // A field is `None` unless the task was configured to collect that part, whatever the model
