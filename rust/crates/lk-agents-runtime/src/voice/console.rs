@@ -198,7 +198,10 @@ impl ConsoleSink for ConsoleIo {
     }
 
     fn playout_finished(&self) {
-        log::error!(target: "livekit.agents", "console playback completion has no segment identity and was refused");
+        let finished = self.playback.lock().unwrap().finished();
+        if let Some((segment, finished)) = finished {
+            self.tracker.playback_finished(segment, finished);
+        }
     }
 }
 
@@ -249,6 +252,7 @@ impl AudioOutput for ConsoleIo {
     }
 
     fn flush_segment(&self) {
+        self.playback.lock().unwrap().flush();
         self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
     }
 
@@ -271,8 +275,8 @@ mod tests {
     }
 
     // Catches: the CLI's frames not reaching the session's microphone, the speaker's audio and
-    // flush not reaching the CLI, an unkeyed ack finishing a segment, or the socket's end
-    // not ending the microphone.
+    // flush not reaching the CLI, the CLI's receipt not finishing the flushed segment or
+    // finishing one not flushed yet, or the socket's end not ending the microphone.
     #[tokio::test]
     async fn the_socket_carries_the_call_both_ways() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -312,9 +316,15 @@ mod tests {
         assert!(matches!(kinds[1], Some(Message::AudioPlaybackFlush(_))));
 
         io.playout_finished();
+        let done = io.wait_for_playout().await;
+        assert!(!done.interrupted);
+        assert_eq!(done.playback_position, Duration::from_millis(10));
+
+        io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480)).await.unwrap();
+        io.playout_finished();
         assert!(
             tokio::time::timeout(Duration::from_millis(10), io.wait_for_playout()).await.is_err(),
-            "an unidentified acknowledgement must not settle the admitted segment"
+            "a receipt before the flush belongs to a cleared segment"
         );
         io.clear_buffer();
         let done = io.wait_for_playout().await;
@@ -324,16 +334,6 @@ mod tests {
             Duration::ZERO,
             "a local clear has no client playback receipt"
         );
-
-        io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480)).await.unwrap();
-        AudioOutputExt::flush(&*io);
-        io.playout_finished();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), io.wait_for_playout()).await.is_err(),
-            "an old unidentified acknowledgement settled the replacement segment"
-        );
-        io.clear_buffer();
-        assert!(io.wait_for_playout().await.interrupted);
 
         drop(cli);
         assert!(transport.recv().await.unwrap().is_none());

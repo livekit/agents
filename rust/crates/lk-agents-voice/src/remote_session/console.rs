@@ -1,5 +1,6 @@
-//! Shared console audio accounting and microphone projection. Local cleanup retains operation
-//! identity; an unkeyed CLI acknowledgement cannot establish a playback position.
+//! Shared console audio accounting and microphone projection. The CLI acknowledges the last
+//! flush once it has played it and drops the acknowledgement on a clear, so its unkeyed receipt
+//! settles the flushed segment; a receipt before the flush belongs to a segment already cleared.
 
 use super::proto::agent_session_message::{Message, console_io};
 use lk_agents_abi::AudioFrame;
@@ -9,10 +10,12 @@ use std::time::Duration;
 /// The rate the CLI captures and plays at.
 pub const CONSOLE_SAMPLE_RATE: u32 = 48_000;
 
-/// One admitted local operation. The CLI protocol carries no keyed playback receipt.
+/// One admitted local operation, the audio captured into it and whether it was flushed.
 #[derive(Debug, Default)]
 pub struct ConsolePlayback {
     segment: Option<PlaybackSegment>,
+    captured: Duration,
+    flushed: bool,
 }
 
 impl ConsolePlayback {
@@ -28,6 +31,7 @@ impl ConsolePlayback {
         }
         let opened = self.segment.is_none();
         self.segment = Some(segment);
+        self.captured += Duration::from_secs_f64(frame.duration());
         let message = Message::AudioOutput(console_io::AudioFrame {
             data: frame.data.to_vec(),
             sample_rate: frame.sample_rate,
@@ -37,15 +41,35 @@ impl ConsolePlayback {
         Ok((message, opened))
     }
 
+    pub fn flush(&mut self) {
+        self.flushed = self.segment.is_some();
+    }
+
+    /// The CLI's receipt: the flushed segment played to its end.
+    pub fn finished(&mut self) -> Option<(PlaybackSegment, PlaybackFinished)> {
+        if !self.flushed {
+            return None;
+        }
+        let played = self.captured;
+        self.settle(played, false)
+    }
+
     /// Local cleanup settles its own operation without inventing heard audio from elapsed time.
     pub fn clear(&mut self) -> Option<(PlaybackSegment, PlaybackFinished)> {
+        self.settle(Duration::ZERO, true)
+    }
+
+    fn settle(
+        &mut self,
+        playback_position: Duration,
+        interrupted: bool,
+    ) -> Option<(PlaybackSegment, PlaybackFinished)> {
+        let segment = self.segment.take()?;
+        self.captured = Duration::ZERO;
+        self.flushed = false;
         Some((
-            self.segment.take()?,
-            PlaybackFinished {
-                playback_position: Duration::ZERO,
-                interrupted: true,
-                synchronized_transcript: None,
-            },
+            segment,
+            PlaybackFinished { playback_position, interrupted, synchronized_transcript: None },
         ))
     }
 }
