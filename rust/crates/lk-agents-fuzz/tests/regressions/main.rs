@@ -115,7 +115,6 @@ mod unvoiced_synthesis_no_item;
 mod user_turn_metrics;
 mod vad_interruption_has_cause;
 mod vad_left_speaking;
-mod voice_connection_reused;
 mod voice_task;
 mod wordless_audio_say;
 

@@ -1054,7 +1054,7 @@ with a fix guards that exact path; the search guards its neighbours.
 | A realtime barge-in paused the reply instead of interrupting it: the agent went silent | c6881abb9 | real room rerun | gate: `realtime_onset_reply_heard`, `realtime_server_onset_interrupts`; search: `speech_is_heard` (seeds 405, 1209) |
 | Chat items lost their STT/LLM/TTS model metadata | 9024425d9 | real room rerun | gate search: `items_carry_their_payload` (seeds 7, 1035) and its probe |
 | A job log record carrying an Agent raised a PicklingError traceback (and hung the transport) | 7f2488fc8 | real room rerun | smoke (`log transport`: times out, smoke never exits) |
-| The gateway TTS reconnected and reconfigured per reply (0.57 s to first audio against 0.36 s) | 54c213e74 | latency.py on real calls | **new** gate: `voice_connection_reused` (reply 0: 417 ms against 217 ms owed); **new** gate: its own unit test (`a_second_synthesis_reuses_the_socket_the_first_finished_on`), which ran nowhere until the gate ran the provider clients' tests |
+| The gateway TTS reconnected and reconfigured per reply (0.57 s to first audio against 0.36 s) | 54c213e74 | latency.py on real calls | **new** gate: `tts_connection_reused` (reply 0: 417 ms against 217 ms owed); **new** gate: its own unit test (`a_second_synthesis_reuses_the_socket_the_first_finished_on`), which ran nowhere until the gate ran the provider clients' tests |
 | TTS TTFB and time to first sentence counted from the first token, not from the text sent | 1bbf57ccb | real calls | gate: `tts_first_byte_anchor` |
 | `llm_node_tps` counted chunks over the whole request | c55a5f1cc | real calls | gate: `llm_tokens_per_second` |
 | An adopted preemptive reply reported no `e2e_latency` | aec87eef0 | real calls | gate: `preemptive_reply_latency` |
@@ -1114,8 +1114,8 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
 - **`idle_is_cheap`** (DST rule, a cost contract): a call averages at most 200 wake-ups of its
   thread per second of virtual time (the runtime's park count; the busiest of 2,048 survey seeds
   is at 29). With a61e6faa0 reverted the room-legs seeds with background audio run at 1,000.
-- **`voice_connection_reused`** (regression test, a latency contract): the production LiveKit
-  Inference TTS client over a gateway that charges 200 ms of connection setup and draws its time
+- **`tts_connection_reused`** (lk-agents-inference's own test since decision 92, a latency
+  contract): the production LiveKit Inference TTS client over a gateway that charges 200 ms of connection setup and draws its time
   to first audio from the corpus; five replies of a call, each heard within the voice's own delay
   and 50 ms. With 54c213e74 reverted reply 0 takes 417 ms against 217 ms owed; with only its
   prewarm reverted, the same.

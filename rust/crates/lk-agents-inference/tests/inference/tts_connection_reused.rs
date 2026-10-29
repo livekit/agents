@@ -12,8 +12,13 @@ use std::{
 };
 
 use base64::Engine;
-use lk_agents_abi::{SimClock, TokioSpawner, Tts};
-use lk_agents_fuzz::drive::simulate;
+use lk_agents_abi::{
+    SimClock, TimedString, TokioSpawner, Tts,
+    tts::{
+        stream_adapter::{SentenceSplitter, SentenceTextProcessor},
+        text::{TranscriptProcessor, TtsTextProcessorFactory},
+    },
+};
 use lk_agents_inference::tts::{NativeTts, TtsOptions};
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_test_support::corpus;
@@ -31,7 +36,12 @@ const BUDGET: Duration = Duration::from_millis(50);
 #[test]
 fn each_reply_pays_only_the_voice() {
     for seed in 0..4 {
-        simulate(async move {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("a paused runtime");
+        runtime.block_on(async move {
             let gateway = Gateway(Arc::new(Shared {
                 rng: Mutex::new(fastrand::Rng::with_seed(seed)),
                 connects: AtomicU32::new(0),
@@ -45,7 +55,7 @@ fn each_reply_pays_only_the_voice() {
                 api_secret: "s".into(),
                 ..Default::default()
             };
-            let voice = NativeTts::<lk_agents_voice::tts::processing::SpeechText>::new(
+            let voice = NativeTts::<WholeText>::new(
                 opts,
                 Arc::new(gateway),
                 Arc::new(TokioSpawner::current()),
@@ -173,5 +183,42 @@ struct Receiver(mpsc::UnboundedReceiver<WsMessage>);
 impl WsReceiver for Receiver {
     async fn recv(&mut self) -> Result<WsMessage, TransportError> {
         Ok(self.0.recv().await.unwrap_or(WsMessage::Closed))
+    }
+}
+
+/// Speech text as one sentence per push and no markup: what is under test is the connection, not
+/// the text's segmentation.
+#[derive(Clone)]
+struct WholeText;
+
+impl TtsTextProcessorFactory for WholeText {
+    fn sentence_splitter(_: Option<&str>, _: bool) -> Box<dyn SentenceSplitter> {
+        Box::new(WholeText)
+    }
+
+    fn markup(_: &str) -> Option<Box<dyn SentenceTextProcessor>> {
+        None
+    }
+
+    fn transcript(_: bool) -> Box<dyn TranscriptProcessor> {
+        Box::new(WholeText)
+    }
+}
+
+impl SentenceSplitter for WholeText {
+    fn push(&mut self, text: &str) -> Vec<String> {
+        vec![text.to_owned()]
+    }
+
+    fn flush(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+impl TranscriptProcessor for WholeText {
+    fn push_alignment(&mut self, _: String, _: Vec<TimedString>) {}
+
+    fn take_audio_transcript(&mut self, _: &str, _: bool) -> Vec<TimedString> {
+        Vec::new()
     }
 }

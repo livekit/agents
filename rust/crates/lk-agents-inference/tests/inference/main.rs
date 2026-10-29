@@ -10,4 +10,5 @@ mod live_gateway;
 mod llm_live;
 mod llm_peer;
 mod realtime;
+mod tts_connection_reused;
 mod vad;
