@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-minimax-ai"
 dynamic = ["version"]
-description = "LiveKit Agents Plugin for services from AWS"
+description = "LiveKit Agents Plugin for services from MiniMax"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
