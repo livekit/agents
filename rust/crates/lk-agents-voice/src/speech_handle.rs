@@ -549,10 +549,7 @@ impl SpeechHandle {
         lock(&self.inner).state.outcome()
     }
 
-    /// `wait_for_playout()`, and so `__await__`; see [`wait_for_playout_for_host`] for the
-    /// self-wait guard.
-    ///
-    /// [`wait_for_playout_for_host`]: Self::wait_for_playout_for_host
+    /// `wait_for_playout()`, and so `__await__`; the host's call adds the self-wait guard.
     pub async fn wait_for_playout(&self) {
         self.wait_for_done().await;
     }
