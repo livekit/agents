@@ -192,3 +192,26 @@ fn a_settled_steps_calls_stay_readable_until_the_verdict() {
     assert_eq!(item.name, "final_result");
     assert!(settled.is_some());
 }
+
+// Catches: a coordinator's call recorded under an id of the run's own, so the coordinator's
+// record and the run's next plan hold the call twice.
+#[test]
+fn a_call_the_coordinator_made_keeps_its_item() {
+    let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
+    let request = d.plans()[0].request;
+    let call = lk_agents_abi::FunctionCall {
+        id: "voice_item_7".into(),
+        call_id: "call_a".into(),
+        arguments: json!({"day": "Monday"}).to_string(),
+        name: "find_slot".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    d.send(Event::CallMade { request, call });
+    d.send(Event::LlmEnded { request });
+    d.run_tools(|_| value("9:00 is free"));
+    let (_, items, _) = d.step_settled();
+    assert_eq!(items[0].id(), "voice_item_7");
+    assert_eq!(items[1].id(), "voice_item_7_out");
+}

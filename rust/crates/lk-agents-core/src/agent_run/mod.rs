@@ -107,6 +107,12 @@ pub enum Event {
     LlmEnded {
         request: RequestId,
     },
+    /// Coordinated: the coordinator admitted a call of `request`'s response as it streamed;
+    /// `call` keeps the coordinator's id, stamp and repaired arguments.
+    CallMade {
+        request: RequestId,
+        call: FunctionCall,
+    },
     LlmFailed {
         request: RequestId,
         error: String,
@@ -460,6 +466,11 @@ impl AgentRun {
             },
             Event::LlmChunk { request, chunk } => self.chunk(request, chunk, now, &mut fx),
             Event::LlmEnded { request } => self.response(request, now, &mut fx),
+            Event::CallMade { request, call } => {
+                if matches!(&self.phase, Phase::Requesting(s, _) if s.request == request) {
+                    self.admit(call, &mut fx);
+                }
+            }
             Event::LlmFailed { request, error } => {
                 if matches!(&self.phase, Phase::Requesting(s, _) if s.request == request) {
                     // The provider already recovered what it could; the calls the response made
