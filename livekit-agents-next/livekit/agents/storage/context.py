@@ -82,23 +82,21 @@ class A2ASessionContext:
         self.caller_history: ChatContext | None = (
             ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
         )
-        self.metadata: dict[str, JsonValue] = {}
-        """What goes on the task's terminal row and final status event, under short keys."""
-        self.events: list[HostEvent] = []
+        self._events: list[HostEvent] = []
         """What the turn appends to the journal (docs/internals/storage.md#journal): each ``update`` here, the
         tool calls from the runs' results."""
-        self.interrupted = False
+        self._interrupted = False
         self._checkpoint = checkpoint
         self._on_update = on_update
         self._on_token = on_token
 
     async def update(self, text: str) -> None:
         """A ``working`` status frame to the client: progress, as the person hears it."""
-        self.events.append(_tool_event("update", text=text))
+        self._events.append(_tool_event("update", text=text))
         if self._on_update is not None:
             await self._on_update(self.task_id, text)
 
-    async def token(self, delta: str) -> None:
+    async def _token(self, delta: str) -> None:
         """One piece of the reply as the model writes it, shown before the turn ends."""
         if self._on_token is not None:
             await self._on_token(self.task_id, delta)
@@ -106,7 +104,7 @@ class A2ASessionContext:
     async def stream(self, source: AsyncIterable[str]) -> str:
         """Forward tokens as they arrive, after a checkpoint before the first one."""
         if await self._checkpoint():
-            self.interrupted = True
+            self._interrupted = True
             return ""
 
         parts: list[str] = []
@@ -174,7 +172,7 @@ class TurnHost:
             checkpoint=checkpoint,
             on_result=results.append,
             on_update=context.update,
-            on_token=context.token,
+            on_token=context._token,
             thread=thread,
             task_id=ctx.task_id,
             store=context.store,
@@ -217,7 +215,7 @@ class TurnHost:
         """The answer, new history, explicitly saved fields and any pending question."""
         from ..a2a.extension import VERBATIM
 
-        metadata: dict[str, object] = dict(ctx.metadata)
+        metadata: dict[str, object] = {}
         # a run returned as is answers with its question while it waits, else its output; a
         # transport transition answers the task (docs/server.md#handler-outcomes)
         if isinstance(output, RunInputRequired):
@@ -258,9 +256,9 @@ class TurnHost:
             usage=_usage(results),
             input_required=question,
             pending_call=pending,
-            interrupted=ctx.interrupted or interrupted,
+            interrupted=ctx._interrupted or interrupted,
             metadata=metadata,
-            events=[*_tool_events(results), *ctx.events],
+            events=[*_tool_events(results), *ctx._events],
             error=error,
         )
 
