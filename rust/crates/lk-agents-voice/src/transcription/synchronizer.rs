@@ -1,3 +1,5 @@
+pub use super::lifecycle::SEGMENT_ACLOSE_TIMEOUT;
+use super::lifecycle::{SyncEffect, SyncEvent, SyncLifecycle, TranscriptOutput as Out};
 use crate::transcription::Heard;
 use crate::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
 use lk_agents_abi::voice::io::{
@@ -17,9 +19,6 @@ use tokio::sync::mpsc;
 const PATTERNS: &str = include_str!("liang/patterns.txt");
 
 const EXCEPTIONS: &str = include_str!("liang/exceptions.txt");
-
-/// How long `aclose` waits for the forwarder to hand the last words to the text sink.
-pub const SEGMENT_ACLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Counts syllable-like pieces used to pace transcript words: [`Liang`] by default.
 pub trait Hyphenator: Send + Sync {
@@ -411,23 +410,9 @@ fn live(pacer: &Pacer) -> bool {
     !pacer.is_over() && !pacer.is_blank()
 }
 
-enum Out {
-    Word(TimedString),
-    Flush,
-    Detached,
-}
-
-/// The segments and the gate around them, under one lock.
+/// The actor's locked state. Its decisions belong to the synchronous lifecycle.
 struct SyncState {
-    segments: SyncSegments,
-    audio_attached: bool,
-    text_attached: bool,
-    /// Admitted physical text attachments; a selected, unused leg owns none.
-    text_attachments: usize,
-    closed: bool,
-    /// `_SyncedTextOutput._capturing`: whether a flush has anything to end. With nothing
-    /// captured, ending the text would pace later words against the next segment's audio.
-    capturing_text: bool,
+    lifecycle: SyncLifecycle,
 }
 
 /// What both chain nodes and the facade share; nothing holds the facade, so no reference cycle.
@@ -446,53 +431,64 @@ struct SyncCore {
 
 impl SyncCore {
     fn enabled(&self) -> bool {
-        self.state.lock().unwrap().segments.enabled()
+        self.state.lock().unwrap().lifecycle.segments.enabled()
     }
 
-    /// Step the segments and perform what they say; the heard transcript of a finished segment.
-    fn step(&self, input: SyncInput) -> Option<Heard> {
-        let effects = self.state.lock().unwrap().segments.step(input);
+    fn decide(&self, event: SyncEvent) -> Vec<SyncEffect> {
+        self.state.lock().unwrap().lifecycle.handle(event)
+    }
+
+    /// Step the pure lifecycle and perform its ordered synchronous effects.
+    fn apply(&self, event: SyncEvent) -> Option<Heard> {
         let mut heard = None;
-        for effect in effects {
-            match effect {
-                PaceEffect::Forward { word, start_time, end_time } => {
-                    let shown = TimedString {
-                        start_time: Some(start_time),
-                        end_time: Some(end_time),
-                        ..TimedString::new(word)
-                    };
-                    self.tracker.transcript_shown(&shown);
-                    // The text output gets where the word's audio ends, as the reference's does.
-                    self.send(Out::Word(TimedString { start_time: None, ..shown }));
-                }
-                PaceEffect::Flush => self.send(Out::Flush),
-                PaceEffect::Heard(h) => heard = Some(h),
-                PaceEffect::Warn(w) => log::warn!(target: "livekit.agents", "{}", w.message()),
+        for effect in self.decide(event) {
+            if let Some(report) = self.perform(effect) {
+                heard = Some(report);
             }
         }
         heard
     }
 
-    fn send(&self, out: Out) {
-        if matches!(out, Out::Word(_) | Out::Flush)
-            && self.state.lock().unwrap().text_attachments == 0
-        {
-            return;
-        }
-        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
-            let _ = tx.send(out);
-        }
+    fn step(&self, input: SyncInput) -> Option<Heard> {
+        self.apply(SyncEvent::Input(input))
     }
 
-    /// `_on_attachment_changed`. `None` leaves a leg's attachment where it is.
+    fn perform(&self, effect: SyncEffect) -> Option<Heard> {
+        match effect {
+            SyncEffect::Pace(PaceEffect::Forward { word, start_time, end_time }) => {
+                let shown = TimedString {
+                    start_time: Some(start_time),
+                    end_time: Some(end_time),
+                    ..TimedString::new(word)
+                };
+                self.tracker.transcript_shown(&shown);
+                self.send(Out::Word(TimedString { start_time: None, ..shown }));
+            }
+            SyncEffect::Pace(PaceEffect::Flush) => self.send(Out::Flush),
+            SyncEffect::Pace(PaceEffect::Heard(heard)) => return Some(heard),
+            SyncEffect::Pace(PaceEffect::Warn(warning)) => {
+                log::warn!(target: "livekit.agents", "{}", warning.message());
+            }
+            SyncEffect::Queue(output) => {
+                if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+                    let _ = tx.send(output);
+                }
+            }
+            SyncEffect::RetireText { admitted } => {
+                self.apply(SyncEvent::TextRetired { admitted });
+            }
+            _ => unreachable!("a chain operation must be performed by its owning output"),
+        }
+        None
+    }
+
+    fn send(&self, out: Out) {
+        self.apply(SyncEvent::Output(out));
+    }
+
+    /// The physical attachment callback completed; only then does the gate change.
     fn on_attachment_changed(&self, audio: Option<bool>, text: Option<bool>) {
-        let enabled = {
-            let mut state = self.state.lock().unwrap();
-            state.audio_attached = audio.unwrap_or(state.audio_attached);
-            state.text_attached = text.unwrap_or(state.text_attached);
-            state.audio_attached && state.text_attached
-        };
-        self.step(SyncInput::Enabled(enabled));
+        self.apply(SyncEvent::AttachmentChanged { audio, text });
     }
 
     /// The forwarder: the only task and the only place the text sink is awaited.
@@ -654,23 +650,24 @@ pub struct SyncedTextOutput {
 }
 
 impl SyncedTextOutput {
-    /// `aligned`: whether the caller used the timed API (see `Pacer::push_text`).
+    /// `aligned` records whether the caller used the timed API.
     async fn capture(&self, text: &TimedString, aligned: bool) -> Result<()> {
-        if !self.core.enabled() {
-            if let Some(next) = &self.next {
-                if aligned {
-                    next.capture_timed(text).await?;
-                } else {
-                    next.capture_text(&text.text).await?;
+        for effect in self.core.decide(SyncEvent::Capture { text: text.clone(), aligned }) {
+            match effect {
+                SyncEffect::Capture { text, aligned } => {
+                    if let Some(next) = &self.next {
+                        if aligned {
+                            next.capture_timed(&text).await?;
+                        } else {
+                            next.capture_text(&text.text).await?;
+                        }
+                    }
+                }
+                effect => {
+                    self.core.perform(effect);
                 }
             }
-            return Ok(());
         }
-        self.core.state.lock().unwrap().capturing_text = true;
-        let (start_time, end_time) =
-            if aligned { (text.start_time, text.end_time) } else { (None, None) };
-        let raw = text.text.clone();
-        self.core.step(SyncInput::Text { raw, start_time, end_time });
         Ok(())
     }
 }
@@ -696,36 +693,38 @@ impl TextOutput for SyncedTextOutput {
     }
 
     fn flush(&self) {
-        if !self.core.enabled() {
-            if let Some(next) = &self.next {
-                next.flush();
+        for effect in self.core.decide(SyncEvent::FlushText) {
+            match effect {
+                SyncEffect::FlushText => {
+                    if let Some(next) = &self.next {
+                        next.flush();
+                    }
+                }
+                effect => {
+                    self.core.perform(effect);
+                }
             }
-            return;
-        }
-        if std::mem::take(&mut self.core.state.lock().unwrap().capturing_text) {
-            self.core.step(SyncInput::TextEnd);
         }
     }
 
     fn on_attached(&self) {
-        self.core.state.lock().unwrap().text_attachments += 1;
-        if let Some(next) = &self.next {
-            next.on_attached();
+        for effect in self.core.decide(SyncEvent::AttachText) {
+            match effect {
+                SyncEffect::AttachText => {
+                    if let Some(next) = &self.next {
+                        next.on_attached();
+                    }
+                    self.core.on_attachment_changed(None, Some(true));
+                }
+                effect => {
+                    self.core.perform(effect);
+                }
+            }
         }
-        self.core.on_attachment_changed(None, Some(true));
     }
 
     fn on_detached(&self) {
-        let attachments = self.core.state.lock().unwrap().text_attachments;
-        if attachments <= 1 {
-            // Rotation still belongs to the final admitted attachment. Its queued writes and
-            // flush must reach the leaf before that leaf observes physical retirement.
-            self.core.on_attachment_changed(None, Some(false));
-        }
-        if attachments > 0 {
-            self.core.state.lock().unwrap().text_attachments -= 1;
-            self.core.send(Out::Detached);
-        }
+        self.core.apply(SyncEvent::DetachText);
     }
 }
 
@@ -798,14 +797,7 @@ impl TranscriptSynchronizer {
         let opts = PacerOptions { speed, hyphenator };
         let (tx, rx) = mpsc::unbounded_channel();
         let core = Arc::new(SyncCore {
-            state: Mutex::new(SyncState {
-                segments: SyncSegments::new(opts),
-                audio_attached: true,
-                text_attached: true,
-                text_attachments: 0,
-                closed: false,
-                capturing_text: false,
-            }),
+            state: Mutex::new(SyncState { lifecycle: SyncLifecycle::new(opts) }),
             clock,
             tx: Mutex::new(Some(tx)),
             forwarder_done: Arc::new(Monotone::new(false)),
@@ -853,33 +845,38 @@ impl TranscriptSynchronizer {
     /// End the live segment now and start a fresh one.
     #[host(method)]
     pub fn rotate_segment(&self) {
-        if !self.core.state.lock().unwrap().closed {
-            self.core.step(SyncInput::Rotate);
-        }
+        self.core.apply(SyncEvent::Rotate);
     }
 
     /// Close: end the live segment and give the forwarder [`SEGMENT_ACLOSE_TIMEOUT`] to drain.
     /// `RoomIO.aclose` must close this before the transcription outputs it feeds.
     #[host(method)]
     pub async fn aclose(&self) {
-        let admitted = {
-            let mut state = self.core.state.lock().unwrap();
-            if std::mem::replace(&mut state.closed, true) {
-                return;
+        for effect in self.core.decide(SyncEvent::Close) {
+            match effect {
+                SyncEffect::CloseSender => {
+                    self.core.tx.lock().unwrap().take();
+                }
+                SyncEffect::BeginWait => {
+                    for wait in self.core.decide(SyncEvent::WaitStarted(self.core.clock.now())) {
+                        let SyncEffect::WaitUntil(at) = wait else {
+                            unreachable!("close only waits on its forwarded words");
+                        };
+                        let left = at.saturating_duration_since(self.core.clock.now());
+                        let _ = lk_agents_abi::timeout(
+                            &*self.core.clock,
+                            left,
+                            self.core.forwarder_done.wait_for(|set| *set),
+                        )
+                        .await;
+                        self.core.apply(SyncEvent::WaitFinished);
+                    }
+                }
+                effect => {
+                    self.core.perform(effect);
+                }
             }
-            state.text_attachments > 0
-        };
-        if admitted {
-            self.core.step(SyncInput::Rotate);
         }
-        // Dropping the sender is what ends the forwarder's `recv`, after the words already queued.
-        self.core.tx.lock().unwrap().take();
-        let _ = lk_agents_abi::timeout(
-            &*self.core.clock,
-            SEGMENT_ACLOSE_TIMEOUT,
-            self.core.forwarder_done.wait_for(|set| *set),
-        )
-        .await;
     }
 }
 

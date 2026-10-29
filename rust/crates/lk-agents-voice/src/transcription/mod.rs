@@ -1,4 +1,5 @@
 pub mod filters;
+pub mod lifecycle;
 pub mod pacer;
 pub mod synchronizer;
 
