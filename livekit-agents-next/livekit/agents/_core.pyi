@@ -100,12 +100,10 @@ from ._generated._core_classes import (
     UploadGate as UploadGate,
     VideoFrameRef as VideoFrameRef,
     VoiceSession as VoiceSession,
-    _core_format_trace_parent as _core_format_trace_parent,
     _core_mcp_timeout_check as _core_mcp_timeout_check,
     _core_resolve_api_connect_options as _core_resolve_api_connect_options,
     _core_RoomSession as _core_RoomSession,
     _core_session_chat_record as _core_session_chat_record,
-    _core_trace_parent as _core_trace_parent,
     amd_constants as amd_constants,
     amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     api_connect_options_check as api_connect_options_check,
@@ -264,12 +262,14 @@ from ._generated._core_stt import (
 from ._generated._core_telemetry import (
     LoopMonitor as LoopMonitor,
     _core_EventRetention as _core_EventRetention,
+    _core_format_trace_parent as _core_format_trace_parent,
     _core_loop_monitor_thresholds as _core_loop_monitor_thresholds,
     _core_MetricSeries as _core_MetricSeries,
     _core_PreparedTranscript as _core_PreparedTranscript,
     _core_SessionReportProjection as _core_SessionReportProjection,
     _core_SessionReportUpload as _core_SessionReportUpload,
     _core_TelemetryPolicy as _core_TelemetryPolicy,
+    _core_trace_parent as _core_trace_parent,
 )
 from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,

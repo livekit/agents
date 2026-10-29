@@ -80,6 +80,7 @@ pub trait Implementations: 'static {
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
     type EventRetention: ::lk_agents_abi::telemetry::observation::EventRetention;
+    type TraceParents: ::lk_agents_abi::telemetry::transport::TraceParents;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
     type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner;
@@ -245,6 +246,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds, m)?)?;
     m.add_class::<telemetry::_core_EventRetention>()?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_format_trace_parent, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_trace_parent, m)?)?;
     m.add_class::<telemetry::_core_SessionReportUpload>()?;
     m.add_class::<telemetry::_core_PreparedTranscript>()?;
     m.add_class::<text_session::TextSessionRunner>()?;

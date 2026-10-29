@@ -173,6 +173,14 @@ class _core_EventRetention:
     @property
     def diagnostics(self) -> list[tuple[str, int]]: ...
 
+def _core_format_trace_parent(trace_id: int, span_id: int, sampled: bool) -> str | None:
+    """Wire values from the SDK's integer identifiers. Invalid parents are omitted."""
+
+def _core_trace_parent(traceparent: str | None = None) -> tuple[int, int, bool] | None:
+    """SDK construction values from a validated parent. Invalid context never refuses the
+    request.
+    """
+
 class _core_SessionReportUpload:
     """Credentials for the session recording endpoint and host OTLP exporters."""
     def __init__(self, api_key: str, api_secret: str) -> None: ...

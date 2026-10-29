@@ -495,6 +495,36 @@ impl _core_EventRetention {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/telemetry/transport.rs.
+type TraceParentsImpl = <crate::Selected as super::Implementations>::TraceParents;
+
+fn _extract_trace_parents__core_format_trace_parent_trace_id(obj: &Bound<'_, PyAny>) -> PyResult<u128> {
+    ::lk_agents_abi::python::number_from_py::<u128>(&obj, "trace_id")
+}
+
+fn _extract_trace_parents__core_format_trace_parent_span_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "span_id")
+}
+
+/// Wire values from the SDK's integer identifiers. Invalid parents are omitted.
+#[pyfunction]
+#[pyo3(signature = (trace_id, span_id, sampled))]
+pub fn _core_format_trace_parent(#[pyo3(from_py_with = _extract_trace_parents__core_format_trace_parent_trace_id)] trace_id: u128, #[pyo3(from_py_with = _extract_trace_parents__core_format_trace_parent_span_id)] span_id: u64, sampled: bool) -> PyResult<::std::option::Option<::std::string::String>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <TraceParentsImpl as ::lk_agents_abi::telemetry::transport::TraceParents>::_core_format_trace_parent(trace_id, span_id, sampled);
+    Ok(out)
+}
+
+/// SDK construction values from a validated parent. Invalid context never refuses the
+/// request.
+#[pyfunction]
+#[pyo3(signature = (traceparent = None))]
+pub fn _core_trace_parent(traceparent: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<(u128, u64, bool)>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <TraceParentsImpl as ::lk_agents_abi::telemetry::transport::TraceParents>::_core_trace_parent(traceparent);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/telemetry/upload.rs.
 type _core_SessionReportUploadImpl = <crate::Selected as super::Implementations>::SessionReportUpload;
 
