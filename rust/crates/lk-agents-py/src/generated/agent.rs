@@ -242,10 +242,6 @@ impl AgentHostProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::agent::AgentHost>(|obj| AgentHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     fn checkpoint<'a>(&'a self, invocation: &::lk_agents_abi::agent::Invocation) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<bool, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -498,10 +494,6 @@ impl HostInstructionsProxy {
         };
         Ok(HostInstructionsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::agent::HostInstructions>(|obj| HostInstructionsProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {

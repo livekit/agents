@@ -3,8 +3,6 @@
 
 mod bridge;
 mod buffers;
-// The `#[host(record)]` conversions, written by `lk-agents-codegen`.
-mod generated;
 mod host_errors;
 #[cfg(test)]
 mod host_tests;
@@ -16,7 +14,7 @@ mod conversion_tests;
 pub use bridge::*;
 pub use buffers::*;
 pub use host_errors::*;
-pub use node::{Convert, HostSource, ItemSink, ItemStream, NodeCallState, NodeCalls, item_stream};
+pub use node::{Convert, HostSource};
 pub use values::*;
 
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]

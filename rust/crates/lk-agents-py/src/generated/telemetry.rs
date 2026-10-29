@@ -923,10 +923,6 @@ impl ChatItemProjectionProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>(|obj| ChatItemProjectionProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::telemetry::report::ChatItemProjection for ChatItemProjectionProxy {
     fn project(&self, item: ::lk_agents_abi::ChatItem) -> ::std::result::Result<::serde_json::Value, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);

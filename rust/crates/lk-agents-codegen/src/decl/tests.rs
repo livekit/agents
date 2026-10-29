@@ -330,7 +330,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
         #[host(source(item = Chunk, class = "NativeStream"))]
         type Chunks;
         #[host(new)] fn new(model: String, #[host(kw, default = None)] extra: Option<Extra>) -> Res<Self>;
-        #[host(call)] fn chat(&self, items: &[Item], #[host(kw)] conn: Conn, #[host(default = None)] reporter: Option<Arc<dyn Llm>>) -> Res<Self::Chunks>;
+        #[host(call)] fn chat(&self, items: &[Item], #[host(kw)] conn: Conn) -> Res<Self::Chunks>;
         #[host(getter)] fn report(&self) -> Report;
         #[host(await)] async fn ping(&self, #[host(default = 1.5)] timeout: f64);
         "#,
@@ -353,8 +353,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
         "{llm}"
     );
     assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?"), "{llm}");
-    assert!(llm.contains("HostProxy>::from_host(&v)"), "{llm}");
-    assert!(llm.contains("(&self.0, &items, conn, reporter)"), "{llm}");
+    assert!(llm.contains("(&self.0, &items, conn)"), "{llm}");
     assert!(llm.contains("NativeStream(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out)))"), "{llm}");
     assert!(
         llm.contains("#[pyo3(signature = (timeout = 1.5))]")
@@ -366,11 +365,10 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
     assert_eq!(stub.path, "_core_llm.pyi");
     for want in [
         "def __init__(self, model: str, *, extra: dict[str, object] | None = None) -> None: ...",
-        "    def chat(\n        self,\n        items: Sequence[Item],\n        *,\n        conn: APIConnectOptions,\n        reporter: LLM | None = None,\n    ) -> NativeStream: ...",
+        "    def chat(self, items: Sequence[Item], *, conn: APIConnectOptions) -> NativeStream: ...",
         "def report(self) -> dict[str, object]: ...",
         "async def ping(self, timeout: float = 1.5) -> None: ...",
         "async def recv(self) -> dict[str, object] | None: ...",
-        "from livekit.agents.llm import LLM",
         "from livekit.agents.types import APIConnectOptions",
         "from .._core import Item",
     ] {
@@ -539,15 +537,9 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
         "crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::llm::chat::Chunk>()?)",
-        "DeclaredProxy::of::<dyn ::lk_agents_abi::llm::class::Callbacks>",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");
     }
-    let bridges = crate::records::rust(&decls).expect("emits");
-    assert!(
-        bridges.iter().all(|out| !out.text.contains("HostProxy for dyn")),
-        "a declaration-only proxy must not generate an ABI Python implementation"
-    );
 }
 
 // Catches: a proxy call with no context to enter (or two), a failure swallowed into a default, an
@@ -739,30 +731,22 @@ fn records_carry_ordered_maps_sets_and_host_proxies() {
         use super::chat::Llm;
         #[crate::host(record(module = "session", extract, emit))]
         pub struct State { pub frames: BTreeMap<String, u32>, pub started: BTreeSet<String> }
-        #[crate::host(record(module = "session", extract))]
-        pub struct Registration { pub llm: std::sync::Arc<dyn Llm> }
         "#,
     )
     .expect("resolves");
-    // The conversions are the registration shell's functions; ABI holds none of them.
-    let abi = crate::records::rust(&decls).expect("emits");
-    assert!(abi.iter().all(|o| !o.text.contains("FromPyObject")), "a record conversion in ABI");
     let shell = crate::records::conversions(&decls).expect("emits").text;
     for want in [
         "pub fn state_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::class::State>",
         "cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)|",
         "collect::<PyResult<::std::collections::BTreeSet<_>>>()",
         "::pyo3::types::PyFrozenSet::new(py,",
-        "<dyn ::lk_agents_abi::llm::chat::Llm as ::lk_agents_abi::python::HostProxy>::from_host(",
     ] {
         assert!(shell.contains(want), "{want}\n{shell}");
     }
     let models = crate::records::python(&decls).expect("models");
     let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
     assert!(
-        session.contains("frames: dict[str, int]")
-            && session.contains("started: frozenset[str]")
-            && session.contains("llm: LLM"),
+        session.contains("frames: dict[str, int]") && session.contains("started: frozenset[str]"),
         "{session}"
     );
     let err = read(

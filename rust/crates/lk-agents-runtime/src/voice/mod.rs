@@ -12,6 +12,7 @@ pub mod generation;
 mod ivr;
 mod keyterm_detection;
 mod legs;
+pub mod nodes;
 mod recorder;
 pub mod remote_session;
 pub mod session;

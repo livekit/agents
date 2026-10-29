@@ -1106,10 +1106,6 @@ impl AudioGateProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(|obj| AudioGateProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
     fn update(&self, frame: ::lk_agents_abi::AudioFrame) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1190,10 +1186,6 @@ impl DuplexHostProxy {
         };
         Ok(DuplexHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(|obj| DuplexHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
@@ -1322,10 +1314,6 @@ impl DuplexSessionProxy {
         };
         Ok(DuplexSessionProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(|obj| DuplexSessionProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
@@ -1570,10 +1558,6 @@ impl ChainObserverProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(|obj| ChainObserverProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     fn availability_changed(&self, ev: ::lk_agents_abi::llm::fallback::AvailabilityChanged) {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1656,10 +1640,6 @@ impl LlmProxy {
         };
         Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, model, id, conn: None })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::Llm>(|obj| LlmProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::Llm for LlmProxy {
@@ -1775,10 +1755,6 @@ impl McpTransportProxy {
         let _ = context;
         Ok(McpTransportProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(|obj| McpTransportProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
@@ -1912,10 +1888,6 @@ impl McpProgressProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(|obj| McpProgressProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
     fn update<'a>(&'a self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &str) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2001,10 +1973,6 @@ impl HostRealtimeProxy {
         };
         Ok(HostRealtimeProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, instance_id, label, capabilities, id })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(|obj| HostRealtimeProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
@@ -2093,10 +2061,6 @@ impl HostRealtimeSessionProxy {
         };
         Ok(HostRealtimeSessionProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>(|obj| HostRealtimeSessionProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSessionProxy {

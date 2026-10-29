@@ -1,143 +1,17 @@
-//! The one bridge between host iterables and the core's streams, both ways: a host async iterable,
-//! awaitable or value drained by the core ([`HostSource`]: a node's output, a callable's answer, a
-//! provider's stream), awaited in the context it was opened in so a node sees its agent's binding;
-//! and a core channel read by the host as an async iterator ([`ItemStream`], fed through
-//! [`ItemSink`]).
+//! A host async iterable, awaitable or value drained by the core ([`HostSource`]: an in-place
+//! port's stream argument), awaited in the context it was opened in.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
-use tokio::sync::mpsc;
 
 // The bridge's shared items, `AsyncMutex` included: each use site carries its own allowance.
 use super::*;
 use crate::errors::ProviderError;
 
-type Item = Result<Py<PyAny>, ProviderError>;
-
-/// `_core.ItemStream`: what the core hands a node (its text, its audio) or a default node hands
-/// back (frames, speech events), as `async for` reads it. Ends when the core ends it; a failure
-/// is raised where it happened.
-#[pyclass(frozen, name = "ItemStream", module = "livekit.agents._core")]
-pub struct ItemStream {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    rx: Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>,
-}
-
-crate::register_host!(class ItemStream);
-
-#[pymethods]
-impl ItemStream {
-    fn __aiter__(slf: Py<Self>) -> Py<Self> {
-        slf
-    }
-
-    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let rx = Arc::clone(&self.rx);
-        super::future_into_py(py, async move {
-            let mut rx = rx.lock().await;
-            let next = match rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => None,
-            };
-            match next {
-                Some(Ok(item)) => Ok(item),
-                Some(Err(e)) => Err(e.to_py_err()),
-                None => Err(PyStopAsyncIteration::new_err(())),
-            }
-        })
-    }
-
-    /// Stop reading: what feeds it stops at its next item.
-    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let rx = Arc::clone(&self.rx);
-        super::future_into_py(py, async move {
-            rx.lock().await.take();
-            Ok(Python::attach(|py| py.None()))
-        })
-    }
-}
-
-/// The core's end of an [`ItemStream`]: each item converted to its host object as it is pushed.
-pub struct ItemSink<I> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    tx: Mutex<Option<mpsc::UnboundedSender<Item>>>,
-    to_py: fn(Python<'_>, &I) -> PyResult<Py<PyAny>>,
-}
-
-impl<I> ItemSink<I> {
-    /// Whether the host still reads.
-    pub fn send(&self, item: &I) -> bool {
-        self.try_send(item).expect("ItemSink state is poisoned")
-    }
-
-    fn try_send(&self, item: &I) -> Result<bool, ProviderError> {
-        let tx = self
-            .tx
-            .lock()
-            .map_err(|poison| {
-                drop(poison);
-                captured(pyo3::exceptions::PyRuntimeError::new_err("ItemSink state is poisoned"))
-            })?
-            .clone();
-        let Some(tx) = tx else {
-            return Ok(false);
-        };
-        let converted = Python::attach(|py| (self.to_py)(py, item)).map_err(captured);
-        Ok(tx.send(converted).is_ok())
-    }
-
-    /// Raised on the host's next read; nothing follows it.
-    pub fn fail(&self, error: ProviderError) {
-        if let Some(tx) = self.tx.lock().expect("ItemSink state is poisoned").take() {
-            let _ = tx.send(Err(error));
-        }
-    }
-
-    /// Resolves once the host stopped reading (closed or dropped the stream).
-    pub async fn closed(&self) {
-        let tx = self.tx.lock().expect("ItemSink state is poisoned").clone();
-        if let Some(tx) = tx {
-            tx.closed().await;
-        }
-    }
-}
-
-impl<I: Send + Sync> crate::StreamSink<I> for ItemSink<I> {
-    /// A host that stopped reading drops the rest, as a node that returned early ignores its input.
-    fn push(&self, item: I) -> Result<(), ProviderError> {
-        self.try_send(&item)?;
-        Ok(())
-    }
-
-    /// The reference's node input has no segment marker.
-    fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-
-    fn end_input(&self) {
-        self.tx.lock().expect("ItemSink state is poisoned").take();
-    }
-}
-
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// A channel the core feeds and the host reads.
-pub fn item_stream<I>(
-    py: Python<'_>,
-    to_py: fn(Python<'_>, &I) -> PyResult<Py<PyAny>>,
-) -> PyResult<(ItemSink<I>, Py<ItemStream>)> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    let stream = Py::new(py, ItemStream { rx: Arc::new(AsyncMutex::new(Some(rx))) })?;
-    Ok((ItemSink { tx: Mutex::new(Some(tx)), to_py }, stream))
-}
-
 /// Turns one item of a node's output into the core's.
 pub type Convert<T> = Box<dyn Fn(&Bound<'_, PyAny>) -> PyResult<T> + Send + Sync>;
 
-#[allow(clippy::disallowed_types, reason = "S0: legacy host channel state")]
 enum State {
     /// What the node returned, not yet looked at: an async iterable, an awaitable, one value or
     /// `None`.
@@ -145,27 +19,8 @@ enum State {
     Iterating(Py<PyAny>),
     /// Read to its end, kept for its `_started_time` and its teardown.
     Ended(Py<PyAny>),
-    /// An `ItemStream` handed on as it is (a node passing its input to a default node): read
-    /// from the core's channel directly.
-    Channel(Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>),
     Done,
 }
-
-/// The provider calls of the default nodes a node runs, as the reference meters a TTS's streams
-/// and not the node's output.
-#[derive(Clone, Default)]
-pub enum NodeCallState {
-    /// No default node: the node makes its own audio, which no provider call stands behind.
-    #[default]
-    Unused,
-    /// A provider stream that is one call: the node's output stands for it.
-    Streamed,
-    /// Providers that meter their own calls (a `StreamAdapter`'s sentences).
-    Metered(Vec<crate::utils::stream::CallLedger>),
-}
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-pub type NodeCalls = Arc<Mutex<NodeCallState>>;
 
 /// The one host-iterable bridge: what a host callable returned (a node's output, a callable's
 /// answer) or a host stream (a provider's), drained by the core as a [`crate::StreamSource`], as
@@ -180,7 +35,6 @@ pub struct HostSource<T> {
     cancel: bool,
     convert: Convert<T>,
     clock: Arc<dyn crate::Clock>,
-    calls: Option<NodeCalls>,
 }
 
 /// The awaits of one host object: cancelled with their Rust waiter, or not.
@@ -226,7 +80,6 @@ impl<T> HostSource<T> {
             cancel: true,
             convert,
             clock,
-            calls: None,
         }
     }
 
@@ -244,14 +97,7 @@ impl<T> HostSource<T> {
             cancel: false,
             convert,
             clock,
-            calls: None,
         }
-    }
-
-    /// The calls the default nodes it runs make, reported in place of its own output.
-    pub fn with_calls(mut self, calls: NodeCalls) -> Self {
-        self.calls = Some(calls);
-        self
     }
 
     fn handle(&self, obj: &Py<PyAny>) -> Handle {
@@ -291,7 +137,6 @@ where
 
 #[allow(clippy::disallowed_types, reason = "S0: legacy host channel state")]
 enum Look {
-    Channel(Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>),
     Iterate(Py<PyAny>),
     Await,
     One(Py<PyAny>),
@@ -306,15 +151,6 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
             loop {
                 match std::mem::replace(&mut self.state, State::Done) {
                     State::Done => return Ok(None),
-                    State::Channel(rx) => {
-                        let next = match rx.lock().await.as_mut() {
-                            Some(rx) => rx.recv().await,
-                            None => None,
-                        };
-                        let Some(item) = next else { return Ok(None) };
-                        self.state = State::Channel(rx);
-                        return self.convert(item?);
-                    }
                     State::Ended(iter) => {
                         self.state = State::Ended(iter);
                         return Ok(None);
@@ -349,8 +185,6 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
                             let obj = out.bind(py);
                             Ok(if obj.is_none() {
                                 Look::Nothing
-                            } else if let Ok(stream) = obj.cast::<ItemStream>() {
-                                Look::Channel(Arc::clone(&stream.get().rx))
                             } else if obj.hasattr("__aiter__")? {
                                 Look::Iterate(obj.call_method0("__aiter__")?.unbind())
                             } else if obj.hasattr("__await__")? {
@@ -362,7 +196,6 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
                         .map_err(captured)?;
                         match look {
                             Look::Nothing => return Ok(None),
-                            Look::Channel(rx) => self.state = State::Channel(rx),
                             Look::Iterate(iter) => self.state = State::Iterating(iter),
                             Look::One(item) => return self.convert(item),
                             Look::Await => match self.handle(&out).awaited().await {
@@ -379,21 +212,6 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
                 }
             }
         })
-    }
-
-    fn take_call_metrics(
-        &mut self,
-        in_flight: bool,
-    ) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
-        let calls = self.calls.as_ref()?;
-        let calls = calls.lock().expect("NodeCallState is poisoned").clone();
-        match calls {
-            NodeCallState::Unused => in_flight.then(Vec::new),
-            NodeCallState::Streamed => None,
-            NodeCallState::Metered(ledgers) => {
-                Some(ledgers.iter().flat_map(|take| take(in_flight)).collect())
-            }
-        }
     }
 
     /// `SynthesizeStream._started_time`, which is `0` until `_mark_started()`; an iterator without
@@ -435,29 +253,8 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
                     });
                     crate::Closed::Clean
                 }
-                State::Ended(_) | State::Channel(_) | State::Done => crate::Closed::Clean,
+                State::Ended(_) | State::Done => crate::Closed::Clean,
             }
         })
-    }
-}
-
-#[cfg(test)]
-mod poison_tests {
-    use super::*;
-    use crate::StreamSink;
-
-    #[test]
-    fn poisoned_sink_refuses_new_items() {
-        Python::initialize();
-        Python::attach(|py| {
-            let (sink, _stream) =
-                item_stream(py, |py, item: &u32| Ok(item.into_pyobject(py)?.into_any().unbind()))
-                    .unwrap();
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _guard = sink.tx.lock().unwrap();
-                panic!("interrupted while changing the sink");
-            }));
-            assert!(sink.push(1).is_err(), "a poisoned sink must not resume delivery");
-        });
     }
 }

@@ -1,8 +1,7 @@
 //! The `#[host(record)]` records: their pyo3 conversions, free functions in the registration shell
 //! (`lk-agents-py/src/generated/records.rs`, a module per model module: the ABI crate holds no host
 //! code), and their models, written into `_generated/<module>.py` as frozen keyword-only
-//! dataclasses. The declared proxies' `HostProxy` bridges for the in-place exports are written into
-//! the ABI crate (`lk-agents-abi/src/python/generated/`) until those exports are declarations.
+//! dataclasses.
 //!
 //! A record crosses as an instance of its model, never a dict: a struct is one class; a
 //! data-variant enum one class per variant, the class being the tag, plus a union alias; a
@@ -11,7 +10,6 @@
 //! applies to an omitted keyword only.
 
 mod emit;
-mod legacy;
 mod models;
 pub(crate) use emit::emit;
 pub use models::{link_legacy, merge, python};
@@ -23,34 +21,9 @@ use crate::decl::{
 };
 use crate::python::Out;
 
-pub const DIR: &str = "rust/crates/lk-agents-abi/src/python/generated";
-
 const PACKAGE: &str = "livekit.agents._generated";
 
 const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `#[host(record)]` declarations of `lk-agents-abi`.\n";
-
-/// What stays in ABI until the in-place exports are declarations: the declared proxies'
-/// `HostProxy` bridges, `mod.rs` and one module per subject.
-pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
-    let proxies = || decls.proxies.iter().filter(|proxy| legacy::proxy_in_place(&proxy.trait_path));
-    let mut families: Vec<&str> = proxies().map(|p| p.family.as_str()).collect();
-    families.sort();
-    families.dedup();
-    let mut root = format!("{HEADER}\n");
-    for family in &families {
-        root.push_str(&format!("mod {family};\n"));
-    }
-    let mut out = vec![Out { path: "mod.rs".into(), text: root }];
-    for family in families {
-        let mut text = format!("{HEADER}//!\n//! The `{family}` proxy bridges.\n");
-        for p in proxies().filter(|p| p.family == family) {
-            text.push_str(&format!("\n// Declared in {}.\n", p.source));
-            text.push_str(&crate::proxy::legacy_bridge(p));
-        }
-        out.push(Out { path: format!("{family}.rs"), text });
-    }
-    Ok(out)
-}
 
 /// The conversions of every record, `records.rs` of the registration shell's generated adapters:
 /// one module per model module, `<record>_from_py` and `<record>_to_py` in each.
@@ -104,11 +77,6 @@ pub fn check_none_defaults(decls: &Declarations) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// The in-place proxy bridges each still name a declared proxy.
-pub fn check_in_place(decls: &Declarations) -> Result<(), String> {
-    legacy::check_proxies(decls)
 }
 
 pub(crate) fn fields(body: &RecordBody) -> Vec<&Field> {
@@ -503,11 +471,8 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
                 "{path}: a record holds a shared `Arc<dyn ..>` proxy, not an owned one"
             ));
         }
-        Ty::Proxy { declared: Some(_), .. } | Ty::Native { .. } => {
+        Ty::Proxy { .. } | Ty::Native { .. } => {
             crate::adapter::from_object(v, ty, &format!("{path:?}"), path)?
-        }
-        Ty::Proxy { rust, .. } => {
-            format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host({v}, None)")
         }
         other => return Err(format!("{path}: `{}` is not a record field", other.rust())),
     })
@@ -574,7 +539,10 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             {
                 ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".to_owned())
             }
-            Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => (
+            Ty::Record(Record {
+                host: HostForm::Record { module, name } | HostForm::Model { module, name },
+                ..
+            }) => (
                 "",
                 format!(
                     "obj.is_instance(&obj.py().import({:?})?.getattr({name:?})?)?",

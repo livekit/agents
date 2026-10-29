@@ -1,13 +1,146 @@
-//! An agent's overridden nodes, as the core opens them. Only the binding's own agent nodes
-//! (`_core.AgentNodes`) implement them: a host object is never a node factory itself.
+//! An agent's overridden nodes, as the core opens them over the host's `_AgentNodes`
+//! (`_core.AgentNodes`), and the default `tts_node` and `stt_node` the host's nodes may call.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
+use crate::types::connect::ApiConnectOptionsError;
+use crate::utils::stream::StreamSource;
 use crate::voice::io::TextOutput;
 use crate::{
-    AudioFrame, ChatRequest, LlmStream, SttSink, SttSource, TimedString, TtsSink, TtsSource,
+    ApiConnectOptions, AudioFrame, ChatRequest, LlmChunk, LlmStream, SpeechEvent, Stt, SttSink,
+    SttSource, SynthesizedAudio, TimedString, Tts, TtsSink, TtsSource, Vad,
 };
+
+/// The host's `_AgentNodes`: the agent's own `llm_node`, `tts_node`, `stt_node`,
+/// `transcription_node` and `realtime_audio_output_node`, each call in a copy of the agent's
+/// binding. Whatever a node returns (an async iterable, an awaitable of one, one value or `None`)
+/// reaches the core as an async iterable.
+#[crate::host(proxy(host = "livekit.agents.voice.agent_session._AgentNodes"))]
+pub trait OverriddenNodes: Send + Sync {
+    #[host(await)]
+    fn llm<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<NodeChunk>>, ProviderError>>;
+
+    /// `calls` meters the default `tts_node` the node runs (`ProviderCalls`).
+    #[host(await)]
+    fn tts<'a>(
+        &'a self,
+        #[host(source(class = "NodeText"))] text: Box<dyn StreamSource<String>>,
+        calls: Arc<dyn ProviderCalls>,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<SynthesizedAudio>>, ProviderError>>;
+
+    #[host(await)]
+    fn stt<'a>(
+        &'a self,
+        #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamSource<AudioFrame>>,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<SpeechEvent>>, ProviderError>>;
+
+    #[host(await)]
+    fn transcription<'a>(
+        &'a self,
+        #[host(source(class = "NodeTranscript"))] text: Box<dyn StreamSource<TimedString>>,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<TimedString>>, ProviderError>>;
+
+    #[host(await)]
+    fn realtime_audio<'a>(
+        &'a self,
+        #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamSource<AudioFrame>>,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<AudioFrame>>, ProviderError>>;
+}
+
+/// What an `llm_node` yields: text it answered itself (spoken, never metered as a model call), a
+/// `FlushSentinel` (the spoken segment ends here), or a model's chunk.
+#[crate::host(record(module = "agent_nodes", extract, transparent))]
+#[derive(Debug, Clone)]
+pub enum NodeChunk {
+    Text(String),
+    #[host(host_type = "livekit.agents.types.FlushSentinel")]
+    Flush,
+    Chunk(LlmChunk),
+}
+
+/// `_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
+/// the agent's binding.
+#[crate::host(class(name = "AgentNodes", native = NodeFactory))]
+pub trait AgentNodes: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(env: &Self::Env, host: Arc<dyn OverriddenNodes>) -> Self;
+}
+
+/// The provider calls of the default `tts_node` an agent's `tts_node` runs: metered for the
+/// speech in place of the node's output, as the reference meters the TTS's own streams.
+#[crate::host(native(refused = "expected the calls of an agent's tts_node"))]
+pub trait ProviderCalls: Any + Send + Sync {}
+
+#[crate::host(class(name = "_core_NodeCalls", native = ProviderCalls))]
+pub trait NodeCalls: Send + Sync + Sized + 'static {}
+
+/// A frame the default `tts_node` yields, with what the reference stamps on its `userdata`: the
+/// words it covers and when its synthesis started (wall-clock seconds).
+#[crate::host(record(module = "agent_nodes", emit))]
+#[derive(Debug, Clone)]
+pub struct NodeFrame {
+    pub frame: AudioFrame,
+    pub timed_transcript: Vec<TimedString>,
+    pub started_time: Option<f64>,
+}
+
+/// The default `tts_node`'s frames.
+#[crate::host(class(name = "TtsNodeFrames"))]
+pub trait TtsNodeFrames: Send + Sync + Sized + 'static {
+    #[host(next)]
+    async fn next(&self) -> Result<Option<NodeFrame>, ProviderError>;
+}
+
+/// The default `stt_node`'s speech events.
+#[crate::host(class(name = "SttNodeEvents"))]
+pub trait SttNodeEvents: Send + Sync + Sized + 'static {
+    #[host(next)]
+    async fn next(&self) -> Result<Option<SpeechEvent>, ProviderError>;
+}
+
+/// `Agent.default.tts_node` and `Agent.default.stt_node`: the session's provider over the node's
+/// input (a TTS that does not stream fed sentence by sentence, an STT that does not stream over
+/// the VAD).
+#[crate::host(functions)]
+pub trait DefaultNodes {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(class(name = "TtsNodeFrames"))]
+    type Frames;
+    #[host(class(name = "SttNodeEvents"))]
+    type Events;
+
+    /// `conn_options`: the node's, else the provider's own policy (models.md), else the
+    /// defaults. `calls`: the running agent node's, when it runs this one.
+    #[host(function)]
+    fn tts_node(
+        env: &Self::Env,
+        tts: Arc<dyn Tts>,
+        text: Box<dyn StreamSource<String>>,
+        #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(default = None)] calls: Option<Arc<dyn ProviderCalls>>,
+    ) -> Result<Self::Frames, ApiConnectOptionsError>;
+
+    #[host(function)]
+    fn stt_node(
+        env: &Self::Env,
+        stt: Arc<dyn Stt>,
+        audio: Box<dyn StreamSource<AudioFrame>>,
+        #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(default = None)] vad: Option<Arc<dyn Vad>>,
+    ) -> Result<Self::Events, ApiConnectOptionsError>;
+}
 
 /// An agent's overridden nodes, as the core calls them. `transcription_node` and
 /// `realtime_audio_output_node` are opened per segment and per realtime generation over the core

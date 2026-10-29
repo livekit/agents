@@ -488,6 +488,38 @@ pub mod a2a_remote {
     }
 }
 
+pub mod agent_nodes {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+
+    pub fn node_chunk_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::nodes::NodeChunk> {
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Text(obj.extract::<::std::string::String>()?));
+        }
+        if obj.is_instance(&obj.py().import("livekit.agents.types")?.getattr("FlushSentinel")?)? {
+            return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Flush);
+        }
+        if obj.is_instance(&obj.py().import("livekit.agents._generated.llm")?.getattr("ChatChunk")?)? {
+            return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Chunk(obj.extract::<::lk_agents_abi::LlmChunk>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        Err(super::not_a(obj, "NodeChunk"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+    static NODE_FRAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn node_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::nodes::NodeFrame) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::nodes::NodeFrame { frame, timed_transcript, started_time } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("frame", ::pyo3::IntoPyObjectExt::into_bound_py_any(frame, py)?)?;
+            kwargs.set_item("timed_transcript", ::pyo3::types::PyList::new(py, timed_transcript.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("started_time", match started_time { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(NODE_FRAME.import(py, "livekit.agents._generated.agent_nodes", "NodeFrame")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod agent_run {
     use pyo3::prelude::*;
 

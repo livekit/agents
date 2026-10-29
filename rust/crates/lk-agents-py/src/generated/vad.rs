@@ -177,10 +177,6 @@ impl VadModelsProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::vad::inference::VadModels>(|obj| VadModelsProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
     fn create(&self) -> ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -236,10 +232,6 @@ impl VadModelProxy {
         let _ = context;
         Ok(VadModelProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::vad::inference::VadModel>(|obj| VadModelProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
@@ -339,10 +331,6 @@ impl VadProxy {
         };
         Ok(VadProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label, capabilities, id })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::Vad>(|obj| VadProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::Vad for VadProxy {

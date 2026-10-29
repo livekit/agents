@@ -345,10 +345,6 @@ impl EotDetectorProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::EotDetector>(|obj| EotDetectorProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
     fn id(&self) -> ::lk_agents_abi::ProviderId {
         ::std::clone::Clone::clone(&self.id)
@@ -454,10 +450,6 @@ impl EotModelFactoryProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(|obj| EotModelFactoryProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::turn::inference::EotModelFactory for EotModelFactoryProxy {
     fn create(&self) -> ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -513,10 +505,6 @@ impl EotModelProxy {
         let _ = context;
         Ok(EotModelProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::turn::inference::EotModel>(|obj| EotModelProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::turn::inference::EotModel for EotModelProxy {
@@ -575,10 +563,6 @@ impl EotMetricsObserverProxy {
         let _ = context;
         Ok(EotMetricsObserverProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>(|obj| EotMetricsObserverProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::turn::inference::EotMetricsObserver for EotMetricsObserverProxy {

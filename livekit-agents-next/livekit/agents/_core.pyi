@@ -6,16 +6,12 @@
 # pyo3 code is still handwritten. `core_names.json` lists the same names.
 
 from ._core_handwritten import (
-    AgentNodes as AgentNodes,
-    ItemStream as ItemStream,
     Role as Role,
     Run as Run,
     Thread as Thread,
     Turn as Turn,
     init as init,
     resolve_host_ref as resolve_host_ref,
-    stt_node as stt_node,
-    tts_node as tts_node,
 )
 from ._generated._core_a2a import (
     AgentClient as AgentClient,
@@ -285,19 +281,26 @@ from ._generated._core_vad import (
     InferenceVadStream as InferenceVadStream,
 )
 from ._generated._core_voice import (
+    AgentNodes as AgentNodes,
     AvatarRunner as AvatarRunner,
     BackgroundAudioPlayer as BackgroundAudioPlayer,
     ConsoleIo as ConsoleIo,
     DataStreamAudioOutput as DataStreamAudioOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     GetDtmfResult as GetDtmfResult,
+    NodeAudio as NodeAudio,
+    NodeText as NodeText,
+    NodeTranscript as NodeTranscript,
     PlayoutLedger as PlayoutLedger,
     PlayState as PlayState,
     SessionOptions as SessionOptions,
+    SttNodeEvents as SttNodeEvents,
+    TtsNodeFrames as TtsNodeFrames,
     VoiceSession as VoiceSession,
     WarmTransfer as WarmTransfer,
     _core_create_room_event_bus as _core_create_room_event_bus,
     _core_create_room_session as _core_create_room_session,
+    _core_NodeCalls as _core_NodeCalls,
     _core_playback_begin as _core_playback_begin,
     _core_playback_current_segment as _core_playback_current_segment,
     _core_playback_finished as _core_playback_finished,
@@ -331,6 +334,8 @@ from ._generated._core_voice import (
     resolve_interruption_detector as resolve_interruption_detector,
     rt_server_turn_detection as rt_server_turn_detection,
     send_dtmf_events as send_dtmf_events,
+    stt_node as stt_node,
+    tts_node as tts_node,
     validate_card_number as validate_card_number,
     wait_avatar_join as wait_avatar_join,
     wait_for_agent as wait_for_agent,

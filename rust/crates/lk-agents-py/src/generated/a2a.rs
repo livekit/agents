@@ -449,10 +449,6 @@ impl TurnHostProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(|obj| TurnHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
     fn handle<'a>(&'a self, ctx: &::lk_agents_abi::a2a::turn::TurnContext) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);

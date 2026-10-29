@@ -89,6 +89,7 @@ from .agent import (
     ModelSettings,
     Output_T,
     _BindingContextVar,
+    _NodeCallsVar,
     _VoiceBinding,
 )
 from .agent_run import run_error
@@ -1000,7 +1001,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return {}
         context = contextvars.copy_context()
         context.run(_BindingContextVar.set, _VoiceBinding(self, agent))
-        return dict.fromkeys(overridden, _core.AgentNodes(context, _AgentNodes(agent)))
+        # taken in the agent's binding: each node call runs in a copy of it
+        return dict.fromkeys(overridden, context.run(_core.AgentNodes, _AgentNodes(agent)))
 
     def _legs(self) -> dict[str, Any]:
         return {
@@ -1481,30 +1483,73 @@ def _tts_model(model: NotGivenOr[tts.TTS | str | None]) -> NotGivenOr[tts.TTS | 
 
 
 class _AgentNodes:
-    """An agent's overridden nodes as the core calls them (``_core.AgentNodes``), in the agent's
-    binding: one completion, one spoken segment, one recognition stream, one segment's transcript,
-    one realtime generation's audio. The core feeds what they read and drains what they return."""
+    """An agent's overridden nodes as the core calls them (``_core.AgentNodes``), each call in a
+    copy of the agent's binding: one completion, one spoken segment, one recognition stream, one
+    segment's transcript, one realtime generation's audio. The core feeds what they read (its
+    streams, read with ``recv()``) and drains what they return."""
 
     def __init__(self, agent: Agent) -> None:
         self._agent = agent
 
-    def llm(self, req: _core.ChatRequest) -> Any:
+    def llm(self, req: _core.ChatRequest) -> AsyncIterator[Any]:
         chat_ctx, tools = chat_request(req)
         choice = req.tool_choice
         settings = ModelSettings(tool_choice=NOT_GIVEN if choice is None else choice)
-        return self._agent.llm_node(chat_ctx, tools, settings)
+        return _node_output(lambda: self._agent.llm_node(chat_ctx, tools, settings))
 
-    def tts(self, text: AsyncIterable[str]) -> Any:
-        return self._agent.tts_node(text, ModelSettings())
+    def tts(self, text: Any, calls: Any) -> AsyncIterator[Any]:
+        def node() -> Any:
+            _NodeCallsVar.set(calls)
+            return self._agent.tts_node(_node_input(text), ModelSettings())
 
-    def stt(self, audio: AsyncIterable[rtc.AudioFrame]) -> Any:
-        return self._agent.stt_node(audio, ModelSettings())
+        return _node_output(node, lambda frame: tts.SynthesizedAudio(frame=frame, request_id=""))
 
-    def transcription(self, text: AsyncIterable[str | TimedString]) -> Any:
-        return self._agent.transcription_node(text, ModelSettings())
+    def stt(self, audio: Any) -> AsyncIterator[Any]:
+        return _node_output(lambda: self._agent.stt_node(_node_input(audio), ModelSettings()))
 
-    def realtime_audio(self, audio: AsyncIterable[rtc.AudioFrame]) -> Any:
-        return self._agent.realtime_audio_output_node(audio, ModelSettings())
+    def transcription(self, text: Any) -> AsyncIterator[Any]:
+        words = _node_input(text, _plain_text)
+        return _node_output(lambda: self._agent.transcription_node(words, ModelSettings()))
+
+    def realtime_audio(self, audio: Any) -> AsyncIterator[Any]:
+        frames = _node_input(audio)
+        return _node_output(lambda: self._agent.realtime_audio_output_node(frames, ModelSettings()))
+
+
+async def _node_input(stream: Any, item: Callable[[Any], Any] = lambda x: x) -> AsyncIterator[Any]:
+    """A core stream as the node reads it."""
+    while (value := await stream.recv()) is not None:
+        yield item(value)
+
+
+def _plain_text(text: TimedString) -> str | TimedString:
+    """A transcript delta as the node reads it: a `str`, or a `TimedString` when it is timed."""
+    timed = is_given(text.start_time) or is_given(text.end_time)
+    return text if timed else str(text)
+
+
+async def _node_output(
+    node: Callable[[], Any], item: Callable[[Any], Any] = lambda x: x
+) -> AsyncIterator[Any]:
+    """What a node returned, read as the reference's node task reads it: an awaitable is awaited
+    first, an async iterable is read to its end (and closed with this one), a single value is the
+    one item, ``None`` is none."""
+    out = node()
+    if inspect.isawaitable(out):
+        out = await out
+    if out is None:
+        return
+    if not isinstance(out, AsyncIterable):
+        yield item(out)
+        return
+    iterator = aiter(out)
+    try:
+        async for value in iterator:
+            yield item(value)
+    finally:
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 # The `HostWire` members with host behaviour, by record class.

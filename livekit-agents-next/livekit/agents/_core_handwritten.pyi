@@ -161,19 +161,6 @@ class Turn:
         ``reject``, ``asyncio.CancelledError`` when the handler was cancelled, the storage
         errors otherwise."""
 
-# --- the voice nodes (lk-agents-py nodes.rs) -----------------------------------------------------
-
-class ItemStream:
-    def __aiter__(self) -> ItemStream: ...
-    def __anext__(self) -> Awaitable[Any]: ...
-    def aclose(self) -> Awaitable[None]: ...
-
-class AgentNodes:
-    def __init__(self, context: Any, host: Any) -> None: ...
-
-def tts_node(tts: Any, text: Any, *, conn_options: Any) -> ItemStream: ...
-def stt_node(stt: Any, audio: Any, *, conn_options: Any) -> ItemStream: ...
-
 # --- lk-agents-abi llm/to_dict.rs ----------------------------------------------------------------
 
 def resolve_host_ref(id: int) -> Any:

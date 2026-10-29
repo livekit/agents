@@ -361,15 +361,8 @@ pub fn host_err<E: FromHostErr>(err: PyErr) -> E {
     Python::attach(|py| E::from_host(py, &err))
 }
 
-/// Implemented for `dyn Trait` by the expansion, so a wrapper in any crate turns a host argument
-/// into `Arc<dyn Trait>` without naming the proxy.
-pub trait HostProxy {
-    /// A registered native class ([`HostNative`]) as itself, anything else behind the proxy.
-    fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<std::sync::Arc<Self>>;
-}
-
 /// A `_core` class whose value the core uses as it is rather than proxying; submitted
-/// (`inventory`) by the owning crate and tried first by [`HostProxy::from_host`].
+/// (`inventory`) by the owning crate and tried first by a generated proxy's `from_host`.
 pub struct HostNative {
     /// A fn: a `TypeId` is not const-constructible.
     pub trait_id: fn() -> std::any::TypeId,
@@ -391,50 +384,6 @@ pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::
         }
     }
     None
-}
-
-/// The generated proxy of a declared `#[host(proxy)]` trait, submitted (`inventory`) by the
-/// registration shell that generates it: the in-place exports take such a trait through
-/// [`declared_proxy`], since the proxy runs on the runtime this crate cannot name.
-pub struct DeclaredProxy {
-    /// A fn: a `TypeId` is not const-constructible.
-    trait_id: fn() -> std::any::TypeId,
-    /// `Box<Arc<dyn Trait>>`.
-    from_host: fn(&Bound<'_, PyAny>) -> PyResult<Box<dyn std::any::Any>>,
-}
-
-impl DeclaredProxy {
-    pub const fn of<T: ?Sized + 'static>(
-        from_host: fn(&Bound<'_, PyAny>) -> PyResult<Box<dyn std::any::Any>>,
-    ) -> Self {
-        DeclaredProxy { trait_id: std::any::TypeId::of::<T>, from_host }
-    }
-}
-
-inventory::collect!(DeclaredProxy);
-
-/// The registration shell submits its [`DeclaredProxy`]s through this crate's `inventory`.
-pub use inventory;
-
-/// `obj` as the declared trait `T`, through its generated proxy.
-pub fn declared_proxy<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> PyResult<std::sync::Arc<T>> {
-    let id = std::any::TypeId::of::<T>();
-    let entry = inventory::iter::<DeclaredProxy>
-        .into_iter()
-        .find(|p| (p.trait_id)() == id)
-        .ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "no proxy of `{}` is registered (the registration shell generates it)",
-                std::any::type_name::<T>()
-            ))
-        })?;
-    let proxy = (entry.from_host)(obj)?;
-    proxy.downcast::<std::sync::Arc<T>>().map(|p| *p).map_err(|_| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "the registered proxy of `{}` is another trait's",
-            std::any::type_name::<T>()
-        ))
-    })
 }
 
 // --------------------------------------------------------------------- a host coroutine from any thread

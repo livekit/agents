@@ -17,8 +17,6 @@ pub mod avatar_output;
 pub mod generated;
 /// Entering the host: a call in its operation's captured context, host streams and notices.
 pub mod host;
-/// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over the core's `NodeFactory`.
-pub mod nodes;
 
 pub mod realtime_fallback;
 /// `init(role)` and the registration table.
@@ -96,6 +94,12 @@ impl generated::Implementations for Selected {
 
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSession = lk_agents_runtime::voice::VoiceSession;
+    type AgentNodes = lk_agents_runtime::voice::nodes::AgentNodes;
+    type NodeCalls = lk_agents_runtime::voice::nodes::NodeCalls;
+    type TtsNodeFrames =
+        lk_agents_runtime::voice::nodes::NodeOutput<lk_agents_abi::voice::nodes::NodeFrame>;
+    type SttNodeEvents = lk_agents_runtime::voice::nodes::NodeOutput<lk_agents_abi::SpeechEvent>;
+    type DefaultNodes = lk_agents_runtime::voice::nodes::DefaultNodes;
     type SessionOptions = lk_agents_runtime::voice::SessionOptions;
     type InterruptionGateFunctions = lk_agents_runtime::voice::InterruptionGateRules;
     type VoiceAgent = lk_agents_runtime::voice::VoiceAgentFrame;

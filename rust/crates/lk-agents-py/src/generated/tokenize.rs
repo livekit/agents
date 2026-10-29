@@ -395,10 +395,6 @@ impl TokenizerCallbackProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>(|obj| TokenizerCallbackProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbackProxy {
     fn tokenize(&self, text: &str) -> ::std::result::Result<::std::vec::Vec<::lk_agents_abi::tokenize::bindings::TokenizerToken>, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);

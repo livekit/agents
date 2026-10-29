@@ -217,16 +217,11 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     unlisted_exports(root)?;
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
-    records::check_in_place(&declared)?;
     let conversions = records::conversions(&declared)?;
     o.add(Path::new(adapter::DIR).join(&conversions.path), &conversions.text);
-    for (dir, outs) in
-        [(adapter::DIR, adapter::emit(&declared)?), (records::DIR, records::rust(&declared)?)]
-    {
-        o.dirs.push(PathBuf::from(dir));
-        for out in &outs {
-            o.add(Path::new(dir).join(&out.path), &out.text);
-        }
+    o.dirs.push(PathBuf::from(adapter::DIR));
+    for out in adapter::emit(&declared)? {
+        o.add(Path::new(adapter::DIR).join(&out.path), &out.text);
     }
     let class_stubs = class_stub::emit(&declared)?;
     let models = records::python(&declared)?;
@@ -457,7 +452,6 @@ mod drift {
 
         let families = [
             "rust/crates/lk-agents-py/src/generated/mod.rs",
-            "rust/crates/lk-agents-abi/src/python/generated/mod.rs",
             "livekit-agents-next/livekit/agents/_generated/storage_class.py",
             "livekit-agents-next/livekit/agents/_generated/stt.py",
             "livekit-agents-next/livekit/agents/_generated/language.py",

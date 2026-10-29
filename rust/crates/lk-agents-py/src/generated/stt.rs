@@ -465,10 +465,6 @@ impl SttProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::Stt>(|obj| SttProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::Stt for SttProxy {
     fn instance_id(&self) -> ::std::option::Option<usize> {
         ::std::clone::Clone::clone(&self.instance_id)

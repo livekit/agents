@@ -136,6 +136,11 @@ pub trait Implementations: 'static {
     type PlayState: ::lk_agents_abi::voice::background_audio::PlayState;
     type BackgroundAudioPlayer: ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer<State = Self::PlayState>;
     type PlaybackReports: ::lk_agents_abi::voice::io::PlaybackReports;
+    type AgentNodes: ::lk_agents_abi::voice::nodes::AgentNodes;
+    type NodeCalls: ::lk_agents_abi::voice::nodes::NodeCalls;
+    type TtsNodeFrames: ::lk_agents_abi::voice::nodes::TtsNodeFrames;
+    type SttNodeEvents: ::lk_agents_abi::voice::nodes::SttNodeEvents;
+    type DefaultNodes: ::lk_agents_abi::voice::nodes::DefaultNodes<Frames = Self::TtsNodeFrames, Events = Self::SttNodeEvents>;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
@@ -353,6 +358,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_playback_started, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_progressed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_finished, m)?)?;
+    m.add_class::<voice::AgentNodes>()?;
+    m.add_class::<voice::_core_NodeCalls>()?;
+    m.add_class::<voice::TtsNodeFrames>()?;
+    m.add_class::<voice::SttNodeEvents>()?;
+    m.add_function(wrap_pyfunction!(voice::tts_node, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::stt_node, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_event_bus, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_subscribed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_unsubscribed, m)?)?;
@@ -408,6 +419,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::JobRun>()?;
     m.add_class::<worker::ServerConfig>()?;
     m.add_class::<worker::ServerRuntime>()?;
+    m.add_class::<voice::NodeText>()?;
+    m.add_class::<voice::NodeAudio>()?;
+    m.add_class::<voice::NodeTranscript>()?;
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     Ok(())
@@ -416,6 +430,16 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// A native implementation a proxy call passes, handed to the host as its declared class.
 pub(crate) trait NativeToHost {
     fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>>;
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::voice::nodes::ProviderCalls {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::NodeCalls>() {
+            Ok(native) => Ok(Py::new(py, voice::_core_NodeCalls(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::nodes::ProviderCalls` is no declared class")),
+        }
+    }
 }
 
 impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver {

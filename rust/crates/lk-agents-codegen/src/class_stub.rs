@@ -319,6 +319,9 @@ fn class(c: &Class, imports: &mut Imports) -> String {
     for m in &c.methods {
         s.push_str(&method(c, m, imports));
     }
+    if c.doc.is_empty() && c.methods.is_empty() {
+        s.push_str("    ...\n");
+    }
     s
 }
 

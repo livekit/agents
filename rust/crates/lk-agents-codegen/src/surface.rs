@@ -17,16 +17,12 @@ const HANDWRITTEN_STUB: &str = "_core_handwritten";
 /// baseline) and stubbed in `_core_handwritten.pyi`. It only shrinks: a family moved to declarations
 /// leaves it, and generation fails while a name is both here and generated.
 const HANDWRITTEN: &[&str] = &[
-    "AgentNodes",
-    "ItemStream",
     "Role",
     "Run",
     "Thread",
     "Turn",
     "init",
     "resolve_host_ref",
-    "stt_node",
-    "tts_node",
 ];
 
 /// `_core.pyi` (package-relative) and `core_names.json`, from the generated stubs of `_generated/`.

@@ -400,10 +400,6 @@ impl FrameReaderProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::media::images::FrameReader>(|obj| FrameReaderProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
     fn rgba(&self, frame: &::lk_agents_abi::MediaRef) -> ::std::result::Result<::lk_agents_abi::utils::video::VideoFrame, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -469,10 +465,6 @@ impl EmitterOutputProxy {
         };
         Ok(EmitterOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(|obj| EmitterOutputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {

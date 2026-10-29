@@ -462,15 +462,6 @@ fn callable_annotations_follow_the_declared_call_and_its_iterable_result_reader(
         conversions.contains("crate::generated::llm::CallbackProxy::from_host(&v)"),
         "modern record fields use the same generated Python extractor: {conversions}"
     );
-    assert!(
-        !conversions.contains("HostProxy>::from_host"),
-        "a modern callback record needs no ABI proxy shim: {conversions}"
-    );
-    let abi = crate::records::rust(&declarations).unwrap();
-    assert!(
-        abi.iter().all(|out| !out.text.contains("Callback")),
-        "new callbacks must remain Python-only"
-    );
 }
 
 #[test]
@@ -530,40 +521,6 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
     let declarations = read(&legacy).expect("explicit host input wins over pure wire metadata");
     assert!(matches!(&declarations.classes[0].methods[0].params[0].ty,
         Ty::Map(key, _) if matches!(&**key, Ty::Record(Record { host: HostForm::Annotation(name), extract: true, .. }) if name == "str")));
-}
-
-#[test]
-fn a_grandfathered_proxy_keeps_its_exact_legacy_abi_conversion() {
-    let tree = crate::decl::tree::Crate::from_files(
-        "lk_agents_abi",
-        &[
-            (
-                "lib.rs",
-                "pub mod stt; pub use stt::Stt; #[host(error(original))] pub struct HostError;",
-            ),
-            (
-                "stt.rs",
-                r#"
-            #[host(proxy(host = "livekit.agents.stt.STT"))]
-            pub trait Stt: Send + Sync {
-                #[host(call)] fn count(&self) -> Result<u32, crate::HostError>;
-            }
-        "#,
-            ),
-        ],
-    )
-    .unwrap();
-    let declarations = crate::decl::resolve::declarations(&tree).unwrap();
-    let bridges = crate::records::rust(&declarations).unwrap();
-    let bridge = &bridges.iter().find(|out| out.path == "stt.rs").unwrap().text;
-    assert!(
-        bridge.contains("impl crate::python::HostProxy for dyn ::lk_agents_abi::Stt {"),
-        "{bridge}"
-    );
-    assert!(
-        bridge.contains("crate::python::declared_proxy::<dyn ::lk_agents_abi::Stt>(obj)"),
-        "{bridge}"
-    );
 }
 
 #[test]

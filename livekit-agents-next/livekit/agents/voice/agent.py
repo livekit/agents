@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import sys
+import time
 from collections.abc import (
     AsyncGenerator,
     AsyncIterable,
@@ -50,6 +51,8 @@ from ..llm.tool_context import (
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
     APIConnectOptions,
     FlushSentinel,
     NotGivenOr,
@@ -81,6 +84,9 @@ DEFAULT_AGENT_NAME = "default_agent"
 
 # what runs the agents of this context: a voice session, or a text run
 _BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_agent_binding")
+# the calls of the agent `tts_node` running in this context, which the default `tts_node` it runs
+# reports its provider's to (`_core.tts_node(calls=)`)
+_NodeCallsVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_node_calls")
 
 
 class _VoiceBinding(NamedTuple):
@@ -740,7 +746,8 @@ class Agent(Generic[Context_T, Output_T]):
             if binding.stt is None:
                 raise RuntimeError("stt_node called but no STT is available")
             conn_options = binding.session.conn_options.stt_conn_options
-            return _core.stt_node(binding.stt, audio, conn_options=conn_options, vad=binding.vad)
+            events = _core.stt_node(binding.stt, audio, conn_options=conn_options, vad=binding.vad)
+            return (stt._speech_event_from_core(ev) async for ev in events)
 
         @staticmethod
         def tts_node(
@@ -752,7 +759,9 @@ class Agent(Generic[Context_T, Output_T]):
             if binding.tts is None:
                 raise RuntimeError("tts_node called but no TTS is available")
             conn_options = binding.session.conn_options.tts_conn_options
-            return _core.tts_node(binding.tts, text, conn_options=conn_options)
+            calls = _NodeCallsVar.get(None)
+            frames = _core.tts_node(binding.tts, text, conn_options=conn_options, calls=calls)
+            return (_stamped(frame) async for frame in frames)
 
         @staticmethod
         async def transcription_node(
@@ -867,3 +876,15 @@ class _InstructionsView(str, Generic[Context_T]):
     ) -> Callable[[RunContext[Context_T]], _RenderedT]:
         self._agent._register_instructions(f)
         return f
+
+
+def _stamped(node_frame: Any) -> rtc.AudioFrame:
+    """A default `tts_node` frame as the reference yields it: its `userdata` carries the words it
+    covers and when its synthesis started (a `perf_counter()` stamp)."""
+    frame: rtc.AudioFrame = node_frame.frame
+    if node_frame.timed_transcript:
+        frame.userdata[USERDATA_TIMED_TRANSCRIPT] = node_frame.timed_transcript
+    if node_frame.started_time is not None:
+        elapsed = time.time() - node_frame.started_time
+        frame.userdata[USERDATA_TTS_STARTED_TIME] = time.perf_counter() - elapsed
+    return frame

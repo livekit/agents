@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, Mapping, Sequence
-from typing import Any
+from typing import Any, Self
 
 from datetime import date
 from livekit.agents import VAD
@@ -14,13 +14,14 @@ from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.llm import LLM
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
+from livekit.agents.types import APIConnectOptions, TimedString
+from livekit.agents.voice.agent_session import _AgentNodes
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import AudioFrame
 
 from .._core import (
-    AgentNodes,
     ChatContent,
     ChatItem,
     PlaybackInfo,
@@ -34,6 +35,7 @@ from .._core import (
     _core_RoomSession,
 )
 from ..types import NotGivenOr
+from .agent_nodes import NodeFrame
 from .amd import AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
@@ -198,6 +200,44 @@ def _core_playback_finished(
     interrupted: bool,
     synchronized_transcript: str | None,
 ) -> bool: ...
+
+class AgentNodes:
+    """`_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
+    the agent's binding.
+    """
+    def __init__(self, host: _AgentNodes) -> None: ...
+
+class _core_NodeCalls:
+    ...
+
+class TtsNodeFrames:
+    """The default `tts_node`'s frames."""
+    def __aiter__(self) -> Self: ...
+    async def __anext__(self) -> NodeFrame: ...
+
+class SttNodeEvents:
+    """The default `stt_node`'s speech events."""
+    def __aiter__(self) -> Self: ...
+    async def __anext__(self) -> dict[str, object]: ...
+
+def tts_node(
+    tts: TTS[Any],
+    text: AsyncIterable[str],
+    *,
+    conn_options: APIConnectOptions | None = None,
+    calls: _core_NodeCalls | None = None,
+) -> TtsNodeFrames:
+    """`conn_options`: the node's, else the provider's own policy (models.md), else the
+    defaults. `calls`: the running agent node's, when it runs this one.
+    """
+
+def stt_node(
+    stt: STT[Any],
+    audio: AsyncIterable[AudioFrame],
+    *,
+    conn_options: APIConnectOptions | None = None,
+    vad: VAD[Any] | None = None,
+) -> SttNodeEvents: ...
 
 def _core_create_room_event_bus() -> RoomEventBus: ...
 
@@ -670,3 +710,15 @@ async def wait_for_track_publication(
     include_local: bool,
     subscribed: bool,
 ) -> tuple[str | None, str]: ...
+
+class NodeText:
+    async def recv(self) -> str | None: ...
+    async def aclose(self) -> None: ...
+
+class NodeAudio:
+    async def recv(self) -> AudioFrame | None: ...
+    async def aclose(self) -> None: ...
+
+class NodeTranscript:
+    async def recv(self) -> TimedString | None: ...
+    async def aclose(self) -> None: ...

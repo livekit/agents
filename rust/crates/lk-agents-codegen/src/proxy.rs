@@ -8,10 +8,6 @@
 //! declared kind; a host failure becomes the declared error. `read_once` values are read when the
 //! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last,
 //! handed out through its declared native wrapper when it names one.
-//!
-//! The ABI's `HostProxy for dyn Trait` (the in-place exports' conversion) is written into the ABI
-//! crate by [`legacy_bridge`]; it resolves to this proxy through the `DeclaredProxy` registration
-//! the adapter submits.
 
 use crate::adapter::from_object;
 use crate::decl::{HostForm, Param, Proxy, ProxyCall, ProxyMethod, Record, Ty};
@@ -75,9 +71,6 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         inits.join(", "),
         host = p.host,
     ));
-    s.push_str(&format!(
-        "::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::DeclaredProxy::of::<dyn {tr}>(|obj| {name}::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))\n}}\n\n"
-    ));
     if p.handed_back {
         s.push_str(&format!(
             "impl {name} {{\n    /// The host object behind a proxy of `{tr}`; a native implementation has none.\n    pub fn to_host<'py>(py: Python<'py>, value: ::std::sync::Arc<dyn {tr}>) -> PyResult<Bound<'py, PyAny>> {{\n        let any: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = value;\n        match any.downcast::<Self>() {{\n            Ok(proxy) => Ok(proxy.source.bind(py).clone()),\n            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(\"a native `{}` has no host object to hand back\")),\n        }}\n    }}\n}}\n\n",
@@ -96,15 +89,6 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     s.push_str(&methods.join("\n"));
     s.push_str("}\n");
     Ok(s)
-}
-
-/// `impl HostProxy for dyn Trait` in the ABI crate: the in-place exports take a declared proxy
-/// through it, registered by the adapter that generates it.
-pub fn legacy_bridge(p: &Proxy) -> String {
-    let tr = &p.trait_path;
-    format!(
-        "impl crate::python::HostProxy for dyn {tr} {{\n    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {{\n        crate::python::declared_proxy::<dyn {tr}>(obj)\n    }}\n}}\n"
-    )
 }
 
 fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {

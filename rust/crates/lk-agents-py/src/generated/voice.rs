@@ -502,6 +502,140 @@ pub fn _core_playback_finished(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyA
     Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+type AgentNodesImpl = <crate::Selected as super::Implementations>::AgentNodes;
+
+/// `_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
+/// the agent's binding.
+#[pyclass(frozen, name = "AgentNodes", module = "livekit.agents._core")]
+pub struct AgentNodes(::std::sync::Arc<AgentNodesImpl>);
+
+#[pymethods]
+impl AgentNodes {
+    #[new]
+    #[pyo3(signature = (host))]
+    fn new(host: Bound<'_, PyAny>) -> PyResult<AgentNodes> {
+        ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
+        let host = crate::generated::voice::OverriddenNodesProxy::from_host(&host)?;
+        let out = <AgentNodesImpl as ::lk_agents_abi::voice::nodes::AgentNodes>::new(&env, host);
+        Ok(AgentNodes(::std::sync::Arc::new(out)))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::nodes::NodeFactory`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(),
+        read: |obj| {
+            let this = obj.cast::<AgentNodes>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::NodeFactory> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+type _core_NodeCallsImpl = <crate::Selected as super::Implementations>::NodeCalls;
+
+#[pyclass(frozen, name = "_core_NodeCalls", module = "livekit.agents._core")]
+pub struct _core_NodeCalls(pub(crate) ::std::sync::Arc<_core_NodeCallsImpl>);
+
+#[pymethods]
+impl _core_NodeCalls {
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::nodes::ProviderCalls`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(),
+        read: |obj| {
+            let this = obj.cast::<_core_NodeCalls>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+type TtsNodeFramesImpl = <crate::Selected as super::Implementations>::TtsNodeFrames;
+
+/// The default `tts_node`'s frames.
+#[pyclass(frozen, name = "TtsNodeFrames", module = "livekit.agents._core")]
+pub struct TtsNodeFrames(::std::sync::Arc<TtsNodeFramesImpl>);
+
+#[pymethods]
+impl TtsNodeFrames {
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            match <TtsNodeFramesImpl as ::lk_agents_abi::voice::nodes::TtsNodeFrames>::next(&this).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))? {
+                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::agent_nodes::node_frame_to_py(py, out)?, py)),
+                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
+            }
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+type SttNodeEventsImpl = <crate::Selected as super::Implementations>::SttNodeEvents;
+
+/// The default `stt_node`'s speech events.
+#[pyclass(frozen, name = "SttNodeEvents", module = "livekit.agents._core")]
+pub struct SttNodeEvents(::std::sync::Arc<SttNodeEventsImpl>);
+
+#[pymethods]
+impl SttNodeEvents {
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            match <SttNodeEventsImpl as ::lk_agents_abi::voice::nodes::SttNodeEvents>::next(&this).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))? {
+                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py)),
+                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
+            }
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+type DefaultNodesImpl = <crate::Selected as super::Implementations>::DefaultNodes;
+
+/// `conn_options`: the node's, else the provider's own policy (models.md), else the
+/// defaults. `calls`: the running agent node's, when it runs this one.
+#[pyfunction]
+#[pyo3(signature = (tts, text, *, conn_options = None, calls = None))]
+pub fn tts_node(tts: Bound<'_, PyAny>, text: Bound<'_, PyAny>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, calls: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::TtsNodeFrames> {
+    ::lk_agents_abi::python::check_pid()?;
+    let env = crate::process::env();
+    let tts = crate::generated::tts::TtsProxy::from_host(&tts)?;
+    let text = crate::host::capture_context(text.py()).and_then(|context| crate::host::stream::HostStream::open(text.py(), &text, &context, |o| Ok(o.extract::<::std::string::String>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::string::String>>)?;
+    let calls = calls.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("calls", ": expected the calls of an agent's tts_node")))).transpose()?;
+    let out = <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::tts_node(&env, tts, text, conn_options, calls).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(super::voice::TtsNodeFrames(::std::sync::Arc::new(out)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (stt, audio, *, conn_options = None, vad = None))]
+pub fn stt_node(stt: Bound<'_, PyAny>, audio: Bound<'_, PyAny>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, vad: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::SttNodeEvents> {
+    ::lk_agents_abi::python::check_pid()?;
+    let env = crate::process::env();
+    let stt = crate::generated::stt::SttProxy::from_host(&stt)?;
+    let audio = crate::host::capture_context(audio.py()).and_then(|context| crate::host::stream::HostStream::open(audio.py(), &audio, &context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)?;
+    let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
+    let out = <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::stt_node(&env, stt, audio, conn_options, vad).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(super::voice::SttNodeEvents(::std::sync::Arc::new(out)))
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/events.rs.
 type RtcRuntimeImpl = <crate::Selected as super::Implementations>::RtcRuntime;
 
@@ -1618,10 +1752,6 @@ impl ClearBufferListenerProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::ClearBufferListener>(|obj| ClearBufferListenerProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::avatar::ClearBufferListener for ClearBufferListenerProxy {
     fn clear_buffer(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1671,10 +1801,6 @@ impl AvatarAudioReceiverProxy {
         };
         Ok(AvatarAudioReceiverProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>(|obj| AvatarAudioReceiverProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiverProxy {
@@ -1834,10 +1960,6 @@ impl AvatarVideoGeneratorProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>(|obj| AvatarVideoGeneratorProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGeneratorProxy {
     fn push_audio(&self, frame: ::std::option::Option<::lk_agents_abi::utils::video::MediaFrame>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1970,10 +2092,6 @@ impl AvatarMediaProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::AvatarMedia>(|obj| AvatarMediaProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
     fn publish(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2086,10 +2204,6 @@ impl FrameStreamProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::background_audio::FrameStream>(|obj| FrameStreamProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy {
     fn next(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2180,10 +2294,6 @@ impl PlaybackListenerProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::PlaybackListener>(|obj| PlaybackListenerProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
     fn on_playback_started(&self, segment: ::lk_agents_abi::voice::io::PlaybackSegment, created_at: f64) {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2268,10 +2378,6 @@ impl AudioInputProxy {
         };
         Ok(AudioInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::AudioInput>(|obj| AudioInputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
@@ -2366,10 +2472,6 @@ impl VideoInputProxy {
         };
         Ok(VideoInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::VideoInput>(|obj| VideoInputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
@@ -2479,10 +2581,6 @@ impl AudioOutputProxy {
         };
         Ok(AudioOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label, tracker, capabilities, sample_rate })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::AudioOutput>(|obj| AudioOutputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
@@ -2644,10 +2742,6 @@ impl TextOutputProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::TextOutput>(|obj| TextOutputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
     fn label(&self) -> &str {
         &self.label
@@ -2724,6 +2818,236 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+
+/// [`::lk_agents_abi::voice::nodes::OverriddenNodes`] over a host `livekit.agents.voice.agent_session._AgentNodes`.
+#[derive(Clone)]
+pub struct OverriddenNodesProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+}
+
+impl OverriddenNodesProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(OverriddenNodesProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+    }
+}
+
+impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
+    fn llm<'a>(&'a self, req: &::lk_agents_abi::ChatRequest) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::voice::nodes::NodeChunk>>, ::lk_agents_abi::errors::ProviderError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let req_arg = ::std::clone::Clone::clone(req);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.llm", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(req_arg, py)?];
+                Ok((host.bind(py).getattr("llm")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.llm: the call captured no host context")));
+                };
+            let o = out.bind(py);
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::agent_nodes::node_chunk_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::voice::nodes::NodeChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn tts<'a>(&'a self, text: ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::string::String>>, calls: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>, ::lk_agents_abi::errors::ProviderError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let text_arg = text;
+        let calls_arg = calls;
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.tts", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, NodeText(::lk_agents_runtime::net::source::NativeSource::new(text_arg)))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
+                Ok((host.bind(py).getattr("tts")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.tts: the call captured no host context")));
+                };
+            let o = out.bind(py);
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::SynthesizedAudio>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn stt<'a>(&'a self, audio: ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>, ::lk_agents_abi::errors::ProviderError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let audio_arg = audio;
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.stt", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, NodeAudio(::lk_agents_runtime::net::source::NativeSource::new(audio_arg)))?.into_any()];
+                Ok((host.bind(py).getattr("stt")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.stt: the call captured no host context")));
+                };
+            let o = out.bind(py);
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::SpeechEvent>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn transcription<'a>(&'a self, text: ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::TimedString>>) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::TimedString>>, ::lk_agents_abi::errors::ProviderError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let text_arg = text;
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.transcription", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, NodeTranscript(::lk_agents_runtime::net::source::NativeSource::new(text_arg)))?.into_any()];
+                Ok((host.bind(py).getattr("transcription")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.transcription: the call captured no host context")));
+                };
+            let o = out.bind(py);
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::TimedString>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::TimedString>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn realtime_audio<'a>(&'a self, audio: ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>, ::lk_agents_abi::errors::ProviderError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let audio_arg = audio;
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.realtime_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, NodeAudio(::lk_agents_runtime::net::source::NativeSource::new(audio_arg)))?.into_any()];
+                Ok((host.bind(py).getattr("realtime_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.realtime_audio: the call captured no host context")));
+                };
+            let o = out.bind(py);
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+}
+
+/// One stream of `::std::string::String` items: `recv()` resolves to the next, `None` at the end.
+#[pyclass(frozen, name = "NodeText", module = "livekit.agents._core")]
+pub struct NodeText(::lk_agents_runtime::net::source::NativeSource<::std::string::String>);
+
+#[pymethods]
+impl NodeText {
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::aclose(&self.0, py)
+    }
+}
+
+/// One stream of `::lk_agents_abi::AudioFrame` items: `recv()` resolves to the next, `None` at the end.
+#[pyclass(frozen, name = "NodeAudio", module = "livekit.agents._core")]
+pub struct NodeAudio(::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::AudioFrame>);
+
+#[pymethods]
+impl NodeAudio {
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::aclose(&self.0, py)
+    }
+}
+
+/// One stream of `::lk_agents_abi::TimedString` items: `recv()` resolves to the next, `None` at the end.
+#[pyclass(frozen, name = "NodeTranscript", module = "livekit.agents._core")]
+pub struct NodeTranscript(::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::TimedString>);
+
+#[pymethods]
+impl NodeTranscript {
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::aclose(&self.0, py)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/capabilities.rs.
 
 /// [`::lk_agents_abi::voice::rtc::RtcRoom`] over a host `livekit.agents.voice.room_io.Room`.
@@ -2768,10 +3092,6 @@ impl RtcRoomProxy {
         };
         Ok(RtcRoomProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), local, event_bus })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::RtcRoom>(|obj| RtcRoomProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
@@ -2982,10 +3302,6 @@ impl LocalParticipantProxy {
         };
         Ok(LocalParticipantProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>(|obj| LocalParticipantProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
@@ -3321,10 +3637,6 @@ impl ByteStreamWriterProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(|obj| ByteStreamWriterProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::rtc::ByteStreamWriter for ByteStreamWriterProxy {
     fn id(&self) -> &str {
         &self.id
@@ -3417,10 +3729,6 @@ impl TextStreamWriterProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(|obj| TextStreamWriterProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::rtc::TextStreamWriter for TextStreamWriterProxy {
     fn write<'a>(&'a self, text: &str) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -3508,10 +3816,6 @@ impl AudioSourceProxy {
         };
         Ok(AudioSourceProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::AudioSource>(|obj| AudioSourceProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
@@ -3691,10 +3995,6 @@ impl RemoteParticipantProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>(|obj| RemoteParticipantProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
     fn sid(&self) -> &str {
         &self.sid
@@ -3830,10 +4130,6 @@ impl TrackPublicationProxy {
         };
         Ok(TrackPublicationProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, sid, name, source, kind, audio_features })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::TrackPublication>(|obj| TrackPublicationProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
@@ -4006,10 +4302,6 @@ impl AudioInputStreamProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>(|obj| AudioInputStreamProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
     fn frames(&self) -> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>, ::lk_agents_abi::voice::rtc::RtcError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -4099,10 +4391,6 @@ impl SessionHooksProxy {
         };
         Ok(SessionHooksProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>(|obj| SessionHooksProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy {
@@ -4363,10 +4651,6 @@ impl SessionEventsProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::session_effects::SessionEvents>(|obj| SessionEventsProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsProxy {
     fn event(&self, wire: ::lk_agents_abi::voice::events::HostWire) {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -4444,10 +4728,6 @@ impl TransferHostProxy {
         };
         Ok(TransferHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), io_state })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost>(|obj| TransferHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for TransferHostProxy {

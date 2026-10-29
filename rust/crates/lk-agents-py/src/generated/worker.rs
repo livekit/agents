@@ -1161,10 +1161,6 @@ impl ExchangeStreamProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(|obj| ExchangeStreamProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::worker::endpoint_host::ExchangeStream for ExchangeStreamProxy {
     fn read(&self, max_bytes: usize) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::vec::Vec<u8>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1280,10 +1276,6 @@ impl AsgiApplicationProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>(|obj| AsgiApplicationProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::worker::endpoint_host::AsgiApplication for AsgiApplicationProxy {
     fn call(&self, scope: ::lk_agents_abi::worker::endpoint_host::AsgiScope, request: ::lk_agents_abi::worker::endpoint::EndpointRequest, receive: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>, send: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::worker::endpoint_host::AsgiFailure>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1351,10 +1343,6 @@ impl SessionJobProxy {
         };
         Ok(SessionJobProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::job::SessionJob>(|obj| SessionJobProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
@@ -1425,10 +1413,6 @@ impl SessionPortProxy {
         };
         Ok(SessionPortProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, framework_info })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(|obj| SessionPortProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
@@ -1657,10 +1641,6 @@ impl DevServerProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::cli::DevServer>(|obj| DevServerProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::worker::cli::DevServer for DevServerProxy {
     fn running_jobs(&self) -> ::std::result::Result<::std::vec::Vec<(::std::vec::Vec<u8>, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, bool)>, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -1742,10 +1722,6 @@ impl JobExecutorProxy {
         let _ = context;
         Ok(JobExecutorProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), source })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::ipc_host::JobExecutor>(|obj| JobExecutorProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl JobExecutorProxy {
@@ -2023,10 +1999,6 @@ impl ChildInitializeProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(|obj| ChildInitializeProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::worker::ipc_host::ChildInitialize for ChildInitializeProxy {
     fn initialize(&self, http_proxy: ::std::option::Option<::std::string::String>) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2088,10 +2060,6 @@ impl JobProcessProxy {
         };
         Ok(JobProcessProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(|obj| JobProcessProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
@@ -2473,10 +2441,6 @@ impl JobCallProxy {
     }
 }
 
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(|obj| JobCallProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
-}
-
 impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
     fn call<'a>(&'a self, context: &::lk_agents_abi::invoke::CallContext) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::lk_agents_abi::HostRef, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2535,10 +2499,6 @@ impl ParticipantEntrypointProxy {
         let _ = context;
         Ok(ParticipantEntrypointProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>(|obj| ParticipantEntrypointProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint for ParticipantEntrypointProxy {
@@ -2608,10 +2568,6 @@ impl PoolCallbacksProxy {
         };
         Ok(PoolCallbacksProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>(|obj| PoolCallbacksProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
@@ -2691,10 +2647,6 @@ impl ServerHostProxy {
         };
         Ok(ServerHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
-}
-
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(|obj| ServerHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
