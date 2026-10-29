@@ -70,14 +70,8 @@ impl Executors for HostExecutors {
         proc.host.close(&self.context).await
     }
 
-    fn close_failed(&self, proc: &Executor, error: HostError) {
-        queue_diagnostic(
-            proc.host.clone(),
-            Level::Error,
-            "error closing process",
-            vec![],
-            Some(error),
-        );
+    fn failed(&self, proc: &Executor, message: &'static str, error: HostError) {
+        queue_diagnostic(proc.host.clone(), Level::Error, message, vec![], Some(error));
     }
 
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError> {
@@ -91,11 +85,6 @@ impl Executors for HostExecutors {
         }
     }
 
-    fn exit_failed(&self, proc: &Executor, error: HostError) {
-        let message = "error observing process exit";
-        queue_diagnostic(proc.host.clone(), Level::Error, message, vec![], Some(error));
-    }
-
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError> {
         let reaped = match proc.supervisor.get() {
             Some(supervisor) => supervisor.wait_cleaned().await,
@@ -104,23 +93,8 @@ impl Executors for HostExecutors {
         Ok(if reaped { PoolJoinOutcome::Reaped } else { PoolJoinOutcome::NotLaunched })
     }
 
-    fn join_failed(&self, proc: &Executor, error: HostError) {
-        queue_diagnostic(
-            proc.host.clone(),
-            Level::Error,
-            "error joining process",
-            vec![],
-            Some(error),
-        );
-    }
-
     fn emit(&self, event: PoolEvent, proc: &Executor) {
         self.host.emit(event.as_str().into(), proc.host.clone());
-    }
-
-    fn init_failed(&self, proc: &Executor, error: HostError) {
-        let message = "error initializing process";
-        queue_diagnostic(proc.host.clone(), Level::Error, message, vec![], Some(error));
     }
 }
 

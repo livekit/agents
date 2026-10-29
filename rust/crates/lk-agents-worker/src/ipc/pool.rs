@@ -62,7 +62,8 @@ pub trait Executors: Send + Sync + 'static {
     async fn initialize(&self, proc: &Executor) -> Result<(), HostError>;
     async fn launch(&self, proc: &Executor, job: &HostRef) -> Result<(), HostError>;
     async fn close(&self, proc: &Executor) -> Result<(), HostError>;
-    fn close_failed(&self, proc: &Executor, error: HostError);
+    /// A step that failed on `proc`, as the host's diagnostic `message`.
+    fn failed(&self, proc: &Executor, message: &'static str, error: HostError);
     fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
         crate::diagnostics::emit(
             log::Level::Error,
@@ -70,11 +71,8 @@ pub trait Executors: Send + Sync + 'static {
         );
     }
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError>;
-    fn exit_failed(&self, proc: &Executor, error: HostError);
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError>;
-    fn join_failed(&self, proc: &Executor, error: HostError);
     fn emit(&self, event: PoolEvent, proc: &Executor);
-    fn init_failed(&self, proc: &Executor, error: HostError);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -293,7 +291,7 @@ impl ProcPool {
                         self.track(TokioSpawner::current().spawn(async move {
                             if let Err(error) = pool.0.host.close(&process).await {
                                 pool.0.host.emit(PoolEvent::CleanupIncomplete, &process);
-                                pool.0.host.close_failed(&process, error);
+                                pool.0.host.failed(&process, "error closing process", error);
                             }
                             pool.handle(PoolInput::Closed(id));
                         }));
@@ -308,7 +306,11 @@ impl ProcPool {
                                 Ok(()) => pool.handle(PoolInput::Exited(id)),
                                 Err(error) => {
                                     pool.0.host.emit(PoolEvent::ExitFailed, &process);
-                                    pool.0.host.exit_failed(&process, error);
+                                    pool.0.host.failed(
+                                        &process,
+                                        "error observing process exit",
+                                        error,
+                                    );
                                     pool.handle(PoolInput::ExitFailed(id));
                                 }
                             }
@@ -326,7 +328,7 @@ impl ProcPool {
                                 }
                                 Err(error) => {
                                     pool.0.host.emit(PoolEvent::JoinFailed, &process);
-                                    pool.0.host.join_failed(&process, error);
+                                    pool.0.host.failed(&process, "error joining process", error);
                                     pool.handle(PoolInput::JoinFailed(id));
                                 }
                             }
@@ -383,7 +385,7 @@ impl ProcPool {
             result = steps => match result {
                 Ok(()) => true,
                 Err(error) => {
-                    self.0.host.init_failed(&process, error);
+                    self.0.host.failed(&process, "error initializing process", error);
                     false
                 }
             },

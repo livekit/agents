@@ -158,9 +158,18 @@ impl Executors for Host {
         self.exits.notify_waiters();
         if self.fail_close { Err(HostError::new("close failed")) } else { Ok(()) }
     }
-    fn close_failed(&self, _: &Executor, error: HostError) {
-        assert!(self.fail_close);
-        assert_eq!(error.to_string(), "close failed", "cleanup must preserve its cause");
+    fn failed(&self, _: &Executor, message: &'static str, error: HostError) {
+        match message {
+            "error closing process" => {
+                assert!(self.fail_close);
+                assert_eq!(error.to_string(), "close failed", "cleanup must preserve its cause");
+            }
+            "error joining process" => {
+                assert_eq!(error.to_string(), "join failed", "join must preserve its cause");
+            }
+            "error initializing process" => {}
+            _ => panic!("unexpected {message}: {error}"),
+        }
     }
     fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
         self.cleanup_observed
@@ -179,9 +188,6 @@ impl Executors for Host {
             exited.await;
         }
     }
-    fn exit_failed(&self, _: &Executor, error: HostError) {
-        panic!("unexpected exit observation failure: {error}");
-    }
     async fn join(&self, p: &Executor) -> Result<PoolJoinOutcome, HostError> {
         loop {
             let exited = self.exits.notified();
@@ -199,13 +205,9 @@ impl Executors for Host {
             exited.await;
         }
     }
-    fn join_failed(&self, _: &Executor, error: HostError) {
-        assert_eq!(error.to_string(), "join failed", "join must preserve its cause");
-    }
     fn emit(&self, event: PoolEvent, p: &Executor) {
         self.events.lock().unwrap().push((event, number(p)));
     }
-    fn init_failed(&self, _: &Executor, _: HostError) {}
 }
 
 fn pool(host: &Arc<Host>, idle: usize) -> ProcPool {
