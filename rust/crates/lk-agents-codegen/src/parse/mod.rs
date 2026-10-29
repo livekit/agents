@@ -84,8 +84,20 @@ pub fn constants(label: &str, text: &str) -> Res<Vec<Constant>> {
 
 /// A Rust literal as Python source.
 fn py_literal(at: &str, e: &syn::Expr) -> Res<String> {
-    let bad = || format!("{at}: a #[host(constant)] is a string, integer, float or bool literal");
+    let bad = || {
+        format!("{at}: a #[host(constant)] is a string, integer, float or bool literal, or a slice of them")
+    };
     match e {
+        // `&[..]`: a tuple, immutable like the Rust slice.
+        syn::Expr::Reference(r) if r.mutability.is_none() => {
+            let syn::Expr::Array(items) = &*r.expr else { return Err(bad()) };
+            let items =
+                items.elems.iter().map(|item| py_literal(at, item)).collect::<Res<Vec<_>>>()?;
+            Ok(match items.len() {
+                1 => format!("({},)", items[0]),
+                _ => format!("({})", items.join(", ")),
+            })
+        }
         syn::Expr::Lit(l) => match &l.lit {
             syn::Lit::Str(s) => {
                 let mut out = String::from("\"");

@@ -870,7 +870,8 @@ pub fn split(text: &str) -> Vec<String> { Vec::new() }
 }
 
 // Catches: a constant's string written unescaped (a quote closing the Python literal early), its
-// docstring dropped, or a module of constants alone missing its `Final` import.
+// docstring dropped, a module of constants alone missing its `Final` import, or a slice written
+// as anything but a tuple (a one-item tuple without its comma is its item).
 #[test]
 fn a_constant_is_a_final_with_its_doc() {
     let src = r#"
@@ -883,6 +884,12 @@ pub const KEY: &str = "lk.\"key\"";
 
 #[crate::host(constant)]
 pub const LIMIT: i32 = 3;
+
+#[crate::host(constant)]
+pub const KEYS: &[&str] = &["a", "b"];
+
+#[crate::host(constant)]
+pub const ONE: &[i32] = &[1];
 "#;
     let consts = parse::constants("a.rs", src).expect("parses");
     let out = python::emit_with(&[], &[], &consts).expect("generates");
@@ -892,6 +899,8 @@ pub const LIMIT: i32 = 3;
     assert!(text.contains("from typing import Final\n"), "{text}");
     assert!(text.contains("KEY: Final = \"lk.\\\"key\\\"\"\n\"\"\"The key.\"\"\"\n"), "{text}");
     assert!(text.contains("LIMIT: Final = 3\n"), "{text}");
+    assert!(text.contains("KEYS: Final = (\"a\", \"b\")\n"), "{text}");
+    assert!(text.contains("ONE: Final = (1,)\n"), "{text}");
 }
 
 // Catches: a `record(.., enum)` crossing as a bare string (consumers compare `CloseReason.ERROR`
