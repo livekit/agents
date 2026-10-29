@@ -97,7 +97,7 @@ pub struct WireCompletionTokensDetails {
     pub reasoning_tokens: Option<u32>,
 }
 
-/// `llm/utils.py`'s `strip_thinking_tokens` over one stream: the tags and the state carried across
+/// [`strip_thinking_tokens`] over one stream: the tags and the state carried across
 /// SSE events. `None` means nothing visible yet; `Some("")` only for an empty input.
 #[derive(Debug, Clone)]
 pub struct TagFilter {

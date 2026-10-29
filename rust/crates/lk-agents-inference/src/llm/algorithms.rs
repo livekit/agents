@@ -126,26 +126,6 @@ impl<E: Env> lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlg
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value> {
         provider_format::tools::inject_confirm_duplicate(parameters)
     }
-    fn strip_thinking(
-        content: Option<String>,
-        start_tag: String,
-        end_tag: String,
-        buffer: String,
-        end_marker: Option<String>,
-        is_final: bool,
-    ) -> (Option<String>, String, Option<String>) {
-        super::thinking::strip_thinking(
-            content.as_deref(),
-            &start_tag,
-            &end_tag,
-            &buffer,
-            end_marker.as_deref(),
-            is_final,
-        )
-    }
-    fn flatten_delta_text(parts: Vec<String>) -> Option<String> {
-        super::thinking::flatten_text_parts(&parts)
-    }
 }
 
 #[cfg(test)]

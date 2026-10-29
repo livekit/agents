@@ -231,8 +231,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::duplicate_key, m)?)?;
     m.add_function(wrap_pyfunction!(llm::decide_duplicate, m)?)?;
     m.add_function(wrap_pyfunction!(llm::inject_confirm_duplicate, m)?)?;
-    m.add_function(wrap_pyfunction!(llm::strip_thinking, m)?)?;
-    m.add_function(wrap_pyfunction!(llm::flatten_delta_text, m)?)?;
     m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::NativeRealtimeModel>()?;
     m.add_class::<llm::RealtimeFallbackModel>()?;

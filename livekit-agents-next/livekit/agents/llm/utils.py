@@ -47,9 +47,6 @@ if TYPE_CHECKING:
 
 _ContextT = TypeVar("_ContextT")
 
-THINK_TAG_START = "<think>"
-THINK_TAG_END = "</think>"
-
 
 @dataclass
 class DiffOps:
@@ -400,40 +397,6 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
         key = field_info.alias if by_alias and field_info.alias else name
         result[key] = getattr(model, name)
     return result
-
-
-@dataclass
-class ThinkingTokenFilter:
-    """State for stripping thinking tokens from streamed content."""
-
-    start_tag: str = THINK_TAG_START
-    end_tag: str = THINK_TAG_END
-    _buffer: str = ""
-    _end_marker: str | None = None
-
-
-def strip_thinking_tokens(
-    content: str | list[object] | None, state: ThinkingTokenFilter, *, final: bool = False
-) -> str | None:
-    """The visible part of a streamed delta, the thinking spans removed; ``state`` carries a
-    span or a partial tag across deltas."""
-    if isinstance(content, list):
-        parts = [
-            p
-            if isinstance(p, str)
-            else (p.get("text") if isinstance(p, dict) else getattr(p, "text", None))
-            for p in content
-        ]
-        content = _core.flatten_delta_text([p for p in parts if isinstance(p, str)])
-    elif content is not None and not isinstance(content, str):
-        logger.warning(
-            "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
-        )
-        content = None
-    visible, state._buffer, state._end_marker = _core.strip_thinking(
-        content, state.start_tag, state.end_tag, state._buffer, state._end_marker, final
-    )
-    return visible
 
 
 def _is_valid_function_output(value: object) -> bool:

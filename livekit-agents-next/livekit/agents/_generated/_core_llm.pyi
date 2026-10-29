@@ -320,17 +320,6 @@ def decide_duplicate(
 
 def inject_confirm_duplicate(parameters: object) -> dict[str, object]: ...
 
-def strip_thinking(
-    content: str | None,
-    start_tag: str,
-    end_tag: str,
-    buffer: str,
-    end_marker: str | None,
-    is_final: bool,
-) -> tuple[str | None, str, str | None]: ...
-
-def flatten_delta_text(parts: Sequence[str]) -> str | None: ...
-
 class HostRealtimeModel:
     """A plugin's realtime model as the core's own: its session opens when the driver first asks and
     is the same when asked again.

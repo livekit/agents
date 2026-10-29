@@ -77,17 +77,6 @@ pub trait LlmAlgorithms {
     ) -> (String, Option<Value>);
     #[host(function)]
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value>;
-    #[host(function)]
-    fn strip_thinking(
-        content: Option<String>,
-        start_tag: String,
-        end_tag: String,
-        buffer: String,
-        end_marker: Option<String>,
-        is_final: bool,
-    ) -> (Option<String>, String, Option<String>);
-    #[host(function, pid = true)]
-    fn flatten_delta_text(parts: Vec<String>) -> Option<String>;
 }
 
 #[crate::host(error(kind = "ValueError"))]
