@@ -3,26 +3,20 @@
 //! that feed them.
 
 use super::driver::*;
-use crate::agent_activity::false_interruption::PausedSpeech;
-use crate::agent_activity::scheduling::SpeechScheduler;
-use crate::agent_activity::{AgentActivity, DriverConfig, PIPELINE_SAMPLE_RATE};
+use super::initial::InitialSession;
+use crate::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use crate::agent_session::SessionShared;
-use crate::agent_session::VoiceSession;
-use crate::agent_session::commands::Origin;
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::{Now, Timebase};
 use crate::audio::AudioChannel;
-use crate::audio_recognition::AudioRecognition;
 use crate::data_plane::{AudioForwarder, ForwarderCommand};
 use crate::generation::Instructions;
-use crate::trace::{CoreStep, Journal, RealtimeStep, Step};
+use crate::trace::Journal;
 use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
-use lk_agents_abi::{
-    AudioFrame, EotDetector, FrameId, Llm, Spawner, StreamSink, Stt, TimerSet, Ts, Tts, Vad,
-};
+use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamSink, Stt, Tts, Vad};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -246,16 +240,22 @@ impl DriverBuilder {
         );
         let shared = self.shared(&queue, closing, outputs.clone());
 
-        let paused_speech = {
-            // The sink's facts at start; re-read at every pause decision.
-            let (sink, audio_enabled) = outputs.pause_facts();
-            PausedSpeech::new(&self.config.effective, sink, audio_enabled)
+        let journal = self.journal.clone();
+        let time = self.time.clone();
+        let interruption = self.interruption.take();
+        let eot = self.eot.take();
+        let (rt_session, rt_caps, rt_disabled, rt_resolved) = match realtime {
+            Some(realtime) => (
+                Some(self.resources.register_realtime(realtime.session)),
+                realtime.caps,
+                realtime.disabled,
+                realtime.resolved,
+            ),
+            None => (None, Default::default(), false, self.config.effective.turn.owner()),
         };
-        // The constructor context as the agent's view, not announced (the host has it). The prompt
-        // is rendered per request.
-        let mut session = VoiceSession::new(
-            self.config.clone(),
-            crate::agent_session::SessionParts {
+        let driver = Driver::new(InitialSession {
+            config: self.config.clone(),
+            parts: super::SessionParts {
                 llm,
                 tts,
                 stt,
@@ -269,71 +269,33 @@ impl DriverBuilder {
                 session_id: self.session_id.clone(),
                 storage_enabled: self.storage.is_some(),
             },
-        );
-        session.expressive = self.expressive.clone();
-        let journal = self.journal.clone();
-        if journal.is_on() {
-            journal.record(Step::Core(CoreStep::ConfigApplied {
-                layer: crate::agent_activity::options::ConfigLayer::Session,
-                effective: Box::new(session.config.effective),
-            }));
-            // The wall clock at `Ts::ZERO`: the session may already be past it.
-            let since_zero = self.time.now().saturating_duration_since(Ts::ZERO);
-            journal.record(Step::Core(CoreStep::WallEpoch {
-                at: self.time.wall().checked_sub(since_zero).unwrap_or(std::time::UNIX_EPOCH),
-            }));
-            if let Some(realtime) = &realtime {
-                let turn_detection_disabled = realtime.disabled;
-                journal.record(Step::Realtime(RealtimeStep::Opened { turn_detection_disabled }));
-            }
-        }
-
-        let resolved_mode = match &realtime {
-            Some(realtime) => realtime.resolved,
-            None => session.config.effective.turn.owner(),
-        };
-        let requested_detection = session.config.effective.turn.detection();
-        let input = crate::agent_activity::io::AgentInput::new(
+            instructions: std::mem::take(&mut self.instructions),
+            dynamic_instructions: self.dynamic_instructions.take(),
+            output_nodes: std::mem::take(&mut self.output_nodes),
+            toolset: std::mem::take(&mut self.toolset),
+            hook_bound: self.hook_bound,
+            expressive: self.expressive.clone(),
             sinks,
-            self.video_in.as_ref().map(|input| Arc::as_ptr(input).cast::<()>() as usize),
-            self.video_sampler.take(),
-        );
-        let time = self.time.clone();
-        let capture_run = self.capture_run.take();
-        let interruption = self.interruption.take();
-        let eot = self.eot.take();
-        let activity = self.activity(
-            eot.as_ref(),
-            realtime,
-            paused_speech,
-            resolved_mode,
-            requested_detection,
-        );
-        let mut driver = Driver {
-            activity_changed: Default::default(),
-            outbox: Vec::new(),
+            video_instance: self
+                .video_in
+                .as_ref()
+                .map(|input| Arc::as_ptr(input).cast::<()>() as usize),
+            video_sampler: self.video_sampler.take(),
+            eot_thresholds: eot.as_ref().and_then(|detector| detector.thresholds()),
+            eot_provider: eot.as_ref().map(|detector| detector.id()),
+            rt_session,
+            rt_caps,
+            rt_disabled,
+            rt_resolved,
             view: Arc::clone(&self.view.borrow()),
-            session,
-            activity,
-            input,
-            current: FrameId::ROOT,
-            timers: TimerSet::new(),
-            journalled: journal.is_on(),
             queue: queue.clone(),
-            command_origin: Origin::Host,
-            step: crate::agent_session::time::StepClock::new(),
-            stopped: false,
-            opened: false,
-        };
-        driver.session.trace.built = built;
-        // What the session opens with is released like anything handed over later.
-        driver.session.providers = driver.providers_held();
-        // The opening cycles run at the instant the session is built.
-        driver.step.set(time.read());
-        driver.publish_activity();
-        driver.flush_activity();
-
-        driver.open_session(capture_run, forward_chat_context, keyterms);
+            now: time.read(),
+            built_at: built,
+            journalled: journal.is_on(),
+            capture_run: self.capture_run.take(),
+            forward_chat_context,
+            keyterms,
+        });
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
         let ivr_detection = driver.session.config.effective.turn.ivr_detection();
         let keyterms_pushed = shared.keyterms.subscribe();
@@ -473,110 +435,6 @@ impl DriverBuilder {
             queue.clone(),
         );
         Ok(Some(RealtimeStart { session, caps, disabled, resolved: side.turn_detection_mode }))
-    }
-
-    /// The opening agent's activity: nothing spoken, nothing pending.
-    fn activity(
-        &mut self,
-        eot: Option<&Arc<dyn EotDetector>>,
-        realtime: Option<RealtimeStart>,
-        paused_speech: PausedSpeech,
-        resolved_mode: crate::audio_recognition::TurnDetectionMode,
-        requested_detection: lk_agents_abi::voice::session_options::TurnDetection,
-    ) -> AgentActivity {
-        let effective = &self.config.effective;
-        let mut audio_recognition = AudioRecognition::new(effective, &self.config.legs);
-        audio_recognition.set_thresholds(eot.and_then(|detector| detector.thresholds()));
-        // `_adaptive_interruption_active` is "a detector was supplied"; without it the sentinels
-        // are unreachable.
-        audio_recognition.set_interruption_active(self.config.legs.adaptive_detector);
-        audio_recognition.set_eot_provider(eot.map(|detector| detector.id()));
-        let (rt_session, caps, disabled) = match realtime {
-            Some(rt) => (Some(self.resources.register_realtime(rt.session)), rt.caps, rt.disabled),
-            None => (None, Default::default(), false),
-        };
-        AgentActivity {
-            agent: std::mem::take(&mut self.agent),
-            instructions: std::mem::take(&mut self.instructions),
-            dynamic_instructions: self.dynamic_instructions.take(),
-            output_nodes: std::mem::take(&mut self.output_nodes),
-            toolset: Arc::new(std::mem::take(&mut self.toolset)),
-            tools: Default::default(),
-            audio_recognition,
-            speech_scheduler: SpeechScheduler::new(),
-            paused_speech,
-            speech_agents: Default::default(),
-            finished: Default::default(),
-            tools_committed: Default::default(),
-            reply_plans: Default::default(),
-            tools_in_flight: Default::default(),
-            spoke: Default::default(),
-            announced_current_speech: None,
-            interrupt_waiters: Vec::new(),
-            hook_bound: self.hook_bound,
-            hooks: Default::default(),
-            handoff: Default::default(),
-            on_exit: Default::default(),
-            drain: Default::default(),
-            voice_tasks: Default::default(),
-            dtmf: Default::default(),
-            end_call: None,
-            pending_turn: None,
-            turn_limit: Default::default(),
-            waiting_turns: Default::default(),
-            last_turn: None,
-            live_speech_at_final: false,
-            preemptive_turn: None,
-            preemptive_record_version: 0,
-            rt_session,
-            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(caps),
-            realtime_players: Default::default(),
-            launching: Default::default(),
-            realtime_turn_detection_disabled: disabled,
-            realtime_resolved_mode: resolved_mode,
-            realtime_requested_detection: requested_detection,
-        }
-    }
-}
-
-impl Driver {
-    /// The opening cycles: the first facts, in order, the gate, then the opening agent's records
-    /// (the handoff from nobody, the starting config), and the opening agent on the realtime
-    /// socket; then the static keyterms.
-    fn open_session(
-        &mut self,
-        capture_run: Option<crate::run_result::RunSpec>,
-        forward_chat_context: bool,
-        keyterms: Option<(
-            crate::keyterm_detection::KeytermSetup,
-            Option<lk_agents_abi::resources::ResourceId>,
-        )>,
-    ) {
-        self.publish_gate();
-        {
-            let mut out = self.out();
-            // `start(capture_run=True)`'s run exists before the opening handoff is recorded, so the
-            // handoff and the opening `on_enter` are the run's.
-            if let Some(spec) = capture_run {
-                out.trace(CoreStep::CommandReceived { origin: Origin::Host, kind: "Command::Run" });
-                self.on_run(self.step.now, spec, &mut out);
-            }
-            self.record_handoff(None, &mut out);
-            if self.activity.rt_session.is_some() {
-                let opening = self.session.chat_ctx.for_realtime();
-                self.push_activity(Some(opening), &mut out);
-            }
-            let effects = self.settle_step(out);
-            self.outbox.extend(effects);
-        }
-        self.session.forward_chat_context = forward_chat_context;
-        // `KeytermDetector.start`: the static terms reach the recogniser now.
-        if let Some((setup, llm)) = keyterms {
-            let mut out = self.out();
-            self.keyterms_start(setup, llm, &mut out);
-            let effects = self.settle_step(out);
-            self.outbox.extend(effects);
-        }
     }
 }
 
