@@ -106,6 +106,39 @@ def test_empty_interim_alone_never_reports_onset() -> None:
     assert stream._speaking is False
 
 
+@pytest.mark.parametrize("previous_turn", [False, True])
+def test_empty_final_reports_usage_without_starting_a_silent_turn(previous_turn):
+    stream = _stream()
+    if previous_turn:
+        stream._process_transcript(
+            {"transcript": "hello", "words": [{"end": 44.26}]}, is_final=True
+        )
+        _drain(stream)
+    stream._speech_duration = 4.05
+
+    stream._process_transcript(
+        {"transcript": "", "start": 44.58, "duration": 4.05, "words": []}, is_final=True
+    )
+
+    usage = stream._event_ch.recv_nowait()
+    assert usage.type == SpeechEventType.RECOGNITION_USAGE
+    assert usage.recognition_usage.audio_duration == pytest.approx(4.05)
+    assert _drain(stream) == []
+    assert stream._speech_duration == 0
+    assert stream._speaking is False
+
+
+def test_empty_final_still_closes_an_active_turn():
+    stream = _stream()
+    stream._process_start_of_speech()
+    _drain(stream)
+
+    stream._process_transcript({"transcript": ""}, is_final=True)
+
+    assert _drain(stream) == [SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.END_OF_SPEECH]
+    assert stream._speaking is False
+
+
 def test_onset_resets_after_the_turn_ends() -> None:
     """A second turn on the same stream must report its own onset."""
     stream = _stream()

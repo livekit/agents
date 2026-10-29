@@ -31,6 +31,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -227,6 +228,7 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._speaking = False
+        self._final_alternatives: list[SpeechData] = []
 
         self._session_stopped_event = asyncio.Event()
         self._session_started_event = asyncio.Event()
@@ -259,6 +261,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             self._session_stopped_event.clear()
             self._cancellation_error = None
+            self._final_alternatives = []
 
             self._stream = speechsdk.audio.PushAudioInputStream(
                 stream_format=speechsdk.audio.AudioStreamFormat(
@@ -359,6 +362,7 @@ class SpeechStream(stt.SpeechStream):
             start_time=evt.result.offset / 10**7 + self.start_time_offset,
             end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
         )
+        self._final_alternatives = [final_data] if evt.result.duration > 0 else []
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -404,6 +408,7 @@ class SpeechStream(stt.SpeechStream):
             start_time=evt.result.offset / 10**7 + self.start_time_offset,
             end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
         )
+        self._final_alternatives = []
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -415,6 +420,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        self._final_alternatives = []
         if self._speaking:
             return
 
@@ -431,21 +437,25 @@ class SpeechStream(stt.SpeechStream):
             return
 
         self._speaking = False
+        # At stream close, the SDK's event offset can include trailing silence.
+        # A completed transcript reports the duration of recognized speech.
+        alternatives = self._final_alternatives
+        if not alternatives and evt.offset > 0:
+            alternatives = [
+                stt.SpeechData(
+                    language=LanguageCode(""),
+                    text="",
+                    end_time=evt.offset / 10**7 + self.start_time_offset,
+                )
+            ]
+        self._final_alternatives = []
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
                 self._event_ch.send_nowait,
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=LanguageCode(""),
-                            text="",
-                            end_time=evt.offset / 10**7 + self.start_time_offset,
-                        )
-                    ]
-                    if evt.offset > 0
-                    else [],
+                    alternatives=alternatives,
                 ),
             )
 

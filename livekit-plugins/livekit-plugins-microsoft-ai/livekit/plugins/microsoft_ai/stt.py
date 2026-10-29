@@ -21,7 +21,6 @@ import asyncio
 import base64
 import json
 import math
-import time
 import weakref
 from collections import deque
 from collections.abc import Mapping
@@ -260,7 +259,6 @@ class SpeechStream(stt.RecognizeStream):
         self._item: _Item | None = None
         self._commit_future: asyncio.Future[None] | None = None
         self._committed_item_id: str | None = None
-        self._committed_speech_end_time: float | None = None
         self._finished_items: deque[str] = deque(maxlen=128)
         self._event_ids: deque[str] = deque(maxlen=256)
         self._ws: _WebSocket | None = None
@@ -412,27 +410,19 @@ class SpeechStream(stt.RecognizeStream):
             self._processed_samples += frame.samples_per_channel
         self._segment_samples += frame.samples_per_channel
 
-    async def _commit(
-        self,
-        ws: _WebSocket,
-        buffer: utils.audio.AudioByteStream,
-        *,
-        speech_end_time: float | None = None,
-    ) -> None:
+    async def _commit(self, ws: _WebSocket, buffer: utils.audio.AudioByteStream) -> None:
         for frame in buffer.flush():
             await self._append(ws, frame)
         if not self._segment_samples:
             return
         self._commit_future = asyncio.get_running_loop().create_future()
         self._committed_item_id = None
-        self._committed_speech_end_time = speech_end_time
         try:
             await self._write(ws, {"type": "input_audio_buffer.commit"})
             await asyncio.wait_for(self._commit_future, self._conn_options.timeout)
             self._segment_samples = 0
         finally:
             self._commit_future = None
-            self._committed_speech_end_time = None
 
     async def _send(self, ws: _WebSocket) -> None:
         buffer = utils.audio.AudioByteStream(
@@ -539,7 +529,6 @@ class SpeechStream(stt.RecognizeStream):
         async def consume() -> None:
             nonlocal speaking, committed_samples
             async for event in vad_stream:
-                speech_end_time = time.time() - event.silence_duration - event.inference_duration
                 if not math.isfinite(event.timestamp) or event.timestamp < 0:
                     raise APIError(
                         "Microsoft AI STT received an invalid VAD timestamp", retryable=False
@@ -561,7 +550,7 @@ class SpeechStream(stt.RecognizeStream):
                             "Microsoft AI STT received a VAD end without a speech start",
                             retryable=False,
                         )
-                    await self._commit(ws, buffer, speech_end_time=speech_end_time)
+                    await self._commit(ws, buffer)
                     committed_samples = position
                     speaking = False
             if not feed_ended:
@@ -678,11 +667,7 @@ class SpeechStream(stt.RecognizeStream):
         if self._speaking:
             self._speaking = False
             self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    request_id=item.id,
-                    speech_end_time=self._committed_speech_end_time,
-                )
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=item.id)
             )
         self._finished_items.append(item.id)
         self._item = None

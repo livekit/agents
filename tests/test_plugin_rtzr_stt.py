@@ -11,7 +11,7 @@ pytestmark = pytest.mark.plugin("rtzr")
 
 
 @pytest.mark.parametrize("duration", [300, 0, None])
-def test_endpoint_preserves_utterance_duration(duration):
+def test_endpoint_does_not_use_audio_duration_without_word_timing(duration):
     stream = object.__new__(rtzr_stt.SpeechStream)
     stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._rtzr_stt = SimpleNamespace(_params=SimpleNamespace(language=LanguageCode("ko")))
@@ -23,10 +23,29 @@ def test_endpoint_preserves_utterance_duration(duration):
     assert endpoint.type == stt.SpeechEventType.END_OF_SPEECH
     assert not speaking
     assert started_at is None
-    if duration:
-        assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
-    else:
-        assert endpoint.alternatives == []
+    assert endpoint.alternatives == []
+
+
+def test_endpoint_uses_nested_word_timing_relative_to_the_utterance():
+    stream = object.__new__(rtzr_stt.SpeechStream)
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    stream._rtzr_stt = SimpleNamespace(_params=SimpleNamespace(language=LanguageCode("ko")))
+    message = {
+        "start_at": 38_505,
+        "duration": 6_745,
+        "final": True,
+        "alternatives": [
+            {
+                "text": "안녕",
+                "words": [{"text": "안녕", "start_at": 5_680, "duration": 280}],
+            }
+        ],
+    }
+    events, _, _ = stream._process_transcript_event(message, False, None)
+    transcript, endpoint = events[-2:]
+    assert transcript.alternatives[0].words[0].start_time == pytest.approx(7.0 + 44.185)
+    assert transcript.alternatives[0].words[0].end_time == pytest.approx(7.0 + 44.465)
+    assert endpoint.alternatives[0].end_time == pytest.approx(7.0 + 44.465)
 
 
 @pytest.mark.no_concurrent
@@ -66,7 +85,14 @@ async def test_internal_reconnect_reanchors_after_old_final(monkeypatch, reason)
         assert stream.start_time_offset == pytest.approx(7.0)
         assert stream._input_ch.qsize() == 1
         first.respond(
-            {"start_at": 0, "duration": 900, "final": True, "alternatives": [{"text": "one"}]}
+            {
+                "start_at": 0,
+                "duration": 900,
+                "final": True,
+                "alternatives": [
+                    {"text": "one", "words": [{"text": "one", "start_at": 0, "duration": 900}]}
+                ],
+            }
         )
         first.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, ""))
         async with asyncio.timeout(2):
@@ -82,7 +108,14 @@ async def test_internal_reconnect_reanchors_after_old_final(monkeypatch, reason)
         second = clock.sockets[1]
         assert sum(len(x) for x in second.sent if isinstance(x, bytes)) == 3200
         second.respond(
-            {"start_at": 0, "duration": 100, "final": True, "alternatives": [{"text": "two"}]}
+            {
+                "start_at": 0,
+                "duration": 100,
+                "final": True,
+                "alternatives": [
+                    {"text": "two", "words": [{"text": "two", "start_at": 0, "duration": 100}]}
+                ],
+            }
         )
         async with asyncio.timeout(2):
             async for event in stream:

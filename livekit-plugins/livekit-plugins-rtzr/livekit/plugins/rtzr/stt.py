@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import aiohttp
 
@@ -81,7 +81,6 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                # word timestamps don't seem to work despite the docs saying they do
                 aligned_transcript="chunk",
                 offline_recognize=False,
             )
@@ -269,13 +268,14 @@ class SpeechStream(stt.SpeechStream):
                 await self._ws.send_bytes(frame.data.tobytes())
         await self._end_segment()
 
-    def _parse_words(self, words: list[dict]) -> list[TimedString]:
+    def _parse_words(self, words: list[dict], *, start_time: float) -> list[TimedString]:
         """Parse word timing data from RTZR response."""
         return [
             TimedString(
                 text=w.get("text", ""),
-                start_time=w.get("start_at", 0) / 1000.0 + self.start_time_offset,
+                start_time=start_time + w.get("start_at", 0) / 1000.0 + self.start_time_offset,
                 end_time=(w.get("start_at", 0) + w.get("duration", 0)) / 1000.0
+                + start_time
                 + self.start_time_offset,
             )
             for w in words
@@ -310,12 +310,12 @@ class SpeechStream(stt.SpeechStream):
         """
         start_time = data.get("start_at", 0) / 1000.0
         duration = data.get("duration", 0) / 1000.0
-        words = data.get("words", [])
-
         if "alternatives" not in data or not data["alternatives"]:
             return [], in_speech, speech_started_at
 
-        text = data["alternatives"][0].get("text", "")
+        alternative = data["alternatives"][0]
+        text = alternative.get("text", "")
+        words = alternative.get("words", [])
         is_final = bool(data.get("final", False))
 
         if not text:
@@ -343,7 +343,7 @@ class SpeechStream(stt.SpeechStream):
                         language=self._rtzr_stt._params.language,
                         start_time=start_time + self.start_time_offset,
                         end_time=start_time + duration + self.start_time_offset,
-                        words=self._parse_words(words) if words else None,
+                        words=self._parse_words(words, start_time=start_time) if words else None,
                     )
                 ],
             )
@@ -354,10 +354,20 @@ class SpeechStream(stt.SpeechStream):
                 time.monotonic() - speech_started_at if speech_started_at is not None else 0.0
             )
             logger.debug("RTZR final transcript received (speech_duration=%.2fs)", speech_duration)
+            end_alternatives = []
+            # The utterance duration includes endpointing silence; word times are
+            # relative to the utterance's start_at, not the beginning of the stream.
+            if words and words[-1].get("duration", 0) > 0:
+                end_time = (
+                    start_time
+                    + (words[-1].get("start_at", 0) + words[-1]["duration"]) / 1000.0
+                    + self.start_time_offset
+                )
+                end_alternatives = [replace(events[-1].alternatives[0], end_time=end_time)]
             events.append(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=events[-1].alternatives if duration > 0 else [],
+                    alternatives=end_alternatives,
                 )
             )
             in_speech = False

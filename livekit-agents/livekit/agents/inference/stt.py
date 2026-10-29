@@ -1427,7 +1427,8 @@ class SpeechStream(stt.SpeechStream):
 
         if not text and not is_final:
             return
-        self._process_start_of_speech()
+        if text:
+            self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 
@@ -1443,6 +1444,11 @@ class SpeechStream(stt.SpeechStream):
                     )
                 )
                 self._speech_duration = 0
+
+            # An empty flush result can account for trailing silence without
+            # starting another turn after the previous final already ended it.
+            if not text and not self._speaking:
+                return
 
             event = stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,

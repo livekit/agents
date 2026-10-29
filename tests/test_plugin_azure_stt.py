@@ -14,6 +14,7 @@ def test_azure_endpoint_uses_event_offset_before_final(offset: int) -> None:
     events = []
     stream = object.__new__(azure_stt.SpeechStream)
     stream._speaking = True
+    stream._final_alternatives = []
     stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
@@ -55,6 +56,57 @@ def test_azure_recognized_emits_final_transcript(monkeypatch):
     )
 
     assert [event.type for event in events] == [stt.SpeechEventType.FINAL_TRANSCRIPT]
+
+
+@pytest.fixture
+def timed_stream(monkeypatch):
+    monkeypatch.setattr(
+        azure_stt.speechsdk,
+        "AutoDetectSourceLanguageResult",
+        lambda result: SimpleNamespace(language="en-US"),
+    )
+    stream = object.__new__(azure_stt.SpeechStream)
+    events = []
+    stream._opts = SimpleNamespace(language=["en-US"])
+    stream._speaking = True
+    stream._final_alternatives = []
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    return stream, events
+
+
+def test_azure_endpoint_prefers_final_speech_timing_over_terminal_silence(timed_stream):
+    stream, events = timed_stream
+    stream._on_recognized(
+        SimpleNamespace(
+            result=SimpleNamespace(text="hello", offset=301_900_000, duration=144_400_000)
+        )
+    )
+    stream._on_speech_end(SimpleNamespace(offset=486_400_000))
+
+    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert events[-1].alternatives[0].end_time == pytest.approx(7.0 + 44.63)
+
+
+@pytest.mark.parametrize("new_activity", ["start", "interim", "untimed_final"])
+def test_azure_endpoint_does_not_reuse_final_timing_after_new_speech(timed_stream, new_activity):
+    stream, events = timed_stream
+    stream._on_recognized(
+        SimpleNamespace(
+            result=SimpleNamespace(text="first", offset=10_000_000, duration=20_000_000)
+        )
+    )
+    if new_activity == "start":
+        stream._on_speech_start(SimpleNamespace(offset=40_000_000))
+    else:
+        callback = stream._on_recognizing if new_activity == "interim" else stream._on_recognized
+        callback(
+            SimpleNamespace(result=SimpleNamespace(text="next", offset=40_000_000, duration=0))
+        )
+    stream._on_speech_end(SimpleNamespace(offset=50_000_000))
+
+    assert events[-1].alternatives[0].end_time == pytest.approx(7.0 + 5.0)
 
 
 def test_azure_stream_emits_usage_for_processed_audio():

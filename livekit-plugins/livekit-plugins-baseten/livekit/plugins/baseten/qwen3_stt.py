@@ -378,12 +378,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 if is_final:
                     if speaking:
                         self._event_ch.send_nowait(
-                            stt_module.SpeechEvent(
-                                type=stt_module.SpeechEventType.END_OF_SPEECH,
-                                alternatives=[self._speech_data(event, segments, text)]
-                                if segments and float(segments[-1].get("end_time", 0)) > 0
-                                else [],
-                            )
+                            stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
                         )
                         speaking = False
                     # Only the commit-triggered final ends the session; VAD
