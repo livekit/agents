@@ -1,3 +1,1 @@
-{
-  "executor:rust/crates/lk-agents-runtime/src/voice/console.rs:tokio-net": 2
-}
+{}
