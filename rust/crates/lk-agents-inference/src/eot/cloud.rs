@@ -184,9 +184,7 @@ impl CloudTransport {
         Ok(())
     }
 
-    async fn connect(
-        &self,
-    ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
+    async fn connect(&self) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
         let mut headers = (self.opts.headers)();
         let token =
             lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
@@ -200,8 +198,7 @@ impl CloudTransport {
         let connect = self.transport.connect(&url, headers);
         let deadline = self.opts.conn_options.connect_deadline(self.clock.now());
         // On the session clock, not tokio's: the bound a virtual clock can fire and a test can see.
-        let (sink, stream) = match lk_agents_abi::before(&*self.clock, deadline, connect).await
-        {
+        let (sink, stream) = match lk_agents_abi::before(&*self.clock, deadline, connect).await {
             // Every arm is `retryable=False`, as `_connect_ws` sets it: the fallback is the
             // recovery.
             Err(Elapsed) => {

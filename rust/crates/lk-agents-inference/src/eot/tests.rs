@@ -12,10 +12,10 @@ use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdError, ThresholdOptions, TurnDetectorModel,
 };
 use lk_agents_abi::{ApiConnectOptions, EotInferenceMetrics};
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use prost::Message as _;
 
 use crate::eot::cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID};
-use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use crate::eot::local::{AudioRingBuffer, LocalEotModel, LocalTransport};
 use crate::eot::proto;
 use crate::eot::session::{
