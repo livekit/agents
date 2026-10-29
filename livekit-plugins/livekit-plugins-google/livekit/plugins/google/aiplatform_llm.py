@@ -318,7 +318,6 @@ class AIPlatformLLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
-            provider_fmt="openai",
         )
 
 

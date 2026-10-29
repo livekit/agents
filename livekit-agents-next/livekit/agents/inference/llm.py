@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 import httpx2 as httpx
 import openai
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from openai.types.chat import ChatCompletionToolParam
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from typing_extensions import TypedDict
 
 from .. import _bindings, _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
-from ..llm.chat_context import ChatContext, ProviderFormat
+from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -359,13 +359,11 @@ class LLMStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
-        provider_fmt: ProviderFormat = "openai",
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._inference_class = inference_class
-        self._provider_fmt: ProviderFormat = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs, tools=tools)
@@ -383,7 +381,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
         parser = _core.LlmChoiceParser(self._model)
         try:
-            messages, _ = await self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            messages, _ = await self._chat_ctx.to_provider_format(format="openai")
             schemas = self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema)
             extra = dict(self._extra_kwargs)
             if not self._tools:
@@ -394,7 +392,7 @@ class LLMStream(llm.LLMStream):
                 headers[HEADER_INFERENCE_PROVIDER] = self._provider
 
             stream = await client.chat.completions.create(
-                messages=cast(list[ChatCompletionMessageParam], messages),
+                messages=messages,
                 tools=cast(list[ChatCompletionToolParam], schemas) or openai.omit,
                 model=self._model,
                 stream_options={"include_usage": True},

@@ -23,13 +23,12 @@ import httpx2 as httpx
 
 import openai
 from livekit.agents import llm
-from livekit.agents.inference.llm import LLMStream as _LLMStream
+from livekit.agents.inference.llm import LLMStream as LLMStream
 from livekit.agents.llm import (
     ChatContext,
     ToolChoice,
     utils as llm_utils,
 )
-from livekit.agents.llm.chat_context import ProviderFormat
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -114,7 +113,6 @@ class LLM(llm.LLM):
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
-        _provider_fmt: NotGivenOr[ProviderFormat] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
         """
@@ -166,7 +164,6 @@ class LLM(llm.LLM):
                 " OPENAI_API_KEY environment variable"
             )
 
-        self._provider_fmt: ProviderFormat = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
         self._owns_client = client is None
         self._client = client or openai.AsyncClient(
@@ -1043,38 +1040,10 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            provider_fmt=self._provider_fmt,
             strict_tool_schema=self._strict_tool_schema,
             client=self._client.with_options(max_retries=0),
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
-        )
-
-
-class LLMStream(_LLMStream):
-    def __init__(
-        self,
-        llm: LLM,
-        *,
-        model: str | ChatModels,
-        provider_fmt: ProviderFormat,
-        strict_tool_schema: bool,
-        client: openai.AsyncClient,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        conn_options: APIConnectOptions,
-        extra_kwargs: dict[str, Any],
-    ) -> None:
-        super().__init__(
-            llm,
-            model=model,
-            provider_fmt=provider_fmt,
-            strict_tool_schema=strict_tool_schema,
-            client=client,
-            chat_ctx=chat_ctx,
-            tools=tools,
-            conn_options=conn_options,
-            extra_kwargs=extra_kwargs,
         )
