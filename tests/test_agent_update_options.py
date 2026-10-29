@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from livekit.agents import Agent, AgentSession
@@ -143,6 +145,44 @@ async def test_update_options_running_disable_stt() -> None:
         assert activity._audio_recognition is not None
         assert activity._audio_recognition._stt_pipeline is None
     finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_close_waits_for_disabled_stt_cleanup(monkeypatch) -> None:
+    stt = FakeSTT()
+    agent = Agent(instructions="test", stt=stt, vad=FakeVAD(), llm=FakeLLM(), tts=FakeTTS())
+    session = AgentSession(turn_handling={"turn_detection": None})
+    await session.start(agent)
+    stream = await stt.stream_ch.recv()
+    close_stream = stream.aclose
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def delayed_close() -> None:
+        entered.set()
+        await release.wait()
+        await close_stream()
+        closed.set()
+
+    monkeypatch.setattr(stream, "aclose", delayed_close)
+    close_session = None
+    try:
+        agent.update_options(stt=None)
+        await entered.wait()
+        close_session = asyncio.create_task(session.aclose())
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(close_session), timeout=0.01)
+        assert not closed.is_set()
+        release.set()
+        await close_session
+        assert closed.is_set()
+    finally:
+        release.set()
+        if close_session is not None:
+            await close_session
+        await close_stream()
         await session.aclose()
 
 

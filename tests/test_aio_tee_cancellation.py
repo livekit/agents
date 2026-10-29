@@ -467,7 +467,8 @@ async def test_parent_close_before_producer_starts_closes_source():
         await tee.aclose()
 
 
-async def test_last_peer_waits_for_cleanup_after_source_terminates():
+@pytest.mark.parametrize("num_peers", [1, 2])
+async def test_terminal_peer_waits_for_cleanup_after_source_terminates(num_peers):
     async def run_case(error):
         entered_close = asyncio.Event()
         finish_close = asyncio.Event()
@@ -487,7 +488,7 @@ async def test_last_peer_waits_for_cleanup_after_source_terminates():
                 self.closed = True
 
         source = Source()
-        tee = Tee(source, n=1)
+        tee = Tee(source, n=num_peers)
         reader = asyncio.create_task(anext(tee[0]))
         try:
             await entered_close.wait()
@@ -504,6 +505,47 @@ async def test_last_peer_waits_for_cleanup_after_source_terminates():
 
     await run_case(StopAsyncIteration())
     await run_case(ValueError("upstream failure"))
+
+
+@pytest.mark.parametrize("error", [StopAsyncIteration(), ValueError("upstream failure")])
+async def test_cancelled_terminal_reader_does_not_cancel_cleanup(error):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    close_count = 0
+
+    class Source:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise error
+
+        async def aclose(self):
+            nonlocal close_count
+            entered.set()
+            await release.wait()
+            close_count += 1
+
+    tee = Tee(Source(), n=2)
+    reader = asyncio.create_task(anext(tee[0]))
+    try:
+        await entered.wait()
+        await asyncio.sleep(0)
+        reader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reader
+        assert close_count == 0
+        release.set()
+        with pytest.raises(type(error)) as caught:
+            await anext(tee[1])
+        if not isinstance(error, StopAsyncIteration):
+            assert caught.value is error
+        assert close_count == 1
+    finally:
+        release.set()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        await tee.aclose()
 
 
 async def test_completed_error_is_retained_when_its_reader_is_cancelled():

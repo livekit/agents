@@ -59,6 +59,18 @@ class _TeeSource(Generic[T]):
             if response.cancelled():
                 self._response = None
             raise
+        except BaseException:
+            # Finish terminal cleanup before releasing the peer lock. Otherwise
+            # a consumer can finish while another peer is still closing the
+            # producer's tasks (for example, a stream's metrics monitor).
+            pending = [
+                task
+                for task in (self._task, self._supervisor)
+                if task is not None and not task.done()
+            ]
+            if pending:
+                await asyncio.shield(asyncio.gather(*pending, return_exceptions=True))
+            raise
         self._response = None
         return item
 
@@ -123,9 +135,12 @@ class _TeeSource(Generic[T]):
                 task.cancel()
         # Only cancel the producer once. A second close or a cancelled close
         # caller must not interrupt an upstream finally block already running.
-        (result,) = await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        if task.done():
+            result = None if task.cancelled() else task.exception()
+        else:
+            (result,) = await asyncio.shield(asyncio.gather(task, return_exceptions=True))
         supervisor = self._supervisor
-        if supervisor is not None:
+        if supervisor is not None and not supervisor.done():
             await asyncio.shield(asyncio.gather(supervisor, return_exceptions=True))
         if self._response is not None:
             if not self._response.done():

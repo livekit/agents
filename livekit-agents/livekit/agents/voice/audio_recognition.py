@@ -836,7 +836,9 @@ class AudioRecognition:
                 await self._stt_pipeline.aclose()
                 self._stt_pipeline = None
 
-            await aio.cancel_and_wait(*self._tasks)
+            # These tasks are already closing replaced/disabled components.
+            # Wait for their cleanup instead of cancelling the cleanup itself.
+            await asyncio.gather(*self._tasks, return_exceptions=True)
 
             if self._stt_consumer_atask is not None:
                 await aio.cancel_and_wait(self._stt_consumer_atask)
@@ -915,13 +917,13 @@ class AudioRecognition:
 
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
-                task.add_done_callback(lambda _: self._tasks.discard(task))
+                task.add_done_callback(self._tasks.discard)
                 self._tasks.add(task)
                 self._stt_consumer_atask = None
 
             if self._stt_pipeline is not None:
                 task = asyncio.create_task(self._stt_pipeline.aclose())
-                task.add_done_callback(lambda _: self._tasks.discard(task))
+                task.add_done_callback(self._tasks.discard)
                 self._tasks.add(task)
                 self._stt_pipeline = None
 
