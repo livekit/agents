@@ -10,14 +10,16 @@
 use crate::support;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use lk_agents_abi::errors::RefRegistry;
-use lk_agents_abi::{HostRef, RealClock};
+use lk_agents_abi::turn::detector::LegEvent;
+use lk_agents_abi::turn::interruption::{InterruptionSignal, InterruptionSource};
+use lk_agents_abi::{Clock, RealClock, WallAnchor};
 use lk_agents_inference::interruption::{
     AUDIO_PREFIX_DURATION, AdaptiveInterruptionDetector, AudioFrame, ConnectionConfig,
-    DETECTION_INTERVAL, DetectorEvent, InputEvent, InterruptionOptions, MAX_AUDIO_DURATION,
-    MIN_INTERRUPTION_DURATION, OverlapStart, REMOTE_INFERENCE_TIMEOUT, StreamEvent,
+    DETECTION_INTERVAL, InputEvent, InterruptionOptions, MAX_AUDIO_DURATION,
+    MIN_INTERRUPTION_DURATION, OverlapStart, REMOTE_INFERENCE_TIMEOUT,
 };
 use support::within;
 use tokio::net::TcpListener;
@@ -34,9 +36,7 @@ fn frame(n: usize) -> AudioFrame {
     }
 }
 
-fn detector(
-    port: u16,
-) -> (AdaptiveInterruptionDetector, tokio::sync::mpsc::UnboundedReceiver<DetectorEvent>) {
+fn detector(port: u16) -> AdaptiveInterruptionDetector {
     let opts = InterruptionOptions::new(
         Some(0.7),
         MIN_INTERRUPTION_DURATION,
@@ -54,17 +54,14 @@ fn detector(
 
 /// 1 s of agent-only audio, then the user starts over it for one detection interval: exactly one
 /// request.
-fn push_one_overlap(
-    stream: &lk_agents_inference::interruption::InterruptionStream,
-    span: Option<HostRef>,
-) {
+fn push_one_overlap(stream: &lk_agents_inference::interruption::InterruptionStream) {
     stream.push(InputEvent::AgentSpeechStarted).unwrap();
     stream.push(InputEvent::Audio(frame(SR as usize))).unwrap();
     stream
         .push(InputEvent::OverlapSpeechStarted(OverlapStart {
             speech_duration: 0.2,
             started_at: 1.0,
-            user_speaking_span: span,
+            user_speaking_span: None,
         }))
         .unwrap();
     stream.push(InputEvent::Audio(frame(1600))).unwrap();
@@ -129,9 +126,9 @@ async fn fake_gateway() -> (u16, tokio::task::JoinHandle<(String, u64)>) {
 #[tokio::test]
 async fn a_verdict_from_a_real_socket_reaches_the_consumer_as_an_event() {
     let (port, gateway) = fake_gateway().await;
-    let (detector, mut detector_events) = detector(port);
+    let detector = detector(port);
     let mut stream = detector.stream();
-    push_one_overlap(&stream, None);
+    push_one_overlap(&stream);
 
     let event = within("the verdict to reach the consumer", stream.recv())
         .await
@@ -170,51 +167,29 @@ async fn a_verdict_from_a_real_socket_reaches_the_consumer_as_an_event() {
     // 1.0 s prefix + 0.2 s of already-detected speech, trimmed out of the 1 s buffered, plus the
     // 0.1 s batch that triggered the send.
     assert_eq!(samples_sent, (1.1 * SR as f64) as u64);
-
-    // Both the event and its metrics reach the detector's channel.
-    let mut saw_event = false;
-    let mut saw_metrics = false;
-    while let Ok(ev) = detector_events.try_recv() {
-        match ev {
-            DetectorEvent::OverlappingSpeech(_) => saw_event = true,
-            DetectorEvent::MetricsCollected(m) => {
-                saw_metrics = true;
-                assert_eq!((m.num_interruptions, m.num_backchannels), (1, 0));
-                assert_eq!(m.num_requests, 1);
-            }
-            _ => {}
-        }
-    }
-    assert!(saw_event && saw_metrics, "the detector must fan the verdict out to both channels");
 }
 
-// Catches: a host-driven stream's events reaching the detector's channel, where the session's
-// reader takes them -- a user's `detector.stream()` during a session then loses its own error or
-// span write to that reader -- or the span write going anywhere but the stream that pushed the
-// span.
+// Catches: interruption metrics never reaching the session. They were sent only on the detector's
+// own channel, which nothing drained, so `metrics_collected` never carried an `InterruptionMetrics`.
 #[tokio::test]
-async fn a_private_stream_keeps_its_verdict_and_span_write_to_itself() {
-    struct NoRelease;
-    impl RefRegistry for NoRelease {
-        fn release(&self, _id: u64) {}
-    }
-    let registry: Arc<dyn RefRegistry> = Arc::new(NoRelease);
-
+async fn the_session_leg_reports_interruption_metrics_with_the_verdict() {
     let (port, gateway) = fake_gateway().await;
-    let (detector, mut detector_events) = detector(port);
-    let mut stream = detector.private_stream();
-    push_one_overlap(&stream, Some(HostRef::new(7, &registry)));
+    let detector = detector(port);
+    let clock = RealClock::new();
+    let leg = detector.open(WallAnchor { wall: 1_787_000_000.0, at: clock.now() });
+    leg.signal(InterruptionSignal::AgentSpeechStarted);
+    leg.audio().push(frame(SR as usize)).unwrap();
+    leg.signal(InterruptionSignal::OverlapStarted {
+        started_at: clock.now(),
+        speech_duration: Duration::from_millis(200),
+    });
+    leg.audio().push(frame(1600)).unwrap();
 
-    let span = within("the span write", stream.recv_event()).await;
-    assert!(
-        matches!(&span, Some(StreamEvent::SpanUpdate { span, .. }) if span.id() == 7),
-        "{span:?}"
-    );
-    let verdict = within("the verdict", stream.recv_event()).await;
-    assert!(matches!(verdict, Some(StreamEvent::Overlap(_))), "{verdict:?}");
+    let event = within("the verdict to reach the session", leg.next_event()).await;
+    let LegEvent::Verdict { verdict, .. } = event else { panic!("expected a verdict: {event:?}") };
+    let metrics = verdict.metrics.expect("the verdict carries the detector's metrics");
+    assert_eq!((metrics.num_interruptions, metrics.num_backchannels), (1, 0));
+    assert_eq!(metrics.num_requests, 1);
+    assert!(metrics.total_duration > 0.0);
     within("the gateway task to finish", gateway).await.unwrap();
-    assert!(
-        detector_events.try_recv().is_err(),
-        "the detector's channel is the session stream's alone"
-    );
 }

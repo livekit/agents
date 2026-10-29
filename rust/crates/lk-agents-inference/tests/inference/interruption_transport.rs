@@ -15,8 +15,8 @@ use lk_agents_abi::RealClock;
 use lk_agents_inference::headers::HEADER_SESSION_ID;
 use lk_agents_inference::interruption::{
     AUDIO_PREFIX_DURATION, AdaptiveInterruptionDetector, ConnectionConfig, DETECTION_INTERVAL,
-    DetectorEvent, InputEvent, InterruptionOptions, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
-    REMOTE_INFERENCE_TIMEOUT, StreamClosed,
+    InputEvent, InterruptionOptions, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
+    REMOTE_INFERENCE_TIMEOUT, StreamClosed, StreamEvent,
 };
 use support::within;
 use tokio::net::TcpListener;
@@ -112,7 +112,7 @@ async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
         }),
         ..Default::default()
     };
-    let (detector, _events) = AdaptiveInterruptionDetector::new(
+    let detector = AdaptiveInterruptionDetector::new(
         options(format!("ws://127.0.0.1:{port}"), Some(0.4)),
         config,
         Arc::new(RealClock::new()),
@@ -154,25 +154,17 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
         },
         ..Default::default()
     };
-    let (detector, mut events) = AdaptiveInterruptionDetector::new(
+    let detector = AdaptiveInterruptionDetector::new(
         options(format!("ws://127.0.0.1:{port}"), Some(0.5)),
         config,
         Arc::new(RealClock::new()),
     );
-    let stream = detector.stream();
-
-    let err = within(
-        "the retry ladder to terminate -- num_retries may not be advancing",
-        stream.finish(),
-    )
-    .await
-    .expect_err("an unreachable gateway must fail the stream");
-    // The count includes the first attempt (7dc5c87d6): two retries are three attempts.
-    assert_eq!(err.message, "failed to detect interruption after 3 attempts");
+    let mut stream = detector.stream();
 
     let mut recoverable = 0;
     let mut fatal = 0;
-    while let Ok(DetectorEvent::Error(e)) = events.try_recv() {
+    while let Some(event) = within("the stream's errors", stream.recv_event()).await {
+        let StreamEvent::Error(e) = event else { panic!("expected an error: {event:?}") };
         if e.recoverable {
             recoverable += 1;
         } else {
@@ -181,6 +173,14 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
         assert_eq!(e.label, "livekit.agents.inference.interruption.AdaptiveInterruptionDetector");
     }
     assert_eq!((recoverable, fatal), (2, 1), "two retries announced, then one give-up");
+    let err = within(
+        "the retry ladder to terminate -- num_retries may not be advancing",
+        stream.finish(),
+    )
+    .await
+    .expect_err("an unreachable gateway must fail the stream");
+    // The count includes the first attempt (7dc5c87d6): two retries are three attempts.
+    assert_eq!(err.message, "failed to detect interruption after 3 attempts");
 }
 
 // Catches: `end_input` not actually closing the channel. The reference closes `_input_ch` so the
@@ -189,7 +189,7 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
 #[tokio::test]
 async fn end_input_closes_the_input_and_further_pushes_are_rejected() {
     let (port, _creates) = recording_gateway().await;
-    let (detector, _events) = AdaptiveInterruptionDetector::new(
+    let detector = AdaptiveInterruptionDetector::new(
         options(format!("ws://127.0.0.1:{port}"), Some(0.5)),
         ConnectionConfig::default(),
         Arc::new(RealClock::new()),

@@ -58,9 +58,7 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
         let conn_options = ApiConnectOptions { max_retry: 0, ..conn_options.unwrap_or_default() };
         let config =
             ConnectionConfig { conn_options, token_ttl_secs, ..ConnectionConfig::default() };
-        // The session reads each stream's own events; nothing drains the detector's channel.
-        let (detector, _events) =
-            AdaptiveInterruptionDetector::new(opts, config, env.clock.clone());
+        let detector = AdaptiveInterruptionDetector::new(opts, config, env.clock.clone());
         Ok(NativeInterruptionDetector { detector })
     }
 

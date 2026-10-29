@@ -26,6 +26,8 @@ pub struct OverlapVerdict {
     pub ignore_user_transcript_until: Ts,
     /// The detector's event, emitted as `overlapping_speech`; `None` from a detector without one.
     pub reported: Option<Arc<crate::voice::events::OverlappingSpeechEvent>>,
+    /// The detector's `metrics_collected` for this verdict; `None` from a detector without one.
+    pub metrics: Option<crate::metrics::base::InterruptionMetrics>,
 }
 
 pub trait InterruptionPort: Send + Sync {

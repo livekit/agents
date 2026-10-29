@@ -9,7 +9,6 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::metrics::base::InterruptionMetrics;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{Clock, HostRef};
@@ -19,13 +18,12 @@ use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 use crate::headers::HeaderProvider;
+use crate::interruption::LABEL;
 use crate::interruption::core::{
-    InputEvent, InterruptionMachine, InterruptionEffect, InterruptionEvent, RequestIdentity,
+    InputEvent, InterruptionEffect, InterruptionEvent, InterruptionMachine, RequestIdentity,
     SpanAttributes, StreamError,
 };
-use crate::interruption::event::{
-    InterruptionDetectionError, OverlappingSpeechEvent, interruption_metrics,
-};
+use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent};
 use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{
     ClientMessage, ENCODING_S16LE, ServerMessage, SessionCreateSettings, frame_request,
@@ -33,7 +31,6 @@ use crate::interruption::proto::{
 use crate::interruption::retry::{
     ConnectFailure, closed_unexpectedly, connect_error, session_create_failed,
 };
-use crate::interruption::{LABEL, MODEL, PROVIDER};
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
@@ -69,40 +66,24 @@ impl Default for ConnectionConfig {
     }
 }
 
-/// The three things `AdaptiveInterruptionDetector` emits for a [`stream`](AdaptiveInterruptionDetector::stream).
-#[derive(Debug, Clone)]
-pub enum DetectorEvent {
-    OverlappingSpeech(Box<OverlappingSpeechEvent>),
-    Error(Box<InterruptionDetectionError>),
-    MetricsCollected(Box<InterruptionMetrics>),
-}
-
 /// `AdaptiveInterruptionDetector` (`inference/interruption.py:264`).
 pub struct AdaptiveInterruptionDetector {
     opts: Arc<Mutex<InterruptionOptions>>,
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
-    events: mpsc::UnboundedSender<DetectorEvent>,
     /// `weakref.WeakSet[InterruptionWebSocketStream]`, so `update_options` reaches live streams
     /// without keeping dead ones alive.
     streams: Mutex<Vec<Weak<Notify>>>,
 }
 
 impl AdaptiveInterruptionDetector {
-    pub fn new(
-        opts: InterruptionOptions,
-        config: ConnectionConfig,
-        clock: Arc<dyn Clock>,
-    ) -> (Self, mpsc::UnboundedReceiver<DetectorEvent>) {
-        let (events, rx) = mpsc::unbounded_channel();
-        let detector = AdaptiveInterruptionDetector {
+    pub fn new(opts: InterruptionOptions, config: ConnectionConfig, clock: Arc<dyn Clock>) -> Self {
+        AdaptiveInterruptionDetector {
             opts: Arc::new(Mutex::new(opts)),
             config,
             clock,
-            events,
             streams: Mutex::new(Vec::new()),
-        };
-        (detector, rx)
+        }
     }
 
     /// `update_options` (`inference/interruption.py:391`). The options are shared with live
@@ -119,20 +100,8 @@ impl AdaptiveInterruptionDetector {
         });
     }
 
-    /// `stream(conn_options=...)`, whose verdicts, metrics and errors also reach the detector's
-    /// channel: the session's stream, since the session's host drains that channel.
+    /// `stream(conn_options=...)`: its verdicts and errors reach only this stream's reader.
     pub fn stream(&self) -> InterruptionStream {
-        self.open(true)
-    }
-
-    /// A stream whose caller emits its own events on the detector (the host's
-    /// `InterruptionWebSocketStream`): nothing reaches the detector's channel, so it never
-    /// competes with the session's stream there.
-    pub fn private_stream(&self) -> InterruptionStream {
-        self.open(false)
-    }
-
-    fn open(&self, fan_out: bool) -> InterruptionStream {
         let reconnect = Arc::new(Notify::new());
         self.streams.lock().unwrap().push(Arc::downgrade(&reconnect));
 
@@ -145,7 +114,6 @@ impl AdaptiveInterruptionDetector {
             opts: self.opts.clone(),
             config: self.config.clone(),
             clock: self.clock.clone(),
-            detector_events: fan_out.then(|| self.events.clone()),
             stream_events: event_tx,
             reconnect: reconnect.clone(),
             closed: closed.clone(),
@@ -178,8 +146,6 @@ struct StreamContext {
     opts: Arc<Mutex<InterruptionOptions>>,
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
-    /// `None` for a [`private_stream`](AdaptiveInterruptionDetector::private_stream).
-    detector_events: Option<mpsc::UnboundedSender<DetectorEvent>>,
     stream_events: mpsc::UnboundedSender<StreamEvent>,
     reconnect: Arc<Notify>,
     closed: Arc<AtomicBool>,
@@ -201,20 +167,12 @@ impl StreamContext {
         self.clock.wall().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64()
     }
 
-    /// `self.send(ev)` plus `_metrics_monitor_task`'s fold, inline.
     fn emit_overlap(&self, request: Option<ReqId>, ev: OverlappingSpeechEvent) {
-        let metrics = interruption_metrics(&ev, self.wall(), MODEL, PROVIDER);
-        let event = match request {
-            Some(request) => {
-                StreamEvent::CorrelatedOverlap { request, event: Box::new(ev.clone()) }
-            }
-            None => StreamEvent::Overlap(Box::new(ev.clone())),
-        };
-        let _ = self.stream_events.send(event);
-        if let Some(detector) = &self.detector_events {
-            let _ = detector.send(DetectorEvent::OverlappingSpeech(Box::new(ev)));
-            let _ = detector.send(DetectorEvent::MetricsCollected(Box::new(metrics)));
-        }
+        let event = Box::new(ev);
+        let _ = self.stream_events.send(match request {
+            Some(request) => StreamEvent::CorrelatedOverlap { request, event },
+            None => StreamEvent::Overlap(event),
+        });
     }
 
     fn emit_effect(&self, effect: InterruptionEffect) -> Option<(RequestIdentity, Vec<i16>)> {
@@ -242,13 +200,10 @@ impl StreamContext {
             recoverable,
         });
         let event = match request {
-            Some(request) => StreamEvent::CorrelatedError { request, error: err.clone() },
-            None => StreamEvent::Error(err.clone()),
+            Some(request) => StreamEvent::CorrelatedError { request, error: err },
+            None => StreamEvent::Error(err),
         };
         let _ = self.stream_events.send(event);
-        if let Some(detector) = &self.detector_events {
-            let _ = detector.send(DetectorEvent::Error(err));
-        }
     }
 }
 
@@ -818,7 +773,6 @@ mod tests {
             },
             Arc::new(lk_agents_abi::RealClock::new()),
         )
-        .0
     }
 
     #[tokio::test]
@@ -838,7 +792,7 @@ mod tests {
         ];
         for (input, count) in cases {
             let detector = detector(Arc::new(FakeWs::hanging()));
-            let mut stream = detector.private_stream();
+            let mut stream = detector.stream();
             let refused = (0..count).any(|_| stream.push(input.clone()).is_err());
             if !refused {
                 stream.aclose().await.unwrap();
@@ -861,7 +815,7 @@ mod tests {
     async fn end_input_sends_accepted_audio_before_session_close() {
         let peer = Arc::new(FakeWs::new(Vec::new()).keep_open());
         let detector = detector(peer.clone());
-        let mut stream = detector.private_stream();
+        let mut stream = detector.stream();
         stream.push(InputEvent::AgentSpeechStarted).unwrap();
         stream
             .push(InputEvent::OverlapSpeechStarted(OverlapStart {

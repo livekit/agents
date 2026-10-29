@@ -116,6 +116,17 @@ pub(super) fn deliver(port: &Arc<FakeInterruption>, what: &Input) -> bool {
                     probability: 0.0,
                     num_requests: 0,
                 })),
+                // The real leg reports one record per verdict.
+                metrics: Some(lk_agents_abi::metrics::base::InterruptionMetrics {
+                    timestamp: 0.0,
+                    total_duration: 0.0,
+                    prediction_duration: 0.0,
+                    detection_delay: 0.0,
+                    num_interruptions: u32::from(*is_interruption),
+                    num_backchannels: u32::from(!*is_interruption && !*agent_ended),
+                    num_requests: 1,
+                    metadata: None,
+                }),
             },
         },
         Input::OverlapFail { .. } => LegEvent::Error {

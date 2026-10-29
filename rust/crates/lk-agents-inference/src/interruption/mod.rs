@@ -16,8 +16,8 @@ pub mod transport;
 
 pub use audio::{AudioError, AudioFrame, AudioWindow};
 pub use core::{
-    InputEvent, InputOutcome, InterruptionMachine, InterruptionEffect, InterruptionEvent, OverlapEnd,
-    OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,
+    InputEvent, InputOutcome, InterruptionEffect, InterruptionEvent, InterruptionMachine,
+    OverlapEnd, OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,
 };
 pub use detector::NativeInterruptionDetector;
 pub use event::{
@@ -32,8 +32,7 @@ pub use options::{
 };
 pub use retry::{ConnectFailure, connect_error};
 pub use transport::{
-    AdaptiveInterruptionDetector, ConnectionConfig, DetectorEvent, InterruptionStream,
-    StreamClosed, StreamEvent,
+    AdaptiveInterruptionDetector, ConnectionConfig, InterruptionStream, StreamClosed, StreamEvent,
 };
 
 /// `type(self).__module__ + "." + type(self).__name__` (`inference/interruption.py:342`), stamped

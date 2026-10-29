@@ -388,6 +388,14 @@ impl Driver {
             out.machine()
                 .emit(crate::events::SessionEvent::OverlappingSpeech(std::sync::Arc::clone(event)));
         }
+        if let Some(m) = &v.metrics {
+            out.machine().emit(crate::events::SessionEvent::MetricsCollected {
+                metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Interruption(
+                    m.clone(),
+                )),
+                speech: None,
+            });
+        }
         // A verdict for an overlap no longer open changes nothing; one inside the boundary
         // cooldown is not trusted. The rest is on the effect list, in order.
         let (applied, eff) = self.activity.audio_recognition.on_overlap_verdict(req, &v);

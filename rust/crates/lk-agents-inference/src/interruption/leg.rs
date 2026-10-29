@@ -8,8 +8,8 @@ use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSignal, Ov
 use lk_agents_abi::{AudioFrame, StreamSink, WallAnchor};
 
 use super::{
-    AdaptiveInterruptionDetector, InputEvent, InterruptionStream, OverlapEnd, OverlapStart,
-    OverlappingSpeechEvent, StreamEvent,
+    AdaptiveInterruptionDetector, InputEvent, InterruptionStream, MODEL, OverlapEnd, OverlapStart,
+    OverlappingSpeechEvent, PROVIDER, StreamEvent, interruption_metrics,
 };
 
 pub struct InterruptionLeg {
@@ -122,6 +122,8 @@ fn verdict(ev: &OverlappingSpeechEvent, anchor: WallAnchor) -> OverlapVerdict {
         ignore_user_transcript_until: anchor
             .ts(ev.overlap_started_at.filter(|v| *v != 0.0).unwrap_or(ev.detected_at)),
         reported: Some(Arc::new(ev.clone())),
+        // `_metrics_monitor_task`: one record per verdict, stamped when the verdict was made.
+        metrics: Some(interruption_metrics(ev, ev.created_at, MODEL, PROVIDER)),
     }
 }
 
@@ -245,7 +247,7 @@ mod tests {
         let transport = Arc::new(FakeWs::new(Vec::new()).keep_open());
         let config = ConnectionConfig { transport: transport.clone(), ..Default::default() };
         let clock = Arc::new(lk_agents_abi::RealClock::new());
-        let (detector, _events) = AdaptiveInterruptionDetector::new(opts, config, clock.clone());
+        let detector = AdaptiveInterruptionDetector::new(opts, config, clock.clone());
         let leg = InterruptionLeg::open(&detector, WallAnchor { wall: 1.0, at: clock.now() });
         leg.signal(S::AgentSpeechStarted);
         leg.signal_overlap(
