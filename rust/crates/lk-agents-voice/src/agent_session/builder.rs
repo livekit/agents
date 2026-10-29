@@ -86,8 +86,6 @@ pub trait SessionExecutor: Send {
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a Resources,
-        time: Timebase,
-        spawner: Arc<dyn Spawner>,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>>;
@@ -228,15 +226,8 @@ impl DriverBuilder {
             by_channel: std::collections::BTreeMap::new(),
             forwarder: AudioForwarder::new(PIPELINE_SAMPLE_RATE),
         };
-        let opened = executor
-            .open_legs(
-                &self.resources,
-                self.time.clone(),
-                Arc::clone(&self.spawner),
-                self.stt.clone(),
-                self.vad.clone(),
-            )
-            .await?;
+        let opened =
+            executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone()).await?;
         self.install_legs(&mut sinks, opened);
         let realtime = self.open_realtime(&mut sinks, &queue).await?;
         let Sinks { by_channel: sinks, forwarder } = sinks;

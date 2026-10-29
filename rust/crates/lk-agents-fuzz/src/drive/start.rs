@@ -298,7 +298,7 @@ impl Run {
         }
         api.start(
             false,
-            Box::new(super::executor::Handover::new(cores_tx)),
+            Box::new(super::executor::Handover::new(cores_tx, time.clone(), tasks.clone())),
             Box::new(fakes::remote_session::hosting),
             fakes::amd::spawn,
         )

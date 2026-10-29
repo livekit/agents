@@ -71,9 +71,9 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
 
 async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
     let (builder, steps) = builder(name);
-    let mut executor = Executor::default();
+    let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let (cores, handle) = builder.start(&mut executor).await.unwrap();
-    (Runtime::new(cores, Vec::new()), handle, steps)
+    (executor.into_runtime(cores), handle, steps)
 }
 
 #[tokio::test(start_paused = true)]
@@ -176,8 +176,16 @@ async fn accepted_views_are_published_before_receipts() {
     assert!(receipt.await.is_ok(), "the receipt was not delivered");
 }
 
-struct StartupStt(Arc<std::sync::atomic::AtomicUsize>, Arc<tokio::sync::Notify>);
-struct StartupSource(Arc<std::sync::atomic::AtomicUsize>, Arc<tokio::sync::Notify>);
+struct StartupStt(
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<tokio::sync::Notify>,
+    Arc<Mutex<Option<lk_agents_abi::Ts>>>,
+);
+struct StartupSource(
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<tokio::sync::Notify>,
+    Arc<Mutex<Option<lk_agents_abi::Ts>>>,
+);
 struct StartupSink;
 
 impl lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame> for StartupSink {
@@ -204,9 +212,10 @@ impl lk_agents_abi::StreamSource<lk_agents_abi::SpeechEvent> for StartupSource {
     }
     fn close(
         self: Box<Self>,
-        _: lk_agents_abi::Ts,
+        deadline: lk_agents_abi::Ts,
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
+            *self.2.lock().unwrap() = Some(deadline);
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.1.notify_one();
             lk_agents_abi::Closed::Clean
@@ -245,7 +254,8 @@ impl lk_agents_abi::Stt for StartupStt {
         Box::pin(async move {
             Ok(Some((
                 Box::new(StartupSink) as lk_agents_abi::SttSink,
-                Box::new(StartupSource(self.0.clone(), self.1.clone())) as lk_agents_abi::SttSource,
+                Box::new(StartupSource(self.0.clone(), self.1.clone(), self.2.clone()))
+                    as lk_agents_abi::SttSource,
             )))
         })
     }
@@ -283,9 +293,9 @@ async fn failed_or_cancelled_startup_closes_each_already_opened_provider_stream(
         let (mut builder, _) = builder("provider-startup-cleanup");
         let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let settled = Arc::new(tokio::sync::Notify::new());
-        builder.stt = Some(Arc::new(StartupStt(closed.clone(), settled.clone())));
+        builder.stt = Some(Arc::new(StartupStt(closed.clone(), settled.clone(), Arc::default())));
         builder.vad = Some(Arc::new(StartupVad(fails)));
-        let mut executor = Executor::default();
+        let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
         let mut opening = Box::pin(builder.start(&mut executor));
         if fails {
             assert!(opening.await.is_err());
@@ -310,13 +320,12 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
     let resources = builder.resources.clone();
     let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let settled = Arc::new(tokio::sync::Notify::new());
-    let mut executor = Executor::default();
+    let deadline = Arc::new(Mutex::new(None));
+    let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let legs = executor
         .open_legs(
             &resources,
-            builder.time,
-            builder.spawner,
-            Some(Arc::new(StartupStt(closed.clone(), settled.clone()))),
+            Some(Arc::new(StartupStt(closed.clone(), settled.clone(), deadline.clone()))),
             None,
         )
         .await
@@ -324,10 +333,13 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
     let sink = legs.stt.expect("the initial STT sink was registered");
     assert!(resources.audio_sink(sink).is_some());
     assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 0);
+    builder.time.advance(Duration::from_secs(7));
+    let expected_deadline = builder.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
     drop(executor);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
         .await
         .expect("an executor dropped before adoption left its provider stream open");
     assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(*deadline.lock().unwrap(), Some(expected_deadline));
     assert!(resources.audio_sink(sink).is_none(), "the abandoned initial sink remained registered");
 }

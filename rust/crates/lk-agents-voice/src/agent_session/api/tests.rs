@@ -27,8 +27,6 @@ impl SessionExecutor for NoLegs {
     fn open_legs<'a>(
         &'a mut self,
         _: &'a lk_agents_abi::resources::Resources,
-        _: Timebase,
-        _: Arc<dyn lk_agents_abi::Spawner>,
         stt: Option<Arc<dyn lk_agents_abi::Stt>>,
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {

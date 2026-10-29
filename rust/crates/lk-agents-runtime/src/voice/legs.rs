@@ -15,8 +15,9 @@ use std::time::Duration;
 
 /// The production [`SessionExecutor`]: it opens the opening streams, then runs the cores on a
 /// [`Runtime`].
-#[derive(Default)]
 pub struct Executor {
+    time: Timebase,
+    spawner: Arc<dyn Spawner>,
     /// The opening streams, read once the cores exist.
     opening: Vec<OpeningLeg>,
 }
@@ -72,6 +73,18 @@ impl Drop for OpeningLeg {
     }
 }
 
+impl Executor {
+    /// Preparation and abandoned-stream cleanup use the supplied session clock and scheduler.
+    pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
+        Self { time, spawner, opening: Vec::new() }
+    }
+
+    /// Hand the same queue owner to either the native loop or a deterministic caller.
+    pub fn into_runtime(self, cores: SessionCores) -> Runtime {
+        Runtime::new(cores, self.opening)
+    }
+}
+
 impl SessionExecutor for Executor {
     fn stt_adapter(&self) -> lk_agents_voice::agent_session::SttAdapter {
         Arc::new(lk_agents_inference::stt::stream_adapter::StreamAdapter::adapted)
@@ -88,12 +101,11 @@ impl SessionExecutor for Executor {
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a Resources,
-        time: Timebase,
-        spawner: Arc<dyn Spawner>,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
+            let (time, spawner) = (self.time.clone(), self.spawner.clone());
             let mut legs = OpeningLegs::default();
             let mut opening = Vec::new();
             if let Some(stt) = stt {
@@ -129,7 +141,7 @@ impl SessionExecutor for Executor {
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
-        Box::new(Runtime::new(cores, self.opening))
+        Box::new((*self).into_runtime(cores))
     }
 }
 

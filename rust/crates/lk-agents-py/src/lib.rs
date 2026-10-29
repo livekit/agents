@@ -191,7 +191,10 @@ impl lk_agents_abi::voice::console::VoiceSessionExecution for Selected {
             let api = obj.extract::<PyRef<'_, lk_agents_runtime::voice::SessionApi>>()?;
             api.start(
                 capture_run,
-                Box::new(lk_agents_runtime::voice::Executor::default()),
+                Box::new(lk_agents_runtime::voice::Executor::new(
+                    api.time().clone(),
+                    api.spawner(),
+                )),
                 Box::new(lk_agents_runtime::voice::remote_session::hosting),
                 lk_agents_runtime::voice::amd::spawn,
             )

@@ -6,7 +6,7 @@
 //! people join and leave through the fake room, which the real room io watches. What the host
 //! cannot do it does not do: the test-only probe (the `dst` feature) only watches the journal and
 //! the host events, and hands the session's cores to the run, which steps them as its own queue
-//! and performs their effects ([`executor`]).
+//! while the real runtime owner performs their effects ([`executor`]).
 //! It decides nothing: rules read [`Recording`] and nothing else.
 //!
 //! **Each resource is opened by whoever mints it.** Speeches, holds, fillers and hook calls come
@@ -94,7 +94,6 @@ mod collect;
 mod executor;
 mod finish;
 pub mod queue;
-mod recorder;
 mod start;
 
 pub use apply::BUDGET_MS;
@@ -624,9 +623,9 @@ pub struct Run {
     room: Arc<FakeRoom>,
     /// `aclose()` then `close_io()`, once a case asked for the close, until they resolve.
     closing: Option<BoxFuture<'static, ()>>,
-    /// The session's cores, stepped and performed by the run itself: the run owns its queue.
+    /// The real runtime owner, stepped over fake ports by the run's deterministic queue.
     /// `None` once they finished, or panicked.
-    cores: Option<executor::Executor>,
+    cores: Option<lk_agents_runtime::voice::Runtime>,
     queue: queue::Queue,
     time: Timebase,
     tasks: Arc<Tasks>,

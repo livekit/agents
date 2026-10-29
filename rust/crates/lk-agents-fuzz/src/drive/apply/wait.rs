@@ -234,7 +234,7 @@ impl Run {
 
     /// One call into the session's cores. A panic is a finding about them, recorded, and the end
     /// of them: they are dropped.
-    fn step(&mut self, call: impl FnOnce(&mut super::executor::Executor)) {
+    fn step(&mut self, call: impl FnOnce(&mut lk_agents_runtime::voice::Runtime)) {
         let Some(cores) = &mut self.cores else { return };
         let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(cores)));
         // The observer unwound out of a livelocked step: the loop reports it, not as a panic.

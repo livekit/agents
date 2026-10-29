@@ -106,6 +106,11 @@ impl SessionApi {
         &self.time
     }
 
+    /// The scheduler supplied when the session was constructed.
+    pub fn spawner(&self) -> Arc<dyn Spawner> {
+        self.spawner.clone()
+    }
+
     pub fn legs(&self) -> crate::agent_activity::options::LegSet {
         self.view.borrow().config.legs
     }

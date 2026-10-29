@@ -1,6 +1,7 @@
 //! [`Runtime`]: the production [`QueueOwner`] of a session's two cores, the decision core
 //! ([`Driver`]) and the data plane ([`AudioForwarder`]): one loop steps them ([`Runtime::run`]) and
-//! performs every effect they return. A simulation owns the cores with its own executor instead.
+//! performs every effect they return. A simulation steps this same owner over fake ports, choosing
+//! ready events and task turns with its deterministic scheduler.
 
 pub mod amd;
 pub mod audio;

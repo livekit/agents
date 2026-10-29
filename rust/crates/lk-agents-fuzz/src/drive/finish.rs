@@ -752,7 +752,9 @@ mod tests {
         for site in sites {
             let placed = site.contains("lk-agents-voice/src/")
                 || site.contains("lk-agents-runtime/src/room_io/")
-                || site.ends_with("drive/executor.rs")
+                || site.ends_with("lk-agents-runtime/src/voice/mod.rs")
+                || site.ends_with("lk-agents-runtime/src/voice/effects.rs")
+                || site.ends_with("lk-agents-runtime/src/voice/legs.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/audio.rs");
             assert!(placed, "a task is placed at {site}");
         }
