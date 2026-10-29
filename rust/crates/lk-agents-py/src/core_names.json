@@ -40,7 +40,6 @@
     "FallbackTts",
     "FallbackTtsStream",
     "FixedGate",
-    "FrameDecoder",
     "GetAddressResult",
     "GetCardNumberResult",
     "GetCreditCardResult",

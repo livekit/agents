@@ -564,15 +564,12 @@ pub enum FrameError {
 }
 
 /// Reassembles length-prefixed frames from a byte stream.
-#[lk_agents_abi::class(mutable)]
 #[derive(Debug, Default)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
 }
 
-#[lk_agents_abi::host(object)]
 impl FrameDecoder {
-    #[host(new)]
     pub fn new() -> Self {
         FrameDecoder { buf: Vec::new() }
     }

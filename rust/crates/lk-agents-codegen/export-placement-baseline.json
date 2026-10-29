@@ -97,8 +97,6 @@
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreTextOutput::flush|host (method)",
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreTextOutput|lk_agents_abi :: host (object (cell = \"arc\"))",
   "host|rust/crates/lk-agents-voice/src/remote_session.rs|const STATE_OPTION_FIELDS|lk_agents_abi :: host (export (name = \"session_state_option_fields\"))",
-  "host|rust/crates/lk-agents-voice/src/remote_session.rs|impl  for FrameDecoder::new|host (new)",
-  "host|rust/crates/lk-agents-voice/src/remote_session.rs|impl  for FrameDecoder|lk_agents_abi :: host (object)",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|enum SpeechRefused|lk_agents_abi :: host (error (kind = \"RuntimeError\"))",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|impl  for SpeechHandle::allow_interruptions_for_host|host (getter (name = \"allow_interruptions\"))",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|impl  for SpeechHandle::chat_items|host (getter)",

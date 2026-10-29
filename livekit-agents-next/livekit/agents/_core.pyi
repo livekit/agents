@@ -49,7 +49,6 @@ from ._generated._core_classes import (
     ChatItem as ChatItem,
     ChatRequest as ChatRequest,
     CoreTextOutput as CoreTextOutput,
-    FrameDecoder as FrameDecoder,
     GetAddressResult as GetAddressResult,
     GetCardNumberResult as GetCardNumberResult,
     GetCreditCardResult as GetCreditCardResult,

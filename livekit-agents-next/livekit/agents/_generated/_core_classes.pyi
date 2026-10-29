@@ -657,10 +657,6 @@ class ModelUsageCollector:
     def flatten(self) -> list[dict[str, Any]]: ...
 
 
-class FrameDecoder:
-    def __init__(self) -> None: ...
-
-
 class ChatContent:
     """One element of `ChatMessage.content`: `str | ImageContent | AudioContent`, built by the host one
     constructor per arm so Rust never reads attributes or dispatches on `.type`.
