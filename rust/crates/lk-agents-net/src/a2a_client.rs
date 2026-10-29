@@ -84,11 +84,14 @@ impl AgentClient {
         options.validate().map_err(|error| ClientError::InvalidInput(error.to_string()))?;
         let endpoint_url = checked_url(&endpoint)?;
         let core = Client::new(endpoint, token)?;
+        // A process that cannot lend a runtime will not gain one on retry.
+        let unavailable =
+            |error| ClientError::Transport(ApiError::new(error).with_retryable(false));
         Ok(Self {
             inner: Arc::new(Inner {
                 core: Mutex::new(core),
-                http: (env.http)().map_err(transport_error)?,
-                runtime: (env.runtime)().map_err(transport_error)?,
+                http: (env.http)().map_err(unavailable)?,
+                runtime: (env.runtime)().map_err(unavailable)?,
                 clock: env.clock.clone(),
                 endpoint: endpoint_url,
                 options,

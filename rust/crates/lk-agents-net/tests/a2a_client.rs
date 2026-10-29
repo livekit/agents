@@ -553,6 +553,21 @@ async fn malformed_messages_fail_without_discovery_or_remote_side_effects() {
     assert!(peer.finish().await.is_empty());
 }
 
+#[test]
+fn an_unusable_process_runtime_is_a_final_error_not_a_retryable_connection_failure() {
+    let env = ProcessEnv {
+        runtime: || Err("the process runtime belongs to the parent of this fork".into()),
+        ..ProcessEnv::current_runtime()
+    };
+    let options = ApiConnectOptions::default();
+    let Err(ClientError::Transport(error)) =
+        AgentClient::new(&env, "http://127.0.0.1:9/agent".into(), None, options)
+    else {
+        panic!("a client was built without a usable runtime");
+    };
+    assert!(!error.retryable && error.kind != ApiErrorKind::Connection, "{error:?}");
+}
+
 #[tokio::test]
 async fn cancel_before_ack_drains_the_original_request_then_cancels_without_resending() {
     let peer = Peer::start(Scenario::DelayedAck).await;
