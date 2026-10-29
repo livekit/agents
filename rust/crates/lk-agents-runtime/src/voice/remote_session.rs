@@ -27,8 +27,7 @@ pub fn hosting(
         config.port,
         transport,
         config.console.map(|console| console.as_console()),
-        time.clock(),
+        time,
         spawner,
-        Box::new(move || time.wall_secs()),
     ))
 }

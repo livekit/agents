@@ -375,6 +375,46 @@ pub enum SessionReply {
     FinalizeSimulation(VerdictOutcome),
 }
 
+/// One remote request over the supplied session port, before transport encoding.
+/// Empty input is refused before entering the session, so it cannot interrupt the caller.
+pub fn reply<'a>(
+    port: &'a dyn SessionPort,
+    request: &'a proto::SessionRequest,
+) -> lk_agents_abi::BoxFuture<'a, Result<Option<SessionReply>, lk_agents_abi::errors::HostError>> {
+    Box::pin(async move {
+        use proto::session_request::Request;
+        let Some(operation) = &request.request else { return Ok(None) };
+        let reply = match operation {
+            Request::Ping(_) => SessionReply::Pong,
+            Request::GetChatHistory(_) => SessionReply::ChatHistory(port.chat_history().await?),
+            Request::GetAgentInfo(_) => SessionReply::AgentInfo(port.agent_info().await?),
+            Request::RunInput(input) if input.text.is_empty() => {
+                SessionReply::RunInput((None, Some("empty run_input text".to_owned())))
+            }
+            Request::RunInput(input) => SessionReply::RunInput(port.run_input(&input.text).await?),
+            Request::GetSessionState(_) => SessionReply::SessionState(port.session_state().await?),
+            Request::GetRtcStats(_) => SessionReply::RtcStats(port.rtc_stats().await?),
+            Request::GetSessionUsage(_) => SessionReply::SessionUsage(port.session_usage().await?),
+            Request::GetFrameworkInfo(_) => {
+                let (sdk, version) = port.framework_info();
+                SessionReply::FrameworkInfo(sdk, version)
+            }
+            Request::UpdateIo(io) => {
+                port.update_io(io_update(io)).await?;
+                SessionReply::UpdateIo
+            }
+            Request::FinalizeSimulation(input) => SessionReply::FinalizeSimulation(
+                port.finalize_simulation((
+                    input.provisional_success,
+                    input.provisional_reason.clone(),
+                ))
+                .await?,
+            ),
+        };
+        Ok(Some(reply))
+    })
+}
+
 /// Encode an observed operation result with the answer's supplied wall time.
 pub fn encode_session_reply(
     request_id: String,

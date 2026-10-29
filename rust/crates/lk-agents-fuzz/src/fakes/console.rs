@@ -283,15 +283,9 @@ impl remote_session::SessionPort for FakeConsolePort {
     }
     fn run_input<'a>(
         &'a self,
-        text: &'a str,
+        _text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<remote_session::RunOutcome, HostError>> {
-        Box::pin(async move {
-            Ok(if text.is_empty() {
-                (None, Some("empty run_input text".into()))
-            } else {
-                (Some(Vec::new()), None)
-            })
-        })
+        Box::pin(async move { Ok((Some(Vec::new()), None)) })
     }
     fn session_state(
         &self,

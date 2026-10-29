@@ -299,7 +299,7 @@ impl Run {
         api.start(
             false,
             Box::new(super::executor::Handover::new(cores_tx, time.clone(), tasks.clone())),
-            Box::new(fakes::remote_session::hosting),
+            Box::new(lk_agents_runtime::voice::remote_session::hosting),
             lk_agents_runtime::voice::amd::spawn,
         )
         .expect("a new session starts")

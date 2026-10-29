@@ -112,25 +112,31 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let drain_ended = Arc::new(AtomicBool::new(false));
     let (saw, ended) = (Arc::clone(&saw_close), Arc::clone(&drain_ended));
     let opening = api
-        .open(false, Box::new(Executor::new(api.time().clone(), api.spawner())), None, None, move |mut runner: SessionRunner| {
-            Box::pin(async move {
-                while let Some(ev) = runner.next_host_event().await {
-                    match ev {
-                        HostEvent::Hook(call) => {
-                            let _ = runner.api().send(Command::HookDone {
-                                id: call.id(),
-                                outcome: HookOutcome::Returned,
-                            });
+        .open(
+            false,
+            Box::new(Executor::new(api.time().clone(), api.spawner())),
+            None,
+            None,
+            move |mut runner: SessionRunner| {
+                Box::pin(async move {
+                    while let Some(ev) = runner.next_host_event().await {
+                        match ev {
+                            HostEvent::Hook(call) => {
+                                let _ = runner.api().send(Command::HookDone {
+                                    id: call.id(),
+                                    outcome: HookOutcome::Returned,
+                                });
+                            }
+                            HostEvent::Session(SessionEvent::Close { .. }) => {
+                                saw.store(true, Ordering::SeqCst);
+                            }
+                            HostEvent::Session(_) | HostEvent::Room(_) => {}
                         }
-                        HostEvent::Session(SessionEvent::Close { .. }) => {
-                            saw.store(true, Ordering::SeqCst);
-                        }
-                        HostEvent::Session(_) | HostEvent::Room(_) => {}
                     }
-                }
-                ended.store(true, Ordering::SeqCst);
-            })
-        })
+                    ended.store(true, Ordering::SeqCst);
+                })
+            },
+        )
         .expect("a ready session opens");
     opening.await.expect("the loop starts");
 
@@ -222,18 +228,24 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let (room, fixed) = fake_room("agent-state");
     let api = room_only(fixed, None);
     let opening = api
-        .open(false, Box::new(Executor::new(api.time().clone(), api.spawner())), None, None, move |mut runner: SessionRunner| {
-            Box::pin(async move {
-                while let Some(ev) = runner.next_host_event().await {
-                    if let HostEvent::Hook(call) = ev {
-                        let _ = runner.api().send(Command::HookDone {
-                            id: call.id(),
-                            outcome: HookOutcome::Returned,
-                        });
+        .open(
+            false,
+            Box::new(Executor::new(api.time().clone(), api.spawner())),
+            None,
+            None,
+            move |mut runner: SessionRunner| {
+                Box::pin(async move {
+                    while let Some(ev) = runner.next_host_event().await {
+                        if let HostEvent::Hook(call) = ev {
+                            let _ = runner.api().send(Command::HookDone {
+                                id: call.id(),
+                                outcome: HookOutcome::Returned,
+                            });
+                        }
                     }
-                }
-            })
-        })
+                })
+            },
+        )
         .expect("a ready session opens");
     opening.await.expect("the loop starts");
     settle().await;
@@ -261,22 +273,28 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
     let api = room_only(fake_room("session-api-test").1, Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
     let opening = api
-        .open(false, Box::new(Executor::new(api.time().clone(), api.spawner())), None, None, move |mut runner: SessionRunner| {
-            Box::pin(async move {
-                while let Some(ev) = runner.next_host_event().await {
-                    if let HostEvent::Hook(call) = ev {
-                        if matches!(call, HookCall::OnExit { .. }) {
-                            let _ = exits_tx.send(call.id());
-                        } else {
-                            let _ = runner.api().send(Command::HookDone {
-                                id: call.id(),
-                                outcome: HookOutcome::Returned,
-                            });
+        .open(
+            false,
+            Box::new(Executor::new(api.time().clone(), api.spawner())),
+            None,
+            None,
+            move |mut runner: SessionRunner| {
+                Box::pin(async move {
+                    while let Some(ev) = runner.next_host_event().await {
+                        if let HostEvent::Hook(call) = ev {
+                            if matches!(call, HookCall::OnExit { .. }) {
+                                let _ = exits_tx.send(call.id());
+                            } else {
+                                let _ = runner.api().send(Command::HookDone {
+                                    id: call.id(),
+                                    outcome: HookOutcome::Returned,
+                                });
+                            }
                         }
                     }
-                }
-            })
-        })
+                })
+            },
+        )
         .expect("a ready session opens");
     opening.await.expect("the loop starts");
     (api, exits)
@@ -527,18 +545,24 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
 /// A session opened over a host that answers every hook at once.
 async fn running(api: SessionApi) -> SessionApi {
     let opening = api
-        .open(false, Box::new(Executor::new(api.time().clone(), api.spawner())), None, None, move |mut runner: SessionRunner| {
-            Box::pin(async move {
-                while let Some(ev) = runner.next_host_event().await {
-                    if let HostEvent::Hook(call) = ev {
-                        let _ = runner.api().send(Command::HookDone {
-                            id: call.id(),
-                            outcome: HookOutcome::Returned,
-                        });
+        .open(
+            false,
+            Box::new(Executor::new(api.time().clone(), api.spawner())),
+            None,
+            None,
+            move |mut runner: SessionRunner| {
+                Box::pin(async move {
+                    while let Some(ev) = runner.next_host_event().await {
+                        if let HostEvent::Hook(call) = ev {
+                            let _ = runner.api().send(Command::HookDone {
+                                id: call.id(),
+                                outcome: HookOutcome::Returned,
+                            });
+                        }
                     }
-                }
-            })
-        })
+                })
+            },
+        )
         .expect("a ready session opens");
     opening.await.expect("the loop starts");
     api
@@ -816,23 +840,30 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
             Arc::new(UnusedRemotePort),
             transport.clone(),
             None,
-            api.time().clock(),
+            api.time().clone(),
             Arc::new(lk_agents_abi::TokioSpawner::current()),
-            Box::new(|| 1.0),
         ));
         (host, transport)
     };
     let (accepted, accepted_transport) = make_host();
     let (refused, refused_transport) = make_host();
     let opening = api
-        .open(false, Box::new(Executor::new(api.time().clone(), api.spawner())), Some(accepted.clone()), None, |_| {
-            Box::pin(async {})
-        })
+        .open(
+            false,
+            Box::new(Executor::new(api.time().clone(), api.spawner())),
+            Some(accepted.clone()),
+            None,
+            |_| Box::pin(async {}),
+        )
         .expect("the first opening is accepted");
     assert!(matches!(
-        api.open(false, Box::new(Executor::new(api.time().clone(), api.spawner())), Some(refused.clone()), None, |_| Box::pin(
-            async {}
-        )),
+        api.open(
+            false,
+            Box::new(Executor::new(api.time().clone(), api.spawner())),
+            Some(refused.clone()),
+            None,
+            |_| Box::pin(async {})
+        ),
         Err(OpenRefused::AlreadyStarted),
     ));
     api.aclose("user_initiated", false).unwrap().await;

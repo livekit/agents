@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet};
+use lk_agents_voice::agent_session::Timebase;
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
@@ -28,7 +29,7 @@ pub struct HostRuntime {
 }
 
 struct HostShared {
-    clock: Arc<dyn Clock>,
+    time: Timebase,
     spawner: Arc<dyn Spawner>,
     events: Mutex<Option<mpsc::UnboundedSender<proto::AgentSessionMessage>>>,
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<proto::AgentSessionMessage>>>,
@@ -47,11 +48,11 @@ struct HostState {
 
 /// `voice/remote_session.py`'s `SessionHost`, running in Rust. Events queue from construction.
 impl HostRuntime {
-    pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         HostRuntime {
             shared: Arc::new(HostShared {
-                clock,
+                time,
                 spawner,
                 events: Mutex::new(Some(tx)),
                 events_rx: Mutex::new(Some(rx)),
@@ -68,7 +69,8 @@ impl HostRuntime {
 
     /// `register_session`; until set, requests get no response.
     pub fn set_port(&self, port: Arc<dyn SessionPort>) {
-        self.shared.state.lock().expect("host state").host = Some(Arc::new(SessionHost::new(port)));
+        self.shared.state.lock().expect("host state").host =
+            Some(Arc::new(SessionHost::new(port, self.shared.time.clone())));
     }
 
     /// The request types in flight, one per running handler.
@@ -98,7 +100,7 @@ impl HostRuntime {
     /// set), which the reference drops.
     pub fn send_wire(&self, event: WireEvent, created_at: Option<f64>) -> Result<bool, String> {
         let Some(ev) = super::encode_wire(event)? else { return Ok(false) };
-        let at = created_at.unwrap_or_else(lk_agents_abi::unix_now);
+        let at = created_at.unwrap_or_else(|| self.shared.time.wall_secs());
         let ev = proto::AgentSessionEvent { created_at: None, event: Some(ev) };
         self.send_event(ev, at).map_err(|e| e.to_string())?;
         Ok(true)
@@ -148,7 +150,8 @@ impl HostRuntime {
             return Vec::new();
         }
         let sh = &self.shared;
-        let clock = &*sh.clock;
+        let clock = sh.time.clock();
+        let clock = &*clock;
         // First, so no new event is queued during the rest.
         sh.state.lock().expect("host state").started = false;
         let deadline = clock.now().saturating_add(drain);
@@ -188,8 +191,6 @@ pub struct Hosting {
     closed: tokio::sync::watch::Sender<bool>,
     transport: Arc<dyn SessionTransport>,
     console: Option<Arc<dyn ConsoleSink>>,
-    /// `time.time()` on the session's clock, for the events stamped now.
-    now: Box<dyn Fn() -> f64 + Send + Sync>,
 }
 
 impl Hosting {
@@ -197,11 +198,10 @@ impl Hosting {
         port: Arc<dyn SessionPort>,
         transport: Arc<dyn SessionTransport>,
         console: Option<Arc<dyn ConsoleSink>>,
-        clock: Arc<dyn Clock>,
+        time: Timebase,
         spawner: Arc<dyn Spawner>,
-        now: Box<dyn Fn() -> f64 + Send + Sync>,
     ) -> Self {
-        let host = Arc::new(HostRuntime::new(clock, Arc::clone(&spawner)));
+        let host = Arc::new(HostRuntime::new(time, Arc::clone(&spawner)));
         host.set_port(port);
         Hosting {
             host,
@@ -210,7 +210,6 @@ impl Hosting {
             closed: tokio::sync::watch::Sender::new(false),
             transport,
             console,
-            now,
         }
     }
 
@@ -233,7 +232,7 @@ impl Hosting {
     }
 
     fn send(&self, event: WireEvent, at: Option<f64>) {
-        if let Err(e) = self.host.send_wire(event, Some(at.unwrap_or_else(|| (self.now)()))) {
+        if let Err(e) = self.host.send_wire(event, at) {
             log::error!(target: LOG, error = e.as_str();
                 "failed to forward a session event to the remote client");
         }
@@ -616,7 +615,6 @@ mod tests {
         AgentInfo, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict, VerdictOutcome,
     };
     use super::*;
-    use async_trait::async_trait;
     use lk_agents_abi::ChatItem;
     use lk_agents_abi::metrics::usage::ModelUsage;
     use std::sync::atomic::AtomicBool;
@@ -751,7 +749,7 @@ mod tests {
     async fn setup(release: Arc<Notify>) -> (HostRuntime, ClientRuntime, Arc<Pipe>, Arc<Events>) {
         let (ht, ct) = pair();
         let (clock, spawner) = rt();
-        let host = HostRuntime::new(Arc::clone(&clock), Arc::clone(&spawner));
+        let host = HostRuntime::new(Timebase::of_clock(Arc::clone(&clock)), Arc::clone(&spawner));
         host.set_port(Arc::new(Port { release }));
         host.start(ht.clone(), None).await.unwrap();
         let client = ClientRuntime::new(clock, spawner);
@@ -767,6 +765,78 @@ mod tests {
     async fn nap(d: Duration) {
         let clock = lk_agents_abi::RealClock::default();
         clock.wait_until(clock.now().saturating_add(d)).await;
+    }
+
+    #[tokio::test]
+    async fn replies_and_default_events_use_the_supplied_session_wall_clock() {
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let time = Timebase::from_virtual(clock);
+        time.advance(Duration::from_secs(17));
+        let host =
+            SessionHost::new(Arc::new(Port { release: Arc::new(Notify::new()) }), time.clone());
+        for request in [
+            proto::session_request::Request::GetSessionState(Default::default()),
+            proto::session_request::Request::GetSessionUsage(Default::default()),
+        ] {
+            let request =
+                proto::SessionRequest { request_id: "clock".into(), request: Some(request) };
+            let before = time.wall_secs();
+            let response = host.handle_request(&request).await.unwrap().unwrap();
+            let after = time.wall_secs();
+            let Some(Message::Response(response)) = response.message else {
+                panic!("response expected")
+            };
+            let stamp = match response.response.unwrap() {
+                proto::session_response::Response::GetSessionState(state) => state.created_at,
+                proto::session_response::Response::GetSessionUsage(usage) => usage.created_at,
+                _ => panic!("unexpected response"),
+            }
+            .unwrap();
+            let stamped = stamp.seconds as f64 + f64::from(stamp.nanos) / 1e9;
+            assert!((before..=after).contains(&stamped), "{stamped} outside {before}..={after}");
+        }
+        let (transport, _peer) = pair();
+        let runtime =
+            HostRuntime::new(time.clone(), Arc::new(lk_agents_abi::TokioSpawner::current()));
+        let before = time.wall_secs();
+        runtime
+            .send_wire(
+                WireEvent::Error(lk_agents_abi::worker::remote_session::ErrorWire {
+                    message: "clock".into(),
+                }),
+                None,
+            )
+            .unwrap();
+        runtime.start(transport.clone(), None).await.unwrap();
+        runtime.aclose(Duration::from_secs(1)).await;
+        let sent = transport.sent.lock().unwrap();
+        let Some(Message::Event(event)) = &sent[0].message else { panic!("event expected") };
+        let stamp = event.created_at.as_ref().unwrap();
+        let after = time.wall_secs();
+        let stamped = stamp.seconds as f64 + f64::from(stamp.nanos) / 1e9;
+        assert!((before..=after).contains(&stamped), "{stamped} outside {before}..={after}");
+    }
+
+    #[tokio::test]
+    async fn empty_run_input_never_enters_the_session_port() {
+        use std::future::Future as _;
+        let (clock, _) = rt();
+        let host = SessionHost::new(
+            Arc::new(Port { release: Arc::new(Notify::new()) }),
+            Timebase::of_clock(clock),
+        );
+        let request = proto::SessionRequest {
+            request_id: "empty".into(),
+            request: Some(proto::session_request::Request::RunInput(Default::default())),
+        };
+        let mut reply = Box::pin(host.handle_request(&request));
+        let ready =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(reply.as_mut().poll(cx))).await;
+        let std::task::Poll::Ready(Ok(Some(reply))) = ready else {
+            panic!("empty input entered the blocking session port")
+        };
+        let Some(Message::Response(reply)) = reply.message else { panic!("response expected") };
+        assert_eq!(reply.error.as_deref(), Some("empty run_input text"));
     }
 
     // Catches: a failing port read left unanswered, or the exception text leaking to the peer.
@@ -847,7 +917,7 @@ mod tests {
     async fn events_queue_before_start_leave_in_order_and_flush_at_close() {
         let (ht, _peer) = pair();
         let (clock, spawner) = rt();
-        let host = HostRuntime::new(clock, spawner);
+        let host = HostRuntime::new(Timebase::of_clock(clock), spawner);
         let ev = |i: usize| proto::AgentSessionEvent {
             created_at: None,
             event: Some(proto::agent_session_event::Event::Error(
@@ -890,7 +960,7 @@ mod tests {
         let err = client.wait_for_ready(secs(0.2), secs(0.05)).await.unwrap_err();
         assert_eq!(err, ReadyError::Transport(HostError::new("transport is down")));
 
-        let host = HostRuntime::new(clock, spawner);
+        let host = HostRuntime::new(Timebase::of_clock(clock), spawner);
         host.set_port(Arc::new(Port { release: Arc::new(Notify::new()) }));
         host.start(ht, None).await.unwrap();
         let late = Arc::clone(&ct);
