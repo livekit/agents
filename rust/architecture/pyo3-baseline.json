@@ -28,6 +28,5 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/vad/events.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/io.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/room_io.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/voice/rtc/error.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/voice/session_options.rs"
+  "pyo3-file:rust/crates/lk-agents-abi/src/voice/rtc/error.rs"
 ]

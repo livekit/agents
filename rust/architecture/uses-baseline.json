@@ -365,10 +365,5 @@
   "pyo3-use:rust/crates/lk-agents-abi/src/voice/room_io.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RoomIoConfig:pyo3::FromPyObject": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/voice/room_io.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RoomIoConfig:pyo3::PyErr": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/voice/rtc/error.rs:impl crate::python::FromHostErr for RtcError::from_host:pyo3::PyErr": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/voice/rtc/error.rs:impl crate::python::FromHostErr for RtcError::from_host:pyo3::Python": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/voice/session_options.rs:host::impl<'a, 'py> FromPyObject<'a, 'py> for SessionConnOptions::extract:pyo3::exceptions::PyValueError::new_err": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/voice/session_options.rs:host::impl<'a, 'py> FromPyObject<'a, 'py> for UpdateKwargs::extract:pyo3::exceptions::PyTypeError::new_err": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/voice/session_options.rs:host:pyo3::exceptions::PyValueError": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/voice/session_options.rs:host:pyo3::prelude": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/voice/session_options.rs:host:pyo3::types": 1
+  "pyo3-use:rust/crates/lk-agents-abi/src/voice/rtc/error.rs:impl crate::python::FromHostErr for RtcError::from_host:pyo3::Python": 1
 }
