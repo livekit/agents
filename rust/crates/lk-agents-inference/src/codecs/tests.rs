@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use super::*;
-use lk_agents_media::workers::MediaWorkerLimits;
+use lk_agents_media::pool::MediaPoolLimits;
 
-fn workers() -> MediaWorkers {
-    MediaWorkers::new(MediaWorkerLimits {
+fn media_pool() -> MediaPool {
+    MediaPool::new(MediaPoolLimits {
         total: 3,
         decoders: 1,
         recordings: 1,
@@ -75,7 +75,7 @@ async fn decoded_stereo_is_normalized_before_delivery_to_a_mono_input() {
     let file = AudioFile::wav("stereo-normalization", &[]);
     std::fs::write(&file.0, wav(2, &[100, 200].repeat(480))).unwrap();
     let mut decoder =
-        AudioDecoder::open_file(&workers(), file.path(), false, 24_000, 1, limits()).unwrap();
+        AudioDecoder::open_file(&media_pool(), file.path(), false, 24_000, 1, limits()).unwrap();
     let mut samples = Vec::new();
     while let Some(frame) = decoder.next().await.unwrap() {
         assert_eq!((frame.sample_rate, frame.num_channels), (24_000, 1));
@@ -87,8 +87,8 @@ async fn decoded_stereo_is_normalized_before_delivery_to_a_mono_input() {
 
 #[tokio::test]
 async fn file_decoding_preserves_audio_and_reports_file_and_codec_failures() {
-    let workers = workers();
-    let open = |path: String| AudioDecoder::open_file(&workers, path, false, 24_000, 1, limits());
+    let media_pool = media_pool();
+    let open = |path: String| AudioDecoder::open_file(&media_pool, path, false, 24_000, 1, limits());
     let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
     let file = AudioFile::wav("service", &pcm);
     let mut decoder = open(file.path()).unwrap();
@@ -122,14 +122,14 @@ async fn file_decoding_preserves_audio_and_reports_file_and_codec_failures() {
 
 #[tokio::test]
 async fn a_stream_keeps_its_slot_until_cancellation_settles_then_refuses_input() {
-    let workers = workers();
-    let open = || AudioDecoder::open_stream(&workers, "audio/wav", Some(24_000), 1, limits());
+    let media_pool = media_pool();
+    let open = || AudioDecoder::open_stream(&media_pool, "audio/wav", Some(24_000), 1, limits());
     let (mut first, input) = open().unwrap();
     // A header alone leaves the native reader waiting for more input.
     input.push(&wav(1, &[1; 480])[..44]).unwrap();
     assert!(matches!(
         open(),
-        Err(DecoderError::WorkerAdmission(MediaWorkerError::Exhausted(MediaWorkerClass::Decoder)))
+        Err(DecoderError::WorkerAdmission(MediaPoolError::Exhausted(JobClass::Decoder)))
     ));
     first.close().await.unwrap();
     assert!(matches!(input.push(&[0; 4]), Err(DecoderError::InputClosed)));
@@ -153,10 +153,10 @@ async fn a_stream_keeps_its_slot_until_cancellation_settles_then_refuses_input()
 async fn looping_file_backpressure_keeps_its_slot_until_cancelled_decode_settles() {
     let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
     let file = AudioFile::wav("looping", &pcm);
-    let workers = workers();
+    let media_pool = media_pool();
     let limits = DecoderLimits { output_samples: 4096, ..limits() };
     let mut decoder =
-        AudioDecoder::open_file(&workers, file.path(), true, 24_000, 1, limits).unwrap();
+        AudioDecoder::open_file(&media_pool, file.path(), true, 24_000, 1, limits).unwrap();
     let mut actual = Vec::new();
     while actual.len() < pcm.len() + 4096 {
         let frame = decoder.next().await.unwrap().unwrap();
@@ -167,12 +167,12 @@ async fn looping_file_backpressure_keeps_its_slot_until_cancelled_decode_settles
     assert_eq!(&actual[..pcm.len()], pcm);
     assert_eq!(&actual[pcm.len()..], &pcm[..actual.len() - pcm.len()]);
     assert!(matches!(
-        AudioDecoder::open_file(&workers, file.path(), false, 24_000, 1, limits),
-        Err(DecoderError::WorkerAdmission(MediaWorkerError::Exhausted(MediaWorkerClass::Decoder)))
+        AudioDecoder::open_file(&media_pool, file.path(), false, 24_000, 1, limits),
+        Err(DecoderError::WorkerAdmission(MediaPoolError::Exhausted(JobClass::Decoder)))
     ));
     decoder.close().await.unwrap();
     let mut replacement =
-        AudioDecoder::open_file(&workers, file.path(), false, 24_000, 1, limits).unwrap();
+        AudioDecoder::open_file(&media_pool, file.path(), false, 24_000, 1, limits).unwrap();
     replacement.close().await.unwrap();
 }
 
@@ -191,7 +191,7 @@ async fn ready_file_pcm_yields_to_control_without_dropping_audio() {
     let file = AudioFile::wav("fairness", &[1; 16_000]);
     let limits = DecoderLimits { output_chunk_samples: 1, ..limits() };
     let mut decoder =
-        AudioDecoder::open_file(&workers(), file.path(), false, 24_000, 1, limits).unwrap();
+        AudioDecoder::open_file(&media_pool(), file.path(), false, 24_000, 1, limits).unwrap();
     loop {
         let ready = decoder.shared.ready.notified();
         if decoder.shared.try_state().map(|state| state.done).unwrap_or(false) {

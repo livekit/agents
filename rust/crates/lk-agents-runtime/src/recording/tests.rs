@@ -4,10 +4,10 @@ use std::sync::{Mutex, mpsc as sync_mpsc};
 use lk_agents_media::recorder::{EncodeError, PCM_ENCODER_TRAILER};
 
 use super::*;
-use lk_agents_media::workers::{MediaWorkerLimits, MediaWorkers};
+use lk_agents_media::pool::{MediaPoolLimits, MediaPool};
 
-fn workers(total: usize) -> MediaWorkers {
-    MediaWorkers::new(MediaWorkerLimits {
+fn media_pool(total: usize) -> MediaPool {
+    MediaPool::new(MediaPoolLimits {
         total,
         decoders: 1,
         recordings: 1,
@@ -96,11 +96,11 @@ impl Sink {
 
 #[tokio::test]
 async fn recording_orders_flush_and_finish_after_accepted_audio() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, started, release) = Sink::new(true, false);
     let (bytes, trace) = (sink.bytes, sink.trace);
     let encoder = Encoder(trace.clone());
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -138,12 +138,12 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
 #[tokio::test]
 async fn recording_overflow_releases_pcm_and_preserves_other_work() {
     // Keep two payload slots available alongside the reserved worker-health slot.
-    let workers = workers(3);
+    let media_pool = media_pool(3);
     let (sink, started, release) = Sink::new(true, false);
     let encoder = Encoder(sink.trace.clone());
     let mut limits = limits();
     limits.queued_commands = 2;
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits, move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits, move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -169,7 +169,7 @@ async fn recording_overflow_releases_pcm_and_preserves_other_work() {
         Err(RecordingFailure::IncompleteCleanup)
     );
     assert!(recorder.retained_bytes() <= limits.queued_bytes + limits.retained_bytes);
-    workers.try_spawn(MediaWorkerClass::Image, || "next turn continues").unwrap().await.unwrap();
+    media_pool.try_spawn(JobClass::Image, || "next turn continues").unwrap().await.unwrap();
     release.send(()).unwrap();
     let _ = flushing.await.unwrap();
     assert_eq!(recorder.finish(0.4).await, Err(RecordingFailure::Overflow("staging commands")));
@@ -179,10 +179,10 @@ async fn recording_overflow_releases_pcm_and_preserves_other_work() {
 
 #[tokio::test]
 async fn recording_close_deadline_keeps_stalled_worker_owned_until_settlement() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, started, release) = Sink::new(true, false);
     let encoder = Encoder(sink.trace.clone());
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -198,21 +198,21 @@ async fn recording_close_deadline_keeps_stalled_worker_owned_until_settlement() 
         Err(RecordingFailure::IncompleteCleanup)
     );
     assert!(
-        matches!(workers.try_spawn(MediaWorkerClass::Image, || ()), Err(_)),
+        matches!(media_pool.try_spawn(JobClass::Image, || ()), Err(_)),
         "deadline cannot release a live worker permit"
     );
     release.send(()).unwrap();
     flushing.await.unwrap().unwrap();
     recorder.finish(0.1).await.unwrap();
-    workers.try_spawn(MediaWorkerClass::Image, || ()).unwrap().await.unwrap();
+    media_pool.try_spawn(JobClass::Image, || ()).unwrap().await.unwrap();
 }
 
 #[tokio::test]
 async fn recording_write_failure_reaches_flush_and_terminal_outcome_once() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, _, _) = Sink::new(false, true);
     let encoder = Encoder(sink.trace.clone());
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -226,11 +226,11 @@ async fn recording_write_failure_reaches_flush_and_terminal_outcome_once() {
 
 #[tokio::test]
 async fn sequential_playback_segments_release_previous_pcm() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, _, _) = Sink::new(false, false);
     let bytes = sink.bytes;
     let encoder = Encoder(sink.trace.clone());
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -251,11 +251,11 @@ async fn sequential_playback_segments_release_previous_pcm() {
 
 #[tokio::test]
 async fn cancelled_finish_waiter_does_not_abandon_accepted_audio() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, started, release) = Sink::new(true, false);
     let bytes = sink.bytes;
     let encoder = Encoder(sink.trace.clone());
-    let recorder = SessionRecorder::open_with(&workers, 10, None, limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, None, limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -279,7 +279,7 @@ async fn cancelled_finish_waiter_does_not_abandon_accepted_audio() {
 #[tokio::test]
 async fn segment_pcm_limits_fail_recording_and_release_the_buffer() {
     for field in ["segment PCM", "retained PCM"] {
-        let workers = workers(1);
+        let media_pool = media_pool(1);
         let (sink, _, _) = Sink::new(false, false);
         let encoder = Encoder(sink.trace.clone());
         let mut limits = limits();
@@ -288,7 +288,7 @@ async fn segment_pcm_limits_fail_recording_and_release_the_buffer() {
             "retained PCM" => limits.retained_bytes = 4,
             _ => unreachable!(),
         }
-        let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits, move || {
+        let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits, move || {
             Ok((encoder, sink.writer))
         })
         .await
@@ -308,13 +308,13 @@ async fn finalization_preserves_the_input_resamplers_tail() {
     expected.extend_from_slice(resampler.flush().unwrap());
     assert_eq!(expected.len(), 480);
     for flush_before_finish in [false, true] {
-        let workers = workers(1);
+        let media_pool = media_pool(1);
         let (sink, _, _) = Sink::new(false, false);
         let bytes = sink.bytes;
         let encoder = Encoder(sink.trace.clone());
         let mut limits = limits();
         limits.retained_bytes = 64 * 1024;
-        let recorder = SessionRecorder::open_with(&workers, 48_000, Some(0.0), limits, move || {
+        let recorder = SessionRecorder::open_with(&media_pool, 48_000, Some(0.0), limits, move || {
             Ok((encoder, sink.writer))
         })
         .await
@@ -350,11 +350,11 @@ async fn finalization_preserves_the_input_resamplers_tail() {
 
 #[tokio::test]
 async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, _, _) = Sink::new(false, false);
     let bytes = sink.bytes;
     let encoder = Encoder(sink.trace.clone());
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -371,11 +371,11 @@ async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
 
 #[tokio::test]
 async fn recording_burst_preserves_input_timing_and_discarded_output_offsets() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, _, _) = Sink::new(false, false);
     let bytes = sink.bytes;
     let encoder = Encoder(sink.trace);
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await
@@ -400,11 +400,11 @@ async fn recording_burst_preserves_input_timing_and_discarded_output_offsets() {
 
 #[tokio::test]
 async fn recording_fallback_drains_played_audio_and_retires_each_segment_once() {
-    let workers = workers(1);
+    let media_pool = media_pool(1);
     let (sink, _, _) = Sink::new(false, false);
     let bytes = sink.bytes;
     let encoder = Encoder(sink.trace);
-    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.), limits(), move || {
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.), limits(), move || {
         Ok((encoder, sink.writer))
     })
     .await

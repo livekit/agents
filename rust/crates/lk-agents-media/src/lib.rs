@@ -25,7 +25,7 @@ pub mod source;
 pub mod soxr;
 pub mod stream_buffer;
 pub mod wav;
-pub mod workers;
+pub mod pool;
 
 pub use byte_stream::{AudioByteStream, Frame};
 pub use decoder::Decoder;

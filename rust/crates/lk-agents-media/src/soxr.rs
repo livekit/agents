@@ -309,13 +309,13 @@ mod tests {
         // `cargo nextest` gives every test its own process and cannot see any of this; the threads
         // are spawned here so it reproduces under both runners.
         const N: usize = 24;
-        let workers = crate::workers::MediaWorkers::new(Default::default()).unwrap();
+        let media_pool = crate::pool::MediaPool::new(Default::default()).unwrap();
         let gate = std::sync::Arc::new(std::sync::Barrier::new(N + 1));
 
         let victim = {
             let gate = std::sync::Arc::clone(&gate);
-            workers
-                .try_spawn(crate::workers::MediaWorkerClass::Decoder, move || {
+            media_pool
+                .try_spawn(crate::pool::JobClass::Decoder, move || {
                     let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
                     let tone = sine(1000.0, 48_000, 20, 1);
                     let mut out = Vec::new();
@@ -338,8 +338,8 @@ mod tests {
         for i in 0..N {
             let gate = std::sync::Arc::clone(&gate);
             creators.push(
-                workers
-                    .try_spawn(crate::workers::MediaWorkerClass::Decoder, move || {
+                media_pool
+                    .try_spawn(crate::pool::JobClass::Decoder, move || {
                         gate.wait();
                         // A distinct rate per thread: every one designs its own filter.
                         let out_rate = 8_000 + (i as u32) * 1_000;

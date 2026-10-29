@@ -61,7 +61,7 @@ mod bench {
         encoded.extend(encoder.finish()?);
         std::fs::write(&ogg, encoded)?;
         // Starting the production process service is outside steady-state heartbeat capture.
-        lk_agents_runtime::process::workers()?;
+        lk_agents_runtime::process::media_pool()?;
         let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build()?;
         let outcome = runtime.block_on(async {
             let mut cases = Vec::new();
@@ -215,7 +215,7 @@ mod bench {
     }
 
     async fn decode(path: &Path, count: usize) -> Result<Value, Error> {
-        let workers = lk_agents_runtime::process::workers()?;
+        let media_pool = lk_agents_runtime::process::media_pool()?;
         let (stop, heartbeat, observations) = start_heartbeat().await;
         let start = Instant::now();
         let mut samples = 0;
@@ -233,7 +233,7 @@ mod bench {
                 let open_started = Instant::now();
                 let open_cpu_start = thread_cpu();
                 match lk_agents_inference::codecs::AudioDecoder::open_file(
-                    &workers,
+                    &media_pool,
                     path.to_string_lossy().into_owned(),
                     false,
                     RATE,
@@ -435,7 +435,7 @@ mod bench {
             resize_height: resize.then_some(1024),
             resize_strategy: resize.then(|| "center_aspect_fit".into()),
         };
-        let workers = lk_agents_runtime::process::workers()?;
+        let media_pool = lk_agents_runtime::process::media_pool()?;
         let images: std::sync::Arc<
             dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync,
         > = std::sync::Arc::new(lk_agents_media::images::Images::default());
@@ -451,7 +451,7 @@ mod bench {
                 let start = Instant::now();
                 let (prepared, cpu, maximum) =
                     measure_polls(lk_agents_runtime::images::prepare_on(
-                        &workers,
+                        &media_pool,
                         images.clone(),
                         ImageInput::Frame(frame.clone()),
                         options.clone(),

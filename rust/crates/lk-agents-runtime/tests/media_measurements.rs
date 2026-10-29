@@ -11,7 +11,7 @@ use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
 use lk_agents_abi::recorder::{AudioRecorder, SessionRecorder as RecorderApi};
 use lk_agents_abi::utils::video::VideoFrame;
 use lk_agents_inference::codecs::{AudioDecoder, decoder_limits};
-use lk_agents_media::workers::MediaWorkerClass;
+use lk_agents_media::pool::JobClass;
 use lk_agents_runtime::recording::SessionRecorder;
 use serde_json::{Value, json};
 
@@ -108,12 +108,12 @@ async fn media_never_block_measurements() {
                "runtime": "current_thread", "features": ["media-images", "media-ffmpeg"],
                "budget": manifest["interfaces"]["media"]})
     );
-    let workers = lk_agents_runtime::process::workers().unwrap();
+    let media_pool = lk_agents_runtime::process::media_pool().unwrap();
     let mut admission = Vec::new();
     let mut ceilings = serde_json::Map::new();
-    for class in [MediaWorkerClass::Decoder, MediaWorkerClass::Recording, MediaWorkerClass::Image] {
+    for class in [JobClass::Decoder, JobClass::Recording, JobClass::Image] {
         let before = admission.len();
-        while let Ok(permit) = workers.try_admit(class) {
+        while let Ok(permit) = media_pool.try_admit(class) {
             admission.push(permit);
         }
         ceilings.insert(format!("{class:?}"), json!(admission.len() - before));
@@ -139,11 +139,11 @@ async fn media_never_block_measurements() {
                 async {
                     let mut tasks = Vec::new();
                     for _ in 0..4 {
-                        let workers = workers.clone();
+                        let media_pool = media_pool.clone();
                         let data = pixels.clone();
                         tasks.push(async move {
                             let image = lk_agents_runtime::images::prepare_on(
-                                &workers,
+                                &media_pool,
                                 std::sync::Arc::new(lk_agents_media::images::Images::default()),
                                 ImageInput::Frame(VideoFrame {
                                     width,
@@ -168,8 +168,8 @@ async fn media_never_block_measurements() {
     let path =
         std::env::temp_dir().join(format!("lk-media-measurements-{}.ogg", std::process::id()));
     let fixture_path = path.clone();
-    workers
-        .try_spawn(MediaWorkerClass::Recording, move || {
+    media_pool
+        .try_spawn(JobClass::Recording, move || {
             let mut encoder = lk_agents_media::OggOpusEncoder::new(48_000, 1, 64_000).unwrap();
             let pcm = (0..480_000).map(|at| ((at % 1024) as i16 - 512) * 16).collect::<Vec<_>>();
             let mut data = encoder.push(&pcm).unwrap();
@@ -187,7 +187,7 @@ async fn media_never_block_measurements() {
             for _ in 0..32 {
                 decoders.push(
                     AudioDecoder::open_file(
-                        &workers,
+                        &media_pool,
                         path.to_string_lossy().into_owned(),
                         false,
                         48_000,
@@ -201,7 +201,7 @@ async fn media_never_block_measurements() {
             // while consumers are stalled. A 33rd stream is refused before its file is opened.
             assert!(
                 AudioDecoder::open_file(
-                    &workers,
+                    &media_pool,
                     path.to_string_lossy().into_owned(),
                     false,
                     48_000,

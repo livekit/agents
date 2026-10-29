@@ -4,7 +4,7 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::media::emitter::{AudioEmitter as _, EmitterOutput};
 use lk_agents_abi::{AudioFrame, RealClock, TimedString};
-use lk_agents_media::workers::MediaWorkers;
+use lk_agents_media::pool::MediaPool;
 use lk_agents_net::task::TokioSpawner;
 
 use super::{AudioEmitter, EmitterEnv};
@@ -64,7 +64,7 @@ fn emitter(output: &Arc<Output>) -> AudioEmitter {
     let env = EmitterEnv {
         spawner: Arc::new(TokioSpawner::current()),
         clock: Arc::new(RealClock::new()),
-        workers: MediaWorkers::new(Default::default()).unwrap(),
+        media_pool: MediaPool::new(Default::default()).unwrap(),
     };
     AudioEmitter::with_env("test".into(), output.clone(), env)
 }
@@ -171,7 +171,7 @@ async fn each_compressed_segment_ends_after_its_decoded_audio() {
 #[cfg(feature = "ffmpeg")]
 #[tokio::test]
 async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
-    let workers = MediaWorkers::new(lk_agents_media::workers::MediaWorkerLimits {
+    let media_pool = MediaPool::new(lk_agents_media::pool::MediaPoolLimits {
         decoders: 1,
         ..Default::default()
     })
@@ -180,7 +180,7 @@ async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
     let env = EmitterEnv {
         spawner: Arc::new(TokioSpawner::current()),
         clock: Arc::new(RealClock::new()),
-        workers: workers.clone(),
+        media_pool: media_pool.clone(),
     };
     let emitter = AudioEmitter::with_env("test".into(), output.clone(), env);
     initialize(&emitter, "audio/ogg", 48_000, false);
@@ -189,8 +189,8 @@ async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
     emitter.end_input().unwrap();
     emitter.aclose().await.unwrap();
     let after = output.sent.lock().unwrap().len();
-    let _slot = workers
-        .try_admit(lk_agents_media::workers::MediaWorkerClass::Decoder)
+    let _slot = media_pool
+        .try_admit(lk_agents_media::pool::JobClass::Decoder)
         .expect("close releases the decoder's admission");
     tokio::task::yield_now().await;
     assert_eq!(output.sent.lock().unwrap().len(), after);

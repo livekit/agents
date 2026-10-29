@@ -4,13 +4,13 @@
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
 use lk_agents_abi::utils::video::VideoFrame;
 use lk_agents_abi::{ChatMessage, Role};
-use lk_agents_media::workers::MediaWorkerClass;
+use lk_agents_media::pool::JobClass;
 
 #[tokio::test]
 async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
-    let workers = lk_agents_runtime::process::workers().unwrap();
+    let media_pool = lk_agents_runtime::process::media_pool().unwrap();
     let mut image_permits = Vec::new();
-    while let Ok(permit) = workers.try_admit(MediaWorkerClass::Image) {
+    while let Ok(permit) = media_pool.try_admit(JobClass::Image) {
         image_permits.push(permit);
     }
     assert!(!image_permits.is_empty());
@@ -30,9 +30,9 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
 
 #[tokio::test]
 async fn oversized_pixels_are_refused_before_buffer_conversion_or_encoding() {
-    let workers = lk_agents_media::workers::MediaWorkers::new(Default::default()).unwrap();
+    let media_pool = lk_agents_media::pool::MediaPool::new(Default::default()).unwrap();
     let result = lk_agents_runtime::images::prepare_on(
-        &workers,
+        &media_pool,
         std::sync::Arc::new(lk_agents_media::images::Images::default()),
         ImageInput::Frame(VideoFrame {
             width: 4097,

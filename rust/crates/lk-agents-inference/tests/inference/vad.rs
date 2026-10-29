@@ -313,18 +313,18 @@ async fn saturated_vad_input_refuses_new_audio_and_still_accepts_close() {
 
 #[tokio::test]
 async fn vad_admission_leaves_capacity_for_image_and_recording_work() {
-    use lk_agents_media::workers::{
-        MediaWorkerClass, MediaWorkerError, MediaWorkerLimits, MediaWorkers,
+    use lk_agents_media::pool::{
+        JobClass, MediaPoolError, MediaPoolLimits, MediaPool,
     };
 
-    let workers = MediaWorkers::new(MediaWorkerLimits::default()).unwrap();
+    let media_pool = MediaPool::new(MediaPoolLimits::default()).unwrap();
     let models =
-        (0..32).map(|_| workers.try_admit(MediaWorkerClass::VadModel).unwrap()).collect::<Vec<_>>();
+        (0..32).map(|_| media_pool.try_admit(JobClass::VadModel).unwrap()).collect::<Vec<_>>();
     assert!(matches!(
-        workers.try_admit(MediaWorkerClass::VadModel),
-        Err(MediaWorkerError::Exhausted(MediaWorkerClass::VadModel))
+        media_pool.try_admit(JobClass::VadModel),
+        Err(MediaPoolError::Exhausted(JobClass::VadModel))
     ));
-    let image = workers.try_admit(MediaWorkerClass::Image).unwrap();
-    let recording = workers.try_admit(MediaWorkerClass::Recording).unwrap();
+    let image = media_pool.try_admit(JobClass::Image).unwrap();
+    let recording = media_pool.try_admit(JobClass::Recording).unwrap();
     drop((models, image, recording));
 }

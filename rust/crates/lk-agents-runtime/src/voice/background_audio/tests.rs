@@ -40,7 +40,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
         200,
         fixed.time.clock(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
-        crate::process::env().workers,
+        crate::process::env().media_pool,
     ));
     player.start_for_host(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();
     (player, room)
@@ -57,7 +57,7 @@ async fn play_refuses_what_cannot_play() {
         200,
         Arc::new(lk_agents_abi::SimClock::new()),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
-        crate::process::env().workers,
+        crate::process::env().media_pool,
     );
     assert!(matches!(
         idle.play_for_host(vec![file("a.ogg", 1.0)], 0.5, false, false, true),
@@ -170,7 +170,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         200,
         lk_agents_voice::agent_session::Timebase::from_virtual(clock.clone()).clock(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
-        crate::process::env().workers,
+        crate::process::env().media_pool,
     ));
     let stream = Arc::new(DelayedClose {
         entered: tokio::sync::Notify::new(),

@@ -47,7 +47,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
-        workers: crate::testkit::workers,
+        media_pool: crate::testkit::media_pool,
         disposal: Arc::default(),
     });
     let (events, receiver) = super::super::queue::events();
@@ -90,10 +90,10 @@ async fn cancelling_close_keeps_the_runtime_owner_until_context_retirement_settl
 
 #[tokio::test]
 async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
-    use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
-    let workers =
-        MediaWorkers::new(MediaWorkerLimits { formatting: 1, ..Default::default() }).unwrap();
-    let held = workers.try_admit(MediaWorkerClass::Formatting).unwrap();
+    use lk_agents_media::pool::{JobClass, MediaPoolLimits, MediaPool};
+    let media_pool =
+        MediaPool::new(MediaPoolLimits { formatting: 1, ..Default::default() }).unwrap();
+    let held = media_pool.try_admit(JobClass::Formatting).unwrap();
     let (pump, shared, _) = pump();
     shared.machine.lock().await.close(pump.clock.now());
     shared.retirement_closing.store(true, std::sync::atomic::Ordering::Release);
@@ -107,7 +107,7 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
         pump.label.clone(),
         pump.events.clone(),
         settled,
-        Ok(workers),
+        Ok(media_pool),
     ));
     for _ in 0..16 {
         tokio::task::yield_now().await;
@@ -188,12 +188,12 @@ async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_
 #[tokio::test]
 async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure() {
     use lk_agents_abi::llm::realtime::{CancelReply, Interrupt, PushAudio};
-    use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
+    use lk_agents_media::pool::{JobClass, MediaPoolLimits, MediaPool};
     use lk_agents_net::transport::WsMessage;
 
-    let workers =
-        MediaWorkers::new(MediaWorkerLimits { formatting: 1, ..Default::default() }).unwrap();
-    let held = workers.try_admit(MediaWorkerClass::Formatting).unwrap();
+    let media_pool =
+        MediaPool::new(MediaPoolLimits { formatting: 1, ..Default::default() }).unwrap();
+    let held = media_pool.try_admit(JobClass::Formatting).unwrap();
     let (mut pump, shared, mut receiver) = pump();
     shared
         .machine
@@ -211,7 +211,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
         pump.label.clone(),
         pump.events.clone(),
         settled,
-        Ok(workers.clone()),
+        Ok(media_pool.clone()),
     ));
     let (commands, incoming) = mpsc::channel(128);
     let running = tokio::spawn(pump.run(incoming));
@@ -269,9 +269,9 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     .expect("cleanup completion failed to wake the parked context continuation");
 
     let held = loop {
-        match workers.try_admit(MediaWorkerClass::Formatting) {
+        match media_pool.try_admit(JobClass::Formatting) {
             Ok(permit) => break permit,
-            Err(_) => workers.wait_for_capacity(MediaWorkerClass::Formatting).await,
+            Err(_) => media_pool.wait_for_capacity(JobClass::Formatting).await,
         }
     };
     let target = ChatContext::new(

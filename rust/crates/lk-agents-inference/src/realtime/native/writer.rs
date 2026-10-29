@@ -95,12 +95,12 @@ pub(super) async fn run(
     conn: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
-    workers: lk_agents_net::env::WorkerPool,
+    media_pool: lk_agents_net::env::MediaPoolSource,
     generation: u64,
     receipts: mpsc::Sender<ResponseSent>,
 ) -> Result<(), ApiError> {
-    let workers = workers()
-        .map(lk_agents_media::workers::MediaWorkers::from)
+    let media_pool = media_pool()
+        .map(lk_agents_media::pool::MediaPool::from)
         .map_err(|error| ApiError::new(error).with_retryable(false))?;
     let mut encoder = Encoder::new();
     while let Some(batch) = effects.recv().await {
@@ -109,11 +109,11 @@ pub(super) async fn run(
         let class = if batch.iter().any(|effect| matches!(effect,
             Outgoing::ItemCreate { item: lk_agents_abi::ChatItem::Message(message), .. }
                 if message.content.iter().any(|content| matches!(content, lk_agents_abi::ChatContent::Image(_))))) {
-            lk_agents_media::workers::MediaWorkerClass::Image
+            lk_agents_media::pool::JobClass::Image
         } else {
-            lk_agents_media::workers::MediaWorkerClass::Decoder
+            lk_agents_media::pool::JobClass::Decoder
         };
-        let prepared = workers
+        let prepared = media_pool
             .try_spawn(class, move || {
                 let frames = encoder.encode(batch, worker_images.as_ref(), &worker_shape);
                 (encoder, frames)

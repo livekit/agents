@@ -15,7 +15,7 @@ use lk_agents_abi::recorder::AudioRecorder;
 use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
 use lk_agents_media::recorder::{RecordingCommand, RecordingLimits};
 #[cfg(any(test, feature = "media-ffmpeg"))]
-use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::pool::{JobClass, MediaPool};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
@@ -94,7 +94,7 @@ impl Shared {
 impl SessionRecorder {
     #[cfg(feature = "media-ffmpeg")]
     fn start(
-        workers: &MediaWorkers,
+        media_pool: &MediaPool,
         runtime: tokio::runtime::Handle,
         path: PathBuf,
         sample_rate: u32,
@@ -102,14 +102,14 @@ impl SessionRecorder {
         bitrate: u32,
         limits: RecordingLimits,
     ) -> Result<Self, RecordingFailure> {
-        Self::start_with(workers, runtime, sample_rate, t0, limits, move |file| {
+        Self::start_with(media_pool, runtime, sample_rate, t0, limits, move |file| {
             RecordingFile::create(&path, sample_rate, bitrate, t0, file)
         })
     }
 
     #[cfg(test)]
     async fn open_with<E, W>(
-        workers: &MediaWorkers,
+        media_pool: &MediaPool,
         sample_rate: u32,
         t0: Option<f64>,
         limits: RecordingLimits,
@@ -121,7 +121,7 @@ impl SessionRecorder {
     {
         let runtime = tokio::runtime::Handle::current();
         let recorder =
-            Arc::new(Self::start_with(workers, runtime, sample_rate, t0, limits, move |file| {
+            Arc::new(Self::start_with(media_pool, runtime, sample_rate, t0, limits, move |file| {
                 let (encoder, writer) = open()?;
                 Ok(RecordingFile::new(encoder, writer, sample_rate, t0, file))
             })?);
@@ -131,7 +131,7 @@ impl SessionRecorder {
 
     #[cfg(any(test, feature = "media-ffmpeg"))]
     fn start_with<E, W>(
-        workers: &MediaWorkers,
+        media_pool: &MediaPool,
         runtime: tokio::runtime::Handle,
         sample_rate: u32,
         t0: Option<f64>,
@@ -167,8 +167,8 @@ impl SessionRecorder {
         let recorder =
             Self { tx, shared: shared.clone(), runtime: runtime.clone(), tasks: Arc::default() };
         let worker_shared = shared.clone();
-        let worker = workers
-            .try_spawn(MediaWorkerClass::Recording, move || {
+        let worker = media_pool
+            .try_spawn(JobClass::Recording, move || {
                 let file = limits.file();
                 let file = match open(file) {
                     Ok(file) => file,
@@ -489,11 +489,11 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     ) -> Result<Self, RecordingFailure> {
         #[cfg(feature = "media-ffmpeg")]
         {
-            let workers =
-                (env.workers)().map(MediaWorkers::from).map_err(RecordingFailure::Worker)?;
+            let media_pool =
+                (env.media_pool)().map(MediaPool::from).map_err(RecordingFailure::Worker)?;
             let runtime = env.caller_runtime().map_err(RecordingFailure::Worker)?;
             Self::start(
-                &workers,
+                &media_pool,
                 runtime,
                 path.into(),
                 sample_rate,

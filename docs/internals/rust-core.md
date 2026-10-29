@@ -104,7 +104,7 @@ never through a dependency on the runtime. It is a plain struct:
 | `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
 | `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
 | `http`, `report_admission` | The shared HTTP pool and the session report admission |
-| `workers` | The media worker pool, as the ABI-declared `MediaPool` handle (`lk_agents_media::workers::MediaWorkers` is its typed face) |
+| `media_pool` | The media pool, as the ABI-declared `MediaExecutor` (`lk_agents_media::pool::MediaPool` is its typed face) |
 | `worker_io` | The worker I/O on the process runtime |
 | `images`, `strip_assistant_markup`, `speech_text` | Image preparation and encoding, and the voice core's text algorithms providers and judges apply |
 

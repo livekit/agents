@@ -139,7 +139,7 @@ impl NativeRealtimeModel for NativeRealtime {
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_abi::RealClock::default()),
             env.images.clone(),
-            env.workers,
+            env.media_pool,
         )
         .with_options(opts, turn_detection_given)
         .with_connect(connect);

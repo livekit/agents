@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamSink, StreamSource, Ts};
-use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkers};
+use lk_agents_media::pool::{MediaJob, JobClass, MediaPool};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -96,7 +96,7 @@ impl Drop for Input {
 
 struct Output {
     events: mpsc::Receiver<VadOutput>,
-    worker: Option<MediaWorker<Result<(), ProviderError>>>,
+    worker: Option<MediaJob<Result<(), ProviderError>>>,
     cancelled: CancellationToken,
     clock: Arc<dyn Clock>,
 }
@@ -128,7 +128,7 @@ impl StreamSource<VadOutput> for Output {
             self.cancelled.cancel();
             self.events.close();
             let Some(mut worker) = self.worker.take() else { return Closed::Clean };
-            // A timed-out receipt transfers to MediaWorker's supervisor; its permit remains held
+            // A timed-out receipt transfers to MediaJob's supervisor; its permit remains held
             // until a native model that ignored cancellation actually returns.
             let deadline =
                 deadline.min(self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
@@ -146,7 +146,7 @@ pub(super) fn open(
     mut options: watch::Receiver<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     clock: Arc<dyn Clock>,
-    workers: MediaWorkers,
+    media_pool: MediaPool,
     runtime: tokio::runtime::Handle,
 ) -> Result<(Box<dyn StreamSink<AudioFrame>>, Box<dyn StreamSource<VadOutput>>), ProviderError> {
     let (sender, mut input) = mpsc::channel(INPUT_CAPACITY);
@@ -161,8 +161,8 @@ pub(super) fn open(
     let stop = cancelled.clone();
     // Only bounded channel descriptors precede admission; refusal constructs no model and
     // retains no queued audio. The same worker owns the recurrent state until settlement.
-    let worker = workers
-        .try_spawn(MediaWorkerClass::VadModel, move || {
+    let worker = media_pool
+        .try_spawn(JobClass::VadModel, move || {
             let mut machine = VadMachine::new(*options.borrow_and_update());
             let mut model = models.create();
             runtime.block_on(async move {

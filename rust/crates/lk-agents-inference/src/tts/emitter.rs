@@ -16,7 +16,7 @@ use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString, Ts};
 use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
-use lk_agents_media::workers::MediaWorkers;
+use lk_agents_media::pool::MediaPool;
 use lk_agents_media::{DecodePlan, Decoder};
 use tokio::sync::{Notify, watch};
 
@@ -27,7 +27,7 @@ use lk_agents_net::env::ProcessEnv;
 pub struct EmitterEnv {
     pub spawner: Arc<dyn Spawner>,
     pub clock: Arc<dyn Clock>,
-    pub workers: MediaWorkers,
+    pub media_pool: MediaPool,
 }
 
 pub struct AudioEmitter(Arc<Inner>);
@@ -357,7 +357,7 @@ impl Inner {
     fn open_segment(&self, queue: &Queue) -> Result<Segment, EmitterError> {
         let (rate, channels) = self.format();
         let (output, input) = codecs::AudioDecoder::open_stream(
-            &self.env.workers,
+            &self.env.media_pool,
             &queue.mime,
             Some(rate),
             channels,
@@ -410,8 +410,8 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         let env = EmitterEnv {
             spawner: (env.spawner)().map_err(EmitterError::Unavailable)?,
             clock: env.clock.clone(),
-            workers: (env.workers)()
-                .map(lk_agents_media::workers::MediaWorkers::from)
+            media_pool: (env.media_pool)()
+                .map(lk_agents_media::pool::MediaPool::from)
                 .map_err(EmitterError::Unavailable)?,
         };
         Ok(Self::with_env(label, dst_ch, env))

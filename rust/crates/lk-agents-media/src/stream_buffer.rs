@@ -202,9 +202,9 @@ mod tests {
     fn a_read_on_an_empty_open_buffer_waits_for_the_writer() {
         let b = Arc::new(StreamBuffer::new());
         let w = b.clone();
-        let workers = crate::workers::MediaWorkers::new(Default::default()).unwrap();
-        let h = workers
-            .try_spawn(crate::workers::MediaWorkerClass::Decoder, move || {
+        let media_pool = crate::pool::MediaPool::new(Default::default()).unwrap();
+        let h = media_pool
+            .try_spawn(crate::pool::JobClass::Decoder, move || {
                 let mut buf = [0u8; 4];
                 let n = w.read(&mut buf);
                 (n, buf)

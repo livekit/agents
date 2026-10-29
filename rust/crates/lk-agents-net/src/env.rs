@@ -6,7 +6,7 @@
 use std::sync::{Arc, LazyLock};
 
 use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
-use lk_agents_abi::media::workers::MediaPool;
+use lk_agents_abi::media::pool::MediaExecutor;
 use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{Clock, ImageContent, Spawner};
 
@@ -15,7 +15,7 @@ use crate::session_report::ReportAdmission;
 use crate::worker_io::WorkerIo;
 
 /// The media worker pool, read at use so a fork is checked before dispatching work.
-pub type WorkerPool = fn() -> Result<Arc<dyn MediaPool>, String>;
+pub type MediaPoolSource = fn() -> Result<Arc<dyn MediaExecutor>, String>;
 
 /// What the hosting process lends a declared class: the generated bindings pass
 /// it to each declared constructor that takes it, and Rust callers and tests build their own.
@@ -36,7 +36,7 @@ pub struct ProcessEnv {
     /// The process's worker I/O, on the runtime the worker's tasks and sockets run on.
     pub worker_io: fn() -> Result<WorkerIo, String>,
     /// The process's media worker pool.
-    pub workers: WorkerPool,
+    pub media_pool: MediaPoolSource,
     /// How a request's images are prepared for a provider.
     pub images: Arc<dyn ImageResolver + Send + Sync>,
     /// An assistant message as a judge reads it, without expressive markup.
@@ -70,7 +70,7 @@ impl ProcessEnv {
                 Ok(ADMISSION.clone())
             },
             worker_io: || WorkerIo::new(runtime()?, 4).map_err(|error| error.to_string()),
-            workers: || Err("no media worker pool in this process".into()),
+            media_pool: || Err("no media worker pool in this process".into()),
             images: Arc::new(NoImagePreparation),
             strip_assistant_markup: str::to_owned,
             speech_text: SpeechTextProcessors::VERBATIM,

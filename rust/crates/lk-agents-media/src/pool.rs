@@ -1,6 +1,6 @@
 //! Admitted native workers for codec, recording, image and model work: a bounded pool
 //! of plain threads, no async runtime. Callers that must not block their loop hand work here and
-//! await its [`MediaWorker`]. Admission refuses overload synchronously; a running job keeps its
+//! await its [`MediaJob`]. Admission refuses overload synchronously; a running job keeps its
 //! capacity until it settles, so a caller dropping its receipt never frees capacity early.
 
 use std::collections::VecDeque;
@@ -11,8 +11,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-pub use lk_agents_abi::media::workers::{
-    MediaPool, WorkerClass as MediaWorkerClass, WorkerError as MediaWorkerError,
+pub use lk_agents_abi::media::pool::{
+    MediaExecutor, JobClass, MediaPoolError,
 };
 
 /// An idle thread waits this long for its next job before it exits.
@@ -20,7 +20,7 @@ const IDLE_KEEPALIVE: Duration = Duration::from_secs(10);
 
 /// Per-class ceilings bound long-lived resources independently of short jobs.
 #[derive(Debug, Clone, Copy)]
-pub struct MediaWorkerLimits {
+pub struct MediaPoolLimits {
     pub total: usize,
     pub decoders: usize,
     pub recordings: usize,
@@ -30,7 +30,7 @@ pub struct MediaWorkerLimits {
     pub vad_models: usize,
 }
 
-impl Default for MediaWorkerLimits {
+impl Default for MediaPoolLimits {
     fn default() -> Self {
         Self {
             total: 64,
@@ -44,22 +44,22 @@ impl Default for MediaWorkerLimits {
     }
 }
 
-impl MediaWorkerLimits {
-    fn of(&self, class: MediaWorkerClass) -> usize {
+impl MediaPoolLimits {
+    fn of(&self, class: JobClass) -> usize {
         match class {
-            MediaWorkerClass::Decoder => self.decoders,
-            MediaWorkerClass::Recording => self.recordings,
-            MediaWorkerClass::Image => self.images,
-            MediaWorkerClass::Formatting => self.formatting,
-            MediaWorkerClass::EotModel => self.eot_models,
-            MediaWorkerClass::VadModel => self.vad_models,
+            JobClass::Decoder => self.decoders,
+            JobClass::Recording => self.recordings,
+            JobClass::Image => self.images,
+            JobClass::Formatting => self.formatting,
+            JobClass::EotModel => self.eot_models,
+            JobClass::VadModel => self.vad_models,
         }
     }
 }
 
 const CLASSES: usize = 6;
 
-fn index(class: MediaWorkerClass) -> usize {
+fn index(class: JobClass) -> usize {
     class as usize
 }
 
@@ -74,7 +74,7 @@ struct State {
 }
 
 struct Shared {
-    limits: MediaWorkerLimits,
+    limits: MediaPoolLimits,
     state: Mutex<State>,
     work: Condvar,
 }
@@ -84,7 +84,7 @@ impl Shared {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn fits(&self, state: &State, class: MediaWorkerClass) -> bool {
+    fn fits(&self, state: &State, class: JobClass) -> bool {
         state.used[index(class)] < self.limits.of(class) && state.total < self.limits.total
     }
 }
@@ -92,18 +92,18 @@ impl Shared {
 /// The pool's threads and admission state.
 struct Pool(Arc<Shared>);
 
-impl MediaPool for Pool {
-    fn admit(&self, class: MediaWorkerClass) -> Result<(), MediaWorkerError> {
+impl MediaExecutor for Pool {
+    fn admit(&self, class: JobClass) -> Result<(), MediaPoolError> {
         let mut state = self.0.lock();
         if !self.0.fits(&state, class) {
-            return Err(MediaWorkerError::Exhausted(class));
+            return Err(MediaPoolError::Exhausted(class));
         }
         state.used[index(class)] += 1;
         state.total += 1;
         Ok(())
     }
 
-    fn release(&self, class: MediaWorkerClass) {
+    fn release(&self, class: JobClass) {
         let waiters = {
             let mut state = self.0.lock();
             state.used[index(class)] -= 1;
@@ -113,7 +113,7 @@ impl MediaPool for Pool {
         waiters.into_iter().for_each(Waker::wake);
     }
 
-    fn poll_capacity(&self, class: MediaWorkerClass, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_capacity(&self, class: JobClass, cx: &mut Context<'_>) -> Poll<()> {
         let mut state = self.0.lock();
         if self.0.fits(&state, class) {
             return Poll::Ready(());
@@ -141,25 +141,25 @@ impl MediaPool for Pool {
 
 /// The process's admission pool. Clones share the same class and total capacity.
 #[derive(Clone)]
-pub struct MediaWorkers {
-    pool: Arc<dyn MediaPool>,
+pub struct MediaPool {
+    pool: Arc<dyn MediaExecutor>,
 }
 
 /// The typed face of a lent pool.
-impl From<Arc<dyn MediaPool>> for MediaWorkers {
-    fn from(pool: Arc<dyn MediaPool>) -> Self {
+impl From<Arc<dyn MediaExecutor>> for MediaPool {
+    fn from(pool: Arc<dyn MediaExecutor>) -> Self {
         Self { pool }
     }
 }
 
 /// A class reservation. Native jobs retain it until they settle; dropping it releases the slot
 /// and wakes capacity waiters.
-pub struct MediaWorkerPermit {
-    pool: Arc<dyn MediaPool>,
-    class: MediaWorkerClass,
+pub struct MediaPermit {
+    pool: Arc<dyn MediaExecutor>,
+    class: JobClass,
 }
 
-impl Drop for MediaWorkerPermit {
+impl Drop for MediaPermit {
     fn drop(&mut self) {
         self.pool.release(self.class);
     }
@@ -168,21 +168,21 @@ impl Drop for MediaWorkerPermit {
 /// The job panicked; its capacity was released when it unwound.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("media worker job panicked")]
-pub struct WorkerPanicked;
+pub struct JobPanicked;
 
 struct Slot<T> {
-    result: Option<Result<T, WorkerPanicked>>,
+    result: Option<Result<T, JobPanicked>>,
     waker: Option<Waker>,
 }
 
 /// The completion of one admitted job. Awaiting it observes the result; dropping it leaves the
 /// job running with its capacity.
-pub struct MediaWorker<T> {
+pub struct MediaJob<T> {
     slot: Arc<(Mutex<Slot<T>>, Condvar)>,
 }
 
-impl<T> Future for MediaWorker<T> {
-    type Output = Result<T, WorkerPanicked>;
+impl<T> Future for MediaJob<T> {
+    type Output = Result<T, JobPanicked>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut slot = self.slot.0.lock().unwrap_or_else(|p| p.into_inner());
@@ -196,10 +196,10 @@ impl<T> Future for MediaWorker<T> {
     }
 }
 
-impl<T> MediaWorker<T> {
+impl<T> MediaJob<T> {
     /// Observe settlement from another native worker or a synchronous caller.
     /// Async callers must await the receipt instead of blocking their executor.
-    pub fn wait(self) -> Result<T, WorkerPanicked> {
+    pub fn wait(self) -> Result<T, JobPanicked> {
         let (slot, ready) = &*self.slot;
         let mut slot = slot.lock().unwrap_or_else(|p| p.into_inner());
         loop {
@@ -213,8 +213,8 @@ impl<T> MediaWorker<T> {
 
 /// Resolves once `class` could be admitted; it reserves nothing.
 pub struct CapacityAvailable {
-    pool: Arc<dyn MediaPool>,
-    class: MediaWorkerClass,
+    pool: Arc<dyn MediaExecutor>,
+    class: JobClass,
 }
 
 impl Future for CapacityAvailable {
@@ -225,8 +225,8 @@ impl Future for CapacityAvailable {
     }
 }
 
-impl MediaWorkers {
-    pub fn new(limits: MediaWorkerLimits) -> Result<Self, MediaWorkerError> {
+impl MediaPool {
+    pub fn new(limits: MediaPoolLimits) -> Result<Self, MediaPoolError> {
         let classes = [
             limits.decoders,
             limits.recordings,
@@ -237,7 +237,7 @@ impl MediaWorkers {
         ];
         if limits.total == 0 || classes.into_iter().any(|limit| limit == 0 || limit > limits.total)
         {
-            return Err(MediaWorkerError::InvalidLimits);
+            return Err(MediaPoolError::InvalidLimits);
         }
         Ok(Self {
             pool: Arc::new(Pool(Arc::new(Shared {
@@ -255,30 +255,30 @@ impl MediaWorkers {
     }
 
     /// The pool as the runtime lends it.
-    pub fn pool(&self) -> Arc<dyn MediaPool> {
+    pub fn executor(&self) -> Arc<dyn MediaExecutor> {
         self.pool.clone()
     }
 
     /// Refuse overload synchronously without retaining a job or an admission waiter.
     pub fn try_admit(
         &self,
-        class: MediaWorkerClass,
-    ) -> Result<MediaWorkerPermit, MediaWorkerError> {
+        class: JobClass,
+    ) -> Result<MediaPermit, MediaPoolError> {
         self.pool.admit(class)?;
-        Ok(MediaWorkerPermit { pool: self.pool.clone(), class })
+        Ok(MediaPermit { pool: self.pool.clone(), class })
     }
 
     /// Wait after refused admission without retaining work or reserving capacity.
-    pub fn wait_for_capacity(&self, class: MediaWorkerClass) -> CapacityAvailable {
+    pub fn wait_for_capacity(&self, class: JobClass) -> CapacityAvailable {
         CapacityAvailable { pool: self.pool.clone(), class }
     }
 
     /// Synchronous ingress refuses overload before retaining work. There is no admission queue.
     pub fn try_spawn<T: Send + 'static>(
         &self,
-        class: MediaWorkerClass,
+        class: JobClass,
         work: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<MediaWorker<T>, MediaWorkerError> {
+    ) -> Result<MediaJob<T>, MediaPoolError> {
         Ok(self.spawn_admitted(self.try_admit(class)?, work))
     }
 
@@ -286,14 +286,14 @@ impl MediaWorkers {
     /// admission.
     pub fn spawn_admitted<T: Send + 'static>(
         &self,
-        permit: MediaWorkerPermit,
+        permit: MediaPermit,
         work: impl FnOnce() -> T + Send + 'static,
-    ) -> MediaWorker<T> {
+    ) -> MediaJob<T> {
         let slot = Arc::new((Mutex::new(Slot { result: None, waker: None }), Condvar::new()));
         let settled = slot.clone();
         let job: Job = Box::new(move || {
             let result =
-                std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|_| WorkerPanicked);
+                std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|_| JobPanicked);
             // Capacity is released by settlement, before the caller observes the result.
             drop(permit);
             let waker = {
@@ -307,7 +307,7 @@ impl MediaWorkers {
             }
         });
         self.pool.run(job);
-        MediaWorker { slot }
+        MediaJob { slot }
     }
 }
 

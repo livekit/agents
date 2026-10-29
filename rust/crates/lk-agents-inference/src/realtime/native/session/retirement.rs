@@ -24,7 +24,7 @@ impl Pump {
             let clock = self.clock.clone();
             let label = self.label.clone();
             let events = self.events.clone();
-            let workers = self.shared.workers;
+            let media_pool = self.shared.media_pool;
             self.shared.disposal.spawn(self.spawner.as_ref(), "realtime retirement", async move {
                 run(
                     shared,
@@ -33,7 +33,7 @@ impl Pump {
                     label,
                     events,
                     settled,
-                    workers().map(lk_agents_media::workers::MediaWorkers::from),
+                    media_pool().map(lk_agents_media::pool::MediaPool::from),
                 )
                 .await;
             });
@@ -49,7 +49,7 @@ pub(super) async fn run(
     label: String,
     events: super::super::queue::Delivery,
     settled: watch::Sender<bool>,
-    workers: Result<lk_agents_media::workers::MediaWorkers, String>,
+    media_pool: Result<lk_agents_media::pool::MediaPool, String>,
 ) {
     let mut retained = None;
     loop {
@@ -73,7 +73,7 @@ pub(super) async fn run(
             }
             continue;
         }
-        let workers = match &workers {
+        let media_pool = match &media_pool {
             Ok(service) => service,
             Err(error) => {
                 let (generation, step, retired) = {
@@ -120,13 +120,13 @@ pub(super) async fn run(
                 return;
             }
         };
-        let permit = match workers.try_admit(lk_agents_media::workers::MediaWorkerClass::Formatting)
+        let permit = match media_pool.try_admit(lk_agents_media::pool::JobClass::Formatting)
         {
             Ok(permit) => permit,
             Err(_) => {
                 // Do not move a destructor-bearing owner into a closure until admission succeeds.
-                workers
-                    .wait_for_capacity(lk_agents_media::workers::MediaWorkerClass::Formatting)
+                media_pool
+                    .wait_for_capacity(lk_agents_media::pool::JobClass::Formatting)
                     .await;
                 retained = Some(shared);
                 continue;
@@ -138,7 +138,7 @@ pub(super) async fn run(
             continue;
         };
         shared.context_ready.notify_one();
-        if workers.spawn_admitted(permit, move || drop(retirement)).await.is_err() {
+        if media_pool.spawn_admitted(permit, move || drop(retirement)).await.is_err() {
             let generation = shared.machine.lock().await.connection_generation();
             shared.incomplete_cleanup(generation, &label);
         }

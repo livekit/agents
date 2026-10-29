@@ -26,10 +26,10 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
     ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
-        (env.workers)()
-            .map(lk_agents_media::workers::MediaWorkers::from)
+        (env.media_pool)()
+            .map(lk_agents_media::pool::MediaPool::from)
             .map_err(LlmAlgorithmError)?
-            .try_spawn(lk_agents_media::workers::MediaWorkerClass::Formatting, move || {
+            .try_spawn(lk_agents_media::pool::JobClass::Formatting, move || {
                 provider_format::host::to_provider_format(
                     &format,
                     items,

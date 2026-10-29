@@ -17,7 +17,7 @@ use crate::realtime::dialect::{Dialect, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 use crate::realtime::native::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
-use lk_agents_net::env::WorkerPool;
+use lk_agents_net::env::MediaPoolSource;
 
 /// How a connection authenticates.
 pub enum Auth {
@@ -107,7 +107,7 @@ pub struct NativeRealtime {
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
-    workers: WorkerPool,
+    media_pool: MediaPoolSource,
     ids: Arc<dyn IdGen>,
     /// Whether the caller passed a turn-detection configuration; `can_disable_turn_detection`
     /// reports intent (see [`Dialect::capabilities`]).
@@ -126,7 +126,7 @@ impl NativeRealtime {
         spawner: Arc<dyn Spawner>,
         clock: Arc<dyn Clock>,
         images: Arc<dyn ImageResolver + Send + Sync>,
-        workers: WorkerPool,
+        media_pool: MediaPoolSource,
     ) -> Self {
         let opts = SessionOptions::from_dialect(&dialect, false);
         let connect = Connect::openai(api_key, dialect.default_base_url);
@@ -138,7 +138,7 @@ impl NativeRealtime {
             spawner,
             clock,
             images,
-            workers,
+            media_pool,
             ids: Arc::new(RandomIds),
             turn_detection_given: false,
             label: None,
@@ -301,7 +301,7 @@ impl NativeRealtime {
             retirement_wake: Arc::new(tokio::sync::Notify::new()),
             context_ready: tokio::sync::Notify::new(),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
-            workers: self.workers,
+            media_pool: self.media_pool,
             disposal: Arc::default(),
         });
         let commands = Arc::new(super::queue::Ingress {
@@ -351,7 +351,7 @@ pub(super) struct Shared {
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
     /// Decoding and context retirement run on the process's admitted workers.
-    workers: WorkerPool,
+    media_pool: MediaPoolSource,
     /// Socket closes and context retirement, which outlive their caller's budget.
     disposal: Arc<lk_agents_net::task::TaskSet>,
 }
@@ -632,7 +632,7 @@ impl Pump {
             self.connect.conn,
             self.clock.clone(),
             self.images.clone(),
-            self.shared.workers,
+            self.shared.media_pool,
             generation,
             sent,
         );
@@ -707,10 +707,10 @@ impl Pump {
                         }
                         let shape = self.shape.clone();
                         let created_at = self.clock.wall();
-                        let workers = self.shared.workers;
+                        let media_pool = self.shared.media_pool;
                         decoding = Some(Box::pin(async move {
-                            let workers = workers().map(lk_agents_media::workers::MediaWorkers::from).map_err(|error| ApiError::new(error).with_retryable(false))?;
-                            let worker = workers.try_spawn(lk_agents_media::workers::MediaWorkerClass::Decoder, move || {
+                            let media_pool = media_pool().map(lk_agents_media::pool::MediaPool::from).map_err(|error| ApiError::new(error).with_retryable(false))?;
+                            let worker = media_pool.try_spawn(lk_agents_media::pool::JobClass::Decoder, move || {
                                 wire::decode_text(&text, &shape, created_at)
                             }).map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
                             worker.await.map_err(|error| ApiError::new(format!("realtime decoder worker failed: {error}")).with_retryable(false))?

@@ -8,7 +8,7 @@ use lk_agents_abi::media::images::{
 };
 
 use lk_agents_media::images::Images;
-use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::pool::{JobClass, MediaPool};
 
 use crate::process::Process;
 use lk_agents_abi::llm::provider_format::ImageResolver;
@@ -72,19 +72,19 @@ async fn prepare(
     input: ImageInput,
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, ImageError> {
-    let workers = (env.workers)().map(MediaWorkers::from).map_err(ImageError)?;
-    prepare_on(&workers, env.images.clone(), input, options).await.map_err(ImageError)
+    let media_pool = (env.media_pool)().map(MediaPool::from).map_err(ImageError)?;
+    prepare_on(&media_pool, env.images.clone(), input, options).await.map_err(ImageError)
 }
 
 /// Prepares `input` on an admitted image worker, keeping the caller's loop serviceable.
 pub async fn prepare_on(
-    workers: &MediaWorkers,
+    media_pool: &MediaPool,
     images: Arc<dyn ImageResolver + Send + Sync>,
     input: ImageInput,
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, String> {
-    workers
-        .try_spawn(MediaWorkerClass::Image, move || images.prepare(input, options))
+    media_pool
+        .try_spawn(JobClass::Image, move || images.prepare(input, options))
         .map_err(|e| e.to_string())?
         .await
         .map_err(|e| e.to_string())?
@@ -115,9 +115,9 @@ mod tests {
             buffer_type: 0,
             data: vec![127; 1920 * 1080 * 4].into(),
         };
-        let workers = crate::process::workers().unwrap();
+        let media_pool = crate::process::media_pool().unwrap();
         let mut encoding = Box::pin(prepare_on(
-            &workers,
+            &media_pool,
             Arc::new(Images::default()),
             ImageInput::Frame(frame),
             ImageEncodeOptions { format: "JPEG".into(), ..Default::default() },

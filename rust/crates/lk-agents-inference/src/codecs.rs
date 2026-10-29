@@ -11,7 +11,7 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::source::{self, Source};
-use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, MediaWorkers};
+use lk_agents_media::pool::{MediaJob, JobClass, MediaPoolError, MediaPool};
 use lk_agents_media::{AudioFormat, CodecError, StreamBuffer};
 use tokio::sync::Notify;
 
@@ -34,7 +34,7 @@ pub enum DecoderError {
     )]
     InvalidLimits,
     #[error(transparent)]
-    WorkerAdmission(#[from] MediaWorkerError),
+    WorkerAdmission(#[from] MediaPoolError),
     #[error("decoder input is closed")]
     InputClosed,
     #[error("decoder {0} capacity exceeded")]
@@ -173,12 +173,12 @@ impl Shared {
 /// One admitted decoder. EOF follows native completion and delivery of all decoded PCM.
 pub struct AudioDecoder {
     shared: Arc<Shared>,
-    worker: Option<MediaWorker<Result<(), DecoderError>>>,
+    worker: Option<MediaJob<Result<(), DecoderError>>>,
 }
 
 impl AudioDecoder {
     pub fn open_file(
-        workers: &MediaWorkers,
+        media_pool: &MediaPool,
         path: String,
         looping: bool,
         sample_rate: u32,
@@ -186,14 +186,14 @@ impl AudioDecoder {
         limits: DecoderLimits,
     ) -> Result<Self, DecoderError> {
         let source = Source::File { path, looping };
-        Self::start(workers, source, Some(sample_rate), num_channels, limits)
+        Self::start(media_pool, source, Some(sample_rate), num_channels, limits)
     }
 
     /// Bytes pushed as they arrive through the returned input, decoded by one admitted native
     /// job. `sample_rate` `None` keeps the source's rate. EOF follows `end_input` and delivery
     /// of everything it queued.
     pub fn open_stream(
-        workers: &MediaWorkers,
+        media_pool: &MediaPool,
         mime: &str,
         sample_rate: Option<u32>,
         num_channels: u16,
@@ -202,14 +202,14 @@ impl AudioDecoder {
         source::check_stream(mime)?;
         let input = Arc::new(StreamBuffer::new());
         let source = Source::Stream { mime: mime.to_owned(), input: input.clone() };
-        let decoder = Self::start(workers, source, sample_rate, num_channels, limits)?;
+        let decoder = Self::start(media_pool, source, sample_rate, num_channels, limits)?;
         let shared = decoder.shared.clone();
         let input = DecoderInput { shared, pipe: input, ended: AtomicBool::new(false) };
         Ok((decoder, input))
     }
 
     fn start(
-        workers: &MediaWorkers,
+        media_pool: &MediaPool,
         source: Source,
         sample_rate: Option<u32>,
         num_channels: u16,
@@ -246,7 +246,7 @@ impl AudioDecoder {
             input,
         });
         let resource = shared.clone();
-        let worker = workers.try_spawn(MediaWorkerClass::Decoder, move || {
+        let worker = media_pool.try_spawn(JobClass::Decoder, move || {
             let _ = resource.reader.set(std::thread::current());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 source::decode(
@@ -398,11 +398,11 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
         sample_rate: Option<u32>,
         num_channels: u16,
     ) -> Result<Self, CodecFailure> {
-        let workers =
-            (env.workers)().map(lk_agents_media::workers::MediaWorkers::from).map_err(failure)?;
+        let media_pool =
+            (env.media_pool)().map(lk_agents_media::pool::MediaPool::from).map_err(failure)?;
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
         let (output, input) =
-            AudioDecoder::open_stream(&workers, &mime, sample_rate, num_channels, limits)
+            AudioDecoder::open_stream(&media_pool, &mime, sample_rate, num_channels, limits)
                 .map_err(failure)?;
         Ok(Self { input, output: tokio::sync::Mutex::new(output) })
     }

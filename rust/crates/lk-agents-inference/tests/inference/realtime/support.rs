@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use lk_agents_inference::realtime::RealtimeMachine;
-use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::pool::{JobClass, MediaPool};
 
 pub fn thread_cpu() -> Duration {
     let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
@@ -22,7 +22,7 @@ pub struct RetirementStats {
 
 struct Executor {
     handle: tokio::runtime::Handle,
-    workers: MediaWorkers,
+    media_pool: MediaPool,
 }
 
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -34,7 +34,7 @@ fn executor() -> &'static Executor {
             .get_or_init(|| tokio::runtime::Runtime::new().expect("runtime"))
             .handle()
             .clone(),
-        workers: MediaWorkers::new(Default::default()).expect("worker pool"),
+        media_pool: MediaPool::new(Default::default()).expect("worker pool"),
     })
 }
 
@@ -47,16 +47,16 @@ pub fn execute_retirements(
     while machine.has_context_retirement() {
         // Capacity refusal leaves every destructor-bearing owner in the machine.
         let permit = loop {
-            match executor.workers.try_admit(MediaWorkerClass::Formatting) {
+            match executor.media_pool.try_admit(JobClass::Formatting) {
                 Ok(permit) => break permit,
                 Err(_) => executor
                     .handle
-                    .block_on(executor.workers.wait_for_capacity(MediaWorkerClass::Formatting)),
+                    .block_on(executor.media_pool.wait_for_capacity(JobClass::Formatting)),
             }
         };
         let retirement = machine.take_context_retirement().expect("admitted retired owner");
         let core_thread = std::thread::current().id();
-        let receipt = executor.workers.spawn_admitted(permit, move || {
+        let receipt = executor.media_pool.spawn_admitted(permit, move || {
             assert_ne!(std::thread::current().id(), core_thread, "cleanup ran on the core thread");
             let start = thread_cpu();
             drop(retirement);

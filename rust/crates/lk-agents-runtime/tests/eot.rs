@@ -68,7 +68,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             .build()
             .unwrap();
         let _runtime = runtime.enter();
-        let _workers = process::workers().unwrap();
+        let _workers = process::media_pool().unwrap();
         let failure = Arc::new(tokio::sync::Notify::new());
         let thresholds =
             Arc::new(Mutex::new(ThresholdOptions::new(TurnDetectorModel::V1, None, None)));
@@ -100,7 +100,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             session,
             16_000,
             make,
-            process::env().workers,
+            process::env().media_pool,
             None,
             &lk_agents_net::task::TokioSpawner::current(),
         );
@@ -208,7 +208,7 @@ impl EotTransport for DyingTransport {
 // run), the waiter left hanging, or a request the dead transport held never answered.
 #[tokio::test]
 async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_next_request() {
-    let _workers = process::workers().unwrap();
+    let _workers = process::media_pool().unwrap();
     let shared = Arc::new(Mutex::new(ThresholdOptions::new(TurnDetectorModel::V1, None, None)));
     let session = EotSession::new(TurnDetectorModel::V1, shared.clone(), true);
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -221,7 +221,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
         })
     });
     let spawner = lk_agents_net::task::TokioSpawner::current();
-    let stream = EotStream::open(session, 16_000, make, process::env().workers, None, &spawner);
+    let stream = EotStream::open(session, 16_000, make, process::env().media_pool, None, &spawner);
     tokio::time::timeout(Duration::from_secs(5), async {
         while !stream.is_fallback() {
             tokio::task::yield_now().await;
@@ -258,12 +258,12 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
 
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
-        use lk_agents_runtime::media::workers::MediaWorkerClass;
+        use lk_agents_runtime::media::pool::JobClass;
 
-        let workers = process::workers().unwrap();
+        let media_pool = process::media_pool().unwrap();
         let (release, waiting) = std::sync::mpsc::channel();
-        let blocker = workers
-            .try_spawn(MediaWorkerClass::EotModel, move || waiting.recv().unwrap())
+        let blocker = media_pool
+            .try_spawn(JobClass::EotModel, move || waiting.recv().unwrap())
             .expect("reserve the one model-construction slot");
         let shared =
             Arc::new(Mutex::new(ThresholdOptions::new(TurnDetectorModel::V1Mini, None, None)));
@@ -280,7 +280,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
             session,
             16_000,
             make,
-            process::env().workers,
+            process::env().media_pool,
             None,
             &lk_agents_net::task::TokioSpawner::current(),
         );

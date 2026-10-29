@@ -6,7 +6,7 @@ use std::time::Duration;
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamSource};
-use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::pool::{JobClass, MediaPool};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::pre_connect_state::{PreConnectBuffer, PreConnectState};
 use tokio::sync::Notify;
@@ -31,7 +31,7 @@ pub struct PreConnectAudioHandler {
     format: (u32, u16),
     /// Where a head decodes; `None` decodes on the executor's own task, as a deterministic
     /// scheduler needs.
-    pool: Option<MediaWorkers>,
+    pool: Option<MediaPool>,
     state: Mutex<State>,
     changed: Notify,
     stopped: Notify,
@@ -45,7 +45,7 @@ impl PreConnectAudioHandler {
         clock: Arc<dyn Clock>,
         timeout: Duration,
         format: (u32, u16),
-        pool: Option<MediaWorkers>,
+        pool: Option<MediaPool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             room,
@@ -214,7 +214,7 @@ impl PreConnectAudioHandler {
         let format = self.format;
         let Some(pool) = &self.pool else { return head.decode(format) };
         let job = pool
-            .try_spawn(MediaWorkerClass::Decoder, move || head.decode(format))
+            .try_spawn(JobClass::Decoder, move || head.decode(format))
             .map_err(|error| HeadError::Decode(error.to_string()))?;
         tokio::select! {
             biased;

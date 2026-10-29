@@ -22,7 +22,7 @@ pub struct FixedRoom {
     pub time: lk_agents_voice::agent_session::Timebase,
     /// Where the room's CPU work (a pre-connect head's decode) runs; `None` runs it on the
     /// executor's own task.
-    pub pool: Option<lk_agents_media::workers::MediaWorkers>,
+    pub pool: Option<lk_agents_media::pool::MediaPool>,
 }
 
 impl room_owner::SessionRoom for FixedRoom {
@@ -112,7 +112,7 @@ impl room_owner::RoomRuntime for RoomFactory {
         let time = lk_agents_voice::agent_session::Timebase::real();
         match room {
             Some(room) => {
-                let pool = (env.workers)().ok().map(lk_agents_media::workers::MediaWorkers::from);
+                let pool = (env.media_pool)().ok().map(lk_agents_media::pool::MediaPool::from);
                 room_owner::RoomSession(Arc::new(FixedRoom { rtc: room, time, pool }))
             }
             None => room_owner::RoomSession(Arc::new(DetachedSession(time))),
