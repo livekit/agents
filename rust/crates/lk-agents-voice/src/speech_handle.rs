@@ -180,7 +180,7 @@ pub struct SpeechHandle {
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One cell per tool-loop step, addressed absolutely.
-    generations: Mutex<Vec<Arc<watch::Sender<bool>>>>,
+    generations: Mutex<Vec<Arc<Monotone<bool>>>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     num_steps: AtomicU32,
 
@@ -199,6 +199,9 @@ impl PartialEq for SpeechHandle {
 }
 
 impl Eq for SpeechHandle {}
+
+/// A flag that only moves forward (`set` once), awaited with [`raised`].
+type Monotone<T> = watch::Sender<T>;
 
 /// Resolves once `flag` is set: level-triggered, so a late waiter does not hang.
 async fn raised(flag: &watch::Sender<bool>) {
@@ -526,7 +529,7 @@ impl SpeechHandle {
     }
 
     /// The lock is released before any await.
-    fn generation_cell(&self, step: usize) -> Arc<watch::Sender<bool>> {
+    fn generation_cell(&self, step: usize) -> Arc<Monotone<bool>> {
         self.generations
             .lock()
             .unwrap()

@@ -108,18 +108,16 @@ struct Virtual {
     parked: Vec<Waker>,
 }
 
-impl VirtualClock {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn new() -> Self {
+impl Default for Virtual {
+    fn default() -> Self {
         let origin = simulated_epoch();
-        VirtualClock {
-            state: Mutex::new(Virtual {
-                now: Ts::ZERO,
-                wall_origin: origin,
-                last_wall: origin,
-                parked: Vec::new(),
-            }),
-        }
+        Virtual { now: Ts::ZERO, wall_origin: origin, last_wall: origin, parked: Vec::new() }
+    }
+}
+
+impl VirtualClock {
+    pub fn new() -> Self {
+        VirtualClock { state: Default::default() }
     }
 
     /// Going backwards is a test bug, not a runtime condition, so it panics.
