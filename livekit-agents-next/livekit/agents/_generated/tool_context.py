@@ -8,14 +8,17 @@
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from typing_extensions import NotRequired, Required, TypedDict
 
-DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
+# The declared records.
 
 
-DuplicateScope = Literal["name", "name_and_args"]
+DuplicateMode: TypeAlias = Literal["allow", "reject", "replace", "confirm"]
+
+
+DuplicateScope: TypeAlias = Literal["name", "name_and_args"]
 """What counts as a duplicate of an in-flight call, i.e. what ``on_duplicate`` acts on.
 
 ``"name"``           any in-flight call of the same tool (default).

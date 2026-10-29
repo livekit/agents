@@ -721,8 +721,8 @@ pub mod agent_run {
                 spec: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "spec", |v| v.extract::<::lk_agents_abi::ToolSpec>().map_err(::std::convert::Into::<PyErr>::into))?,
                 raw_schema: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "raw_schema", |v| v.extract::<bool>())?,
                 needs_approval: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "needs_approval", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::agent_run::read_back_from_py(v)).map(Some) })?,
-                on_duplicate: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "on_duplicate", |v| v.extract::<::lk_agents_abi::llm::mcp::DuplicateMode>().map_err(::std::convert::Into::<PyErr>::into))?,
-                duplicate_scope: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "duplicate_scope", |v| v.extract::<::lk_agents_abi::llm::mcp::DuplicateScope>().map_err(::std::convert::Into::<PyErr>::into))?,
+                on_duplicate: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "on_duplicate", |v| crate::generated::records::tool_context::duplicate_mode_from_py(v))?,
+                duplicate_scope: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "duplicate_scope", |v| crate::generated::records::tool_context::duplicate_scope_from_py(v))?,
                 retries: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "retries", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "FunctionToolInfo.retries")).map(Some) })?,
                 remote: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "remote", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
             })
@@ -1733,6 +1733,38 @@ pub mod llm_fallback {
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("available", ::pyo3::IntoPyObjectExt::into_bound_py_any(available, py)?)?;
             crate::host::construct(AVAILABILITY_CHANGED.import(py, "livekit.agents._generated.llm_fallback", "AvailabilityChanged")?.as_any(), (), Some(&kwargs))
+    }
+}
+
+pub mod mcp {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+    pub fn resolved_tool_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::mcp::McpToolOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::mcp::McpToolOptions { flags, on_duplicate, duplicate_scope, report_progress, retries } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("flags", ::pyo3::IntoPyObjectExt::into_bound_py_any(flags, py)?)?;
+            dict.set_item("on_duplicate", crate::generated::records::tool_context::duplicate_mode_to_py(py, on_duplicate)?)?;
+            dict.set_item("duplicate_scope", crate::generated::records::tool_context::duplicate_scope_to_py(py, duplicate_scope)?)?;
+            dict.set_item("report_progress", ::pyo3::IntoPyObjectExt::into_bound_py_any(report_progress, py)?)?;
+            if let Some(x) = retries {
+                dict.set_item("retries", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+    pub fn m_c_p_tool_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptionsPatch> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::llm::mcp::McpToolOptionsPatch {
+                flags: match obj.get_item("flags")? { Some(v) if !v.is_none() => Some(((&v).extract::<::lk_agents_abi::llm::mcp::ToolFlag>().map_err(::std::convert::Into::<PyErr>::into))?), _ => None },
+                on_duplicate: match obj.get_item("on_duplicate")? { Some(v) if !v.is_none() => Some((crate::generated::records::tool_context::duplicate_mode_from_py((&v)))?), _ => None },
+                duplicate_scope: match obj.get_item("duplicate_scope")? { Some(v) if !v.is_none() => Some((crate::generated::records::tool_context::duplicate_scope_from_py((&v)))?), _ => None },
+                report_progress: match obj.get_item("report_progress")? { Some(v) if !v.is_none() => Some(((&v).extract::<bool>())?), _ => None },
+                retries: match obj.get_item("retries")? { Some(v) if !v.is_none() => Some((::lk_agents_abi::python::number_from_py::<u32>((&v), "MCPToolOptions.retries"))?), _ => None },
+            })
     }
 }
 
@@ -3848,6 +3880,52 @@ pub mod tokenizer {
             return Ok(::lk_agents_abi::tokenize::bindings::TokenizerToken::Span((|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "TokenizerToken.Span"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<::std::string::String>())?, (::lk_agents_abi::python::number_from_py::<usize>(&item_1, "TokenizerToken.Span"))?, (::lk_agents_abi::python::number_from_py::<usize>(&item_2, "TokenizerToken.Span"))?,)) })()?));
         }
         Err(super::not_a(obj, "TokenizerToken"))
+    }
+}
+
+pub mod tool_context {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs.
+
+    pub fn duplicate_mode_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::DuplicateMode> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "allow" => Ok(::lk_agents_abi::llm::mcp::DuplicateMode::Allow),
+                "reject" => Ok(::lk_agents_abi::llm::mcp::DuplicateMode::Reject),
+                "replace" => Ok(::lk_agents_abi::llm::mcp::DuplicateMode::Replace),
+                "confirm" => Ok(::lk_agents_abi::llm::mcp::DuplicateMode::Confirm),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("DuplicateMode: {other:?} is not one of 'allow', 'reject', 'replace', 'confirm'"))),
+            }
+    }
+
+    pub fn duplicate_mode_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::mcp::DuplicateMode) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::llm::mcp::DuplicateMode::Allow => "allow",
+                ::lk_agents_abi::llm::mcp::DuplicateMode::Reject => "reject",
+                ::lk_agents_abi::llm::mcp::DuplicateMode::Replace => "replace",
+                ::lk_agents_abi::llm::mcp::DuplicateMode::Confirm => "confirm",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs.
+
+    pub fn duplicate_scope_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::DuplicateScope> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "name" => Ok(::lk_agents_abi::llm::mcp::DuplicateScope::Name),
+                "name_and_args" => Ok(::lk_agents_abi::llm::mcp::DuplicateScope::NameAndArgs),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("DuplicateScope: {other:?} is not one of 'name', 'name_and_args'"))),
+            }
+    }
+
+    pub fn duplicate_scope_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::mcp::DuplicateScope) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::llm::mcp::DuplicateScope::Name => "name",
+                ::lk_agents_abi::llm::mcp::DuplicateScope::NameAndArgs => "name_and_args",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 }
 

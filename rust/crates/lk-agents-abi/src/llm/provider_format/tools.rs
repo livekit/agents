@@ -5,6 +5,7 @@ use lk_agents_host_derive::Host;
 use serde_json::Value;
 
 /// The values are the reference's `auto()` order and the wire to the shim: never reorder.
+#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolFlag"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ToolFlag(u8);
 
@@ -71,9 +72,9 @@ impl std::ops::BitOr for ToolFlag {
 
 // No `///`: it would become a docstring on the host's `DuplicateMode = Literal[...]`, which has
 // none. Variant order is the `Literal`'s member order, a public surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Host)]
-#[python(literal, module = "tool_context", name = "DuplicateMode")]
-#[host(wire(msg = format!("unknown on_duplicate mode {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[crate::host(record(module = "tool_context", emit, extract))]
+#[crate::host(wire_strs(msg = format!("unknown on_duplicate mode {s:?}")))]
 pub enum DuplicateMode {
     #[default]
     #[host(rename = "allow")]
@@ -112,9 +113,9 @@ pub enum DuplicateMode {
 // fencing it would put backticks into the generated Python docstring. The `cfg_attr(doctest)`
 // fences exist only for `cargo test --doc`, which the codegen never reads.
 #[allow(rustdoc::invalid_rust_codeblocks)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Host)]
-#[python(literal, module = "tool_context", name = "DuplicateScope")]
-#[host(wire(msg = format!("unknown duplicate_scope {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[crate::host(record(module = "tool_context", emit, extract))]
+#[crate::host(wire_strs(msg = format!("unknown duplicate_scope {s:?}")))]
 pub enum DuplicateScope {
     /// Any in-flight call of the same tool.
     #[default]

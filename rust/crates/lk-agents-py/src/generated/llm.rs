@@ -751,10 +751,11 @@ fn _extract_mcp_tools_timeout_check_seconds(obj: &Bound<'_, PyAny>) -> PyResult<
 
 #[pyfunction]
 #[pyo3(signature = (config))]
-pub fn resolve_mcp_tool_options(config: ::std::option::Option<::lk_agents_abi::llm::mcp::McpToolOptionsPatch>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptions> {
+pub fn resolve_mcp_tool_options<'py>(py: Python<'py>, config: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
+    let config = config.map(|v| crate::generated::records::mcp::m_c_p_tool_options_from_py(&v)).transpose()?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::resolve_tool_options(config);
-    Ok(out)
+    Ok(crate::generated::records::mcp::resolved_tool_options_to_py(py, out)?)
 }
 
 #[pyfunction]

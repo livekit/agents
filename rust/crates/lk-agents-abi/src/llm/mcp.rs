@@ -1,13 +1,11 @@
 //! MCP host contracts. Runtime owns the SDK, transports, requests and cleanup.
 
-use lk_agents_host_derive::Host;
-
 // The generated module globs this one to resolve field types.
 pub use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
 
 /// Resolved per-tool behavior passed to the host's function-tool decorator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Host)]
-#[binding(emit, from_items)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[crate::host(record(module = "mcp", name = "ResolvedToolOptions", emit, typed_dict))]
 pub struct McpToolOptions {
     /// Passed through to the `@function_tool` decorator, using `ToolFlag`.
     pub flags: ToolFlag,
@@ -21,30 +19,24 @@ pub struct McpToolOptions {
 }
 
 /// Per-tool behavior for MCP tools exposed by an MCPToolset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Host)]
-#[python(
-    typed_dict,
-    total = "False",
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[crate::host(record(
     module = "mcp",
     path = "livekit.agents.llm.mcp",
-    name = "MCPToolOptions"
-)]
-#[binding(extract, from_items)]
+    name = "MCPToolOptions",
+    extract,
+    typed_dict
+))]
 pub struct McpToolOptionsPatch {
     /// Flags passed to the @function_tool decorator, using ToolFlag.
-    #[python(ty = "ToolFlag", import = "..llm.tool_context:ToolFlag")]
     pub flags: Option<ToolFlag>,
     /// Behavior when a tool is called multiple times in the same context.
-    #[python(ty = "DuplicateMode", import = "..llm.tool_context:DuplicateMode")]
     pub on_duplicate: Option<DuplicateMode>,
     /// What counts as a duplicate, e.g. ``"name_and_args"`` to compare arguments too.
-    #[python(ty = "DuplicateScope", import = "..llm.tool_context:DuplicateScope")]
     pub duplicate_scope: Option<DuplicateScope>,
     /// Whether to forward the tool's progress notifications to ctx.update().
-    #[python(ty = "bool")]
     pub report_progress: Option<bool>,
     /// The tool's retry budget, in place of the agent's ``retries['tools']``.
-    #[python(ty = "int")]
     pub retries: Option<u32>,
 }
 

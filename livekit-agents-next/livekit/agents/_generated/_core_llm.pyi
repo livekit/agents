@@ -18,7 +18,7 @@ from livekit.agents.types import APIConnectOptions
 from livekit.rtc import AudioFrame
 
 from .._core import ChatItem, FallbackTtsStream
-from .mcp import MCPToolOptions
+from .mcp import MCPToolOptions, ResolvedToolOptions
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 
@@ -274,7 +274,7 @@ class McpSession:
     @property
     def cleanup(self) -> McpCleanup: ...
 
-def resolve_mcp_tool_options(config: MCPToolOptions | None) -> dict[str, object]: ...
+def resolve_mcp_tool_options(config: MCPToolOptions | None) -> ResolvedToolOptions: ...
 
 def mcp_raw_schema(
     name: str,
