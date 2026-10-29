@@ -11,7 +11,7 @@ use lk_agents_voice::room_io::pre_connect_state::{PreConnectBuffer, PreConnectSt
 use tokio::sync::Notify;
 
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
-use lk_agents_voice::room_io::pre_connect_state::{HeadBytes, replayed};
+use lk_agents_voice::room_io::pre_connect_state::{HeadBytes, HeadError, replayed};
 
 #[derive(Default)]
 struct State {
@@ -157,7 +157,7 @@ impl PreConnectAudioHandler {
             }
         };
         let outcome = match lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, wait).await {
-            Ok(outcome) => outcome.map_err(IoError::PreConnectMalformed)?,
+            Ok(outcome) => outcome?,
             Err(_) => {
                 self.state.lock().unwrap().core.expire(id);
                 self.changed.notify_waiters();
@@ -173,15 +173,15 @@ impl PreConnectAudioHandler {
         stop.as_mut().enable();
         let receive = async {
             if self.state.lock().unwrap().closed {
-                return Err("pre-connect input is closed".into());
+                return Err(HeadError::Closed);
             }
             receive_bytes(&mut stream).await
         };
         let received = tokio::select! {
             biased;
-            () = &mut stop => Err("pre-connect input is closed".into()),
+            () = &mut stop => Err(HeadError::Closed),
             received = lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, receive) => {
-                received.unwrap_or_else(|_| Err("pre-connect receive deadline expired".into()))
+                received.unwrap_or(Err(HeadError::Expired))
             },
         };
         let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
@@ -189,7 +189,7 @@ impl PreConnectAudioHandler {
         self.record_cleanup(cleanup);
         let outcome = match received {
             Ok(head) if cleanup == Closed::Clean => self.decode(head).await,
-            Ok(_) => Err("pre-connect stream cleanup did not finish".into()),
+            Ok(_) => Err(HeadError::Cleanup),
             Err(error) => Err(error),
         };
         let received_at = self.clock.now();
@@ -202,25 +202,22 @@ impl PreConnectAudioHandler {
     }
 
     /// On the media pool when there is one, abandoned at close.
-    async fn decode(&self, head: HeadBytes) -> std::result::Result<Vec<AudioFrame>, String> {
-        let closed = || -> std::result::Result<Vec<AudioFrame>, String> {
-            Err("pre-connect input is closed".into())
-        };
+    async fn decode(&self, head: HeadBytes) -> std::result::Result<Vec<AudioFrame>, HeadError> {
         let stopped = self.stopped.notified();
         tokio::pin!(stopped);
         stopped.as_mut().enable();
         if self.state.lock().unwrap().closed {
-            return closed();
+            return Err(HeadError::Closed);
         }
         let format = self.format;
         let Some(pool) = &self.pool else { return head.decode(format) };
         let job = pool
             .try_spawn(MediaWorkerClass::Decoder, move || head.decode(format))
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| HeadError::Decode(error.to_string()))?;
         tokio::select! {
             biased;
-            () = &mut stopped => closed(),
-            decoded = job => decoded.map_err(|_| "pre-connect decoder panicked".to_string())?,
+            () = &mut stopped => Err(HeadError::Closed),
+            decoded = job => decoded.map_err(|_| HeadError::Decode("the decoder panicked".into()))?,
         }
     }
 
@@ -266,9 +263,10 @@ impl PreConnectAudioHandler {
     }
 }
 
-async fn receive_bytes(stream: &mut ByteStream) -> std::result::Result<HeadBytes, String> {
+async fn receive_bytes(stream: &mut ByteStream) -> std::result::Result<HeadBytes, HeadError> {
     let mut head = HeadBytes::new(&stream.info)?;
-    while let Some(chunk) = stream.chunks.next().await.map_err(|error| error.to_string())? {
+    let next = |error: lk_agents_abi::errors::ProviderError| HeadError::Stream(error.to_string());
+    while let Some(chunk) = stream.chunks.next().await.map_err(next)? {
         head.push(&chunk)?;
         tokio::task::yield_now().await;
     }

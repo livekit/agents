@@ -9,6 +9,39 @@ use lk_agents_abi::{AudioFrame, Ts};
 pub const MAX_TRACKS: usize = 32;
 pub const MAX_STREAMS: usize = 4;
 
+/// Why a buffered head is not replayed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HeadError {
+    #[error("pre-connect input is closed")]
+    Closed,
+    #[error("pre-connect buffer already transferred")]
+    Transferred,
+    #[error("pre-connect receive deadline expired")]
+    Expired,
+    #[error("pre-connect stream cleanup did not finish")]
+    Cleanup,
+    #[error("pre-connect {0} capacity exceeded")]
+    Capacity(&'static str),
+    #[error("pre-connect {0}")]
+    Malformed(&'static str),
+    #[error("pre-connect stream failed: {0}")]
+    Stream(String),
+    #[error("pre-connect decode failed: {0}")]
+    Decode(String),
+}
+
+impl From<lk_agents_media::CodecError> for HeadError {
+    fn from(error: lk_agents_media::CodecError) -> Self {
+        HeadError::Decode(error.to_string())
+    }
+}
+
+impl From<HeadError> for IoError {
+    fn from(error: HeadError) -> Self {
+        IoError::PreConnectMalformed(error.to_string())
+    }
+}
+
 pub struct PreConnectBuffer {
     pub received_at: Ts,
     pub frames: Vec<AudioFrame>,
@@ -16,7 +49,7 @@ pub struct PreConnectBuffer {
 
 enum SlotValue {
     Pending,
-    Ready(std::result::Result<PreConnectBuffer, String>),
+    Ready(std::result::Result<PreConnectBuffer, HeadError>),
     Taken,
 }
 
@@ -33,13 +66,13 @@ pub struct PreConnectState {
 impl PreConnectState {
     pub fn slot(&mut self, track: &TrackSid) -> Result<u64> {
         if self.closed {
-            return Err(IoError::PreConnectMalformed("pre-connect input is closed".into()));
+            return Err(HeadError::Closed.into());
         }
         if let Some(id) = self.tracks.get(track) {
             return Ok(*id);
         }
         if self.tracks.len() == MAX_TRACKS {
-            return Err(IoError::PreConnectMalformed("pre-connect track capacity exceeded".into()));
+            return Err(HeadError::Capacity("track").into());
         }
         Ok(self.new_slot(track.clone()))
     }
@@ -52,9 +85,9 @@ impl PreConnectState {
             return Ok(None);
         }
         let limit = if self.receiving.len() == MAX_STREAMS {
-            Some("pre-connect stream capacity exceeded")
+            Some(HeadError::Capacity("stream"))
         } else if self.transfers.len() == MAX_TRACKS {
-            Some("pre-connect transfer capacity exceeded")
+            Some(HeadError::Capacity("transfer"))
         } else {
             None
         };
@@ -63,9 +96,9 @@ impl PreConnectState {
                 && let Some(slot) = self.slots.get_mut(id)
                 && matches!(slot, SlotValue::Pending)
             {
-                *slot = SlotValue::Ready(Err(error.into()));
+                *slot = SlotValue::Ready(Err(error.clone()));
             }
-            return Err(IoError::PreConnectMalformed(error.into()));
+            return Err(error.into());
         }
         let slot = self.slot(&track)?;
         let id = if self.slots.get(&slot).is_some_and(|slot| !matches!(slot, SlotValue::Pending)) {
@@ -82,7 +115,7 @@ impl PreConnectState {
         &mut self,
         track: &TrackSid,
         id: u64,
-        outcome: std::result::Result<PreConnectBuffer, String>,
+        outcome: std::result::Result<PreConnectBuffer, HeadError>,
     ) -> bool {
         if self.receiving.get(track) != Some(&id) {
             return false;
@@ -99,13 +132,13 @@ impl PreConnectState {
     }
 
     /// `None` keeps the runtime waiter parked. A successful read moves all PCM out of the state.
-    pub fn take(&mut self, id: u64) -> Option<std::result::Result<PreConnectBuffer, String>> {
+    pub fn take(&mut self, id: u64) -> Option<std::result::Result<PreConnectBuffer, HeadError>> {
         let Some(slot) = self.slots.get_mut(&id) else {
-            return Some(Err("pre-connect input is closed".into()));
+            return Some(Err(HeadError::Closed));
         };
         match slot {
             SlotValue::Pending => None,
-            SlotValue::Taken => Some(Err("pre-connect buffer already transferred".into())),
+            SlotValue::Taken => Some(Err(HeadError::Transferred)),
             SlotValue::Ready(_) => {
                 let SlotValue::Ready(outcome) = std::mem::replace(slot, SlotValue::Taken) else {
                     unreachable!()
@@ -119,7 +152,7 @@ impl PreConnectState {
         if let Some(slot) = self.slots.get_mut(&id)
             && matches!(slot, SlotValue::Pending)
         {
-            *slot = SlotValue::Ready(Err("pre-connect receive deadline expired".into()));
+            *slot = SlotValue::Ready(Err(HeadError::Expired));
         }
     }
 
@@ -127,7 +160,7 @@ impl PreConnectState {
         self.closed = true;
         for slot in self.slots.values_mut() {
             if !matches!(slot, SlotValue::Taken) {
-                *slot = SlotValue::Ready(Err("pre-connect input is closed".into()));
+                *slot = SlotValue::Ready(Err(HeadError::Closed));
             }
         }
         self.receiving.clear();
@@ -253,6 +286,33 @@ mod tests {
     }
 
     #[test]
+    fn a_container_head_stops_at_its_decoded_duration_bound() {
+        let info = lk_agents_abi::voice::rtc::StreamInfo {
+            mime_type: "audio/wav".into(),
+            attributes: [("sampleRate".into(), "8000".into()), ("channels".into(), "1".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let eleven_seconds = vec![0i16; 8_000 * 11];
+        let data = (eleven_seconds.len() * 2) as u32;
+        let mut wav = [b"RIFF".as_slice(), &(36 + data).to_le_bytes(), b"WAVEfmt "].concat();
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes()); // PCM
+        wav.extend(1u16.to_le_bytes()); // mono
+        wav.extend(8_000u32.to_le_bytes());
+        wav.extend(16_000u32.to_le_bytes()); // byte rate
+        wav.extend(2u16.to_le_bytes()); // block align
+        wav.extend(16u16.to_le_bytes()); // bits
+        wav.extend(b"data");
+        wav.extend(data.to_le_bytes());
+        wav.extend(lk_agents_media::pcm_bytes(&eleven_seconds));
+        let mut head = HeadBytes::new(&info).unwrap();
+        head.push(&wav).unwrap();
+        assert_eq!(head.decode((8_000, 1)), Err(HeadError::Capacity("decoded duration")));
+    }
+
+    #[test]
     fn preconnect_overload_preserves_already_admitted_tracks() {
         let mut state = PreConnectState::default();
         let tracks =
@@ -288,22 +348,24 @@ pub struct HeadBytes {
 }
 
 impl HeadBytes {
-    pub fn new(info: &lk_agents_abi::voice::rtc::StreamInfo) -> std::result::Result<Self, String> {
+    pub fn new(
+        info: &lk_agents_abi::voice::rtc::StreamInfo,
+    ) -> std::result::Result<Self, HeadError> {
         let format = source_format(info)?;
         if info.total_length.is_some_and(|length| length > MAX_BYTES as u64) {
-            return Err("pre-connect encoded byte capacity exceeded".into());
+            return Err(HeadError::Capacity("encoded byte"));
         }
         let raw = info.mime_type.is_empty() || info.mime_type == "audio/pcm";
         let pcm_limit = raw.then(|| sample_limit(format) * 2);
         Ok(Self { format, mime: info.mime_type.clone(), pcm_limit, data: Vec::new() })
     }
 
-    pub fn push(&mut self, chunk: &[u8]) -> std::result::Result<(), String> {
+    pub fn push(&mut self, chunk: &[u8]) -> std::result::Result<(), HeadError> {
         if chunk.len() > MAX_BYTES.saturating_sub(self.data.len()) {
-            return Err("pre-connect encoded byte capacity exceeded".into());
+            return Err(HeadError::Capacity("encoded byte"));
         }
         if self.pcm_limit.is_some_and(|limit| chunk.len() > limit.saturating_sub(self.data.len())) {
-            return Err("pre-connect PCM duration/byte capacity exceeded".into());
+            return Err(HeadError::Capacity("PCM duration"));
         }
         self.data.extend_from_slice(chunk);
         Ok(())
@@ -311,7 +373,7 @@ impl HeadBytes {
 
     /// Synchronous CPU work: decoded, remixed and resampled to the session's `target`, in 10 ms
     /// frames, never more than [`MAX_DURATION`] of it.
-    pub fn decode(self, target: (u32, u16)) -> std::result::Result<Vec<AudioFrame>, String> {
+    pub fn decode(self, target: (u32, u16)) -> std::result::Result<Vec<AudioFrame>, HeadError> {
         use lk_agents_media::AudioFormat;
         use lk_agents_media::source::{Source, decode, frames};
         let limit = sample_limit(target);
@@ -332,23 +394,23 @@ impl HeadBytes {
         };
         let format = AudioFormat::new(target.0, target.1);
         let mut pcm = Vec::new();
-        decode::<lk_agents_media::CodecError>(
+        decode::<HeadError>(
             source,
             Some(target.0),
             target.1,
             limits,
             &|| false,
             &mut |decoded, samples| {
-                if decoded != format || samples.len() > limit - pcm.len() {
-                    return Err(lk_agents_media::CodecError::DecodeLimit(
-                        "pre-connect decoded format or duration",
-                    ));
+                if decoded != format {
+                    return Err(HeadError::Malformed("decoder output is not the session format"));
+                }
+                if samples.len() > limit - pcm.len() {
+                    return Err(HeadError::Capacity("decoded duration"));
                 }
                 pcm.extend_from_slice(samples);
                 Ok(())
             },
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
         let chunk = (target.0 as usize / 100) * usize::from(target.1);
         Ok(frames(format, &pcm, chunk).collect())
     }
@@ -370,18 +432,18 @@ pub fn replayed(buffer: PreConnectBuffer, now: Ts) -> Vec<AudioFrame> {
 
 pub fn source_format(
     info: &lk_agents_abi::voice::rtc::StreamInfo,
-) -> std::result::Result<(u32, u16), String> {
+) -> std::result::Result<(u32, u16), HeadError> {
     let rate = info
         .attributes
         .get("sampleRate")
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|rate| (8000..=48000).contains(rate))
-        .ok_or("pre-connect sampleRate must be between 8000 and 48000")?;
+        .ok_or(HeadError::Malformed("sampleRate must be between 8000 and 48000"))?;
     let channels = info
         .attributes
         .get("channels")
         .and_then(|v| v.parse::<u16>().ok())
         .filter(|channels| (1..=2).contains(channels))
-        .ok_or("pre-connect channels must be 1 or 2")?;
+        .ok_or(HeadError::Malformed("channels must be 1 or 2"))?;
     Ok((rate, channels))
 }
