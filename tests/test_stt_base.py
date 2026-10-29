@@ -198,9 +198,9 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
     assert final_event.created_at - end_event.created_at >= recognize_delay
 
 
-# a connect timeout short enough for a real-time test: an attempt outlives it in 0.1 s
+# a real-time test: a long attempt outlives the connect timeout 10x over, a short one drops at once
 _FLAP_OPTIONS = dataclasses.replace(
-    DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0, connect_timeout=0.05
+    DEFAULT_API_CONNECT_OPTIONS, max_retry=1, retry_interval=0.0, connect_timeout=0.05
 )
 
 
@@ -229,7 +229,7 @@ async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_ti
     # a caller who never speaks produces no FINAL_TRANSCRIPT, so this is the only reset that
     # keeps an idle socket (Cartesia closes it every ~3 minutes) from exhausting the budget
     drops = _FLAP_OPTIONS.max_retry * 3
-    stream = _FlappingStream(stt=_DummySTT(), uptime=0.1, drops=drops)
+    stream = _FlappingStream(stt=_DummySTT(), uptime=0.5, drops=drops)
     stream.end_input()
     try:
         await stream._task
@@ -239,7 +239,7 @@ async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_ti
 
 
 async def test_retry_budget_still_gives_up_on_consecutive_short_lived_attempts() -> None:
-    stream = _FlappingStream(stt=_DummySTT(), uptime=0.01, drops=100)
+    stream = _FlappingStream(stt=_DummySTT(), uptime=0.0, drops=100)
     try:
         with pytest.raises(APIConnectionError):
             await stream._task
