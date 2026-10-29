@@ -177,6 +177,7 @@ impl AmdSystem {
         let callee_tx = tx.clone();
         spawner.spawn_unboxed(async move {
             tokio::select! {
+                biased;
                 () = callee_tx.closed() => {}
                 callee = await_callee(room, participant, time) => {
                     let _ = callee_tx.send(Msg::Callee(callee));

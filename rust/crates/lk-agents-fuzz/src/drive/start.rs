@@ -300,7 +300,7 @@ impl Run {
             false,
             Box::new(super::executor::Handover::new(cores_tx, time.clone(), tasks.clone())),
             Box::new(fakes::remote_session::hosting),
-            fakes::amd::spawn,
+            lk_agents_runtime::voice::amd::spawn,
         )
         .expect("a new session starts")
         .await

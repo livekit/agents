@@ -755,7 +755,8 @@ mod tests {
                 || site.ends_with("lk-agents-runtime/src/voice/mod.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/effects.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/legs.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/audio.rs");
+                || site.ends_with("lk-agents-runtime/src/voice/audio.rs")
+                || site.ends_with("lk-agents-runtime/src/voice/amd.rs");
             assert!(placed, "a task is placed at {site}");
         }
     }
