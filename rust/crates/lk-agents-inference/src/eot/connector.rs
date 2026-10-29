@@ -112,6 +112,7 @@ mod tests {
             .await
             .err()
             .expect("invalid header fails before connecting");
+        assert!(error.message.contains("header"), "{}", error.message);
         assert!(!error.retryable);
     }
 }
