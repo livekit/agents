@@ -1,6 +1,6 @@
 //! `HostInvoker` (docs/internals/rust-core.md "HostInvoker"): every Rust-to-host call is
 //! dispatched here, language-neutral, and entered through the binding's
-//! [`HostEntry`](lk_agents_abi::invoke::HostEntry) port (`lk-agents-py`'s `host`, decision 74).
+//! [`HostEntry`](lk_agents_abi::invoke::HostEntry) port (`lk-agents-py`'s `host`).
 //! [`call`], [`call_now`] and [`notify`] are what generated proxies call: a call runs in the
 //! host context its invocation captured at entry, refused before the host is entered when it
 //! captured none or lacks a scope the call requires.

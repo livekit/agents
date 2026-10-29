@@ -34,7 +34,7 @@ struct Started {
 /// The ports outlive a fork: the host objects are the child's too.
 struct State {
     started: Option<Started>,
-    /// The host's frame reader (decision 94), installed once as the host starts.
+    /// The host's frame reader, installed once as the host starts.
     frames: Option<Arc<dyn FrameReader>>,
     /// The host's time, installed once as the host loads.
     time: Option<Arc<dyn HostTime>>,
@@ -42,7 +42,7 @@ struct State {
 
 static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, time: None });
 
-/// The host's clock and executor (decision 88). Each read resolves the caller's: a host whose
+/// The host's clock and executor. Each read resolves the caller's: a host whose
 /// running loop is on virtual time answers with that loop's.
 pub trait HostTime: Send + Sync {
     fn clock(&self) -> Arc<dyn Clock>;

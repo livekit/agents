@@ -495,7 +495,7 @@ async fn the_validated_output_reaches_the_result() {
     assert!(settled.output.is_some());
 }
 
-// Catches (decision 16): cancellation not reaching the running body through the host, or the run
+// Catches: cancellation not reaching the running body through the host, or the run
 // settling before the body reported back.
 #[tokio::test(start_paused = true)]
 async fn cancel_reaches_the_running_tool_through_the_host_and_waits_for_it() {
@@ -517,7 +517,7 @@ async fn cancel_reaches_the_running_tool_through_the_host_and_waits_for_it() {
     assert_eq!(*s.host.cancelled.lock().unwrap(), [run_operation]);
 }
 
-// Catches (decision 14): a body that never settles holding the run forever, or the deadline
+// Catches: a body that never settles holding the run forever, or the deadline
 // passing silently.
 #[tokio::test(start_paused = true)]
 async fn a_body_that_ignores_cancel_is_reported_incomplete_at_the_deadline() {

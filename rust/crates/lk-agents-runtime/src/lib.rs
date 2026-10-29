@@ -6,7 +6,7 @@
 //! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
 //! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
-/// What the extension names of the subject cores (decision 67: it reaches them through the
+/// What the extension names of the subject cores (it reaches them through the
 /// runtime): the declared classes a core implements outright.
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
@@ -36,8 +36,8 @@ pub mod cores {
 extern crate lk_agents_media as _;
 extern crate lk_agents_voice as _;
 
-/// The provider clients, judges and detectors, wired to this process by [`process::Process`]
-/// (decision 88); the extension names their declared classes through this path.
+/// The provider clients, judges and detectors, wired to this process by [`process::env`]; the
+/// extension names their declared classes through this path.
 pub use lk_agents_inference as inference;
 /// The shared transport, A2A credentials and the delegation client, wired the same way.
 pub use lk_agents_net as net;
