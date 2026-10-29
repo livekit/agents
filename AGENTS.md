@@ -125,12 +125,14 @@ specification; implementation cleanup must follow the agreed contracts.
 - **Rust core** (`rust/crates/`, see `docs/internals/rust-core.md`): the sans-I/O crates
   (`lk-agents-core` with its `a2a` and MCP logic, `-voice`, `-media`) are synchronous (events and
   time in, effects out); media is CPU work with no async runtime. `lk-agents-runtime` is only the
-  I/O layer of voice and text: the voice executor, AgentRun/TextSession drivers, the thin A2A
-  door (executes core's storage effects by calling storage), thin MCP I/O, HostInvoker and the
-  process runtime. Everything that can be faked at its boundary is ordinary async Rust, tested
-  on its own and faked in the DST: `lk-agents-net` (the shared HTTP/SSE/WebSocket transport,
-  the host stream adapter and the delegation A2A client), `lk-agents-inference` (providers,
-  retry/fallback/reconnect, evaluation judges), `lk-agents-worker` (registration, IPC,
+  I/O layer of voice and text: the voice executor, room I/O, avatar transport, recording
+  ingress, AgentRun/TextSession drivers, the thin A2A door (executes core's storage effects by
+  calling storage), thin MCP I/O, HostInvoker and the process runtime; it makes no decisions.
+  Everything that can be faked at its boundary is ordinary async Rust, tested on its own and
+  faked in the DST: `lk-agents-net` (the shared HTTP/SSE/WebSocket transport, the host stream
+  adapter, the delegation A2A client and the Cloud session report upload),
+  `lk-agents-inference` (providers, retry/fallback/reconnect, the TTS audio emitter and
+  streaming decoder queue, evaluation judges), `lk-agents-worker` (registration, IPC,
   supervision) and `lk-agents-storage` (all database interaction, typed errors). Telemetry is
   recorded synchronously and reaches the host's OpenTelemetry SDK through HostInvoker.
   `lk-agents-abi` declares the boundary once and codegen emits the Python bindings from it; pyo3
@@ -181,14 +183,14 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-core      # AgentRun, tools/approval/output acceptance, TextSession, A2A and MCP logic
 ├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
 ├── lk-agents-storage   # Async I/O: AgentDB and SQLite, fencing, leases, typed errors
-├── lk-agents-media     # Codecs, resampling, filters and sample arithmetic; no async runtime
-├── lk-agents-net       # Async I/O: shared transport, token signing, host stream adapter, A2A client
-├── lk-agents-inference # Async I/O: provider clients, retry/fallback/reconnect, evaluation judges
+├── lk-agents-media     # Codecs, TTS framing, images, recording files, resampling; no async runtime
+├── lk-agents-net       # Async I/O: transport, token signing, host stream adapter, A2A client, Env
+├── lk-agents-inference # Async I/O: provider clients, retry/fallback/reconnect, TTS emitter, judges
 ├── lk-agents-worker    # Async I/O: registration, jobs, IPC, process pool and supervision
-├── lk-agents-runtime   # The I/O layer of voice and text: executors, drivers, HostInvoker
+├── lk-agents-runtime   # The I/O layer of voice and text: executors, room I/O, drivers, HostInvoker
 ├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
 ├── lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen   # Declarations IR, markers, generation
-├── lk-agents-fuzz      # Deterministic simulation of the sans-I/O crates with realistic fakes
+├── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
 ├── lk-agents-test-support # Simulated RTC peers (SDK-port fakes) on a supplied clock for the DST and tests
 └── lk-agents-bench-steps  # Voice data-plane step measurements (compiled in the launch gate)
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
@@ -253,8 +255,22 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   the Invocation captured at its operation's entry and its declared scopes; async I/O crates
   hold only ABI-declared proxy traits. Log forwarding (`pyo3-log` in `lk-agents-py`) is the
   one host entry outside HostInvoker.
-- Rust has no telemetry exporter or upload task: observations are recorded synchronously and
-  reach the host's OpenTelemetry SDK through HostInvoker.
+- Rust has no telemetry exporter: observations are recorded synchronously and reach the host's
+  OpenTelemetry SDK through HostInvoker. The LiveKit Cloud session report and recording upload
+  is not user telemetry; it is async Rust in `lk-agents-net`.
+- The runtime owns the process Tokio runtime, fork guard and media pool and injects them as
+  plain values. Host-constructed classes read them through one environment contract,
+  `lk_agents_net::env::Env`, extended per crate with exactly that crate's needs
+  (`inference::env::Env`, `worker::env::Env`) and bound to the runtime's `Process`; no
+  environment is a callback slot for another layer.
+- Runtime executor modules (`voice/`, `room_io/`, `avatar/`, `rtc/`) use no Tokio runtime
+  (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`, `Runtime`): they spawn and sleep only
+  through the injected `Spawner` and `Clock`, so the DST runs them on its deterministic
+  scheduler. Tokio sync primitives are allowed; every `select!` is `biased;`. Sockets live in
+  boundary adapters (the SDK room, the console's TCP port) that the DST replaces with port fakes.
+- Move executors into the runtime by splitting: decisions stay in voice/core as synchronous
+  state machines emitting effects; the runtime keeps pumps, node calls, timers and output
+  binding. Never move a decision-bearing module into the runtime wholesale.
 - The `clippy.toml` of core, voice, ABI and media uses `disallowed-methods`, `disallowed-types`
   and `disallowed-macros` to reject spawns, `select!`/`join!`, ambient clocks/entropy/environment/process reads,
   unbounded channels, locks, host-shared atomics and randomly ordered decision state.
