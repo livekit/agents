@@ -434,22 +434,23 @@ mod tests {
 /// A session is a socket that outlives every turn, so the driver opens one per agent frame.
 /// `async fn session` because the reference's session starts running in its constructor.
 #[crate::host(native(refused = "expected NativeRealtime"))]
-#[async_trait::async_trait]
 pub trait Realtime: Send + Sync + 'static {
     fn label(&self) -> String;
 
     fn capabilities(&self) -> RealtimeCapabilities;
 
     /// `session(turn_detection_disabled=..)`: the session's choice, not the model's.
-    async fn session(
+    fn session(
         &self,
         turn_detection_disabled: bool,
-    ) -> Result<std::sync::Arc<dyn RealtimeSession>, crate::errors::ProviderError>;
+    ) -> crate::BoxFuture<
+        '_,
+        Result<std::sync::Arc<dyn RealtimeSession>, crate::errors::ProviderError>,
+    >;
 }
 
 /// Commands, not trait methods: `&self` on a queue send cannot deadlock the audio pusher against
 /// the event drain the way a `&mut self` duplex trait can.
-#[async_trait::async_trait]
 pub trait RealtimeSession: Send + Sync {
     fn capabilities(&self) -> RealtimeCapabilities;
 
@@ -457,12 +458,12 @@ pub trait RealtimeSession: Send + Sync {
     fn send(&self, cmd: RealtimeCommand);
 
     /// `None` once the session has stopped. One consumer only.
-    async fn next_event(&self) -> Option<Event>;
+    fn next_event(&self) -> crate::BoxFuture<'_, Option<Event>>;
 
     /// The server's mirror of history; may lag the agent's chat context by a turn.
-    async fn chat_ctx(&self) -> crate::ChatContext;
+    fn chat_ctx(&self) -> crate::BoxFuture<'_, crate::ChatContext>;
 
-    async fn aclose(&self);
+    fn aclose(&self) -> crate::BoxFuture<'_, ()>;
 }
 
 /// **The `tag_value` strings below are the wire.** A host session reads each as its member's
@@ -783,7 +784,6 @@ impl HostRealtimeModel {
     }
 }
 
-#[async_trait::async_trait]
 impl Realtime for HostRealtimeModel {
     fn label(&self) -> String {
         self.label.clone()
@@ -793,25 +793,30 @@ impl Realtime for HostRealtimeModel {
         self.caps
     }
 
-    async fn session(
+    fn session(
         &self,
         turn_detection_disabled: bool,
-    ) -> Result<std::sync::Arc<dyn RealtimeSession>, crate::errors::ProviderError> {
-        let mut slot = self.session.lock().await;
-        if let Some(leg) = slot.as_ref() {
-            return Ok(std::sync::Arc::clone(leg) as std::sync::Arc<dyn RealtimeSession>);
-        }
-        // The plugin's `session()` raised: the driver's start fails with its message, as the
-        // reference's activity start does.
-        let host = self.host.session(turn_detection_disabled).await.map_err(|e| {
-            crate::errors::ProviderError::Local(crate::errors::ApiError::new(format!(
-                "realtime session could not be opened: {}",
-                e.message()
-            )))
-        })?;
-        let leg = HostRealtimeLeg::open(host, self.caps, self.anchor, &self.spawner);
-        *slot = Some(std::sync::Arc::clone(&leg));
-        Ok(leg as std::sync::Arc<dyn RealtimeSession>)
+    ) -> crate::BoxFuture<
+        '_,
+        Result<std::sync::Arc<dyn RealtimeSession>, crate::errors::ProviderError>,
+    > {
+        Box::pin(async move {
+            let mut slot = self.session.lock().await;
+            if let Some(leg) = slot.as_ref() {
+                return Ok(std::sync::Arc::clone(leg) as std::sync::Arc<dyn RealtimeSession>);
+            }
+            // The plugin's `session()` raised: the driver's start fails with its message, as the
+            // reference's activity start does.
+            let host = self.host.session(turn_detection_disabled).await.map_err(|e| {
+                crate::errors::ProviderError::Local(crate::errors::ApiError::new(format!(
+                    "realtime session could not be opened: {}",
+                    e.message()
+                )))
+            })?;
+            let leg = HostRealtimeLeg::open(host, self.caps, self.anchor, &self.spawner);
+            *slot = Some(std::sync::Arc::clone(&leg));
+            Ok(leg as std::sync::Arc<dyn RealtimeSession>)
+        })
     }
 }
 
@@ -966,7 +971,6 @@ impl HostRealtimeLeg {
     }
 }
 
-#[async_trait::async_trait]
 impl RealtimeSession for HostRealtimeLeg {
     fn capabilities(&self) -> RealtimeCapabilities {
         self.caps
@@ -1004,21 +1008,25 @@ impl RealtimeSession for HostRealtimeLeg {
         }
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        self.events.lock().await.recv().await
+    fn next_event(&self) -> crate::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move { self.events.lock().await.recv().await })
     }
 
-    async fn chat_ctx(&self) -> crate::ChatContext {
-        // Only read when no agent context is bound, which never happens for a host session.
-        crate::ChatContext::default()
+    fn chat_ctx(&self) -> crate::BoxFuture<'_, crate::ChatContext> {
+        Box::pin(async move {
+            // Only read when no agent context is bound, which never happens for a host session.
+            crate::ChatContext::default()
+        })
     }
 
-    async fn aclose(&self) {
-        // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
-        // session closes.
-        for task in std::mem::take(&mut *self.tasks.lock().unwrap()) {
-            task.abort();
-        }
-        self.host.aclose().await;
+    fn aclose(&self) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
+            // session closes.
+            for task in std::mem::take(&mut *self.tasks.lock().unwrap()) {
+                task.abort();
+            }
+            self.host.aclose().await;
+        })
     }
 }

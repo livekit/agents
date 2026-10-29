@@ -128,7 +128,6 @@ impl FakeRealtime {
     }
 }
 
-#[async_trait::async_trait]
 impl Realtime for FakeRealtime {
     fn label(&self) -> String {
         "fake::realtime".into()
@@ -140,53 +139,61 @@ impl Realtime for FakeRealtime {
 
     /// Running when it returns, as the runtime's session is: a connect failure arrives as an
     /// `Event::Error`, like a reconnect failure.
-    async fn session(&self, disabled: bool) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        let nth = self.sessions.fetch_add(1, Ordering::SeqCst);
-        let mut opts = self.options();
-        if disabled && INFERENCE.supports_turn_detection_disabled {
-            opts.turn_detection = None;
-        }
-        let caps = self.capabilities_of(&opts);
-        let conn = ApiConnectOptions::default();
-        let born = self.clock.now().saturating_add(MODEL_BUILT_BEFORE);
-        let machine = RealtimeMachine::new(INFERENCE, opts, caps, "1".into())
-            .with_response_timeout(conn.read_timeout.map(Duration::from_secs_f64))
-            .with_label(LABEL.into())
-            .with_provider("livekit".into())
-            .with_wall_anchor(self.clock.wall() - Duration::from_nanos(born.as_nanos()));
-        let mut connection = RealtimeConnection::new(&conn, born);
-        let effects = connection.start(born).into();
-        let socket = Arc::new(Socket {
-            tool_calls: self.setup.tool_calls,
-            seed: self.setup.seed ^ (nth << 32),
-            connect: self.setup.connect,
-            clock: self.clock.clone(),
-            registry: self.registry.clone(),
-            slot: OnceLock::new(),
-            state: Mutex::new(State {
-                machine,
-                connection,
-                link: Link::Waiting,
-                effects,
-                reconnecting: false,
-                commands: VecDeque::new(),
-                closing: false,
-                events: VecDeque::new(),
-                audio: batches(),
-                generations: HashMap::new(),
-                connections: 0,
-                closed: false,
-            }),
-            wake: tokio::sync::Notify::new(),
-            ready: tokio::sync::Notify::new(),
-            up: AtomicBool::new(true),
-        });
-        let slot =
-            self.registry.register(Kind::Realtime, Detail::None, Control::Realtime(socket.clone()));
-        let _ = socket.slot.set(slot);
-        let pump = socket.clone();
-        let abort = self.spawner.spawn_unboxed(async move { pump.run().await });
-        Ok(Arc::new(Session { socket, abort }))
+    fn session(
+        &self,
+        disabled: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(async move {
+            let nth = self.sessions.fetch_add(1, Ordering::SeqCst);
+            let mut opts = self.options();
+            if disabled && INFERENCE.supports_turn_detection_disabled {
+                opts.turn_detection = None;
+            }
+            let caps = self.capabilities_of(&opts);
+            let conn = ApiConnectOptions::default();
+            let born = self.clock.now().saturating_add(MODEL_BUILT_BEFORE);
+            let machine = RealtimeMachine::new(INFERENCE, opts, caps, "1".into())
+                .with_response_timeout(conn.read_timeout.map(Duration::from_secs_f64))
+                .with_label(LABEL.into())
+                .with_provider("livekit".into())
+                .with_wall_anchor(self.clock.wall() - Duration::from_nanos(born.as_nanos()));
+            let mut connection = RealtimeConnection::new(&conn, born);
+            let effects = connection.start(born).into();
+            let socket = Arc::new(Socket {
+                tool_calls: self.setup.tool_calls,
+                seed: self.setup.seed ^ (nth << 32),
+                connect: self.setup.connect,
+                clock: self.clock.clone(),
+                registry: self.registry.clone(),
+                slot: OnceLock::new(),
+                state: Mutex::new(State {
+                    machine,
+                    connection,
+                    link: Link::Waiting,
+                    effects,
+                    reconnecting: false,
+                    commands: VecDeque::new(),
+                    closing: false,
+                    events: VecDeque::new(),
+                    audio: batches(),
+                    generations: HashMap::new(),
+                    connections: 0,
+                    closed: false,
+                }),
+                wake: tokio::sync::Notify::new(),
+                ready: tokio::sync::Notify::new(),
+                up: AtomicBool::new(true),
+            });
+            let slot = self.registry.register(
+                Kind::Realtime,
+                Detail::None,
+                Control::Realtime(socket.clone()),
+            );
+            let _ = socket.slot.set(slot);
+            let pump = socket.clone();
+            let abort = self.spawner.spawn_unboxed(async move { pump.run().await });
+            Ok(Arc::new(Session { socket, abort }) as Arc<dyn RealtimeSession>)
+        })
     }
 }
 
@@ -201,7 +208,6 @@ struct Session {
     abort: AbortHandle,
 }
 
-#[async_trait::async_trait]
 impl RealtimeSession for Session {
     fn capabilities(&self) -> RealtimeCapabilities {
         self.socket.state.lock().unwrap().machine.capabilities()
@@ -213,47 +219,54 @@ impl RealtimeSession for Session {
         self.socket.wake.notify_one();
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        self.socket
-            .until(|state| match state.events.pop_front() {
-                Some(event) => Some(Some(event)),
-                None => matches!(state.link, Link::Over).then_some(None),
-            })
-            .await
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move {
+            self.socket
+                .until(|state| match state.events.pop_front() {
+                    Some(event) => Some(Some(event)),
+                    None => matches!(state.link, Link::Over).then_some(None),
+                })
+                .await
+        })
     }
 
     /// The mirror: what the server believes.
-    async fn chat_ctx(&self) -> ChatContext {
-        self.socket.state.lock().unwrap().machine.chat_ctx()
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+        Box::pin(async move { self.socket.state.lock().unwrap().machine.chat_ctx() })
     }
 
     /// The runtime's close: the response in flight interrupted and the close signalled, the pump
     /// given the teardown bound to settle; then the session is over for the server. A connection
     /// the pump left open (no close frame) keeps the socket unclosed, as a server still billing
     /// it would.
-    async fn aclose(&self) {
-        let socket = &self.socket;
-        {
-            let mut state = socket.state.lock().unwrap();
-            state.commands.push_back(RealtimeCommand::Interrupt(Interrupt { response_id: None }));
-            state.closing = true;
-        }
-        socket.wake.notify_one();
-        let over = socket.until(|state| matches!(state.link, Link::Over).then_some(()));
-        let _ = lk_agents_abi::timeout(&*socket.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, over)
-            .await;
-        self.abort.abort();
-        let open = {
-            let mut state = socket.state.lock().unwrap();
-            state.closed = true;
-            let open = matches!(state.link, Link::Open { server: Some(_), .. });
-            state.link = Link::Over;
-            open
-        };
-        socket.ready.notify_waiters();
-        if !open && let Some(slot) = socket.slot.get() {
-            socket.registry.mark_closed(*slot);
-        }
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let socket = &self.socket;
+            {
+                let mut state = socket.state.lock().unwrap();
+                state
+                    .commands
+                    .push_back(RealtimeCommand::Interrupt(Interrupt { response_id: None }));
+                state.closing = true;
+            }
+            socket.wake.notify_one();
+            let over = socket.until(|state| matches!(state.link, Link::Over).then_some(()));
+            let _ =
+                lk_agents_abi::timeout(&*socket.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, over)
+                    .await;
+            self.abort.abort();
+            let open = {
+                let mut state = socket.state.lock().unwrap();
+                state.closed = true;
+                let open = matches!(state.link, Link::Open { server: Some(_), .. });
+                state.link = Link::Over;
+                open
+            };
+            socket.ready.notify_waiters();
+            if !open && let Some(slot) = socket.slot.get() {
+                socket.registry.mark_closed(*slot);
+            }
+        })
     }
 }
 

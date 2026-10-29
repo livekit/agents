@@ -69,7 +69,6 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
     }
 }
 
-#[async_trait::async_trait]
 impl Realtime for RealtimeFallback {
     fn label(&self) -> String {
         self.0.label()
@@ -79,10 +78,10 @@ impl Realtime for RealtimeFallback {
         Realtime::capabilities(&self.0)
     }
 
-    async fn session(
+    fn session(
         &self,
         turn_detection_disabled: bool,
-    ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        self.0.session(turn_detection_disabled).await
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(async move { self.0.session(turn_detection_disabled).await })
     }
 }

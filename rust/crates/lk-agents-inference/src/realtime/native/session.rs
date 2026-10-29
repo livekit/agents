@@ -878,7 +878,6 @@ enum Outcome {
 // The `lk-agents-abi` seam
 // =============================================================================================
 
-#[async_trait::async_trait]
 impl<E: Env<Services = Services>> lk_agents_abi::Realtime for NativeRealtime<E> {
     fn label(&self) -> String {
         NativeRealtime::label(self)
@@ -888,16 +887,21 @@ impl<E: Env<Services = Services>> lk_agents_abi::Realtime for NativeRealtime<E> 
         NativeRealtime::capabilities(self)
     }
 
-    async fn session(
+    fn session(
         &self,
         turn_detection_disabled: bool,
-    ) -> Result<Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::errors::ProviderError> {
-        // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
-        Ok(Arc::new(NativeRealtime::session(self, turn_detection_disabled).await))
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::errors::ProviderError>,
+    > {
+        Box::pin(async move {
+            // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
+            Ok(Arc::new(NativeRealtime::session(self, turn_detection_disabled).await)
+                as Arc<dyn lk_agents_abi::RealtimeSession>)
+        })
     }
 }
 
-#[async_trait::async_trait]
 impl lk_agents_abi::RealtimeSession for SessionHandle {
     fn capabilities(&self) -> RealtimeCapabilities {
         SessionHandle::capabilities(self)
@@ -907,16 +911,16 @@ impl lk_agents_abi::RealtimeSession for SessionHandle {
         SessionHandle::send(self, cmd);
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        SessionHandle::next_event(self).await
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move { SessionHandle::next_event(self).await })
     }
 
-    async fn chat_ctx(&self) -> ChatContext {
-        SessionHandle::chat_ctx(self).await
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+        Box::pin(async move { SessionHandle::chat_ctx(self).await })
     }
 
-    async fn aclose(&self) {
-        SessionHandle::aclose(self).await
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move { SessionHandle::aclose(self).await })
     }
 }
 

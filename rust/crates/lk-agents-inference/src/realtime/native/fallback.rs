@@ -127,7 +127,6 @@ impl RealtimeFallbackModel {
     }
 }
 
-#[async_trait::async_trait]
 impl Realtime for RealtimeFallbackModel {
     fn label(&self) -> String {
         "livekit.agents.llm.realtime_fallback_adapter.RealtimeModelFallbackAdapter".to_owned()
@@ -138,42 +137,44 @@ impl Realtime for RealtimeFallbackModel {
     }
 
     /// A fresh session always starts on the primary, even after an earlier failover.
-    async fn session(
+    fn session(
         &self,
         turn_detection_disabled: bool,
-    ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        let first = self.children[0].open(turn_detection_disabled, self.anchor).await?;
-        let (restart_tx, restart_rx) = tokio::sync::watch::channel(false);
-        self.active.store(0, std::sync::atomic::Ordering::Relaxed);
-        let session = Arc::new(FallbackSession {
-            children: self.children.clone(),
-            caps: self.caps,
-            regenerate_on_swap: self.regenerate_on_swap,
-            observer: Arc::clone(&self.observer),
-            anchor: self.anchor,
-            turn_detection_disabled,
-            model_active: Arc::clone(&self.active),
-            state: Mutex::new(SessionState {
-                active: first,
-                policy: RealtimePolicy::new(
-                    self.children.len(),
-                    std::time::Duration::from_secs_f64(self.cooldown),
-                ),
-                swapping: false,
-                fresh: false,
-                held: FallbackBacklog::default(),
-                events: VecDeque::new(),
-                generation: None,
-                closed: false,
-            }),
-            restart_tx,
-            changed: tokio::sync::Notify::new(),
-            restart_rx: tokio::sync::Mutex::new(restart_rx),
-        });
-        let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
-        sessions.retain(|w| w.strong_count() > 0);
-        sessions.push(Arc::downgrade(&session));
-        Ok(session as Arc<dyn RealtimeSession>)
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(async move {
+            let first = self.children[0].open(turn_detection_disabled, self.anchor).await?;
+            let (restart_tx, restart_rx) = tokio::sync::watch::channel(false);
+            self.active.store(0, std::sync::atomic::Ordering::Relaxed);
+            let session = Arc::new(FallbackSession {
+                children: self.children.clone(),
+                caps: self.caps,
+                regenerate_on_swap: self.regenerate_on_swap,
+                observer: Arc::clone(&self.observer),
+                anchor: self.anchor,
+                turn_detection_disabled,
+                model_active: Arc::clone(&self.active),
+                state: Mutex::new(SessionState {
+                    active: first,
+                    policy: RealtimePolicy::new(
+                        self.children.len(),
+                        std::time::Duration::from_secs_f64(self.cooldown),
+                    ),
+                    swapping: false,
+                    fresh: false,
+                    held: FallbackBacklog::default(),
+                    events: VecDeque::new(),
+                    generation: None,
+                    closed: false,
+                }),
+                restart_tx,
+                changed: tokio::sync::Notify::new(),
+                restart_rx: tokio::sync::Mutex::new(restart_rx),
+            });
+            let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
+            sessions.retain(|w| w.strong_count() > 0);
+            sessions.push(Arc::downgrade(&session));
+            Ok(session as Arc<dyn RealtimeSession>)
+        })
     }
 }
 
@@ -367,7 +368,6 @@ impl FallbackSession {
     }
 }
 
-#[async_trait::async_trait]
 impl RealtimeSession for FallbackSession {
     /// The adapter's merged capabilities: the session's pipeline was shaped by them.
     fn capabilities(&self) -> RealtimeCapabilities {
@@ -448,72 +448,78 @@ impl RealtimeSession for FallbackSession {
         }
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        loop {
-            let active = {
-                let mut st = self.lock();
-                if let Some(ev) = st.events.pop_front() {
-                    return Some(ev);
-                }
-                if st.closed {
-                    return None;
-                }
-                Arc::clone(&st.active)
-            };
-            let mut restart_rx = self.restart_rx.lock().await;
-            let ev = tokio::select! {
-                () = self.changed.notified() => continue,
-                ev = active.next_event() => ev,
-                changed = restart_rx.changed() => {
-                    if changed.is_err() { continue; }
-                    let switch_model = *restart_rx.borrow_and_update();
-                    let (target, changes) = self.lock().policy.restart_target(switch_model, now());
-                    self.announce(changes);
-                    self.swap(target).await;
-                    continue;
-                }
-            };
-            match ev {
-                None => {
-                    if !Arc::ptr_eq(&active, &self.lock().active) {
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move {
+            loop {
+                let active = {
+                    let mut st = self.lock();
+                    if let Some(ev) = st.events.pop_front() {
+                        return Some(ev);
+                    }
+                    if st.closed {
+                        return None;
+                    }
+                    Arc::clone(&st.active)
+                };
+                let mut restart_rx = self.restart_rx.lock().await;
+                let ev = tokio::select! {
+                    () = self.changed.notified() => continue,
+                    ev = active.next_event() => ev,
+                    changed = restart_rx.changed() => {
+                        if changed.is_err() { continue; }
+                        let switch_model = *restart_rx.borrow_and_update();
+                        let (target, changes) = self.lock().policy.restart_target(switch_model, now());
+                        self.announce(changes);
+                        self.swap(target).await;
                         continue;
                     }
-                    return None;
-                }
-                Some(Event::Error(e)) if !e.recoverable => {
-                    let plan = self.lock().policy.on_child_error(false, false, now());
-                    self.announce(plan.changes);
-                    match plan.swap_to {
-                        Some(target) => {
-                            // While a fallback remains the error is recoverable.
-                            self.lock().events.push_back(Event::Error(RealtimeModelError {
-                                recoverable: true,
-                                ..e
-                            }));
-                            self.swap(target).await;
+                };
+                match ev {
+                    None => {
+                        if !Arc::ptr_eq(&active, &self.lock().active) {
+                            continue;
                         }
-                        None => return Some(Event::Error(e)),
+                        return None;
                     }
+                    Some(Event::Error(e)) if !e.recoverable => {
+                        let plan = self.lock().policy.on_child_error(false, false, now());
+                        self.announce(plan.changes);
+                        match plan.swap_to {
+                            Some(target) => {
+                                // While a fallback remains the error is recoverable.
+                                self.lock().events.push_back(Event::Error(RealtimeModelError {
+                                    recoverable: true,
+                                    ..e
+                                }));
+                                self.swap(target).await;
+                            }
+                            None => return Some(Event::Error(e)),
+                        }
+                    }
+                    Some(ev) => return Some(self.observe(&mut self.lock(), ev)),
                 }
-                Some(ev) => return Some(self.observe(&mut self.lock(), ev)),
             }
-        }
+        })
     }
 
-    async fn chat_ctx(&self) -> ChatContext {
-        let active = Arc::clone(&self.lock().active);
-        active.chat_ctx().await
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+        Box::pin(async move {
+            let active = Arc::clone(&self.lock().active);
+            active.chat_ctx().await
+        })
     }
 
-    async fn aclose(&self) {
-        let active = {
-            let mut st = self.lock();
-            st.closed = true;
-            st.held.clear();
-            Arc::clone(&st.active)
-        };
-        self.changed.notify_one();
-        active.aclose().await;
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let active = {
+                let mut st = self.lock();
+                st.closed = true;
+                st.held.clear();
+                Arc::clone(&st.active)
+            };
+            self.changed.notify_one();
+            active.aclose().await;
+        })
     }
 }
 
@@ -529,7 +535,6 @@ mod fallback_session_tests {
         closed: std::sync::atomic::AtomicBool,
     }
 
-    #[async_trait::async_trait]
     impl RealtimeSession for Scripted {
         fn capabilities(&self) -> RealtimeCapabilities {
             RealtimeCapabilities { audio_output: true, ..Default::default() }
@@ -541,24 +546,27 @@ mod fallback_session_tests {
             };
             self.sent.lock().unwrap().push(label);
         }
-        async fn next_event(&self) -> Option<Event> {
-            let next = self.events.lock().unwrap().pop_front();
-            match next {
-                Some(ev) => Some(ev),
-                None => std::future::pending().await,
-            }
+        fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+            Box::pin(async move {
+                let next = self.events.lock().unwrap().pop_front();
+                match next {
+                    Some(ev) => Some(ev),
+                    None => std::future::pending().await,
+                }
+            })
         }
-        async fn chat_ctx(&self) -> ChatContext {
-            ChatContext::default()
+        fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+            Box::pin(async move { ChatContext::default() })
         }
-        async fn aclose(&self) {
-            self.closed.store(true, std::sync::atomic::Ordering::Release);
+        fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+            Box::pin(async move {
+                self.closed.store(true, std::sync::atomic::Ordering::Release);
+            })
         }
     }
 
     struct Model(Arc<Scripted>);
 
-    #[async_trait::async_trait]
     impl Realtime for Model {
         fn label(&self) -> String {
             "scripted".into()
@@ -566,8 +574,11 @@ mod fallback_session_tests {
         fn capabilities(&self) -> RealtimeCapabilities {
             RealtimeCapabilities { audio_output: true, ..Default::default() }
         }
-        async fn session(&self, _td: bool) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-            Ok(Arc::clone(&self.0) as Arc<dyn RealtimeSession>)
+        fn session(
+            &self,
+            _td: bool,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+            Box::pin(async move { Ok(Arc::clone(&self.0) as Arc<dyn RealtimeSession>) })
         }
     }
 

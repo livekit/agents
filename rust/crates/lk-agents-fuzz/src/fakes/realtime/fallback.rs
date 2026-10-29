@@ -40,7 +40,6 @@ impl FallbackRealtime {
     }
 }
 
-#[async_trait::async_trait]
 impl Realtime for FallbackRealtime {
     fn label(&self) -> String {
         "livekit.agents.llm.realtime_fallback_adapter.RealtimeModelFallbackAdapter".into()
@@ -51,26 +50,31 @@ impl Realtime for FallbackRealtime {
     }
 
     /// A fresh session starts on the primary.
-    async fn session(&self, disabled: bool) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        let active = self.children[0].session(disabled).await?;
-        Ok(Arc::new(FallbackSession {
-            children: self.children.clone(),
-            caps: self.caps,
-            clock: self.clock.clone(),
-            disabled,
-            state: Mutex::new(State {
-                active,
-                active_index: 0,
-                down_until: vec![None; self.children.len()],
-                swapping: false,
-                fresh: false,
-                held: Vec::new(),
-                events: Default::default(),
-                generation: None,
-                closed: false,
-            }),
-            changed: tokio::sync::Notify::new(),
-        }))
+    fn session(
+        &self,
+        disabled: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(async move {
+            let active = self.children[0].session(disabled).await?;
+            Ok(Arc::new(FallbackSession {
+                children: self.children.clone(),
+                caps: self.caps,
+                clock: self.clock.clone(),
+                disabled,
+                state: Mutex::new(State {
+                    active,
+                    active_index: 0,
+                    down_until: vec![None; self.children.len()],
+                    swapping: false,
+                    fresh: false,
+                    held: Vec::new(),
+                    events: Default::default(),
+                    generation: None,
+                    closed: false,
+                }),
+                changed: tokio::sync::Notify::new(),
+            }) as Arc<dyn RealtimeSession>)
+        })
     }
 }
 
@@ -195,7 +199,6 @@ impl FallbackSession {
     }
 }
 
-#[async_trait::async_trait]
 impl RealtimeSession for FallbackSession {
     fn capabilities(&self) -> RealtimeCapabilities {
         self.caps
@@ -256,58 +259,64 @@ impl RealtimeSession for FallbackSession {
         }
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        loop {
-            let active = {
-                let mut st = self.lock();
-                if let Some(ev) = st.events.pop_front() {
-                    return Some(ev);
-                }
-                if st.closed {
-                    return None;
-                }
-                st.active.clone()
-            };
-            let ev = tokio::select! {
-                () = self.changed.notified() => continue,
-                ev = active.next_event() => ev,
-            };
-            match ev {
-                // A swapped-away session's end is not the adapter's.
-                None if !Arc::ptr_eq(&active, &self.lock().active) => continue,
-                None => return None,
-                Some(Event::Error(e)) if !e.recoverable => {
-                    let target = {
-                        let mut st = self.lock();
-                        self.swap_target(&mut st)
-                    };
-                    let Some(target) = target else { return Some(Event::Error(e)) };
-                    // While a fallback remains the error is recoverable.
-                    let e = RealtimeModelError { recoverable: true, ..e };
-                    self.lock().events.push_back(Event::Error(e));
-                    self.swap(target).await;
-                }
-                Some(ev) => {
-                    Self::observe(&mut self.lock(), &ev);
-                    return Some(ev);
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move {
+            loop {
+                let active = {
+                    let mut st = self.lock();
+                    if let Some(ev) = st.events.pop_front() {
+                        return Some(ev);
+                    }
+                    if st.closed {
+                        return None;
+                    }
+                    st.active.clone()
+                };
+                let ev = tokio::select! {
+                    () = self.changed.notified() => continue,
+                    ev = active.next_event() => ev,
+                };
+                match ev {
+                    // A swapped-away session's end is not the adapter's.
+                    None if !Arc::ptr_eq(&active, &self.lock().active) => continue,
+                    None => return None,
+                    Some(Event::Error(e)) if !e.recoverable => {
+                        let target = {
+                            let mut st = self.lock();
+                            self.swap_target(&mut st)
+                        };
+                        let Some(target) = target else { return Some(Event::Error(e)) };
+                        // While a fallback remains the error is recoverable.
+                        let e = RealtimeModelError { recoverable: true, ..e };
+                        self.lock().events.push_back(Event::Error(e));
+                        self.swap(target).await;
+                    }
+                    Some(ev) => {
+                        Self::observe(&mut self.lock(), &ev);
+                        return Some(ev);
+                    }
                 }
             }
-        }
+        })
     }
 
-    async fn chat_ctx(&self) -> ChatContext {
-        let active = self.lock().active.clone();
-        active.chat_ctx().await
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+        Box::pin(async move {
+            let active = self.lock().active.clone();
+            active.chat_ctx().await
+        })
     }
 
-    async fn aclose(&self) {
-        let active = {
-            let mut st = self.lock();
-            st.closed = true;
-            st.held.clear();
-            st.active.clone()
-        };
-        self.changed.notify_one();
-        active.aclose().await;
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let active = {
+                let mut st = self.lock();
+                st.closed = true;
+                st.held.clear();
+                st.active.clone()
+            };
+            self.changed.notify_one();
+            active.aclose().await;
+        })
     }
 }

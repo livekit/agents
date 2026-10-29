@@ -65,7 +65,6 @@ impl DuplexModel {
     }
 }
 
-#[async_trait::async_trait]
 impl Realtime for DuplexModel {
     fn label(&self) -> String {
         self.label.clone()
@@ -76,34 +75,36 @@ impl Realtime for DuplexModel {
     }
 
     /// Turn detection is inherent to a duplex model, so it is never asked to be off.
-    async fn session(
+    fn session(
         &self,
         _turn_detection_disabled: bool,
-    ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        let (host, gate) = self.host.open().await?;
-        let gate = gate.unwrap_or_else(|| Box::new(AdaptiveNoiseGate::default()));
-        let segmenter = Segmenter::new(
-            self.label.clone(),
-            self.audio_timeout,
-            format!("{}_", crate::ids::shortuuid("item_")),
-        );
-        let (delivery, events) = queue::events();
-        Ok(Arc::new(DuplexSession {
-            host,
-            label: self.label.clone(),
-            delivery,
-            events: AsyncMutex::new(events),
-            changed: Notify::new(),
-            gate: Mutex::new(gate),
-            caps: self.caps,
-            clock: Arc::clone(&self.clock),
-            anchor: self.anchor,
-            state: Mutex::new(State {
-                seg: segmenter,
-                closed: false,
-                config: Some(Config::default()),
-            }),
-        }))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(async move {
+            let (host, gate) = self.host.open().await?;
+            let gate = gate.unwrap_or_else(|| Box::new(AdaptiveNoiseGate::default()));
+            let segmenter = Segmenter::new(
+                self.label.clone(),
+                self.audio_timeout,
+                format!("{}_", crate::ids::shortuuid("item_")),
+            );
+            let (delivery, events) = queue::events();
+            Ok(Arc::new(DuplexSession {
+                host,
+                label: self.label.clone(),
+                delivery,
+                events: AsyncMutex::new(events),
+                changed: Notify::new(),
+                gate: Mutex::new(gate),
+                caps: self.caps,
+                clock: Arc::clone(&self.clock),
+                anchor: self.anchor,
+                state: Mutex::new(State {
+                    seg: segmenter,
+                    closed: false,
+                    config: Some(Config::default()),
+                }),
+            }) as Arc<dyn RealtimeSession>)
+        })
     }
 }
 
@@ -237,7 +238,6 @@ impl DuplexSession {
     }
 }
 
-#[async_trait::async_trait]
 impl RealtimeSession for DuplexSession {
     fn capabilities(&self) -> RealtimeCapabilities {
         self.caps
@@ -310,42 +310,46 @@ impl RealtimeSession for DuplexSession {
         }
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        let mut events = self.events.lock().await;
-        loop {
-            let deadline = self.lock().seg.next_deadline();
-            let timer = async {
-                match deadline {
-                    Some(at) => self.clock.wait_until(at).await,
-                    None => std::future::pending().await,
-                }
-            };
-            tokio::select! {
-                biased;
-                event = events.next() => return event,
-                () = self.changed.notified() => {},
-                () = timer => {
-                    let events = self.lock().seg.tick(self.clock.now());
-                    self.apply(events);
-                },
-                ev = self.host.next_event() => match ev {
-                    Some(ev) => self.on_host_event(ev),
-                    None => {
-                        self.on_host_event(DuplexEvent::OutputEnded { error: None });
-                        self.close_core();
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move {
+            let mut events = self.events.lock().await;
+            loop {
+                let deadline = self.lock().seg.next_deadline();
+                let timer = async {
+                    match deadline {
+                        Some(at) => self.clock.wait_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    event = events.next() => return event,
+                    () = self.changed.notified() => {},
+                    () = timer => {
+                        let events = self.lock().seg.tick(self.clock.now());
+                        self.apply(events);
                     },
-                },
+                    ev = self.host.next_event() => match ev {
+                        Some(ev) => self.on_host_event(ev),
+                        None => {
+                            self.on_host_event(DuplexEvent::OutputEnded { error: None });
+                            self.close_core();
+                        },
+                    },
+                }
             }
-        }
+        })
     }
 
-    async fn chat_ctx(&self) -> ChatContext {
-        self.lock().seg.chat_ctx().clone()
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+        Box::pin(async move { self.lock().seg.chat_ctx().clone() })
     }
 
-    async fn aclose(&self) {
-        self.close_core();
-        self.host.aclose().await;
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.close_core();
+            self.host.aclose().await;
+        })
     }
 }
 

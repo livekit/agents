@@ -74,7 +74,6 @@ fn capabilities() -> RealtimeCapabilities {
     .realtime()
 }
 
-#[async_trait::async_trait]
 impl Realtime for FakeDuplex {
     fn label(&self) -> String {
         "fake::duplex".into()
@@ -85,34 +84,39 @@ impl Realtime for FakeDuplex {
     }
 
     /// Turn detection is the model's own: it is never asked to be off.
-    async fn session(&self, _: bool) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        let model = Arc::new(Model {
-            registry: self.registry.clone(),
-            clock: self.clock.clone(),
-            slot: OnceLock::new(),
-            started: self.clock.now(),
-            state: Mutex::new(State {
-                seg: Segmenter::new("fake::duplex", AUDIO_TIMEOUT, "duplex_".into()),
-                // Its own silence is digital zeros, speech stands far out of it, and it pauses
-                // inside no utterance: the first silent frame closes the gate, unplayed.
-                gate: FixedGate::new(0.0, 10.0, 2.0, 0.0),
-                rng: Rng::with_seed(self.seed),
-                commands: VecDeque::new(),
-                configured: false,
-                outputs: VecDeque::new(),
-                utterances: Vec::new(),
-                speaking: None,
-                events: VecDeque::new(),
-                over: false,
-            }),
-            wake: tokio::sync::Notify::new(),
-            ready: tokio::sync::Notify::new(),
-        });
-        let slot = self.registry.register(Kind::Realtime, Detail::None, Control::Generation);
-        let _ = model.slot.set(slot);
-        let pump = model.clone();
-        let abort = self.spawner.spawn_unboxed(async move { pump.run().await });
-        Ok(Arc::new(Session { model, abort }))
+    fn session(
+        &self,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(async move {
+            let model = Arc::new(Model {
+                registry: self.registry.clone(),
+                clock: self.clock.clone(),
+                slot: OnceLock::new(),
+                started: self.clock.now(),
+                state: Mutex::new(State {
+                    seg: Segmenter::new("fake::duplex", AUDIO_TIMEOUT, "duplex_".into()),
+                    // Its own silence is digital zeros, speech stands far out of it, and it pauses
+                    // inside no utterance: the first silent frame closes the gate, unplayed.
+                    gate: FixedGate::new(0.0, 10.0, 2.0, 0.0),
+                    rng: Rng::with_seed(self.seed),
+                    commands: VecDeque::new(),
+                    configured: false,
+                    outputs: VecDeque::new(),
+                    utterances: Vec::new(),
+                    speaking: None,
+                    events: VecDeque::new(),
+                    over: false,
+                }),
+                wake: tokio::sync::Notify::new(),
+                ready: tokio::sync::Notify::new(),
+            });
+            let slot = self.registry.register(Kind::Realtime, Detail::None, Control::Generation);
+            let _ = model.slot.set(slot);
+            let pump = model.clone();
+            let abort = self.spawner.spawn_unboxed(async move { pump.run().await });
+            Ok(Arc::new(Session { model, abort }) as Arc<dyn RealtimeSession>)
+        })
     }
 }
 
@@ -367,7 +371,6 @@ struct Session {
     abort: AbortHandle,
 }
 
-#[async_trait::async_trait]
 impl RealtimeSession for Session {
     fn capabilities(&self) -> RealtimeCapabilities {
         capabilities()
@@ -382,30 +385,34 @@ impl RealtimeSession for Session {
         }
     }
 
-    async fn next_event(&self) -> Option<Event> {
-        self.model
-            .until(|st| match st.events.pop_front() {
-                Some(event) => Some(Some(event)),
-                None => st.over.then_some(None),
-            })
-            .await
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
+        Box::pin(async move {
+            self.model
+                .until(|st| match st.events.pop_front() {
+                    Some(event) => Some(Some(event)),
+                    None => st.over.then_some(None),
+                })
+                .await
+        })
     }
 
-    async fn chat_ctx(&self) -> ChatContext {
-        self.model.state.lock().unwrap().seg.chat_ctx().clone()
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
+        Box::pin(async move { self.model.state.lock().unwrap().seg.chat_ctx().clone() })
     }
 
-    async fn aclose(&self) {
-        {
-            let mut st = self.model.state.lock().unwrap();
-            if !st.over {
-                self.model.close(&mut st);
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            {
+                let mut st = self.model.state.lock().unwrap();
+                if !st.over {
+                    self.model.close(&mut st);
+                }
             }
-        }
-        self.abort.abort();
-        self.model.ready.notify_waiters();
-        if let Some(slot) = self.model.slot.get() {
-            self.model.registry.mark_closed(*slot);
-        }
+            self.abort.abort();
+            self.model.ready.notify_waiters();
+            if let Some(slot) = self.model.slot.get() {
+                self.model.registry.mark_closed(*slot);
+            }
+        })
     }
 }
