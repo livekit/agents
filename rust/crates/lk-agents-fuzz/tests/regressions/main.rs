@@ -78,6 +78,7 @@ mod replaced_output_mid_step;
 mod reply_behind_tool_step;
 mod reply_during_playout;
 mod server_generation_ends;
+mod shown_words_follow_their_playback;
 mod silent_audio_say;
 mod silent_segment;
 mod sink_reset_reports_cut;

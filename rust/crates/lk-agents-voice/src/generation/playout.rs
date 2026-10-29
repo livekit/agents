@@ -14,8 +14,12 @@ const LOST_FINISH_MARGIN: Duration = Duration::from_secs(2);
 /// A physical sink observation, delivered in arrival order.
 pub enum SinkReport {
     Playback(PlaybackEvent),
-    Finished { segment: PlaybackSegment, ev: PlaybackFinished },
-    Shown(lk_agents_abi::TimedString),
+    Finished {
+        segment: PlaybackSegment,
+        ev: PlaybackFinished,
+    },
+    /// A word a synchroniser released, and the playback that released it.
+    Shown(Option<PlaybackSegment>, lk_agents_abi::TimedString),
     Reset,
 }
 
@@ -103,7 +107,11 @@ impl Playout {
         let speech = self.speech;
         let mut effects = Vec::new();
         match report {
-            SinkReport::Shown(word) => {
+            // Words a late report of another forwarding's playback released are not this one's.
+            SinkReport::Shown(segment, word) => {
+                if segment.is_some() && self.segment_key.is_some_and(|key| Some(key) != segment) {
+                    return effects;
+                }
                 effects.push(PlayoutEffect::Trace(PlayoutStep::TranscriptShown {
                     speech,
                     text: word.text,

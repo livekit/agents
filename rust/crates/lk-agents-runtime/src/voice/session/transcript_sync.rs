@@ -3,7 +3,7 @@
 
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
-    PlaybackTracker, Result, TextOutput,
+    PlaybackSegment, PlaybackTracker, Result, TextOutput,
 };
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, Clock, Monotone, OwnedTask, Spawner, SpawnerExt, TimedString};
@@ -32,6 +32,8 @@ struct SyncCore {
     forwarder_done: Arc<Monotone<bool>>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
     tracker: Arc<PlaybackTracker>,
+    /// The playback whose report is being stepped: the words it releases are its own.
+    reporting: Mutex<Option<PlaybackSegment>>,
 }
 
 impl SyncCore {
@@ -58,6 +60,14 @@ impl SyncCore {
         self.apply(SyncEvent::Input(input))
     }
 
+    /// `input` from `segment`'s playback report.
+    fn step_reported(&self, segment: PlaybackSegment, input: SyncInput) -> Option<Heard> {
+        *self.reporting.lock().unwrap() = Some(segment);
+        let heard = self.step(input);
+        *self.reporting.lock().unwrap() = None;
+        heard
+    }
+
     fn perform(&self, effect: SyncEffect) -> Option<Heard> {
         match effect {
             SyncEffect::Pace(PaceEffect::Forward { word, start_time, end_time }) => {
@@ -66,7 +76,8 @@ impl SyncCore {
                     end_time: Some(end_time),
                     ..TimedString::new(word)
                 };
-                self.tracker.transcript_shown(&shown);
+                let segment = *self.reporting.lock().unwrap();
+                self.tracker.transcript_shown(segment, &shown);
                 self.send(Out::Word(TimedString { start_time: None, ..shown }));
             }
             SyncEffect::Pace(PaceEffect::Flush) => self.send(Out::Flush),
@@ -158,12 +169,13 @@ impl SyncedAudioOutput {
         match ev {
             PlaybackEvent::Started(e) => {
                 if self.tracker.playback_started(e.segment, e.created_at) {
-                    self.core.step(SyncInput::Started);
+                    self.core.step_reported(e.segment, SyncInput::Started);
                 }
             }
             PlaybackEvent::Progressed(e) => {
                 if self.tracker.playback_progressed(e.segment, e.started_at, e.offset, e.duration) {
-                    self.core.step(SyncInput::Progressed(e.offset + e.duration));
+                    self.core
+                        .step_reported(e.segment, SyncInput::Progressed(e.offset + e.duration));
                 }
             }
             PlaybackEvent::Finished { segment, event: e } => {
@@ -171,8 +183,8 @@ impl SyncedAudioOutput {
                     return;
                 }
                 let position = e.playback_position;
-                let heard =
-                    self.core.step(SyncInput::Finished { position, interrupted: e.interrupted });
+                let finished = SyncInput::Finished { position, interrupted: e.interrupted };
+                let heard = self.core.step_reported(*segment, finished);
                 let synchronized_transcript =
                     heard.map(|h| h.text).or(e.synchronized_transcript.clone());
                 self.tracker.playback_finished(
@@ -373,6 +385,7 @@ impl TranscriptSynchronizer {
             tx: Mutex::new(Some(tx)),
             forwarder_done: Arc::new(Monotone::new(false)),
             tracker: Arc::new(PlaybackTracker::new()),
+            reporting: Mutex::new(None),
         });
         // The task holds only the done flag, so it never keeps the core alive.
         let forwarder_done = Arc::clone(&core.forwarder_done);

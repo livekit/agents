@@ -13,7 +13,11 @@ struct Shown(watch::Sender<Vec<(String, f64)>>);
 impl PlaybackObserver for Shown {
     fn on_playback_event(&self, _ev: &PlaybackEvent) {}
 
-    fn on_transcript_shown(&self, word: &TimedString) {
+    fn on_transcript_shown(
+        &self,
+        _: Option<lk_agents_abi::voice::io::PlaybackSegment>,
+        word: &TimedString,
+    ) {
         let start = word.start_time.unwrap_or_default();
         self.0.send_modify(|shown| shown.push((word.text.clone(), start)));
     }
