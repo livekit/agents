@@ -133,7 +133,7 @@ macro_rules! contract {
 }
 
 /// How the next commit batch fails: its acknowledgment lost before or after it applied, or
-/// refused outright.
+/// refused outright by a disk I/O error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitFault {
     LoseAckBefore,
@@ -194,7 +194,8 @@ impl SqliteConnection for Faulty {
                 Err(StorageError::Uncertain("lost after".into()))
             }
             Some(CommitFault::Refuse) => {
-                Err(StorageError::Invalid("sqlite: disk I/O error".into()))
+                let io = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR);
+                Err(crate::sqlite::sqlite_error(rusqlite::Error::SqliteFailure(io, None)))
             }
         }
     }

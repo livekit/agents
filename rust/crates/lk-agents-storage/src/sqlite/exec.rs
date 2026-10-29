@@ -7,17 +7,33 @@ use rusqlite::types::ValueRef;
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 
-/// A lock another process held past the busy timeout applied nothing: retryable. Anything else
-/// keeps SQLite's text under the `sqlite` code.
+/// The database's own failure (a lock held past the busy timeout, I/O, a full disk, corruption,
+/// memory) applied nothing and is retryable: `Unavailable`. What the caller asked wrongly (a
+/// refused constraint, which is how a fence aborts a batch, a type mismatch, SQL it rejects)
+/// stays `Invalid`.
 pub fn sqlite_error(e: rusqlite::Error) -> StorageError {
+    use rusqlite::ErrorCode as Code;
     match &e {
         rusqlite::Error::SqliteFailure(f, _)
             if matches!(
                 f.code,
-                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                Code::DatabaseBusy
+                    | Code::DatabaseLocked
+                    | Code::SystemIoFailure
+                    | Code::DiskFull
+                    | Code::DatabaseCorrupt
+                    | Code::NotADatabase
+                    | Code::CannotOpen
+                    | Code::ReadOnly
+                    | Code::PermissionDenied
+                    | Code::FileLockingProtocolFailed
+                    | Code::NoLargeFileSupport
+                    | Code::OutOfMemory
+                    | Code::InternalMalfunction
+                    | Code::SchemaChanged
             ) =>
         {
-            StorageError::Unavailable(e.to_string())
+            StorageError::Unavailable(format!("sqlite: {e}"))
         }
         _ => StorageError::Invalid(format!("sqlite: {e}")),
     }
