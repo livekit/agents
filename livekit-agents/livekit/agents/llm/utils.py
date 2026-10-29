@@ -373,9 +373,15 @@ def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[st
     for union_key in ("anyOf", "oneOf"):
         variants = schema.get(union_key)
         if isinstance(variants, list):
-            for variant in variants:
-                if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
-                    return _inject_schema_defaults(value, schema=variant, root=root)
+            # Prefer a match that accounts for array contents. Keep the previous
+            # shape-only fallback for inputs that pydantic can coerce but that do
+            # not strictly match any variant's item schema.
+            for check_array_items in (True, False):
+                for variant in variants:
+                    if isinstance(variant, dict) and _json_schema_matches(
+                        value, variant, root=root, check_array_items=check_array_items
+                    ):
+                        return _inject_schema_defaults(value, schema=variant, root=root)
 
     if isinstance(value, dict):
         properties = schema.get("properties")
@@ -464,7 +470,13 @@ def _json_schema_allows_null(
     return True
 
 
-def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+def _json_schema_matches(
+    value: Any,
+    schema: dict[str, Any],
+    *,
+    root: dict[str, Any],
+    check_array_items: bool = True,
+) -> bool:
     ref = schema.get("$ref")
     if isinstance(ref, str):
         resolved = _strict.resolve_ref(root=root, ref=ref)
@@ -486,6 +498,25 @@ def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, 
     if isinstance(typ, str) and not _json_type_matches(value, typ):
         return False
 
+    if check_array_items and isinstance(value, list):
+        # Container unions share the same array type. Select by their contents
+        # before injecting defaults, or a later variant can receive the first
+        # variant's defaults and still pass pydantic validation.
+        prefix_items = schema.get("prefixItems")
+        items = schema.get("items")
+        for i, item in enumerate(value):
+            item_schema = (
+                prefix_items[i]
+                if isinstance(prefix_items, list) and i < len(prefix_items)
+                else items
+            )
+            if item_schema is False:
+                return False
+            if isinstance(item_schema, dict) and not _json_schema_matches(
+                item, item_schema, root=root
+            ):
+                return False
+
     if isinstance(value, dict):
         required = schema.get("required")
         if isinstance(required, list) and not all(key in value for key in required):
@@ -503,7 +534,7 @@ def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, 
             for key, item in value.items():
                 property_schema = properties.get(key)
                 if isinstance(property_schema, dict) and not _json_schema_matches(
-                    item, property_schema, root=root
+                    item, property_schema, root=root, check_array_items=check_array_items
                 ):
                     return False
 
