@@ -682,38 +682,55 @@ mod tests {
         release: Arc<Notify>,
     }
 
-    #[async_trait]
     impl SessionPort for Port {
-        async fn chat_history(&self) -> Result<Vec<ChatItem>, HostError> {
-            Err(HostError::new("no history here"))
+        fn chat_history(&self) -> lk_agents_abi::BoxFuture<'_, Result<Vec<ChatItem>, HostError>> {
+            Box::pin(async move { Err(HostError::new("no history here")) })
         }
-        async fn agent_info(&self) -> Result<AgentInfo, HostError> {
-            Ok(("agent-1".into(), None, vec![], vec![]))
+        fn agent_info(&self) -> lk_agents_abi::BoxFuture<'_, Result<AgentInfo, HostError>> {
+            Box::pin(async move { Ok(("agent-1".into(), None, vec![], vec![])) })
         }
-        async fn run_input(&self, _text: &str) -> Result<RunOutcome, HostError> {
-            self.release.notified().await;
-            Ok((Some(vec![]), None))
+        fn run_input<'a>(
+            &'a self,
+            _text: &'a str,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<RunOutcome, HostError>> {
+            Box::pin(async move {
+                self.release.notified().await;
+                Ok((Some(vec![]), None))
+            })
         }
-        async fn session_state(&self) -> Result<SessionState, HostError> {
-            Ok(("not-a-state".into(), "away".into(), "agent-1".into(), Default::default(), None))
+        fn session_state(&self) -> lk_agents_abi::BoxFuture<'_, Result<SessionState, HostError>> {
+            Box::pin(async move {
+                Ok((
+                    "not-a-state".into(),
+                    "away".into(),
+                    "agent-1".into(),
+                    Default::default(),
+                    None,
+                ))
+            })
         }
-        async fn rtc_stats(&self) -> Result<Option<RtcStats>, HostError> {
-            Ok(None)
+        fn rtc_stats(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<RtcStats>, HostError>> {
+            Box::pin(async move { Ok(None) })
         }
-        async fn session_usage(&self) -> Result<Vec<ModelUsage>, HostError> {
-            Ok(Vec::new())
+        fn session_usage(
+            &self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<ModelUsage>, HostError>> {
+            Box::pin(async move { Ok(Vec::new()) })
         }
         fn framework_info(&self) -> (String, String) {
             ("rust".into(), "0".into())
         }
-        async fn update_io(&self, _update: IoUpdate) -> Result<(), HostError> {
-            Ok(())
+        fn update_io(
+            &self,
+            _update: IoUpdate,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+            Box::pin(async move { Ok(()) })
         }
-        async fn finalize_simulation(
+        fn finalize_simulation(
             &self,
             _p: SimulationVerdict,
-        ) -> Result<VerdictOutcome, HostError> {
-            Ok((None, None))
+        ) -> lk_agents_abi::BoxFuture<'_, Result<VerdictOutcome, HostError>> {
+            Box::pin(async move { Ok((None, None)) })
         }
     }
 

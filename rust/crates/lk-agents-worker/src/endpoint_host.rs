@@ -126,14 +126,13 @@ impl EndpointStream for NativeStream {
 }
 
 /// The native stream wherever the host passes an exchange stream.
-#[async_trait]
 impl ExchangeStream for NativeStream {
-    async fn read(&self, max_bytes: usize) -> HostResult<Vec<u8>> {
-        self.read_some(max_bytes).await.map_err(HostError::new)
+    fn read(&self, max_bytes: usize) -> lk_agents_abi::BoxFuture<'_, HostResult<Vec<u8>>> {
+        Box::pin(async move { self.read_some(max_bytes).await.map_err(HostError::new) })
     }
 
-    async fn write(&self, data: Vec<u8>) -> HostResult {
-        self.write_all(&data).await.map_err(HostError::new)
+    fn write(&self, data: Vec<u8>) -> lk_agents_abi::BoxFuture<'_, HostResult> {
+        Box::pin(async move { self.write_all(&data).await.map_err(HostError::new) })
     }
 
     fn finish(&self) {

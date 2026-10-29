@@ -95,14 +95,13 @@ pub struct AsgiFailure {
 /// An exchange after its preamble, with independent reads and writes: the native
 /// `EndpointStream`, or any host object with its five methods (a test's node).
 #[crate::host(proxy(host = "livekit.agents.http.ExchangeStream"))]
-#[async_trait::async_trait]
 pub trait ExchangeStream: Send + Sync {
     /// Up to `max_bytes` of the peer's bytes; empty once the peer half-closed (FIN).
     #[host(await, name = "read")]
-    async fn read(&self, max_bytes: usize) -> Result<Vec<u8>, HostError>;
+    fn read(&self, max_bytes: usize) -> crate::BoxFuture<'_, Result<Vec<u8>, HostError>>;
     /// All of `data`, waiting on flow control.
     #[host(await, name = "write")]
-    async fn write(&self, data: Vec<u8>) -> Result<(), HostError>;
+    fn write(&self, data: Vec<u8>) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// FIN: the response is complete.
     #[host(notify, name = "finish")]
     fn finish(&self);
@@ -137,16 +136,15 @@ pub trait EndpointStream: Send + Sync + Sized + 'static {
 /// The host's ASGI application, called with the scope, the request's preamble and the native
 /// receive and send callables; it answers with the failure it raised, if any.
 #[crate::host(proxy(host = "livekit.agents.http.AsgiApplication"))]
-#[async_trait::async_trait]
 pub trait AsgiApplication: Send + Sync {
     #[host(await, name = "_core_call")]
-    async fn call(
+    fn call(
         &self,
         scope: AsgiScope,
         request: EndpointRequest,
         receive: Arc<dyn AsgiReceiver>,
         send: Arc<dyn AsgiSender>,
-    ) -> Result<Option<AsgiFailure>, HostError>;
+    ) -> crate::BoxFuture<'_, Result<Option<AsgiFailure>, HostError>>;
 }
 
 /// One exchange's `receive()`.

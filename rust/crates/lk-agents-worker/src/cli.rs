@@ -568,7 +568,6 @@ impl Default for ExitSignals {
 /// The launcher's functions as the host calls them.
 pub struct Commands;
 
-#[async_trait::async_trait]
 impl lk_agents_abi::worker::cli::WorkerCli for Commands {
     fn parse_cli(argv: Vec<String>) -> Result<CliArgs, CliError> {
         parse_cli(argv)

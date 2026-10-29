@@ -130,33 +130,41 @@ pub enum WireEvent {
 /// (answered `"internal error"`); a `(value, error)` row's error becomes the response's `error`
 /// verbatim. The rows are the host's tuples, so each crosses as it is.
 #[crate::host(proxy(host = "livekit.agents.voice.remote_session.SessionPort"))]
-#[async_trait::async_trait]
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
     #[host(await, name = "_core_chat_history")]
-    async fn chat_history(&self) -> Result<Vec<ChatItem>, crate::errors::HostError>;
+    fn chat_history(&self)
+    -> crate::BoxFuture<'_, Result<Vec<ChatItem>, crate::errors::HostError>>;
 
     /// `session.current_agent`, flattened; instructions rendered with `modality="audio"`.
     #[host(await, name = "_core_agent_info")]
-    async fn agent_info(&self) -> Result<AgentInfo, crate::errors::HostError>;
+    fn agent_info(&self) -> crate::BoxFuture<'_, Result<AgentInfo, crate::errors::HostError>>;
 
     /// `interrupt(force=True)`, then `await session.run(user_input=text)` and its items. An empty
     /// list is a silent turn, not a failure.
     #[host(await, name = "_core_run_input")]
-    async fn run_input(&self, text: &str) -> Result<RunOutcome, crate::errors::HostError>;
+    fn run_input<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> crate::BoxFuture<'a, Result<RunOutcome, crate::errors::HostError>>;
 
     #[host(await, name = "_core_session_state")]
-    async fn session_state(&self) -> Result<SessionState, crate::errors::HostError>;
+    fn session_state(&self)
+    -> crate::BoxFuture<'_, Result<SessionState, crate::errors::HostError>>;
 
     /// `session._room_io.room.get_rtc_stats()`; `None` without room IO.
     #[host(await, name = "_core_rtc_stats")]
-    async fn rtc_stats(&self) -> Result<Option<RtcStats>, crate::errors::HostError>;
+    fn rtc_stats(&self)
+    -> crate::BoxFuture<'_, Result<Option<RtcStats>, crate::errors::HostError>>;
 
     /// `session.usage.model_usage`.
     #[host(await, name = "_core_session_usage")]
-    async fn session_usage(
+    fn session_usage(
         &self,
-    ) -> Result<Vec<crate::metrics::usage::ModelUsage>, crate::errors::HostError>;
+    ) -> crate::BoxFuture<
+        '_,
+        Result<Vec<crate::metrics::usage::ModelUsage>, crate::errors::HostError>,
+    >;
 
     /// `("python", __version__)` on the reference. Read once.
     #[host(read_once, name = "_core_framework_info")]
@@ -164,15 +172,18 @@ pub trait SessionPort: Send + Sync {
 
     /// Only the `Some` channels are applied.
     #[host(await, name = "_core_update_io")]
-    async fn update_io(&self, update: IoUpdate) -> Result<(), crate::errors::HostError>;
+    fn update_io(
+        &self,
+        update: IoUpdate,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
     /// Hand the agent the simulator's provisional verdict; return the agent's own
     /// (`on_simulation_end`). `(None, None)`: no simulation or no verdict.
     #[host(await, name = "_core_finalize_simulation")]
-    async fn finalize_simulation(
+    fn finalize_simulation(
         &self,
         provisional: SimulationVerdict,
-    ) -> Result<VerdictOutcome, crate::errors::HostError>;
+    ) -> crate::BoxFuture<'_, Result<VerdictOutcome, crate::errors::HostError>>;
 }
 
 /// `(id, instructions, tool names, chat_ctx items)`. `None` instructions differ from `""`; tools are

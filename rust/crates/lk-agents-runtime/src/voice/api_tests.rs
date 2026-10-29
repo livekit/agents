@@ -725,63 +725,82 @@ impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
 
 struct UnusedRemotePort;
 
-#[async_trait::async_trait]
 impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
-    async fn chat_history(
+    fn chat_history(
         &self,
-    ) -> Result<Vec<lk_agents_abi::ChatItem>, lk_agents_abi::errors::HostError> {
-        unreachable!("the lifecycle test sends no remote requests")
-    }
-    async fn agent_info(
-        &self,
-    ) -> Result<lk_agents_abi::worker::remote_session::AgentInfo, lk_agents_abi::errors::HostError>
-    {
-        unreachable!("the lifecycle test sends no remote requests")
-    }
-    async fn run_input(
-        &self,
-        _text: &str,
-    ) -> Result<lk_agents_abi::worker::remote_session::RunOutcome, lk_agents_abi::errors::HostError>
-    {
-        unreachable!("the lifecycle test sends no remote requests")
-    }
-    async fn session_state(
-        &self,
-    ) -> Result<lk_agents_abi::worker::remote_session::SessionState, lk_agents_abi::errors::HostError>
-    {
-        unreachable!("the lifecycle test sends no remote requests")
-    }
-    async fn rtc_stats(
-        &self,
-    ) -> Result<
-        Option<lk_agents_abi::worker::remote_session::RtcStats>,
-        lk_agents_abi::errors::HostError,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Vec<lk_agents_abi::ChatItem>, lk_agents_abi::errors::HostError>,
     > {
-        unreachable!("the lifecycle test sends no remote requests")
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
-    async fn session_usage(
+    fn agent_info(
         &self,
-    ) -> Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, lk_agents_abi::errors::HostError>
-    {
-        unreachable!("the lifecycle test sends no remote requests")
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::worker::remote_session::AgentInfo, lk_agents_abi::errors::HostError>,
+    > {
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
+    }
+    fn run_input<'a>(
+        &'a self,
+        _text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<lk_agents_abi::worker::remote_session::RunOutcome, lk_agents_abi::errors::HostError>,
+    > {
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
+    }
+    fn session_state(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            lk_agents_abi::worker::remote_session::SessionState,
+            lk_agents_abi::errors::HostError,
+        >,
+    > {
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
+    }
+    fn rtc_stats(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            Option<lk_agents_abi::worker::remote_session::RtcStats>,
+            lk_agents_abi::errors::HostError,
+        >,
+    > {
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
+    }
+    fn session_usage(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, lk_agents_abi::errors::HostError>,
+    > {
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn framework_info(&self) -> (String, String) {
         ("rust".to_owned(), "test".to_owned())
     }
-    async fn update_io(
+    fn update_io(
         &self,
         _update: lk_agents_abi::worker::remote_session::IoUpdate,
-    ) -> Result<(), lk_agents_abi::errors::HostError> {
-        unreachable!("the lifecycle test sends no remote requests")
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
-    async fn finalize_simulation(
+    fn finalize_simulation(
         &self,
         _verdict: lk_agents_abi::worker::remote_session::SimulationVerdict,
-    ) -> Result<
-        lk_agents_abi::worker::remote_session::VerdictOutcome,
-        lk_agents_abi::errors::HostError,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            lk_agents_abi::worker::remote_session::VerdictOutcome,
+            lk_agents_abi::errors::HostError,
+        >,
     > {
-        unreachable!("the lifecycle test sends no remote requests")
+        Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
 }
 

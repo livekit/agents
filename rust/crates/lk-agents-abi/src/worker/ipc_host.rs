@@ -36,27 +36,32 @@ pub enum WorkerError {
 /// The executor of one job process (`ipc.JobExecutor`): it spawns the process, owns its
 /// start-method bookkeeping and receives the supervisor's diagnostics.
 #[crate::host(proxy(host = "livekit.agents.ipc.JobExecutor"))]
-#[async_trait::async_trait]
 pub trait ProcessHost: Any + Send + Sync {
     /// Spawn the process on its socket; it reports its receipt through `_core_launched_process`.
     #[host(await, name = "_core_launch")]
-    async fn launch(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    fn launch<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_launched")]
-    async fn launched(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    fn launched<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_launch_failed")]
-    async fn launch_failed(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn launch_failed<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         cause: String,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// The process exited and was reaped.
     #[host(await, name = "_core_completed")]
-    async fn completed(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn completed<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         completion: ProcessCompletion,
         pid: u32,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// One supervision diagnostic on the host's logger, with the failure that caused it.
     #[host(call, name = "_core_log")]
     fn log(
@@ -69,23 +74,32 @@ pub trait ProcessHost: Any + Send + Sync {
     /// The pool's steps: start the process (its supervisor), initialize it, hand it a job
     /// (`launched_at` is when it took it), close it and join it.
     #[host(await, name = "_core_start")]
-    async fn start(
-        &self,
-        #[host(context)] context: &CallContext,
-    ) -> Result<Arc<dyn SupervisedProcess>, HostError>;
+    fn start<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<Arc<dyn SupervisedProcess>, HostError>>;
     #[host(await, name = "initialize")]
-    async fn initialize(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    fn initialize<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_launch_job")]
-    async fn launch_job(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn launch_job<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         info: HostRef,
         launched_at: f64,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "aclose")]
-    async fn close(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    fn close<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_join")]
-    async fn join(&self, #[host(context)] context: &CallContext) -> Result<bool, HostError>;
+    fn join<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<bool, HostError>>;
 }
 
 /// A native `ProcSupervisor`, as its executor hands it to the pool.
@@ -156,71 +170,76 @@ pub trait ChildInitialize: Send + Sync {
 /// The job process's runner (`ipc.child._JobProc`): it starts the job the parent hands over and
 /// runs each step of the job's run, in the context the run captured.
 #[crate::host(proxy(host = "livekit.agents.ipc.child._JobProc"))]
-#[async_trait::async_trait]
 pub trait JobHost: Send + Sync {
     /// Answers once its loop ran it: a pong measures the loop's responsiveness.
     #[host(await, name = "_core_ping")]
-    async fn ping(&self) -> Result<(), HostError>;
+    fn ping(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_start_job")]
-    async fn start_job(&self, fields: StartJobFields) -> Result<Arc<dyn JobExecution>, HostError>;
+    fn start_job(
+        &self,
+        fields: StartJobFields,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>>;
     #[host(await, name = "_core_dump_stacks")]
-    async fn dump_stacks(&self) -> Result<(), HostError>;
+    fn dump_stacks(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// The entrypoint's task.
     #[host(await, name = "_core_start_entrypoint")]
-    async fn start_entrypoint(
-        &self,
-        #[host(context)] context: &CallContext,
-    ) -> Result<HostRef, HostError>;
+    fn start_entrypoint<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<HostRef, HostError>>;
     #[host(await, name = "_core_wait")]
-    async fn wait(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn wait<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         task: HostRef,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_cancel")]
-    async fn cancel(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn cancel<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         task: HostRef,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_shutdown_began")]
-    async fn shutdown_began(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn shutdown_began<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         reason: String,
         user_initiated: bool,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_close_session")]
-    async fn close_session(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    fn close_session<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_session_end")]
-    async fn session_end(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn session_end<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         span: HostRef,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_upload")]
-    async fn upload(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn upload<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         span: HostRef,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_disconnect")]
-    async fn disconnect(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn disconnect<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         span: HostRef,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// A shutdown callback, given the reason when it takes one, in its span (the shutdown's own
     /// for a framework callback).
     #[host(await, name = "_core_shutdown_callback")]
-    async fn shutdown_callback(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn shutdown_callback<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         callback: HostRef,
         reason: Option<String>,
         span: Option<HostRef>,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// A span of the shutdown's, labelled with the callback it runs.
     #[host(call, name = "_core_span")]
     fn span(&self, name: String, callback: Option<String>) -> Result<HostRef, HostError>;
@@ -244,23 +263,24 @@ pub trait JobHost: Send + Sync {
 /// An awaited application call of the job's (`connect`, `delete_room`, ...), run in its caller's
 /// context.
 #[crate::host(proxy(host = "collections.abc.Callable"))]
-#[async_trait::async_trait]
 pub trait JobCall: Send + Sync {
     #[host(await, name = "__call__")]
-    async fn call(&self, #[host(context)] context: &CallContext) -> Result<HostRef, HostError>;
+    fn call<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<HostRef, HostError>>;
 }
 
 /// A participant entrypoint: `entrypoint(ctx, participant)`.
 #[crate::host(proxy(host = "collections.abc.Callable"))]
-#[async_trait::async_trait]
 pub trait ParticipantEntrypoint: Send + Sync {
     #[host(await, name = "__call__")]
-    async fn run(
-        &self,
-        #[host(context)] context: &CallContext,
+    fn run<'a>(
+        &'a self,
+        #[host(context)] context: &'a CallContext,
         job: HostRef,
         participant: HostRef,
-    ) -> Result<(), HostError>;
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
 }
 
 #[crate::host(class(name = "IpcClient"))]
@@ -284,11 +304,10 @@ pub trait WorkerIpcClient: Send + Sync + Sized + 'static {
 }
 
 #[crate::host(proxy(host = "livekit.agents.ipc.ProcPool"))]
-#[async_trait::async_trait]
 pub trait PoolHost: Send + Sync {
     /// A new executor, made on the host's loop.
     #[host(await, name = "_core_create")]
-    async fn create(&self) -> Result<Arc<dyn ProcessHost>, HostError>;
+    fn create(&self) -> crate::BoxFuture<'_, Result<Arc<dyn ProcessHost>, HostError>>;
     #[host(notify, name = "emit")]
     fn emit(&self, event: String, process: Arc<dyn ProcessHost>);
 }

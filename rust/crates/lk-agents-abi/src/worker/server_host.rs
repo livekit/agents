@@ -78,40 +78,42 @@ pub struct EndpointRoute {
 /// The job processes and the user's callbacks, which the server runtime calls on the host's
 /// loop. Which jobs to take, when, and whether job processes start at all are the runtime's.
 #[crate::host(proxy(host = "livekit.agents.worker._ServerHost"))]
-#[async_trait::async_trait]
 pub trait ServerHost: Send + Sync {
     /// The voice door's `on_request`, asked only when there is one.
     #[host(await, name = "_core_job_request")]
-    async fn job_request(&self, request: JobRequest) -> Result<JobAnswer, HostError>;
+    fn job_request(
+        &self,
+        request: JobRequest,
+    ) -> crate::BoxFuture<'_, Result<JobAnswer, HostError>>;
     /// A job the runtime took, with the timeline it stamped; its LiveKit job id.
     #[host(await, name = "_core_launch_job")]
-    async fn launch_job(&self, info: RunningJobInfo) -> Result<String, HostError>;
+    fn launch_job(&self, info: RunningJobInfo) -> crate::BoxFuture<'_, Result<String, HostError>>;
     #[host(await, name = "_core_terminate_job")]
-    async fn terminate_job(&self, job_id: String) -> Result<(), HostError>;
+    fn terminate_job(&self, job_id: String) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// The user's `load_fnc`, asked only when there is one.
     #[host(await, name = "_core_load")]
-    async fn load(&self) -> Result<f64, HostError>;
+    fn load(&self) -> crate::BoxFuture<'_, Result<f64, HostError>>;
     /// The job processes, when the runtime wants them.
     #[host(await, name = "_core_start")]
-    async fn start(&self, options: ProcessStartOptions) -> Result<(), HostError>;
+    fn start(&self, options: ProcessStartOptions) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_started")]
-    async fn started(&self) -> Result<(), HostError>;
+    fn started(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_registered")]
-    async fn registered(&self, info: RegisteredInfo) -> Result<(), HostError>;
+    fn registered(&self, info: RegisteredInfo) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_idle_processes")]
-    async fn idle_processes(&self, target: u32) -> Result<(), HostError>;
+    fn idle_processes(&self, target: u32) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_worker_load")]
-    async fn worker_load(&self, load: f64) -> Result<(), HostError>;
+    fn worker_load(&self, load: f64) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_join_jobs")]
-    async fn join_jobs(&self) -> Result<(), HostError>;
+    fn join_jobs(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_close")]
-    async fn close(&self) -> Result<(), HostError>;
+    fn close(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// The jobs running, for the health check.
     #[host(await, name = "_core_health")]
-    async fn active_jobs(&self) -> Result<usize, HostError>;
+    fn active_jobs(&self) -> crate::BoxFuture<'_, Result<usize, HostError>>;
     /// The Prometheus exposition and its content type.
     #[host(await, name = "_core_metrics")]
-    async fn metrics(&self) -> Result<(String, String), HostError>;
+    fn metrics(&self) -> crate::BoxFuture<'_, Result<(String, String), HostError>>;
 }
 
 #[crate::host(class(name = "ServerRuntime"))]

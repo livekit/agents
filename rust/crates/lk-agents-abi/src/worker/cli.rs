@@ -54,7 +54,6 @@ pub struct LogFields {
 
 /// The typed command parser and filesystem entrypoint discovery implemented by the launcher.
 #[crate::host(functions)]
-#[async_trait::async_trait]
 pub trait WorkerCli {
     #[host(function)]
     fn parse_cli(argv: Vec<String>) -> Result<CliArgs, CliError>;
@@ -122,12 +121,14 @@ pub type DevJob = (Vec<u8>, String, String, String, String, String, String, bool
 
 /// The agent server the dev channel reports on (`cli.py`'s `_DevServer`).
 #[crate::host(proxy(host = "livekit.agents.cli._DevServer"))]
-#[async_trait::async_trait]
 pub trait DevServer: Send + Sync {
     /// The jobs running now, read when the CLI asks.
     #[host(call, name = "_core_running_jobs")]
     fn running_jobs(&self) -> Result<Vec<DevJob>, crate::errors::HostError>;
     /// Resume the jobs the CLI kept from before the reload, on this server's URL and a fresh token.
     #[host(await, name = "_core_reload_jobs")]
-    async fn reload_jobs(&self, jobs: Vec<DevJob>) -> Result<(), crate::errors::HostError>;
+    fn reload_jobs(
+        &self,
+        jobs: Vec<DevJob>,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }

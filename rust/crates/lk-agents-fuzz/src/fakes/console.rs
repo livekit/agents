@@ -45,9 +45,7 @@ impl FakeConsole {
     }
     fn send(&self, message: Message) {
         if let Some(outgoing) = self.outgoing.lock().unwrap().as_ref() {
-            let _ = outgoing.send(proto::AgentSessionMessage {
-                message: Some(message),
-            });
+            let _ = outgoing.send(proto::AgentSessionMessage { message: Some(message) });
         }
     }
     fn finish(&self) {
@@ -59,10 +57,7 @@ impl FakeConsole {
 
 impl ConsolePort for FakeConsole {
     fn as_transport(self: Arc<Self>, spawner: Arc<dyn Spawner>) -> Arc<dyn SessionTransport> {
-        Arc::new(FakeTransport {
-            console: self,
-            spawner,
-        })
+        Arc::new(FakeTransport { console: self, spawner })
     }
     fn as_console(self: Arc<Self>) -> Arc<dyn ConsoleSink> {
         self
@@ -156,10 +151,8 @@ impl AudioOutput for FakeConsole {
     fn capture<'a>(&'a self, frame: &'a AudioFrame) -> BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
             let now = self.now();
-            let segment = self
-                .tracker
-                .current_segment()
-                .ok_or(IoError::PlaybackSegmentUnavailable)?;
+            let segment =
+                self.tracker.current_segment().ok_or(IoError::PlaybackSegmentUnavailable)?;
             let (message, opened) = self.playback.lock().unwrap().capture(frame, segment)?;
             if opened {
                 self.tracker.report_started(segment, now);
@@ -169,14 +162,10 @@ impl AudioOutput for FakeConsole {
         })
     }
     fn flush_segment(&self) {
-        self.send(Message::AudioPlaybackFlush(
-            console_io::AudioPlaybackFlush {},
-        ));
+        self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
     }
     fn clear_buffer(&self) {
-        self.send(Message::AudioPlaybackClear(
-            console_io::AudioPlaybackClear {},
-        ));
+        self.send(Message::AudioPlaybackClear(console_io::AudioPlaybackClear {}));
         self.finish();
     }
 }
@@ -218,10 +207,7 @@ impl FakeCli {
             playback: Mutex::default(),
             clock,
         });
-        let cli = FakeCli {
-            to_agent,
-            playing_until: Arc::default(),
-        };
+        let cli = FakeCli { to_agent, playing_until: Arc::default() };
         let speaker = cli.clone();
         let world_inner = world.clone();
         world.spawn(Box::pin(async move {
@@ -267,16 +253,12 @@ impl FakeCli {
     /// The agent's voice the speaker has yet to play: an ack still owed on the clock.
     pub fn queued(&self) -> Duration {
         let until = *self.playing_until.lock().unwrap();
-        until.map_or(Duration::ZERO, |at| {
-            at.saturating_duration_since(tokio::time::Instant::now())
-        })
+        until.map_or(Duration::ZERO, |at| at.saturating_duration_since(tokio::time::Instant::now()))
     }
 
     /// One message to the agent; `false` once the CLI's socket is gone.
     pub fn send(&self, message: Message) -> bool {
-        let message = proto::AgentSessionMessage {
-            message: Some(message),
-        };
+        let message = proto::AgentSessionMessage { message: Some(message) };
         self.to_agent.send(message).is_ok()
     }
 }
@@ -286,57 +268,68 @@ impl FakeCli {
 /// acknowledged and changes nothing.
 pub struct FakeConsolePort;
 
-#[async_trait::async_trait]
 impl remote_session::SessionPort for FakeConsolePort {
-    async fn chat_history(&self) -> Result<Vec<lk_agents_abi::ChatItem>, HostError> {
-        Ok(Vec::new())
+    fn chat_history(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<lk_agents_abi::ChatItem>, HostError>> {
+        Box::pin(async move { Ok(Vec::new()) })
     }
-    async fn agent_info(&self) -> Result<remote_session::AgentInfo, HostError> {
-        Ok((
-            "agent".into(),
-            Some("You are a test agent.".into()),
-            Vec::new(),
-            Vec::new(),
-        ))
-    }
-    async fn run_input(&self, text: &str) -> Result<remote_session::RunOutcome, HostError> {
-        Ok(if text.is_empty() {
-            (None, Some("empty run_input text".into()))
-        } else {
-            (Some(Vec::new()), None)
+    fn agent_info(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::AgentInfo, HostError>> {
+        Box::pin(async move {
+            Ok(("agent".into(), Some("You are a test agent.".into()), Vec::new(), Vec::new()))
         })
     }
-    async fn session_state(&self) -> Result<remote_session::SessionState, HostError> {
-        let options = remote_session::STATE_OPTION_FIELDS
-            .iter()
-            .map(|(key, _)| ((*key).to_owned(), "None".to_owned()))
-            .collect();
-        Ok((
-            "listening".into(),
-            "listening".into(),
-            "agent".into(),
-            options,
-            Some(0.0),
-        ))
+    fn run_input<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<remote_session::RunOutcome, HostError>> {
+        Box::pin(async move {
+            Ok(if text.is_empty() {
+                (None, Some("empty run_input text".into()))
+            } else {
+                (Some(Vec::new()), None)
+            })
+        })
     }
-    async fn rtc_stats(&self) -> Result<Option<remote_session::RtcStats>, HostError> {
-        Ok(None)
-    }
-    async fn session_usage(
+    fn session_state(
         &self,
-    ) -> Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, HostError> {
-        Ok(Vec::new())
+    ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::SessionState, HostError>> {
+        Box::pin(async move {
+            let options = remote_session::STATE_OPTION_FIELDS
+                .iter()
+                .map(|(key, _)| ((*key).to_owned(), "None".to_owned()))
+                .collect();
+            Ok(("listening".into(), "listening".into(), "agent".into(), options, Some(0.0)))
+        })
+    }
+    fn rtc_stats(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<remote_session::RtcStats>, HostError>> {
+        Box::pin(async move { Ok(None) })
+    }
+    fn session_usage(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, HostError>,
+    > {
+        Box::pin(async move { Ok(Vec::new()) })
     }
     fn framework_info(&self) -> (String, String) {
         ("rust".into(), "fuzz".into())
     }
-    async fn update_io(&self, _update: remote_session::IoUpdate) -> Result<(), HostError> {
-        Ok(())
+    fn update_io(
+        &self,
+        _update: remote_session::IoUpdate,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn finalize_simulation(
+    fn finalize_simulation(
         &self,
         _provisional: remote_session::SimulationVerdict,
-    ) -> Result<remote_session::VerdictOutcome, HostError> {
-        Ok((None, None))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::VerdictOutcome, HostError>> {
+        Box::pin(async move { Ok((None, None)) })
     }
 }
