@@ -47,11 +47,19 @@ UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
+{fnc_calls_text}"""
+
+DUPLICATE_REJECT_WITH_CANCEL = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
 Only do this when user explicitly requests it."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
+{fnc_calls_text}
+Re-call with confirm duplicate True to run a duplicate if needed.
+Only run a duplicate when the user explicitly requests it."""
+
+DUPLICATE_CONFIRM_WITH_CANCEL = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
@@ -700,11 +708,25 @@ class _ToolExecutor:
                 "fnc_calls_json": fnc_calls_json,
                 "fnc_calls_text": "\n".join(fnc_calls_json),
             }
+            # Only mention lk_agents_cancel_task when an in-flight duplicate is
+            # cancellable — that tool is exposed only for ToolFlag.CANCELLABLE
+            # tools (see AgentActivity.tools), so non-cancellable reject/confirm
+            # must not instruct the model to call a missing function.
+            can_cancel = any(
+                self._running_tasks[fnc_call.call_id].allow_cancellation
+                for fnc_call in running_fnc_calls
+            )
             if on_duplicate == "reject":
-                return _render(self._tool_options["duplicate_reject_template"], dict(args))
+                template = self._tool_options["duplicate_reject_template"]
+                if template is DUPLICATE_REJECT and can_cancel:
+                    template = DUPLICATE_REJECT_WITH_CANCEL
+                return _render(template, dict(args))
 
             if on_duplicate == "confirm" and not confirm_duplicate:
-                return _render(self._tool_options["duplicate_confirm_template"], dict(args))
+                template = self._tool_options["duplicate_confirm_template"]
+                if template is DUPLICATE_CONFIRM and can_cancel:
+                    template = DUPLICATE_CONFIRM_WITH_CANCEL
+                return _render(template, dict(args))
 
         return None
 
