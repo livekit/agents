@@ -234,11 +234,11 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 ## Rust architecture rules
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
-  lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `py -> abi`, async
-  I/O crates `-> net`, `fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`,
-  `fuzz -> runtime` (the DST runs the runtime's real executors over faked ports) and
-  `-> test-support` from fuzz and every crate's tests are allowed composition edges.
-  `inference -> core` and `net -> core` are pending owner approval, each a separable edge.
+  lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
+  `net -> core`, `py -> abi`, async I/O crates `-> net`, `fuzz`, `test-support` and
+  `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
+  executors over faked ports) and `-> test-support` from fuzz and every crate's tests are allowed
+  composition edges.
   `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the
   implementations generated adapters select). ABI never depends on subjects or runtime; cores
   and async I/O crates never depend on runtime, `lk-agents-py` or host adapters. Core never

@@ -63,8 +63,8 @@ lk-agents-runtime -> sans-I/O crates, async I/O crates
 lk-agents-voice -> lk-agents-core -> lk-agents-abi
 lk-agents-voice -> lk-agents-media
 lk-agents-inference -> lk-agents-media
-lk-agents-inference -> lk-agents-core   (pending owner approval)
-lk-agents-net -> lk-agents-core         (pending owner approval)
+lk-agents-inference -> lk-agents-core
+lk-agents-net -> lk-agents-core
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 fuzz, test-support, bench-steps -> sans-I/O crates + lk-agents-abi
@@ -76,7 +76,7 @@ The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
 `lk-agents-media`. `lk-agents-media` is a synchronous data-plane core with no
 async runtime, so voice and inference compose it like `lk-agents-core`; inference
 also uses `lk-agents-core`'s chat formatting, strict tool schemas and JSON repair
-for the request bodies it sends (that edge is pending owner approval).
+for the request bodies it sends.
 `lk-agents-core` has no dependency on `lk-agents-storage`: its A2A decisions
 emit storage effects over request/result records and error types declared in
 ABI, and the runtime's A2A door executes them by calling storage.
@@ -85,8 +85,7 @@ ABI, and the runtime's A2A door executes them by calling storage.
 client: inference, the worker and the AgentDB backend use its HTTP client with
 declared phase deadlines, SSE decoding, WebSocket connect, owned task handles
 and gateway token signing rather than building their own. The delegation
-client executes the client decisions of `lk_agents_core::a2a` (that edge is
-pending owner approval).
+client executes the client decisions of `lk_agents_core::a2a`.
 
 The runtime depends on the async I/O crates to wire voice and text sessions:
 providers, storage, the worker server, judges and the delegation client in
@@ -1030,7 +1029,7 @@ tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
-`net -> core` (each pending owner approval), `py -> abi`, async I/O crates `-> net`,
+`net -> core`, `py -> abi`, async I/O crates `-> net`,
 `fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`, and
 `-> test-support` from fuzz and every crate's tests described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
