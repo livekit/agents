@@ -490,7 +490,7 @@ class RunUpdateStream:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RunUpdateIncompleteCleanup:
-    """Cancelled work missed its cleanup deadline; the runtime still owns it (decision 14)."""
+    """Cancelled work missed its cleanup deadline; the runtime still owns it."""
 
     pending: list[str]
 
