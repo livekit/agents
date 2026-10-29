@@ -82,9 +82,14 @@ plugin's classes, not these bases.
 | --- | --- |
 | `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk`, `ChoiceDelta`, `CompletionUsage`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events; duplex: `DuplexModel`, `DuplexSession`, `DuplexCapabilities`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
 | `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent`, `STTCapabilities`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `AudioEmitter`, `TTSCapabilities`; each module's `FallbackAdapter` |
-| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http` |
+| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause` |
 | `livekit.agents.utils` | `ConnectionPool`, `AudioBuffer`, `http_context`, `aio` |
 | `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)` |
+
+A plugin keeps the cause of the errors it raises, redacted:
+`raise APIConnectionError(...) from redacted_cause(error)` chains the original
+error's type and traceback without its message, which can carry credentials or
+provider data.
 
 In a plugin's own retry loop, `async with conn_options.total_deadline():`
 bounds the operation by `total_timeout`, and `conn_options.interval_for_retry(n)`

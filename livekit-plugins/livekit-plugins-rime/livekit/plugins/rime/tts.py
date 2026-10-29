@@ -31,6 +31,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    redacted_cause,
     tokenize,
     tts,
     utils,
@@ -53,7 +54,7 @@ from ._websocket_v1 import (
 )
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
-from .log import logger, redacted
+from .log import logger
 from .models import (
     MODEL_CODA,
     MODEL_MIST_V3,
@@ -691,15 +692,15 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.push(data)
 
         except asyncio.TimeoutError as cause:
-            raise APITimeoutError() from redacted(cause)
+            raise APITimeoutError() from redacted_cause(cause)
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message="Rime HTTP request failed",
                 status_code=e.status,
                 request_id=None,
                 body=None,
-            ) from redacted(e)
+            ) from redacted_cause(e)
         except APIError:
             raise
         except Exception as cause:
-            raise APIConnectionError("Rime HTTP request failed") from redacted(cause)
+            raise APIConnectionError("Rime HTTP request failed") from redacted_cause(cause)

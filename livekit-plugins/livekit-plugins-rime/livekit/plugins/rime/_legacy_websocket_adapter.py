@@ -29,6 +29,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    redacted_cause,
     tokenize,
     tts,
     utils,
@@ -37,7 +38,7 @@ from livekit.agents.voice.io import TimedString
 
 from ._pool_manager import PoolManager
 from ._stream_tts import StreamTTS
-from .log import logger, redacted
+from .log import logger
 
 NUM_CHANNELS = 1
 
@@ -245,7 +246,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 except ValidationError as cause:
                     raise APIConnectionError(
                         "Rime WebSocket sent an invalid response", retryable=False
-                    ) from redacted(cause)
+                    ) from redacted_cause(cause)
                 message_type = data.type
                 if message_type == "chunk":
                     output_emitter.push(base64.b64decode(data.data))
@@ -277,15 +278,15 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     await sent_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError as cause:
-            raise APITimeoutError() from redacted(cause)
+            raise APITimeoutError() from redacted_cause(cause)
         except aiohttp.ClientResponseError as error:
             raise APIStatusError(
                 message="Rime WebSocket request failed",
                 status_code=error.status,
                 request_id=None,
                 body=None,
-            ) from redacted(error)
+            ) from redacted_cause(error)
         except APIError:
             raise
         except Exception as cause:
-            raise APIConnectionError("Rime WebSocket request failed") from redacted(cause)
+            raise APIConnectionError("Rime WebSocket request failed") from redacted_cause(cause)

@@ -20,14 +20,13 @@ from dataclasses import dataclass
 
 import aiohttp
 
-from livekit.agents import APIConnectOptions, APIError, tokenize, tts, utils
+from livekit.agents import APIConnectOptions, APIError, redacted_cause, tokenize, tts, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from . import _websocket_v1
 from ._pool_manager import PoolManager
 from ._stream_tts import StreamTTS
-from .log import redacted
 
 _Pool = utils.ConnectionPool[_websocket_v1.Connection]
 
@@ -312,9 +311,9 @@ async def _sentence_tokenized_input_events(
             sentence_stream.end_input()
             await forward_task
         except Exception as cause:
-            raise APIError("Rime sentence tokenization failed", retryable=False) from redacted(
-                cause
-            )
+            raise APIError(
+                "Rime sentence tokenization failed", retryable=False
+            ) from redacted_cause(cause)
         finally:
             try:
                 if next_input_task is not None:

@@ -179,6 +179,16 @@ class CLIError(Exception):
     pass
 
 
+class RedactedCause(Exception):
+    """A provider failure's cause with its type and traceback but not its message, which can
+    carry credentials, provider responses or user text."""
+
+
+def redacted_cause(error: BaseException) -> RedactedCause:
+    """``error`` to chain as a cause (``raise APIError(...) from redacted_cause(e)``)."""
+    return RedactedCause(type(error).__qualname__).with_traceback(error.__traceback__)
+
+
 def create_api_error_from_http(
     message: str = "",
     *,

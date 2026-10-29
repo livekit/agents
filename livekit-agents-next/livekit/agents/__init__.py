@@ -29,6 +29,7 @@ from ._exceptions import (
     StreamStateError,
     UnexpectedModelBehavior,
     create_api_error_from_http,
+    redacted_cause,
 )
 from ._generated.language import LanguageCode
 from ._generated.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
@@ -217,6 +218,7 @@ __all__ = [
     "APITimeoutError",
     "StreamStateError",
     "create_api_error_from_http",
+    "redacted_cause",
     "APIConnectOptions",
     "NotGiven",
     "NOT_GIVEN",
