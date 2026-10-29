@@ -684,7 +684,7 @@ impl Driver {
                 self.dispatch(signal, &mut out);
                 continue;
             }
-            if self.settle_reply_plans(&mut out) {
+            if self.settle_reply_plans(&mut out) || self.settle_deferred_calls(&mut out) {
                 continue;
             }
             if !self.publish_current_speech(&mut out) {

@@ -823,8 +823,8 @@ impl Driver {
                     self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
                 }
             }
-            GenEvent::ToolCallStarted { speech, step, call, runner, go } => {
-                self.on_tool_started(now, (speech, step), *call, runner, go, out);
+            GenEvent::ToolCallMade { speech, step, made, go } => {
+                self.on_tool_made(now, (speech, step), *made, go, out);
             }
             GenEvent::ToolDescribed { speech, step, call, tool, go } => {
                 self.on_tool_described((speech, step), call, tool.map(|t| *t), go, out);
@@ -1074,6 +1074,7 @@ impl Driver {
         // leave the sink paused until the close.
         self.release_paused_speech(speech, out);
         self.activity.tools.retries.remove(&speech);
+        self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
         // Their bodies are cancelled, as the reference's close cancels its tool tasks

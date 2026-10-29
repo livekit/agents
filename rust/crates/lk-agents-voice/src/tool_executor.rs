@@ -42,6 +42,36 @@ pub(crate) struct Tools {
     pub(crate) next_call: u64,
     /// Each live reply's tool retry budget, one for its steps as for an `agent.run()` invocation.
     pub(crate) retries: BTreeMap<SpeechId, lk_agents_core::tool_outcome::ToolRetries>,
+    /// Calls made before their step was authorized to play, in the model's order: started once
+    /// it is, dropped unrun if the speech is interrupted or done first.
+    pub(crate) deferred: Vec<Deferred>,
+    /// The calls `tool_choice="none"` dropped, by step, reported when the step's tools finish.
+    pub(crate) dropped: BTreeMap<(SpeechId, u32), Vec<String>>,
+}
+
+/// A call the model made, as the reply task saw it: what the step offered and how it may call.
+#[derive(Debug)]
+pub struct MadeCall {
+    pub call: FunctionCall,
+    /// The step's offered tool of the call's name.
+    pub spec: Option<lk_agents_abi::ToolSpec>,
+    /// The step forbade tools (`tool_choice="none"`).
+    pub forbidden: bool,
+    /// The step answers an `InputRequired(tool=)`.
+    pub answering: Option<Answering>,
+    /// The reply's runner.
+    pub runner: Option<Arc<dyn HostToolRunner>>,
+}
+
+/// An admitted call waiting for its step's authorization.
+#[derive(Debug)]
+pub(crate) struct Deferred {
+    pub(crate) speech: SpeechId,
+    pub(crate) step: u32,
+    pub(crate) call: FunctionCall,
+    pub(crate) advertised: bool,
+    pub(crate) runner: Option<Arc<dyn HostToolRunner>>,
+    pub(crate) go: crate::agent_session::RequestId,
 }
 
 /// One step's calls as `lk_agents_core::tool_calls` decides them, and the call tasks waiting
@@ -62,8 +92,10 @@ pub use lk_agents_core::agent_run::CallId;
 /// The next move of a call's task, decided by the shared tool machine.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolGo {
-    /// Ask the runner for the tool's description: what the machine decides with.
-    Describe { call: CallId },
+    /// The call starts as `item` (stamped and admitted); hosted on the reply's runner unless it
+    /// names a tool the request did not offer. The task first describes the call's tool: what the
+    /// machine decides with.
+    Start { call: CallId, item: Box<FunctionCall>, hosted: bool },
     /// Bind and validate these arguments (the framework's parse, with the schema's defaults).
     Prepare { call: CallId, arguments: serde_json::Map<String, serde_json::Value> },
     /// Render the read-back of the prepared arguments.
@@ -72,7 +104,8 @@ pub enum ToolGo {
     Execute { item: Box<FunctionCall> },
     /// Settled without its body: `item` as recorded, and whether it spends a retry.
     Settled { item: Box<FunctionCall>, outcome: ToolOutcome, retry: bool },
-    /// The step's calls are over: the call does not run.
+    /// The call does not run: dropped unrun before it started (`tool_choice="none"`, a speech
+    /// interrupted or done before its step was authorized), or the step's calls are over.
     Gone,
 }
 
@@ -303,8 +336,6 @@ pub(crate) struct Handling {
 #[derive(Debug)]
 pub struct StepEnd {
     pub executions: Vec<ToolExecution>,
-    /// The calls `tool_choice="none"` dropped unrun.
-    pub dropped: Vec<String>,
     /// Read before the executions were awaited.
     pub interrupted_before_tools: bool,
     /// Read after them.
@@ -759,7 +790,7 @@ impl Driver {
         answer: Option<crate::agent_session::RequestId>,
         out: &mut Out,
     ) {
-        for name in end.dropped {
+        for name in self.activity.tools.dropped.remove(&(speech, step)).unwrap_or_default() {
             let diagnostic = DiagnosticEvent::error(crate::events::diagnostics::TOOL_CHOICE_NONE)
                 .with("function", name)
                 .with("speech_id", speech.0.to_string());

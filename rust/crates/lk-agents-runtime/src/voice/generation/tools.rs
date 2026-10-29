@@ -1,176 +1,85 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
 use lk_agents_abi::FunctionCall;
-use lk_agents_core::tool_calls::{Admission, PrepareFailure, admit};
+use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::generation::{GenEvent, ReplyContext};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
-    CallId, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, answer,
+    CallId, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, answer,
 };
 use std::sync::Arc;
 
-/// Calls go to the runner as they arrive (latency hides behind the generation's tail). **Order is
-/// the contract**: `next_step` pairs by index.
+/// Calls go to the driver as they arrive (latency hides behind the generation's tail), which
+/// starts or drops each. **Order is the contract**: the step pairs by index.
 pub(crate) struct ToolStep {
     calls: Vec<Dispatched>,
-    /// The start signal of the last call deferred to adoption, so the next one starts after it.
-    last_deferred_start: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 struct Dispatched {
     call: FunctionCall,
-    /// `None` when `tool_choice="none"` dropped the call; answers `None` when the speech was
-    /// interrupted before the step could start it.
-    rx: Option<tokio::sync::oneshot::Receiver<Option<ToolExecution>>>,
+    /// Answers `None` when the driver dropped the call unrun.
+    rx: tokio::sync::oneshot::Receiver<Option<ToolExecution>>,
 }
 
 impl ToolStep {
     pub(crate) fn new() -> Self {
-        ToolStep { calls: Vec::new(), last_deferred_start: None }
+        ToolStep { calls: Vec::new() }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.calls.is_empty()
     }
 
-    /// Run once the step is authorized to play (a call made while another speech plays, or by a
-    /// preemptive generation, waits). The runner's task is **not** registered on the speech
-    /// handle: a tool may outlive the turn.
+    /// Hands the call to the driver and runs it as told. The task is **not** registered on the
+    /// speech handle: a tool may outlive the turn.
     pub(crate) fn dispatch(
         &mut self,
         shared: &Arc<SessionShared>,
         handle: &Arc<SpeechHandle>,
         ctx: &ReplyContext,
-        mut call: FunctionCall,
+        call: FunctionCall,
     ) {
-        let answering = ctx.answering.as_ref().map(|a| (a.tool.as_str(), a.said.as_str()));
-        let forbidden = ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden);
-        let admission = admit(&mut call, &ctx.request.tools, forbidden, answering);
-        // Only offered calls reach the speech; the shared tool machine answers an invented one.
-        let advertised = admission.offered();
-        let names = vec![call.name.clone()];
-        shared.trace(lk_agents_voice::trace::ToolStep::Calls { speech: handle.id(), names });
         let (speech, step) = (handle.id(), handle.num_steps());
-        // `tool_choice="none"` calls are started and dropped: told to the speech and the loop as
-        // the model made them.
-        if matches!(admission, Admission::Forbidden { .. }) {
-            if advertised {
-                handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
-            }
-            if handle.scheduled() {
-                let call = Box::new(call.clone());
-                let (runner, go) = (None, None);
-                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, go });
-            }
-            self.calls.push(Dispatched { call, rx: None });
-            return;
-        }
-        // Offered calls with a runner are hosted: the loop's running set has them.
-        let hosted = admission == Admission::Offered;
-        let runner = ctx.providers.toolset.runner.clone().filter(|_| hosted);
-        // `_tool_execution_started_cb`: the call is stamped with its start (history is ordered by
-        // `created_at`, and it was made before the step was authorized), then told; the shared
-        // tool machine answers with the call's first move.
-        let start =
-            move |shared: &SessionShared, handle: &SpeechHandle, call: &mut FunctionCall| {
-                call.created_at = shared.time.wall();
-                if advertised {
-                    handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
-                }
-                let (go, moved) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
-                let started = GenEvent::ToolCallStarted {
-                    speech,
-                    step,
-                    call: Box::new(call.clone()),
-                    runner: runner.clone(),
-                    go: Some(go.id),
-                };
-                shared.report_awaited(started, go);
-                (moved, runner)
-            };
-        let mut one = call.clone();
-        let (deferred, started) = if handle.step_authorized(step) {
-            (None, Some(start(shared, handle, &mut one)))
-        } else {
-            (Some(start), None)
+        let made = MadeCall {
+            call: call.clone(),
+            spec: ctx.request.tools.iter().find(|t| t.name == call.name).cloned(),
+            forbidden: ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden),
+            answering: ctx.answering.clone(),
+            runner: ctx.providers.toolset.runner.clone(),
         };
+        let (go, first) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
+        let made = GenEvent::ToolCallMade { speech, step, made: Box::new(made), go: go.id };
+        shared.report_awaited(made, go);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let handle = Arc::clone(handle);
+        let runner = ctx.providers.toolset.runner.clone();
         let host_speech = handle.object();
         let spawner = Arc::clone(&shared.spawner);
         let shared = Arc::clone(shared);
-        // Deferred starts are reported in the model's order.
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
-        let previous = self.last_deferred_start.replace(started_rx);
-        let task_owner = Arc::clone(&handle);
+        let task_owner = Arc::clone(handle);
+        let handle = Arc::clone(handle);
         let task = ctx.task;
         let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
-            // A start already reported runs, as the reference's executor starts the body
-            // right after `tool_execution_started_cb`, interrupted or not.
-            let mut started = started;
-            if let Some(start) = deferred {
-                // Authorization first: a discarded preemptive generation, or a speech
-                // interrupted while queued, drops the call unrun.
-                let authorized = tool_authorization(&handle, step).await;
-                if !authorized {
-                    let _ = tx.send(None);
-                    return;
-                }
-                if let Some(previous) = previous {
-                    let _ = previous.await;
-                }
-                started = Some(start(&shared, &handle, &mut one));
-            }
-            let _ = started_tx.send(());
-            let Some((first, runner)) = started else { return };
+            // Dropped unrun, or a loop gone before the start: owed nothing.
+            let Ok(ToolGo::Start { call: id, item, hosted }) = first.await else {
+                let _ = tx.send(None);
+                return;
+            };
+            let runner = runner.filter(|_| hosted);
             let call =
                 HostedCall { shared: &shared, speech, step, runner, host_speech: &host_speech };
-            let (execution, id, outcome) = call.run(first, one, &handle, task).await;
+            let (execution, outcome) = call.run(id, *item, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
             let (call_id, end) = (execution.call.call_id.clone(), execution.end);
-            let call = id;
+            let call = Some(id);
             let ended =
                 GenEvent::ToolCallEnded { speech, step, call, call_id, end, message, outcome };
             shared.report(ended);
             let _ = tx.send(Some(execution));
         });
         task_owner.add_task(abort);
-        self.calls.push(Dispatched { call, rx: Some(rx) });
-    }
-}
-
-async fn tool_authorization(handle: &SpeechHandle, step: u32) -> bool {
-    let mut interrupted = std::pin::pin!(handle.wait_for_interrupted());
-    let mut done = std::pin::pin!(handle.wait_for_done());
-    let mut authorized = std::pin::pin!(handle.wait_for_step_authorized(step));
-    std::future::poll_fn(|cx| {
-        if interrupted.as_mut().poll(cx).is_ready() || done.as_mut().poll(cx).is_ready() {
-            return std::task::Poll::Ready(false);
-        }
-        if authorized.as_mut().poll(cx).is_ready() {
-            return std::task::Poll::Ready(true);
-        }
-        std::task::Poll::Pending
-    })
-    .await
-}
-
-#[cfg(test)]
-mod authorization_tests {
-    use super::*;
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
-
-    #[test]
-    fn a_failed_speech_discards_a_tool_still_waiting_for_authorization() {
-        let handle = SpeechHandle::detached("failed-before-authorization".into(), true);
-        let mut waiting = std::pin::pin!(tool_authorization(&handle, 1));
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(waiting.as_mut().poll(&mut cx).is_pending());
-        handle.mark_done(Some(lk_agents_abi::errors::ApiError::new("output refused").into()));
-        assert_eq!(waiting.as_mut().poll(&mut cx), Poll::Ready(false));
+        self.calls.push(Dispatched { call, rx });
     }
 }
 
@@ -184,37 +93,35 @@ struct HostedCall<'a> {
 }
 
 impl HostedCall<'_> {
-    /// Prepares, reads back or runs the call as told, until it is answered: the execution, the
-    /// call's machine id once it has one, and the outcome the machine records.
+    /// Describes the call's tool, then prepares, reads back or runs the call as told, until it is
+    /// answered: the execution and the outcome the machine records.
     async fn run(
         &self,
-        first: lk_agents_voice::agent_session::api::Awaited<ToolGo>,
+        call: CallId,
         mut one: FunctionCall,
         handle: &SpeechHandle,
         task: bool,
-    ) -> (ToolExecution, Option<CallId>, ToolOutcome) {
+    ) -> (ToolExecution, ToolOutcome) {
         let wall = || self.shared.time.wall();
-        let mut id = None;
         let mut prepared = None;
-        let mut go = first.await;
+        let tool = match &self.runner {
+            Some(runner) => runner.describe(&one.name).await.ok().flatten(),
+            None => None,
+        };
+        let tool = tool.map(Box::new);
+        let (speech, step) = (self.speech, self.step);
+        let mut go = self.ask(|go| GenEvent::ToolDescribed { speech, step, call, tool, go }).await;
         loop {
             match go {
                 // A loop gone answers nothing: the call never ran.
                 Err(_) | Ok(ToolGo::Gone) => {
                     let outcome = ToolOutcome::Cancelled;
-                    return (answer(&one, outcome.clone().into(), wall()), id, outcome);
+                    return (answer(&one, outcome.clone().into(), wall()), outcome);
                 }
-                Ok(ToolGo::Describe { call }) => {
-                    id = Some(call);
-                    let tool = match &self.runner {
-                        Some(runner) => runner.describe(&one.name).await.ok().flatten(),
-                        None => None,
-                    };
-                    let tool = tool.map(Box::new);
-                    let (speech, step) = (self.speech, self.step);
-                    go = self
-                        .ask(|go| GenEvent::ToolDescribed { speech, step, call, tool, go })
-                        .await;
+                // Started once; a repeat is no move.
+                Ok(ToolGo::Start { .. }) => {
+                    let outcome = ToolOutcome::Internal;
+                    return (answer(&one, outcome.clone().into(), wall()), outcome);
                 }
                 Ok(ToolGo::Prepare { call, arguments }) => {
                     let identity = match &self.runner {
@@ -254,7 +161,7 @@ impl HostedCall<'_> {
                     one = *item;
                     let (Some(runner), Some(args)) = (&self.runner, prepared.take()) else {
                         let outcome = ToolOutcome::Internal;
-                        return (answer(&one, outcome.clone().into(), wall()), id, outcome);
+                        return (answer(&one, outcome.clone().into(), wall()), outcome);
                     };
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
@@ -262,12 +169,12 @@ impl HostedCall<'_> {
                     let report = runner.answer(&args, &one, task).await;
                     handle.tool_returned(&one.call_id);
                     let outcome = report.outcome.clone();
-                    return (answer(&one, report, wall()), id, outcome);
+                    return (answer(&one, report, wall()), outcome);
                 }
                 Ok(ToolGo::Settled { item, outcome, retry }) => {
                     let mut execution = answer(&item, outcome.clone().into(), wall());
                     execution.retry = retry;
-                    return (execution, id, outcome);
+                    return (execution, outcome);
                 }
             }
         }
@@ -304,15 +211,10 @@ pub(crate) async fn run_tools(
 
     // Awaited in the model's order: they ran concurrently, so this is a join, not a sequence.
     let mut executions = Vec::with_capacity(tools.calls.len());
-    let mut dropped = Vec::new();
     for d in tools.calls {
-        let Some(rx) = d.rx else {
-            dropped.push(d.call.name);
-            continue;
-        };
-        let execution = match rx.await {
+        let execution = match d.rx.await {
             Ok(Some(out)) => out,
-            // Never started: the reference returns before executing, so it is owed nothing.
+            // Dropped unrun: the reference returns before executing, so it is owed nothing.
             Ok(None) => continue,
             // Aborted or panicked: never a hole, since the step pairs by index.
             Err(_) => {
@@ -336,7 +238,6 @@ pub(crate) async fn run_tools(
     }
     let end = Box::new(StepEnd {
         executions,
-        dropped,
         interrupted_before_tools,
         interrupted: handle.interrupted(),
         forwarded_text_empty,

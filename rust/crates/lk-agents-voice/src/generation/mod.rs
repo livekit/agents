@@ -884,14 +884,13 @@ pub enum GenEvent {
         step: u32,
         error: Option<crate::trace::FailureClass>,
     },
-    /// Hosted on `runner`, or answered without running (a name the request did not offer).
-    /// Awaited (`go`) with the call's first move, unless the call is dropped unrun.
-    ToolCallStarted {
+    /// The model made a call. Awaited (`go`) with the call's start, or with `Gone` when the
+    /// driver drops it unrun.
+    ToolCallMade {
         speech: SpeechId,
         step: u32,
-        call: Box<lk_agents_abi::FunctionCall>,
-        runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
-        go: Option<crate::agent_session::RequestId>,
+        made: Box<crate::tool_executor::MadeCall>,
+        go: crate::agent_session::RequestId,
     },
     /// The runner described the call's tool; `None` for a name the request did not offer or the
     /// runner does not have. Awaited with the call's next move.
