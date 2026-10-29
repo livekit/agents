@@ -672,7 +672,7 @@ pub struct Run {
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.
-    avatar_sink: Option<Arc<lk_agents_test_support::avatar_output::FakeAvatarOutput>>,
+    avatar_sink: Option<Arc<lk_agents_runtime::avatar::output::DataStreamAudioOutput>>,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     refs: Arc<dyn RefRegistry>,
@@ -695,4 +695,4 @@ impl Run {
     }
 }
 
-use lk_agents_test_support::room_io::FixedRoom;
+use lk_agents_runtime::room_io::FixedRoom;

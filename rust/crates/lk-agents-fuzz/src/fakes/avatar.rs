@@ -27,7 +27,7 @@ use lk_agents_abi::{
     AudioFrame, Clock, Ts,
     errors::{ApiError, ProviderError},
 };
-use lk_agents_test_support::avatar_receiver::DataStreamAudioReceiver;
+use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
@@ -581,7 +581,7 @@ impl FakeAvatarWorker {
             })
         };
         let rx = Arc::new(DataStreamAudioReceiver::new(
-            room.clone(),
+            lk_agents_runtime::rtc::room::Room::wrap(room.clone()),
             Some(Self::AGENT.into()),
             20,
             1,

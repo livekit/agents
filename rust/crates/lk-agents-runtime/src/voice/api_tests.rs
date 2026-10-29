@@ -3,10 +3,10 @@
 mod playback;
 
 use super::*;
+use crate::room_io::FixedRoom;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::CloseReason;
-use lk_agents_test_support::room_io::FixedRoom;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::HandoffRefused;
 use lk_agents_voice::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
@@ -46,7 +46,7 @@ fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRo
     let room = rtc.room(name);
     // The `FakeRtc` is the room's owner; the room keeps it alive through its own `Arc`.
     std::mem::forget(rtc);
-    (room.clone(), FixedRoom { rtc: room, time: Timebase::from_virtual(clock) })
+    (room.clone(), FixedRoom { rtc: room, time: Timebase::from_virtual(clock), pool: None })
 }
 
 /// A session and the steps it journals.

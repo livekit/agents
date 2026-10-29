@@ -39,6 +39,7 @@ fn room_io(room: Arc<dyn RtcRoom>, clock: Arc<VirtualClock>, config: RoomIoConfi
         Arc::new(SegmentIds::counting()),
         config,
         None,
+        None,
     )
 }
 

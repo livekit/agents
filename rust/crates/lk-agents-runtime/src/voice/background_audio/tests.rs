@@ -1,5 +1,5 @@
 use super::*;
-use lk_agents_test_support::room_io::FixedRoom;
+use crate::room_io::FixedRoom;
 
 fn file(path: &str, probability: f64) -> Sound {
     Sound::for_host(Some(path.to_owned()), None, 1.0, probability, 0.0, 0.0)
@@ -29,6 +29,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
     let fixed = FixedRoom {
         rtc: room.clone(),
         time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
+        pool: None,
     };
     let player = Arc::new(BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200));
     player.start_for_host(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();

@@ -751,7 +751,7 @@ mod tests {
         assert!(!sites.is_empty(), "the session spawned no task to check");
         for site in sites {
             let placed = site.contains("lk-agents-voice/src/")
-                || site.contains("lk-agents-test-support/src/room_io/")
+                || site.contains("lk-agents-runtime/src/room_io/")
                 || site.ends_with("drive/executor.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/audio.rs");
             assert!(placed, "a task is placed at {site}");

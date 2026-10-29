@@ -5,12 +5,12 @@ pub mod output;
 mod owner;
 pub mod pre_connect_audio;
 
+use self::output::transcription::SegmentIds;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::RoomIoConfig;
 use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomVideoInput};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, capabilities::RtcRoom};
 use lk_agents_abi::{Clock, Spawner};
-use self::output::transcription::SegmentIds;
 use std::sync::Arc;
 
 pub use owner::RoomIo;
@@ -18,6 +18,9 @@ pub use owner::RoomIo;
 pub struct FixedRoom {
     pub rtc: Arc<dyn RtcRoom>,
     pub time: lk_agents_voice::agent_session::Timebase,
+    /// Where the room's CPU work (a pre-connect head's decode) runs; `None` runs it on the
+    /// executor's own task.
+    pub pool: Option<lk_agents_media::workers::MediaWorkers>,
 }
 
 impl room_owner::SessionRoom for FixedRoom {
@@ -42,6 +45,7 @@ impl room_owner::SessionRoom for FixedRoom {
             Arc::new(SegmentIds::default()),
             config.clone(),
             None,
+            self.pool.clone(),
         )
     }
 }
@@ -61,7 +65,10 @@ impl room_owner::RoomRuntime for RoomFactory {
     fn create_room_session(room: Option<Arc<dyn RtcRoom>>) -> room_owner::RoomSession {
         let time = lk_agents_voice::agent_session::Timebase::real();
         match room {
-            Some(room) => room_owner::RoomSession(Arc::new(FixedRoom { rtc: room, time })),
+            Some(room) => {
+                let pool = crate::process::workers().ok();
+                room_owner::RoomSession(Arc::new(FixedRoom { rtc: room, time, pool }))
+            }
             None => room_owner::RoomSession(Arc::new(DetachedSession(time))),
         }
     }

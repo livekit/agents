@@ -105,8 +105,8 @@ impl Run {
         // as they are sent, so the sink gives up on one after a clear as in production.
         let avatar_sink = (setup.avatar && console.is_none()).then(|| {
             room.add_participant(AVATAR, ParticipantKind::Agent);
-            Arc::new(lk_agents_test_support::avatar_output::FakeAvatarOutput::new(
-                room.clone(),
+            Arc::new(lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
+                lk_agents_runtime::rtc::room::Room::wrap(room.clone()),
                 AVATAR.into(),
                 Some(SAMPLE_RATE),
                 None,
@@ -118,7 +118,7 @@ impl Run {
         });
         let api = Arc::new(
             SessionApi::host_new(
-                Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
+                Arc::new(FixedRoom { rtc: room.clone(), time: time.clone(), pool: None }),
                 Some(instructions(&setup.instructions)),
                 None,
                 OPENING_AGENT.into(),
@@ -393,7 +393,8 @@ impl Run {
         // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
         if setup.background_audio {
             let player = Arc::new(FakeBackgroundAudioPlayer::new(run.registry.world.clone()));
-            let room = Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone() });
+            let room =
+                Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone(), pool: None });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
             let _ = player.start(room, ambient, fakes::HALF).await;
             run.background = Some(player);

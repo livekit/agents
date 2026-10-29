@@ -6,6 +6,7 @@ use std::time::Duration;
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamSource, TaskSet};
+use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 use lk_agents_voice::room_io::pre_connect_state::{PreConnectBuffer, PreConnectState};
 use tokio::sync::Notify;
 
@@ -27,6 +28,9 @@ pub struct PreConnectAudioHandler {
     clock: Arc<dyn Clock>,
     timeout: Duration,
     format: (u32, u16),
+    /// Where a head decodes; `None` decodes on the executor's own task, as a deterministic
+    /// scheduler needs.
+    pool: Option<MediaWorkers>,
     state: Mutex<State>,
     changed: Notify,
     stopped: Notify,
@@ -40,6 +44,7 @@ impl PreConnectAudioHandler {
         clock: Arc<dyn Clock>,
         timeout: Duration,
         format: (u32, u16),
+        pool: Option<MediaWorkers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             room,
@@ -47,6 +52,7 @@ impl PreConnectAudioHandler {
             clock,
             timeout,
             format,
+            pool,
             state: Mutex::new(State::default()),
             changed: Notify::new(),
             stopped: Notify::new(),
@@ -195,7 +201,7 @@ impl PreConnectAudioHandler {
         self.changed.notify_waiters();
     }
 
-    /// On the media pool, abandoned at close.
+    /// On the media pool when there is one, abandoned at close.
     async fn decode(&self, head: HeadBytes) -> std::result::Result<Vec<AudioFrame>, String> {
         let closed = || -> std::result::Result<Vec<AudioFrame>, String> {
             Err("pre-connect input is closed".into())
@@ -207,11 +213,9 @@ impl PreConnectAudioHandler {
             return closed();
         }
         let format = self.format;
-        let workers = crate::process::workers().map_err(|error| error.to_string())?;
-        let job = workers
-            .try_spawn(lk_agents_media::workers::MediaWorkerClass::Decoder, move || {
-                head.decode(format)
-            })
+        let Some(pool) = &self.pool else { return head.decode(format) };
+        let job = pool
+            .try_spawn(MediaWorkerClass::Decoder, move || head.decode(format))
             .map_err(|error| error.to_string())?;
         tokio::select! {
             biased;

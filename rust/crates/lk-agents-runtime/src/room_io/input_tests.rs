@@ -113,6 +113,7 @@ async fn track_replacement_releases_pending_preconnect_input() {
         clock.clone(),
         Duration::from_secs(3),
         (24_000, 1),
+        None,
     );
     let input = ParticipantAudioInput::new(
         room.clone(),
@@ -177,6 +178,7 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
             clock.clone(),
             Duration::from_secs(3),
             (24_000, 1),
+            None,
         );
         assert!(handler.register());
         let input = ParticipantAudioInput::new(

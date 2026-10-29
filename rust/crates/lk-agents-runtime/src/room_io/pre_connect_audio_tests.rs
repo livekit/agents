@@ -13,6 +13,7 @@ async fn failed_registration_does_not_remove_another_stream_owner() {
         clock,
         Duration::from_secs(3),
         (24_000, 1),
+        None,
     );
     assert!(!handler.register());
     handler.aclose().await;
@@ -39,6 +40,7 @@ async fn closed_preconnect_input_cannot_register_again() {
         clock,
         Duration::from_secs(3),
         (24_000, 1),
+        None,
     );
     handler.aclose().await;
     assert!(!handler.register());
@@ -70,6 +72,7 @@ async fn preconnect_overload_preserves_already_admitted_tracks() {
         clock,
         Duration::from_secs(3),
         (24_000, 1),
+        None,
     );
     assert!(handler.register());
     let tracks = (0..lk_agents_voice::room_io::pre_connect_state::MAX_TRACKS)
@@ -103,6 +106,7 @@ async fn preconnect_receive_deadline_discards_partial_pcm() {
         clock.clone(),
         Duration::from_secs(3),
         (24_000, 1),
+        None,
     );
     assert!(handler.register());
     let chunks = room.open_byte_stream("user", pcm_info("TR_expired")).unwrap();
@@ -128,6 +132,7 @@ async fn preconnect_duration_is_bounded_before_transfer() {
         clock,
         Duration::from_secs(3),
         (24_000, 1),
+        None,
     );
     let info = lk_agents_abi::voice::rtc::StreamInfo {
         id: "buffer".into(),

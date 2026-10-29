@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use lk_agents_abi::voice::room_owner::RoomIo as _;
 use lk_agents_abi::{ATTRIBUTE_AGENT_STATE, TokioSpawner};
-use lk_agents_test_support::room_io::owner::RoomIo;
+use lk_agents_runtime::room_io::RoomIo;
 use lk_agents_test_support::rtc::{ConnectionState, FakeRtc, RtcRoom};
 use lk_agents_voice::room_io::RoomIoConfig;
 
@@ -17,7 +17,9 @@ async fn a_state_taken_before_the_connect_is_written_on_it() {
     let room = rtc.room("agent-state-on-connect");
     room.set_connection_state(ConnectionState::Disconnected);
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let io = RoomIo::new(room.clone() as Arc<dyn RtcRoom>, clock, spawner, RoomIoConfig::default());
+    let ids = Arc::new(lk_agents_runtime::room_io::output::transcription::SegmentIds::default());
+    let config = RoomIoConfig::default();
+    let io = RoomIo::new(room.clone() as Arc<dyn RtcRoom>, clock, spawner, ids, config, None, None);
     io.clone().start();
     io.clone().on_agent_state_changed("listening");
     tokio::time::sleep(Duration::from_millis(50)).await;

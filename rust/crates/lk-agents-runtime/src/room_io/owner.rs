@@ -75,6 +75,7 @@ impl RoomIo {
         ids: Arc<SegmentIds>,
         config: RoomIoConfig,
         text_next_in_chain: Option<Arc<dyn TextOutput>>,
+        pool: Option<lk_agents_media::workers::MediaWorkers>,
     ) -> Arc<Self> {
         let room = crate::rtc::room::Room::wrap(room);
         let pre_connect = config.audio_input.as_ref().filter(|a| a.pre_connect_audio).map(|a| {
@@ -84,6 +85,7 @@ impl RoomIo {
                 clock.clone(),
                 a.pre_connect_audio_timeout,
                 (a.sample_rate, a.num_channels),
+                pool.clone(),
             )
         });
 

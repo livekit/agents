@@ -1,7 +1,7 @@
 use super::*;
 use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::voice::rtc::LocalParticipant as _;
-use lk_agents_test_support::room_io::FixedRoom;
+use lk_agents_runtime::room_io::FixedRoom;
 use lk_agents_voice::agent_session::Timebase;
 use std::sync::atomic::AtomicUsize;
 use tokio::sync::Notify;
@@ -56,7 +56,11 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
     let sound = Sound::for_host(None, Some(stream.clone()), 1.0, 1.0, 0.0, 0.0);
     player
         .start(
-            Arc::new(FixedRoom { rtc: room.clone(), time: Timebase::from_virtual(clock) }),
+            Arc::new(FixedRoom {
+                rtc: room.clone(),
+                time: Timebase::from_virtual(clock),
+                pool: None,
+            }),
             vec![sound],
             0.5,
         )

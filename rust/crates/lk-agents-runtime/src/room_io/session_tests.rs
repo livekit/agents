@@ -15,6 +15,7 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
         Arc::new(super::FixedRoom {
             rtc: room.clone(),
             time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
+            pool: None,
         }),
         None,
         None,

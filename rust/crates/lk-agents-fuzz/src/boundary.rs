@@ -28,6 +28,8 @@ pub const VOICE: Boundary = Boundary {
         "voice data plane (data_plane forwarder), stepped by drive::executor per microphone frame",
         "realtime conversation machine and connection policy (lk_agents_inference::realtime), \
          stepped by fakes::realtime's pump per command, server event and deadline",
+        "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
+         over FakeRoom, on the run's scheduler (decision 92)",
     ],
     fakes: &[
         "fakes::stt",
@@ -48,7 +50,7 @@ pub const VOICE: Boundary = Boundary {
     transitional: &[
         "voice policy tasks the core spawns (generation, playout, tools, hooks): scheduled as the \
          pool's turns, or one process each under the task bridge (E-1, E-3, E-13)",
-        "room io and the avatar runner over FakeRoom; the console's remote session over a socket",
+        "the avatar runner over FakeRoom; the console's remote session over a socket",
     ],
     outside: &[
         "the voice runtime: its Tokio session loop and effect execution (K-30 conformance and stress)",
