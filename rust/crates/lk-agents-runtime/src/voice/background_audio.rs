@@ -1,10 +1,10 @@
 //! Background sound stream execution and room track ownership.
 
-use lk_agents_abi::AudioFrame;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{
     AudioSource, LocalParticipant, RtcError, TrackPublication, TrackPublishOptions, TrackSource,
 };
+use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt};
 use lk_agents_media::{Mixer, StreamId};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -82,6 +82,8 @@ impl PlaybackHandle {
 }
 
 pub struct BackgroundAudioPlayer {
+    clock: Arc<dyn Clock>,
+    spawner: Arc<dyn Spawner>,
     state: tokio::sync::Mutex<MixerState>,
 
     queued: Arc<Mutex<Vec<Source>>>,
@@ -110,7 +112,7 @@ struct PublishedOutput {
     publication: Arc<dyn TrackPublication>,
     source: Arc<dyn AudioSource>,
     stop: tokio::sync::watch::Sender<bool>,
-    pump: tokio::task::JoinHandle<()>,
+    pump: tokio::sync::oneshot::Receiver<()>,
 }
 
 /// `_core.BackgroundAudioPlayer`: the mixer and the published track, under `background_audio.py`.
@@ -120,15 +122,33 @@ impl BackgroundAudioPlayer {
         num_channels: u16,
         blocksize: usize,
         stream_timeout_ms: u64,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
     ) -> Self {
-        Self::build(sample_rate, num_channels, blocksize, Duration::from_millis(stream_timeout_ms))
+        Self::build(
+            sample_rate,
+            num_channels,
+            blocksize,
+            Duration::from_millis(stream_timeout_ms),
+            clock,
+            spawner,
+        )
     }
 
-    fn build(sample_rate: u32, num_channels: u16, blocksize: usize, timeout: Duration) -> Self {
+    fn build(
+        sample_rate: u32,
+        num_channels: u16,
+        blocksize: usize,
+        timeout: Duration,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
+    ) -> Self {
         let mixer = Mixer::new(sample_rate, num_channels, blocksize);
         let blocksize = mixer.blocksize();
         let queued = Arc::new(Mutex::new(Vec::new()));
         Self {
+            clock,
+            spawner,
             state: tokio::sync::Mutex::new(MixerState {
                 mixer,
                 sources: BTreeMap::new(),
@@ -165,7 +185,7 @@ impl BackgroundAudioPlayer {
         // Publish the track and own the pump. If the caller cancels, close waits and releases the
         // track.
         let this = self.clone();
-        tokio::spawn(async move {
+        spawn_owned(self.spawner.as_ref(), async move {
             let mut output = this.output.lock().await;
             if this.closed.load(Ordering::Acquire) {
                 return Err(RtcError::Closed("background audio"));
@@ -185,7 +205,7 @@ impl BackgroundAudioPlayer {
             let (stop, stop_rx) = tokio::sync::watch::channel(false);
             let engine = this.clone();
             let sink = source.clone();
-            let pump = tokio::spawn(async move {
+            let pump = spawn_owned(this.spawner.as_ref(), async move {
                 if let Err(err) = engine.pump(sink, stop_rx).await {
                     log::error!("background audio capture failed: {err}");
                 }
@@ -205,7 +225,7 @@ impl BackgroundAudioPlayer {
             Ok(publication.sid().clone())
         })
         .await
-        .map_err(|err| RtcError::host(err.to_string()))?
+        .map_err(|_| RtcError::host("background audio publication task stopped"))?
     }
 
     /// [`play`](Self::play), choosing by the host's `draw` (`random.random()`).
@@ -287,6 +307,7 @@ impl BackgroundAudioPlayer {
             pending: None,
             playback: Playback::new(&sound.config),
             handle: handle.clone(),
+            spawner: self.spawner.clone(),
         });
         self.wake.notify_one();
         Ok(handle)
@@ -297,7 +318,7 @@ impl BackgroundAudioPlayer {
             let woken = self.wake.notified();
             let idle = {
                 let mut state = self.state.lock().await;
-                if let Some(pcm) = state.round(self.timeout).await {
+                if let Some(pcm) = state.round(self.timeout, self.clock.as_ref()).await {
                     return Some(pcm);
                 }
                 state.sources.is_empty() && self.queued.lock().unwrap().is_empty()
@@ -307,7 +328,9 @@ impl BackgroundAudioPlayer {
             if idle {
                 woken.await;
             } else {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                self.clock
+                    .wait_until(self.clock.now().saturating_add(Duration::from_millis(1)))
+                    .await;
             }
         }
         None
@@ -357,12 +380,12 @@ impl BackgroundAudioPlayer {
         self.closing.store(true, Ordering::Release);
         let mut reopen = Reopen(&self.closing, false);
         let this = self.clone();
-        let _ = tokio::spawn(async move { this.stop_sounds().await }).await;
+        let _ = spawn_owned(self.spawner.as_ref(), async move { this.stop_sounds().await }).await;
         reopen.1 = true;
         self.closed.store(true, Ordering::Release);
         self.wake.notify_one();
         let this = self.clone();
-        let _ = tokio::spawn(async move {
+        let _ = spawn_owned(self.spawner.as_ref(), async move {
             let mut output = this.output.lock().await;
             if let Some(output) = output.take() {
                 let _ = output.stop.send(true);
@@ -404,10 +427,22 @@ impl BackgroundAudioPlayer {
     }
 }
 
+/// The task owns its work even if its waiter is cancelled.
+fn spawn_owned<T: Send + 'static>(
+    spawner: &dyn Spawner,
+    future: impl Future<Output = T> + Send + 'static,
+) -> tokio::sync::oneshot::Receiver<T> {
+    let (done, completed) = tokio::sync::oneshot::channel();
+    spawner.spawn_unboxed(async move {
+        let _ = done.send(future.await);
+    });
+    completed
+}
+
 struct MixerState {
     mixer: Mixer,
     sources: BTreeMap<StreamId, Source>,
-    retired: Vec<tokio::task::JoinHandle<()>>,
+    retired: Vec<tokio::sync::oneshot::Receiver<()>>,
 
     queued: Arc<Mutex<Vec<Source>>>,
 }
@@ -419,6 +454,7 @@ struct Source {
     pending: Option<PendingFrame>,
     playback: Playback,
     handle: Arc<PlaybackHandle>,
+    spawner: Arc<dyn Spawner>,
 }
 
 enum Input {
@@ -430,13 +466,15 @@ enum Input {
 impl MixerState {
     async fn retire(&mut self, mut source: Source) {
         // Retain cleanup in mixer state so cancelling the pump cannot orphan a stream close.
-        self.retired.retain(|task| !task.is_finished());
+        self.retired.retain_mut(|task| {
+            matches!(task.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty))
+        });
         self.retired.push(source.teardown());
         let _ = self.retired.last_mut().unwrap().await;
         self.retired.pop();
     }
 
-    async fn round(&mut self, timeout: Duration) -> Option<Vec<i16>> {
+    async fn round(&mut self, timeout: Duration, clock: &dyn Clock) -> Option<Vec<i16>> {
         for source in self.queued.lock().unwrap().drain(..) {
             let id = self.mixer.add_stream();
             self.sources.insert(id, source);
@@ -454,7 +492,8 @@ impl MixerState {
                     break;
                 };
                 let frame = match &mut source.input {
-                    Input::File(file) => match tokio::time::timeout(
+                    Input::File(file) => match lk_agents_abi::timeout(
+                        clock,
                         timeout,
                         file.next(self.mixer.sample_rate(), self.mixer.num_channels()),
                     )
@@ -479,7 +518,12 @@ impl MixerState {
                             let stream = stream.clone();
                             source.pending = Some(Box::pin(async move { stream.next().await }));
                         }
-                        match tokio::time::timeout(timeout, source.pending.as_mut().unwrap()).await
+                        match lk_agents_abi::timeout(
+                            clock,
+                            timeout,
+                            source.pending.as_mut().unwrap(),
+                        )
+                        .await
                         {
                             Ok(result) => {
                                 source.pending = None;
@@ -547,13 +591,13 @@ impl Source {
         let _ = self.teardown().await;
     }
 
-    fn teardown(&mut self) -> tokio::task::JoinHandle<()> {
+    fn teardown(&mut self) -> tokio::sync::oneshot::Receiver<()> {
         if let Input::Stream(stream) = &self.input {
             stream.cancel_pending();
         }
         let pending = self.pending.take();
         let input = std::mem::replace(&mut self.input, Input::Closed);
-        tokio::spawn(async move {
+        spawn_owned(self.spawner.as_ref(), async move {
             if let Some(pending) = pending {
                 let _ = pending.await;
             }
@@ -578,7 +622,7 @@ impl Drop for Source {
     fn drop(&mut self) {
         self.handle.finish();
         if !matches!(self.input, Input::Closed) {
-            self.teardown();
+            let _ = self.teardown();
         }
     }
 }
@@ -653,13 +697,24 @@ pub struct HostBackgroundAudioPlayer(Arc<BackgroundAudioPlayer>);
 impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for HostBackgroundAudioPlayer {
     type State = PlayState;
 
-    fn new(sample_rate: u32, num_channels: u16, blocksize: usize, stream_timeout_ms: u64) -> Self {
-        Self(Arc::new(BackgroundAudioPlayer::for_host(
+    fn new(
+        sample_rate: u32,
+        num_channels: u16,
+        blocksize: usize,
+        stream_timeout_ms: u64,
+    ) -> Result<Self, ProviderError> {
+        use lk_agents_net::env::Env;
+        let spawner =
+            crate::process::Process::spawner().map_err(lk_agents_abi::errors::ApiError::new)?;
+        let clock = crate::process::Process::clock();
+        Ok(Self(Arc::new(BackgroundAudioPlayer::for_host(
             sample_rate,
             num_channels,
             blocksize,
             stream_timeout_ms,
-        )))
+            clock,
+            spawner,
+        ))))
     }
 
     async fn start(

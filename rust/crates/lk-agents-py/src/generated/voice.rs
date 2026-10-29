@@ -264,7 +264,7 @@ impl BackgroundAudioPlayer {
     #[pyo3(signature = (sample_rate = 48000, num_channels = 1, *, blocksize = 4800, stream_timeout_ms = 200))]
     fn new(#[pyo3(from_py_with = _extract_background_audio_player_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_background_audio_player_new_num_channels)] num_channels: u16, #[pyo3(from_py_with = _extract_background_audio_player_new_blocksize)] blocksize: usize, #[pyo3(from_py_with = _extract_background_audio_player_new_stream_timeout_ms)] stream_timeout_ms: u64) -> PyResult<BackgroundAudioPlayer> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::new(sample_rate, num_channels, blocksize, stream_timeout_ms);
+        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::new(sample_rate, num_channels, blocksize, stream_timeout_ms).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(BackgroundAudioPlayer(::std::sync::Arc::new(out)))
     }
 

@@ -33,7 +33,14 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
         time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
         pool: None,
     };
-    let player = Arc::new(BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200));
+    let player = Arc::new(BackgroundAudioPlayer::for_host(
+        48_000,
+        1,
+        4_800,
+        200,
+        fixed.time.clock(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+    ));
     player.start_for_host(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();
     (player, room)
 }
@@ -42,7 +49,14 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
 // a looping iterator accepted (it can only play once).
 #[tokio::test(start_paused = true)]
 async fn play_refuses_what_cannot_play() {
-    let idle = BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200);
+    let idle = BackgroundAudioPlayer::for_host(
+        48_000,
+        1,
+        4_800,
+        200,
+        Arc::new(lk_agents_abi::SimClock::new()),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+    );
     assert!(matches!(
         idle.play_for_host(vec![file("a.ogg", 1.0)], 0.5, false, false, true),
         Err(PlaybackError::NotStarted)
@@ -104,4 +118,100 @@ fn every_builtin_clip_is_shipped() {
             clip.file_name()
         );
     }
+}
+
+struct DelayedClose {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    finished: AtomicBool,
+    calls: std::sync::atomic::AtomicUsize,
+    cancelled: std::sync::atomic::AtomicUsize,
+}
+
+impl FrameStream for DelayedClose {
+    fn next(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn cancel_pending(&self) {}
+
+    fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            struct Closing<'a>(&'a DelayedClose, bool);
+            impl Drop for Closing<'_> {
+                fn drop(&mut self) {
+                    if !self.1 {
+                        self.0.cancelled.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut closing = Closing(self, false);
+            self.entered.notify_one();
+            self.release.notified().await;
+            closing.1 = true;
+            self.finished.store(true, Ordering::SeqCst);
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is_cancelled() {
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
+    let room = rtc.room("background-retirement-cancellation");
+    let player = Arc::new(BackgroundAudioPlayer::for_host(
+        48_000,
+        1,
+        4_800,
+        200,
+        lk_agents_voice::agent_session::Timebase::from_virtual(clock.clone()).clock(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+    ));
+    let stream = Arc::new(DelayedClose {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        finished: AtomicBool::new(false),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        cancelled: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let sound = Sound::for_host(None, Some(stream.clone()), 1.0, 1.0, 0.0, 0.0);
+    player
+        .start_for_host(
+            Arc::new(FixedRoom {
+                rtc: room.clone(),
+                time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
+                pool: None,
+            }),
+            0.5,
+            vec![sound],
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    stream.entered.notified().await;
+    let mut closing = Box::pin(player.close());
+    std::future::poll_fn(|cx| {
+        assert!(closing.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(closing);
+    // Retirement stays owned after the close waiter is cancelled.
+    stream.release.notify_one();
+    tokio::task::yield_now().await;
+    player.close().await;
+    let finished = stream.finished.load(Ordering::SeqCst);
+    let cancelled = stream.cancelled.load(Ordering::SeqCst);
+    let publications = room.local_participant().track_publications().unwrap();
+    // Leave no published track behind if the regression assertion fails.
+    for publication in &publications {
+        room.local_participant().unpublish_track(publication.sid()).await.unwrap();
+    }
+    assert!(finished, "stopping the pump abandoned an in-flight stream close");
+    assert_eq!(cancelled, 0, "retirement cleanup was cancelled by the pump's stop");
+    assert_eq!(stream.calls.load(Ordering::SeqCst), 1, "cleanup was restarted");
+    assert!(publications.is_empty(), "cancelling a close waiter orphaned the output track");
 }

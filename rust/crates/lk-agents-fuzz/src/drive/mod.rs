@@ -29,7 +29,6 @@ use std::{
     time::Duration,
 };
 
-use crate::fakes::FakeBackgroundAudioPlayer;
 use lk_agents_abi::{
     AudioFrame, BoxFuture, ChatItem, ChatMessage, HostRef, ImageContent, ImageSource, Maybe,
     MediaRef, Realtime, Spawner, Ts,
@@ -43,6 +42,7 @@ use lk_agents_abi::{
         SessionKwargs, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
+use lk_agents_runtime::voice::background_audio::BackgroundAudioPlayer;
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind};
 use lk_agents_voice::remote_session::{
     proto,
@@ -667,7 +667,7 @@ pub struct Run {
     /// The next console request's id.
     next_request: u64,
     /// The background audio player, as `background_audio.py` runs it beside the session.
-    background: Option<Arc<FakeBackgroundAudioPlayer>>,
+    background: Option<Arc<BackgroundAudioPlayer>>,
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.

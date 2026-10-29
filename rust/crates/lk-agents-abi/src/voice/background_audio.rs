@@ -122,7 +122,7 @@ pub trait BackgroundAudioPlayer: Send + Sync + Sized + 'static {
         #[host(default = 1)] num_channels: u16,
         #[host(kw, default = 4800)] blocksize: usize,
         #[host(default = 200)] stream_timeout_ms: u64,
-    ) -> Self;
+    ) -> Result<Self, ProviderError>;
 
     #[host(await)]
     async fn start(
