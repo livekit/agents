@@ -496,6 +496,47 @@ background execution, a scheduler, or Python stack recovery. The backend request
 inbox continues to serve endpoint request policies independently.
 
 
+## Customizing the pipeline
+
+An `Agent` subclass overrides the steps a reply runs through. Each node
+receives a stream and returns a stream (an async iterable, or a coroutine
+returning one); `super()` runs the default, so an override can wrap it. A
+node's override can narrow its return type to what it actually returns:
+
+```python
+from collections.abc import AsyncIterable
+
+from livekit.agents import Agent, ModelSettings, StopResponse, llm
+
+
+class FrontDesk(Agent):
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        if (new_message.text_content or "").strip().lower() == "hold on":
+            raise StopResponse()  # no reply to this turn
+
+    async def transcription_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[str]:
+        async for chunk in text:
+            yield chunk.replace("Live Kit", "LiveKit")
+```
+
+| Override | Runs | Receives, returns |
+| --- | --- | --- |
+| `on_user_turn_completed(turn_ctx, new_message)` | when the person's turn ends, before the reply | the turn's `ChatContext` and the new `ChatMessage`, both editable in place; `StopResponse` skips the reply |
+| `llm_node(chat_ctx, tools, model_settings)` | each model request, on a call and in `agent.run()` | `ChatChunk`s or text; a `FlushSentinel` ends the spoken segment there |
+| `stt_node(audio, model_settings)` | the person's audio | `rtc.AudioFrame`s in, `stt.SpeechEvent`s out |
+| `tts_node(text, model_settings)` | each spoken segment | text in, `rtc.AudioFrame`s out |
+| `transcription_node(text, model_settings)` | each segment's transcript before the transcription output | text (or `TimedString`s) in and out |
+| `realtime_audio_output_node(audio, model_settings)` | a realtime model's audio before playout | `rtc.AudioFrame`s in and out |
+
+`ModelSettings.tool_choice` is the reply's tool choice. Edits to `turn_ctx`
+in `on_user_turn_completed` apply to this reply's request; the edited
+`new_message` text is what the history records. A node that returns `None`
+(a coroutine resolving to nothing) produces no output for that step.
+
 ## Tool calls on a call
 
 On a call, a tool's `RunContext` also carries the speech it belongs to:

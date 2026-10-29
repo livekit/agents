@@ -1,5 +1,5 @@
 from . import io, room_io
-from .agent import Agent, AgentRetries
+from .agent import Agent, AgentRetries, ModelSettings
 from .agent_session import (
     VoiceSession,
     VoiceTask,
@@ -26,6 +26,7 @@ __all__ = [
     "VoiceTask",
     "Agent",
     "AgentRetries",
+    "ModelSettings",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",

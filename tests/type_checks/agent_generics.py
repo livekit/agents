@@ -8,12 +8,13 @@ ignore that is no longer needed, so the file fails both when a check is lost and
 error appears.
 """
 
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Any
 
 from typing_extensions import assert_type
 
-from livekit.agents import Agent, RunContext, RunResult
+from livekit.agents import Agent, ModelSettings, RunContext, RunResult, StopResponse, llm
 
 
 @dataclass
@@ -93,7 +94,19 @@ async def runs(patient: Patient) -> None:
 
 
 class FrontDesk(Agent):
-    pass
+    """The node overrides of voice-session.md "Customizing the pipeline"."""
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        if (new_message.text_content or "").strip().lower() == "hold on":
+            raise StopResponse()
+
+    async def transcription_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[str]:
+        async for chunk in text:
+            yield chunk.replace("Live Kit", "LiveKit")
 
 
 def any_agent(agent: Agent) -> None: ...

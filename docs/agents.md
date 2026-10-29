@@ -327,6 +327,7 @@ availability and authorization before committing the booking.
 | `@agent.instructions` | on every turn, before the model request |
 | `@agent.on_enter` | when the agent takes the active live role; receives the `VoiceSession` |
 | `@agent.on_exit` | when the agent relinquishes the active live role during an orderly agent replacement or session close; receives the `VoiceSession` |
+| `on_user_turn_completed` (subclass override) | on a call, when the person's turn ends and before the reply; `StopResponse` skips the reply |
 
 ```python
 @front_desk.on_enter
@@ -349,6 +350,11 @@ A `VoiceTask` temporarily suspends the parent interaction without ending its
 activation. Starting the task does not call the parent's `on_exit`; restoring
 the parent does not call its `on_enter`. This avoids repeating greetings or
 releasing parent resources during a bounded inline interaction.
+
+A subclass can also override the steps a reply runs through: `llm_node` (every
+model request, in `agent.run()` and on a call) and, on a call, `stt_node`,
+`tts_node`, `transcription_node` and `realtime_audio_output_node`. See
+[customizing the pipeline](voice-session.md#customizing-the-pipeline).
 
 Use `on_exit` for orderly frontend cleanup. A process crash cannot guarantee
 its execution; external effects and persistence need their own explicit
