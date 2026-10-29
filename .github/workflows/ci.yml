@@ -184,7 +184,7 @@ jobs:
           cd livekit-agents-next
           VIRTUAL_ENV=../.venv-next ../.venv-next/bin/maturin develop --uv
 
-      # The plugin base classes are Python the generator writes from `lk-agents-codegen/src/bases.rs`:
+      # The plugin base classes are Python the generator writes from `rust/ai_slop/lk-agents-codegen/src/bases.rs`:
       # linted like hand-written code (the repository's ruff excludes `_generated/` otherwise).
       - name: Lint the generated plugin bases
         working-directory: livekit-agents-next/livekit/agents/_generated

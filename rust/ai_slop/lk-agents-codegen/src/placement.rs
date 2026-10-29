@@ -10,7 +10,7 @@ use std::{
 use quote::ToTokens as _;
 use syn::{parse::Parser as _, punctuated::Punctuated, spanned::Spanned as _};
 
-const BASELINE: &str = "rust/crates/lk-agents-codegen/export-placement-baseline.json";
+const BASELINE: &str = "rust/ai_slop/lk-agents-codegen/export-placement-baseline.json";
 
 pub fn check(root: &Path) -> Result<(), String> {
     let output = Command::new("git")
@@ -119,9 +119,7 @@ pub(crate) struct Exports {
 
 impl Exports {
     pub(crate) fn generator(&self) -> bool {
-        ["lk-agents-codegen", "lk-agents-bindgen", "lk-agents-host-derive"]
-            .iter()
-            .any(|name| self.path.starts_with(&format!("rust/crates/{name}/")))
+        self.path.starts_with("rust/ai_slop/")
     }
 
     pub(crate) fn attribute(&mut self, meta: &syn::Meta) -> syn::Result<()> {
@@ -194,7 +192,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let tool = "rust/crates/lk-agents-codegen/src/python.rs";
+        let tool = "rust/ai_slop/lk-agents-codegen/src/python.rs";
         assert!(
             violations(tool, "fn emit() { quote! { #[pyclass] struct Generated; }; }")
                 .unwrap()

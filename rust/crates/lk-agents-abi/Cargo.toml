@@ -19,7 +19,7 @@ livekit-protocol.workspace = true
 a2a.workspace = true
 pbjson-types.workspace = true
 # Expands to nothing. It exists so `#[host(..)]` is legal Rust; see `voice/mod.rs`.
-lk-agents-host-derive = { path = "../lk-agents-host-derive" }
+lk-agents-host-derive = { path = "../../ai_slop/lk-agents-host-derive" }
 # `extra` is JSON, not an opaque host payload: the reference reads it for control flow and
 # `_provider_format` serialises it onto the wire.
 #

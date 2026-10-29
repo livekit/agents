@@ -189,10 +189,11 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-worker    # Async I/O: registration, jobs, IPC, process pool and supervision
 ├── lk-agents-runtime   # The I/O layer of voice and text: executors, room I/O, drivers, HostInvoker
 ├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
-├── lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen   # Declarations IR, markers, generation
 ├── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
 ├── lk-agents-test-support # Simulated RTC peers (SDK-port fakes) on a supplied clock for the DST and tests
 └── lk-agents-bench-steps  # Voice data-plane step measurements (compiled in the launch gate)
+rust/ai_slop/           # Build tools: lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen
+                        # (declarations IR, markers, generation); only their generated output is reviewed
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
 docs/                   # The 2.0 design, one feature per page

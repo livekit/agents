@@ -16,7 +16,7 @@ doctest = false
 [dependencies]
 # `Host` for the row records, so their pydantic twins come from `lk-agents-codegen`, and their
 # `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
-lk-agents-host-derive = { path = "../lk-agents-host-derive" }
+lk-agents-host-derive = { path = "../../ai_slop/lk-agents-host-derive" }
 # `StorageError` and the host-visible rows, declared with the host vocabulary.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # Owned renewal tasks, and the HTTP transport, WebSocket and SSE decoder AgentDB reaches the

@@ -382,7 +382,7 @@ class HostCallContracts(unittest.TestCase):
                 "rust/crates/lk-agents-py/src/host/mod.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); }\n",
                 "rust/crates/lk-agents-py/src/generated/stt.rs": "use ::pyo3::prelude::*;\nfn f() { crate::host::future_into_py(py, fut); }\n",
                 "rust/crates/lk-agents-py/tests/agent_host.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call1(()); }\n",
-                "rust/crates/lk-agents-codegen/src/proxy.rs": '"::pyo3 o.call_method1("\n',
+                "rust/ai_slop/lk-agents-codegen/src/proxy.rs": '"::pyo3 o.call_method1("\n',
                 "rust/crates/lk-agents-voice/src/lib.rs": "fn f(c: &C) { c.call(1); }\n",
             }
             for path, text in files.items():
@@ -505,7 +505,7 @@ class Pyo3Contracts(unittest.TestCase):
                 "rust/crates/lk-agents-runtime/src/host.rs": "use pyo3::prelude::*;\n",
                 "rust/crates/lk-agents-abi/src/python/generated/llm.rs": "//! GENERATED\npyo3::Python::attach(|_| ());\n",
                 "rust/crates/lk-agents-py/src/lib.rs": "use pyo3::prelude::*;\n",
-                "rust/crates/lk-agents-codegen/src/proxy.rs": '"::pyo3::Python::attach"\n',
+                "rust/ai_slop/lk-agents-codegen/src/proxy.rs": '"::pyo3::Python::attach"\n',
                 "rust/crates/lk-agents-voice/src/lib.rs": "pub fn plain() {}\n",
             }
             for path, text in files.items():
