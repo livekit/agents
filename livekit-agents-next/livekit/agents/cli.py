@@ -15,8 +15,8 @@ import pkgutil
 import signal
 import sys
 from builtins import ExceptionGroup
+from collections.abc import Mapping
 from types import FrameType
-from typing import Any
 
 from livekit.protocol import agent
 
@@ -144,7 +144,7 @@ def _log_fields(record: logging.LogRecord) -> LogFields:
         for key, value in record.__dict__.items()
         if key not in _RECORD_ATTRIBUTES and not key.startswith("_")
     }
-    msg = _lenient(record.msg) if isinstance(record.msg, dict) else None
+    msg = _lenient_mapping(record.msg) if isinstance(record.msg, dict) else None
     return LogFields(
         level=record.levelname,
         name=record.name,
@@ -155,7 +155,11 @@ def _log_fields(record: logging.LogRecord) -> LogFields:
     )
 
 
-def _lenient(value: Any) -> Any:
+def _lenient_mapping(value: Mapping[object, object]) -> dict[str, object]:
+    return {str(key): _lenient(item) for key, item in value.items()}
+
+
+def _lenient(value: object) -> object:
     """A record's attribute as JSON, as the reference's encoder writes it: a date by its
     ``isoformat()``, anything else not JSON by its ``str()``."""
     if value is None or isinstance(value, (bool, int, str)):
@@ -163,7 +167,7 @@ def _lenient(value: Any) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
     if isinstance(value, dict):
-        return {str(k): _lenient(v) for k, v in value.items()}
+        return _lenient_mapping(value)
     if isinstance(value, (list, tuple)):
         return [_lenient(v) for v in value]
     if callable(isoformat := getattr(value, "isoformat", None)):
@@ -359,7 +363,7 @@ async def _drain(server: AgentServer) -> None:
         logger.warning("drain timed out, forcing shutdown")
 
 
-def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
     # a task preempted by the exit escalation: the shutdown is already running
     if not isinstance(context.get("exception"), _ExitCli):
         loop.default_exception_handler(context)
@@ -405,7 +409,9 @@ class _DevServer:
             for info in self._server.active_jobs
         ]
 
-    async def _core_reload_jobs(self, jobs: list[tuple[Any, ...]]) -> None:
+    async def _core_reload_jobs(
+        self, jobs: list[tuple[bytes, str, str, str, str, str, str, bool]]
+    ) -> None:
         """The jobs a dev reload carried over, on this server and a fresh token: relaunched."""
         for job, name, identity, meta, url, token, worker_id, fake_job in jobs:
             info = RunningJobInfo(
