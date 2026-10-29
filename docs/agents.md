@@ -129,6 +129,7 @@ the application's final-result contract. See the
 | `new_messages()` | This invocation’s input and recorded messages, including tool calls/results |
 | `all_messages()` | Supplied history plus this invocation; suitable for the next direct run |
 | `usage` | Usage accumulated by this invocation |
+| `expect` | Event assertions over this invocation; see [testing](testing.md#programmatic-tests) |
 
 `RunUsage` records `requests`, `input_tokens`, `output_tokens` and `tool_calls`;
 `total_tokens` is `input_tokens + output_tokens`. Pass a shared `RunUsage` as
@@ -274,9 +275,9 @@ result = await fnol.run(message, retries={"output": 3})   # this run only
 `retries=` takes an `int`, which sets both budgets, or an `AgentRetries`
 dict `{"tools": int, "output": int}`. On `Agent(...)` each budget defaults
 to `1`. The same `retries=` on a run entrypoint (`agent.run`,
-`agent.run_stream`, `session.run`, `session.run_stream`, and
-`VoiceSession.run`) overrides the agent's budgets for that run; a key it
-omits keeps the agent's value. In a `TextSession` turn it applies to every
+`agent.run_stream`, `session.run` and `session.run_stream`) overrides the
+agent's budgets for that run; a key it omits keeps the agent's value. On a
+call, each reply spends its agent's budgets. In a `TextSession` turn it applies to every
 agent of the session. `retries=` on a tool (`@agent.tool`, `@function_tool`,
 `MCPToolOptions`) replaces the `tools` budget for that tool. A budget of `0`
 fails on the first retry. There is no separate `output_retries=`.

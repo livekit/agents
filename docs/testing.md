@@ -7,7 +7,7 @@ and judging; the SDK also supports tests and evaluations without a simulation.
 
 | Surface | Use it for | Evidence |
 | --- | --- | --- |
-| Run event assertions (`result.expect`) | A particular message, tool call, argument or event sequence | Events observed during a tested invocation |
+| Run event assertions (`result.expect`) | A particular message, tool call, argument or event sequence | Events of one `agent.run()` invocation |
 | Conversation evals (`livekit.agents.evals`) | Scoring a supplied conversation with custom or built-in judges | Transcript, optional reference and individual judgments |
 | Simulations and `SimulationContext` | An entire scenario with a simulated user and application checks | Simulator verdict plus application-owned verification |
 
@@ -16,49 +16,47 @@ Simulation callbacks belong to the [server entrypoint](server.md) lifecycle.
 
 ## Programmatic tests
 
-Keep small tests close to application code. Assert typed results and the
-application's state directly. Use run event assertions when the behavior under
-test is which messages or tools the agent produces:
+Keep small tests close to application code. Run the agent with `agent.run(...)`
+and assert its typed result and the application's state directly. Use run
+event assertions when the behavior under test is which messages or tools the
+agent produces:
 
 ```python
-from livekit.agents import VoiceSession
+result = await agent.run("Book a room for tomorrow.", context=app)
 
-async with VoiceSession(llm=test_model) as session:
-    await session.start(agent)
-    result = await session.run(user_input="Book a room for tomorrow.")
-
-    result.expect.next_event().is_function_call(
-        name="check_availability",
-        arguments={"room_type": "king"},
-    )
-    result.expect.next_event().is_function_call_output()
-    result.expect.next_event().is_message(role="assistant")
-    result.expect.no_more_events()
+result.expect.next_event().is_function_call(
+    name="check_availability",
+    arguments={"room_type": "king"},
+)
+result.expect.next_event().is_function_call_output()
+result.expect.next_event().is_message(role="assistant")
+result.expect.no_more_events()
 ```
 
-`VoiceSession.run()` returns a `VoiceRunResult` with the event assertions used
-here. Its `retries=` overrides the current agent's retry budgets for that run, as
-on `agent.run()` ([retries](agents.md#retries)). `agent` and `test_model` are test fixtures that produce the expected
-exchange. Argument assertions check the supplied keys; assert exact business
-state separately when extra fields or effects matter. `next_event` advances
-through the observed sequence. `contains_function_call` and
-`contains_message` check for an event without requiring that exact sequence.
-Failed expectations raise `AssertionError` with event context.
+`result.expect` is on every [`RunResult`](agents.md#running-a-turn), from
+`agent.run()` and from a `TextSession` turn's `turn.result`. Its events are this
+invocation's assistant messages, tool calls and tool outputs, in order: the
+items of `result.new_messages()` without the incoming message. Plain list
+assertions over `result.new_messages()` work as well. `agent` and its model are
+test fixtures that produce the expected exchange. Argument assertions check
+the supplied keys; assert exact business state separately when extra fields or
+effects matter. `next_event` advances through the observed sequence.
+`contains_function_call` and `contains_message` check for an event without
+requiring that exact sequence. Failed expectations raise `AssertionError` with
+event context.
 
 | Assertion | What |
 | --- | --- |
 | `result.expect[i]`, `result.expect[i:j]` | the event at an index, or a range of events with the `contains_*` checks |
-| `next_event(type=...)` | the next event, narrowed to `"message"`, `"function_call"`, `"function_call_output"` or `"agent_handoff"` |
+| `next_event(type=...)` | the next event, narrowed to `"message"`, `"function_call"` or `"function_call_output"` |
 | `skip_next(count=1)` | advance past events without asserting them |
 | `skip_next_event_if(type=..., ...)` | skip the next event only if it matches; returns its assertion or `None` |
-| `contains_function_call`, `contains_function_call_output`, `contains_message`, `contains_agent_handoff` | an event anywhere in the run or range |
-| `is_agent_handoff(new_agent_type=)`, `contains_agent_handoff(new_agent_type=)` | a handoff to an agent of that type |
+| `contains_function_call`, `contains_function_call_output`, `contains_message` | an event anywhere in the run or range |
 | `no_more_events()` | nothing left after the current position |
 
 Each assertion's `.event()` returns the matched `RunEvent`: a
-`ChatMessageEvent`, `FunctionCallEvent`, `FunctionCallOutputEvent` or
-`AgentHandoffEvent`, each with its `item` and literal `type`;
-`AgentHandoffEvent` also carries `old_agent` and `new_agent`.
+`ChatMessageEvent`, `FunctionCallEvent` or `FunctionCallOutputEvent`, each
+with its `item` and literal `type`.
 
 A message assertion can use an LLM judge for semantic intent:
 
@@ -197,9 +195,8 @@ The SDK judge API remains supported without requiring a separate scenario or
 judging subsystem inside the agent core. Simulation verdicts and SDK judgments
 keep their distinct result types and meanings.
 
-Programmatic tests need no room: a session started without one, as above, runs
-offline (`session.start(agent)` outside a job, or `room=None` where a job would
-supply its room). The framework ships no test-only room or fake export; its own
+Programmatic tests need no room or session: `agent.run()` runs the agent
+directly. The framework ships no test-only room or fake export; its own
 room-level behavior is tested in Rust over simulated SDK peers.
 
 The framework's deterministic simulation runs the real voice, room and avatar
