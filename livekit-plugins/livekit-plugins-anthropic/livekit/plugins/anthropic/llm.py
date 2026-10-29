@@ -228,7 +228,7 @@ class LLM(llm.LLM):
 
             for tool in tool_ctx.provider_tools:
                 if isinstance(tool, AnthropicTool):
-                    tool_schemas.append(tool.to_dict())
+                    tool_schemas.append(dict[str, object](tool.to_dict()))
                     if tool.beta_flag:
                         beta_flag = tool.beta_flag
 

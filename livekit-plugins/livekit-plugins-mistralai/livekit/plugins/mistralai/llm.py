@@ -296,7 +296,7 @@ class LLMStream(llm.LLMStream):
             tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
             for tool in self._tool_ctx.provider_tools:
                 if isinstance(tool, MistralTool):
-                    tools_list.append(tool.to_dict())
+                    tools_list.append(dict[str, object](tool.to_dict()))
 
             start_kwargs: dict[str, Any] = {}
             if tools_list:
