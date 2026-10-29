@@ -64,7 +64,7 @@ async def test_birthday_lists_the_charts_to_match_the_name_against(agent, contex
     assert context.userdata.caller is None
 
 
-async def test_a_shared_birthday_lists_only_the_charts_with_the_callers_last_name(
+async def test_a_shared_birthday_lists_only_the_charts_sharing_a_name(
     agent, context, clinic
 ):
     clinic.patients["Tyler Smith"] = date(1988, 3, 14)
@@ -75,6 +75,14 @@ async def test_a_shared_birthday_lists_only_the_charts_with_the_callers_last_nam
     )
 
     assert [c["name"] for c in result["charts"]] == ["Taylor Smith", "Tyler Smith"]
+
+
+async def test_a_misheard_surname_still_finds_the_chart(agent, context):
+    result = json.loads(
+        await agent.look_up_birthday(context, "1992-07-08", "Jordan Leigh")
+    )
+
+    assert [c["name"] for c in result["charts"]] == ["Jordan Lee"]
 
 
 async def test_opening_the_matched_chart_verifies_the_caller(agent, context):
@@ -96,7 +104,7 @@ async def test_only_a_chart_on_the_looked_up_birthday_opens(agent, context):
     with pytest.raises(ToolError, match="No chart named"):
         await agent.open_chart(context, "Taylor Smith")
 
-    await agent.look_up_birthday(context, "1988-03-14", "Taylor Smythe")
+    await agent.look_up_birthday(context, "1988-03-14", "Pat Jones")
     with pytest.raises(ToolError, match="No chart named"):
         await agent.open_chart(context, "Taylor Smith")
     assert context.userdata.caller is None

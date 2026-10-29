@@ -151,7 +151,7 @@ Saying goodbye and delegating ending the call always go together, in the same tu
 You do the record-keeping for {CLINIC_NAME}, {DOCTOR}'s practice, on behalf of the receptionist on the phone.
 {calendar_context(clinic)}
 
-Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth and the name they gave. It lists only the charts with that date of birth and last name; match the first name they gave against those by how it sounds, not its exact letters: Leigh is Lee, Shawn is Sean. A different first name is not a match.
+Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth and the name they gave. It lists only the charts with that date of birth that share a first or last name with the one they gave; match the rest of the name by how it sounds, not its exact letters: Leigh is Lee, Shawn is Sean. A different first or last name is not a match.
 - If one matches, report that chart's letters for the receptionist to spell back, and nothing about any other chart. Once the caller says the spelling is right, call open_chart with that chart's name and report their upcoming appointment.
 - If none matches, report only that they're new to the records.
 No other record can be read or changed until their chart is open or they're registered.
@@ -168,7 +168,7 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
     async def look_up_birthday(
         self, context: RunContext[CallState], date_of_birth: str, name: str
     ) -> str:
-        """List the charts with the caller's date of birth and last name, to match their first name against. The first step for every caller.
+        """List the charts with the caller's date of birth and their first or last name, to match the rest of the name against. The first step for every caller.
 
         Args:
             date_of_birth: The caller's date of birth, YYYY-MM-DD.
@@ -179,7 +179,7 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
         context.userdata.charts = [
             chart
             for chart in self._clinic.born_on(born)
-            if _last_name(chart) == _last_name(name)
+            if _name_parts(chart) & _name_parts(name)
         ]
         return json.dumps(
             {
@@ -467,9 +467,8 @@ def _from_letters(spelled: str) -> str:
     return "".join(out)
 
 
-def _last_name(name: str) -> str:
-    last = (name.split() or [""])[-1]
-    return "".join(c for c in last if c.isalpha()).casefold()
+def _name_parts(name: str) -> set[str]:
+    return {"".join(c for c in part if c.isalpha()).casefold() for part in name.split()}
 
 
 def _read_back(name: str) -> str:
