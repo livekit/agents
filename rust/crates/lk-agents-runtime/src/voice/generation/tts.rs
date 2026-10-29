@@ -149,7 +149,7 @@ async fn synthesize(
     }
     let heard = playback.run(shared, handle, &mut streaming).await;
     take_tts_calls(&mut streaming.tts_data, shared, handle, &mut streaming.source, true);
-    let Streaming { state, source, rx, tts_data, aligned, .. } = streaming;
+    let Streaming { state, source, rx, text_out, tts_data, aligned, .. } = streaming;
     let StreamingTts { words, input_done, .. } = state;
     // Always: `end_input` before teardown (a second call is a no-op).
     sink.end_input();
@@ -168,9 +168,10 @@ async fn synthesize(
                 report_metrics(shared, handle, record);
             }
             // Drain the rest so the next segment starts clean; it joins the item only if the audio
-            // played out whole (on the aligned path the item is the stamps).
+            // played out whole (on the aligned path the item is the stamps). Its words still go
+            // down the transcript leg, which an interruption keeps from the output.
             if !input_done {
-                let rest = drain_segment_text(rx, Visible::default(), None).await;
+                let rest = drain_segment_text(rx, Visible::default(), text_out).await;
                 if heard.complete && aligned.is_none() {
                     heard.text.push_str(&rest.text);
                 }

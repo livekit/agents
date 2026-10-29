@@ -9,6 +9,7 @@ mod amd_tap_opened_late;
 mod amd_tap_queued_at_close;
 mod console_cut_position;
 mod console_delivery;
+mod cut_by_output_forwards_its_text;
 mod cut_reply_keeps_heard_words;
 mod determinism;
 mod dtmf_close;
