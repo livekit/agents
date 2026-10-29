@@ -18,14 +18,12 @@ from .._generated.mcp import MCPToolOptions
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, function_tool
 
+# the documented surface (docs/tools.md "Toolsets"); custom transports and result resolvers are
+# the framework's own
 __all__ = [
-    "MCPServer",
     "MCPServerHTTP",
     "MCPServerStdio",
-    "MCPTool",
     "MCPToolOptions",
-    "MCPToolResultContext",
-    "MCPToolResultResolver",
     "MCPToolset",
 ]
 
@@ -327,11 +325,6 @@ class MCPToolset(AsyncToolset):
                 raise
             self._initialized = True
             return self
-
-    def filter_tools(self, filter_fn: Callable[[MCPTool], bool]) -> Self:
-        """Filter the toolset's tools in-place using a predicate."""
-        self._tools = [t for t in self._tools if isinstance(t, MCPTool) and filter_fn(t)]
-        return self
 
     async def aclose(self) -> None:
         try:

@@ -17,14 +17,13 @@ from .._generated.a2a_client import (
 from ..storage.context import A2ASessionContext
 from .auth import AgentThreadGrant, Credentials, Forbidden, Principal, Unauthorized
 from .client import AgentClient, Reply
-from .endpoint import A2AEndpoint, a2a_session
+from .endpoint import a2a_session
 from .remote import RemoteAgent
 
 # the documented surface (docs/clients.md, docs/server.md, docs/tools.md): the endpoint, card and
 # wire codec modules are the framework's own
 __all__ = [
     "a2a_session",
-    "A2AEndpoint",
     "A2ASessionContext",
     "AgentClient",
     "Artifact",

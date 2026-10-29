@@ -290,7 +290,7 @@ def settled_result(
     }
     match result.outcome:
         case RunOutcomeInputRequired(question=question, answer_tool=answer_tool):
-            return RunInputRequired(question=question, answer_tool=answer_tool, **common)
+            return RunInputRequired(question=question, _answer_tool=answer_tool, **common)
         case RunOutcomeCompleted(output=OutputText(text=text)):
             return RunCompleted(output=text, **common)
         case RunOutcomeCompleted(output=OutputValidated()):

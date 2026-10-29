@@ -31,18 +31,12 @@ from pydantic import BaseModel, Field
 
 from livekit import api, rtc
 from livekit.agents import (
-    AMD,
     VAD,
     Agent,
-    AMDCategory,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    AudioConfig,
-    BackgroundAudioPlayer,
-    BuiltinAudioClip,
     Completed,
-    FlushSentinel,
     ModelSettings,
     RunContext,
     VADCapabilities,
@@ -60,10 +54,16 @@ from livekit.agents import (
 )
 from livekit.agents.llm._realtime import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.telemetry import set_tracer_provider
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, FlushSentinel
 from livekit.agents.utils import shortuuid
 from livekit.agents.voice import SpeechHandle
+from livekit.agents.voice.amd import AMD, AMDCategory
 from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.background_audio import (
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.trace_schema import check_trace, from_readable_spans  # noqa: E402

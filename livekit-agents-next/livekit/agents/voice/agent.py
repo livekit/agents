@@ -34,7 +34,6 @@ from ..llm import (
     DuplexModel,
     DuplexRealtimeAdapter,
     RealtimeModel,
-    find_function_tools,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
@@ -45,6 +44,7 @@ from ..llm.tool_context import (
     RawFunctionTool,
     ReadBack,
     ToolFlag,
+    find_function_tools,
     function_tool,
 )
 from ..types import (

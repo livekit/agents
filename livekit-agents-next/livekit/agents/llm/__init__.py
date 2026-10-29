@@ -2,7 +2,6 @@ from .._generated.llm import (
     LLM,
     ChatChunk,
     ChoiceDelta,
-    CollectedResponse,
     CompletionUsage,
     FunctionToolCall,
     LLMError,
@@ -21,7 +20,6 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
-    MetricsReport,
 )
 from .duplex import (
     DuplexAudioFrame,
@@ -31,7 +29,6 @@ from .duplex import (
     DuplexSession,
 )
 from .duplex_adapter import (
-    AdaptiveNoiseGate,
     AudioGate,
     DuplexRealtimeAdapter,
     FixedGate,
@@ -52,7 +49,6 @@ from .realtime import (
     RemoteItemAddedEvent,
 )
 from .realtime_fallback_adapter import (
-    RealtimeAvailabilityChangedEvent,
     RealtimeModelFallbackAdapter,
 )
 from .tool_context import (
@@ -75,7 +71,6 @@ from .tool_context import (
     ToolResult,
     Toolset,
     Working,
-    find_function_tools,
     function_tool,
     is_function_tool,
     is_raw_function_tool,
@@ -84,7 +79,6 @@ from .tool_context import (
 __all__ = [
     "LLM",
     "LLMStream",
-    "CollectedResponse",
     "ChatContext",
     "ChatRole",
     "ChatMessage",
@@ -95,7 +89,6 @@ __all__ = [
     "ImageContent",
     "AgentConfigUpdate",
     "AgentHandoff",
-    "MetricsReport",
     "ChatItem",
     "ChoiceDelta",
     "ChatChunk",
@@ -103,14 +96,12 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "RealtimeModelFallbackAdapter",
-    "RealtimeAvailabilityChangedEvent",
     "ToolChoice",
     "Tool",
     "Toolset",
     "AsyncToolset",
     "is_function_tool",
     "function_tool",
-    "find_function_tools",
     "FunctionTool",
     "is_raw_function_tool",
     "RawFunctionTool",
@@ -137,7 +128,6 @@ __all__ = [
     "DuplexOutputTranscriptDelta",
     "DuplexRealtimeAdapter",
     "AudioGate",
-    "AdaptiveNoiseGate",
     "FixedGate",
     "RealtimeModel",
     "RealtimeError",

@@ -204,7 +204,7 @@ class A2AEndpoint:
         node_authorized = bool(getattr(lk_request, "authorized", False))
         credentials = self.service.credentials
         if credentials is not None:
-            principal = credentials.principal(
+            principal = credentials._principal(
                 connection.headers,
                 agent_name=self.service.agent_name,
                 node_authorized=node_authorized,

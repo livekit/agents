@@ -11,8 +11,9 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import JobContext, JobExecutorType, _core
+from livekit.agents import JobContext, _core
 from livekit.agents.ipc.child import _JobProc
+from livekit.agents.job import JobExecutorType
 from livekit.protocol import agent, models
 
 pytestmark = pytest.mark.unit

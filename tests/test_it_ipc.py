@@ -348,7 +348,8 @@ async def _drive(server: Any, jobs: int) -> None:
 
 
 def _worker_main() -> None:
-    from livekit.agents import AgentServer, JobExecutorType, cli, ipc
+    from livekit.agents import AgentServer, cli, ipc
+    from livekit.agents.job import JobExecutorType
 
     options = json.loads(os.environ["IT_OPTS"])
     ping_timeout = options.pop("it_ping_timeout", None)

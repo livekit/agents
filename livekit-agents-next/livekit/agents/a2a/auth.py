@@ -114,7 +114,7 @@ class Credentials:
             self._native.verify(token, agent_name=agent_name, deployment=deployment)
         )
 
-    def principal(
+    def _principal(
         self,
         headers: Mapping[str, str] | None,
         *,

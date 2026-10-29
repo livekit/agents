@@ -11,12 +11,12 @@ from livekit.agents import (
     EndpointingOptions,
     InterruptionOptions,
     NotGivenOr,
-    RecordingOptions,
     TurnHandlingOptions,
     VoiceSession,
     utils,
 )
 from livekit.agents.llm import FunctionToolCall
+from livekit.agents.voice.agent_session import RecordingOptions
 from livekit.agents.voice.transcription.synchronizer import (
     TranscriptSynchronizer,
     _SyncedAudioOutput,

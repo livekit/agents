@@ -20,7 +20,6 @@ from a2a.utils.constants import TransportProtocol
 from livekit.agents import Agent, AgentServer, RunContext
 from livekit.agents._generated.storage_class import ThreadInfo
 from livekit.agents.a2a import (
-    A2AEndpoint,
     A2ASessionContext,
     AgentThreadGrant,
     Credentials,
@@ -28,7 +27,7 @@ from livekit.agents.a2a import (
     Unauthorized,
 )
 from livekit.agents.a2a.codec import TaskUpdate, metadata_from_wire, updates_from_events
-from livekit.agents.a2a.endpoint import AGENT_CARD_PATH
+from livekit.agents.a2a.endpoint import AGENT_CARD_PATH, A2AEndpoint
 from livekit.agents.a2a.extension import (
     CHANNEL,
     EXTENSION_URI,
@@ -563,7 +562,7 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
     ctx_id = (await a.threads.create_thread()).thread_id
 
     # the first client reads the acknowledgment and drops the stream
-    principal = CREDENTIALS.principal(
+    principal = CREDENTIALS._principal(
         {
             "Authorization": "Bearer "
             + CREDENTIALS.thread_grant_token(AgentThreadGrant(all=True, read=True, write=True))
@@ -633,7 +632,7 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
     server_b, _ = make_server(b, handler)
     ctx_id = (await a.threads.create_thread()).thread_id
 
-    principal = CREDENTIALS.principal(
+    principal = CREDENTIALS._principal(
         {
             "Authorization": "Bearer "
             + CREDENTIALS.thread_grant_token(AgentThreadGrant(all=True, read=True, write=True))
@@ -769,17 +768,17 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
     grant arrives as the bearer it is and the worker verifies it, as it verifies every token
     when reached directly."""
     bob = {"Authorization": f"Bearer {grant_token('user:bob')}"}
-    principal = CREDENTIALS.principal(bob, agent_name=AGENT, node_authorized=True)
+    principal = CREDENTIALS._principal(bob, agent_name=AGENT, node_authorized=True)
     assert principal.kind == "grant" and principal.grant is not None
     assert principal.grant.scope == "user:bob" and principal.grant.write
     # the node's verdict without a bearer is the project credential; nothing is anonymous
-    assert CREDENTIALS.principal({}, agent_name=AGENT, node_authorized=True).unscoped
+    assert CREDENTIALS._principal({}, agent_name=AGENT, node_authorized=True).unscoped
     with pytest.raises(Unauthorized):
-        CREDENTIALS.principal({}, agent_name=AGENT)
+        CREDENTIALS._principal({}, agent_name=AGENT)
     # a grant naming neither a scope nor a thread is refused
     bare = {"Authorization": f"Bearer {grant_token('', write=True)}"}
     with pytest.raises(Unauthorized):
-        CREDENTIALS.principal(bare, agent_name=AGENT)
+        CREDENTIALS._principal(bare, agent_name=AGENT)
     # the checks, as protocol's: scope covers create and list, ids or all cover a thread,
     # update needs all
     thread = ThreadInfo(
