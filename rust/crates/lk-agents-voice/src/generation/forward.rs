@@ -116,3 +116,50 @@ impl TextLegState {
         }
     }
 }
+
+/// Inputs to the generation's sequential segment forwarding.
+pub enum SegmentInput {
+    Ready { interrupted: bool },
+    Chunk { words: crate::transcription::Visible, caller_frames: bool, interrupted: bool },
+    Boundary,
+    Closed { interrupted: bool },
+    Played { heard: crate::transcription::Heard, interrupted: bool },
+}
+
+pub enum SegmentEffect {
+    Read,
+    Forward(crate::transcription::Visible),
+    End { interrupted: bool },
+}
+
+impl TurnAccumulator {
+    /// Empty word segments are skipped; caller-supplied audio plays even without words.
+    pub fn on_segment(&mut self, input: SegmentInput) -> SegmentEffect {
+        match input {
+            SegmentInput::Ready { interrupted: true } => SegmentEffect::End { interrupted: true },
+            SegmentInput::Ready { interrupted: false } | SegmentInput::Boundary => {
+                SegmentEffect::Read
+            }
+            SegmentInput::Closed { interrupted } => SegmentEffect::End { interrupted },
+            SegmentInput::Chunk { words, caller_frames, interrupted } => {
+                if !caller_frames && words.raw.is_empty() && words.text.is_empty() {
+                    SegmentEffect::Read
+                } else if interrupted {
+                    SegmentEffect::End { interrupted: true }
+                } else {
+                    SegmentEffect::Forward(words)
+                }
+            }
+            SegmentInput::Played { heard, interrupted } => {
+                self.record(&heard.text);
+                if interrupted {
+                    return SegmentEffect::End { interrupted: true };
+                }
+                if !heard.complete {
+                    self.cut_short();
+                }
+                SegmentEffect::Read
+            }
+        }
+    }
+}

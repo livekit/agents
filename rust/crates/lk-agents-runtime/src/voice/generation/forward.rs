@@ -151,39 +151,28 @@ struct Pump<'a> {
 impl Pump<'_> {
     /// Ends when the words leg drops its sender.
     async fn run(&mut self) -> Result<bool, DriverError> {
-        // TTS requests of a step are numbered in order across segments.
+        use lk_agents_voice::generation::forward::{SegmentEffect, SegmentInput};
         let mut idx = 0usize;
+        let mut effect =
+            self.acc.on_segment(SegmentInput::Ready { interrupted: self.handle.interrupted() });
         loop {
-            if self.handle.interrupted() {
-                return Ok(true);
-            }
-            // An `End` with nothing before it is an empty segment: skip, don't synthesise silence.
-            // Caller frames are never empty: they play with or without words.
-            let frames = matches!(self.voice, Voice::Frames(_));
-            let first = loop {
-                match self.rx.recv().await {
-                    // The words leg is done (or stopped by the interruption ending this step).
-                    None => return Ok(self.handle.interrupted()),
-                    Some(SegEvent::Chunk(v))
-                        if frames || !v.raw.is_empty() || !v.text.is_empty() =>
-                    {
-                        break v;
-                    }
-                    Some(SegEvent::Chunk(_) | SegEvent::End) => {}
+            let input = match effect {
+                SegmentEffect::Read => match self.rx.recv().await {
+                    Some(SegEvent::Chunk(words)) => SegmentInput::Chunk {
+                        words,
+                        caller_frames: matches!(self.voice, Voice::Frames(_)),
+                        interrupted: self.handle.interrupted(),
+                    },
+                    Some(SegEvent::End) => SegmentInput::Boundary,
+                    None => SegmentInput::Closed { interrupted: self.handle.interrupted() },
+                },
+                SegmentEffect::Forward(first) => {
+                    let heard = self.forward_generation(&mut idx, first).await?;
+                    SegmentInput::Played { heard, interrupted: self.handle.interrupted() }
                 }
+                SegmentEffect::End { interrupted } => return Ok(interrupted),
             };
-            if self.handle.interrupted() {
-                return Ok(true);
-            }
-            let heard = self.forward_generation(&mut idx, first).await?;
-            self.acc.record(&heard.text);
-            if self.handle.interrupted() {
-                return Ok(true);
-            }
-            // Not interrupted, yet not all of it played: the output cut it (a reset).
-            if !heard.complete {
-                self.acc.cut_short();
-            }
+            effect = self.acc.on_segment(input);
         }
     }
 
