@@ -10,7 +10,6 @@ use tokio::task::JoinHandle;
 use super::*;
 
 const READ_INACTIVITY: Duration = Duration::from_millis(50);
-const CLEANUP: Duration = lk_agents_net::attempts::ATTEMPT_CLEANUP_TIMEOUT;
 
 struct Peer {
     url: Arc<str>,
@@ -110,7 +109,7 @@ async fn a_passive_mcp_stream_keeps_its_cursor_without_timing_out_between_messag
     assert!(tokio::time::timeout(READ_INACTIVITY * 2, stream.next()).await.is_err());
     drop(stream);
     client.receipt.update(|state| state.close());
-    tokio::time::timeout(CLEANUP, client.receipt.closed()).await.unwrap();
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, client.receipt.closed()).await.unwrap();
     peer.close().await;
 }
 
@@ -135,7 +134,7 @@ async fn a_decoding_failure_releases_http_even_while_the_consumer_keeps_its_stre
         .await
         .unwrap();
     assert!(stream.next().await.unwrap().is_err());
-    tokio::time::timeout(CLEANUP, peer.closed.take().unwrap())
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, peer.closed.take().unwrap())
         .await
         .expect("framing failure must release the exchange before the consumer drops it")
         .unwrap();

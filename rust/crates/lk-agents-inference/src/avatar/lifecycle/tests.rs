@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use super::*;
-use lk_agents_net::attempts::ATTEMPT_CLEANUP_TIMEOUT;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use AvatarSessionEffect as Fx;
 use AvatarSessionEvent as Ev;
 
@@ -180,7 +180,7 @@ fn a_missed_cleanup_deadline_is_reported_once() {
         vec![Fx::AvatarRequestCancel { request: AvatarRequestId(1), attempt: 0 }],
         "the gateway cannot have received it: nothing to retire"
     );
-    let due = at(0).saturating_add(ATTEMPT_CLEANUP_TIMEOUT);
+    let due = at(0).saturating_add(HOST_TEARDOWN_TIMEOUT);
     assert_eq!(avatar.wake_at(), Some(due));
     assert_eq!(avatar.handle(Ev::Wake, due), vec![Fx::CleanupIncomplete { request: AvatarRequestId(1), attempt: 0 }]);
     assert!(avatar.is_settled());

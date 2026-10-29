@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
@@ -15,6 +14,7 @@ use lk_agents_abi::{
 };
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use std::marker::PhantomData;
 
 use lk_agents_abi::llm::inference::InvalidPayload;
@@ -26,7 +26,7 @@ use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoverySlot,
 };
-use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next, teardown_deadline};
+use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next};
 
 // ---------------------------------------------------------------------------------------------
 // The live input tee
@@ -302,7 +302,7 @@ impl Backend for SttBackend {
                     }
                 };
                 tee.remove_probe(id);
-                source.close(teardown_deadline(self.clock.as_ref())).await;
+                source.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
                 verdict
             }
         }
@@ -601,7 +601,11 @@ impl<E: Env> Stt for FallbackStt<E> {
                                     .await;
                                 // The dead stream leaves the tee before the next entry installs its own.
                                 tee.clear_main();
-                                source.close(chain.teardown_deadline()).await;
+                                source
+                                    .close(
+                                        chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT),
+                                    )
+                                    .await;
                                 outcome
                             }) as BoxFuture<'_, Attempt<()>>
                         },

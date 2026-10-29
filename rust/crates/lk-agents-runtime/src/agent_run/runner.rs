@@ -66,7 +66,7 @@ impl AgentRunner for Runner {
             mode: Mode::Text,
             llm: Some(LlmRef { id: ResourceId(0), provider: self.llm.id() }),
             wall: WallAnchor::of(&*self.clock),
-            cleanup_timeout: lk_agents_core::agent_run::CLEANUP_TIMEOUT,
+            cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
         let ports = Ports {
             tools_host: request.tools_host,

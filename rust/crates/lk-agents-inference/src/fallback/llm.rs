@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lk_agents_abi::Clock;
 use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::inference::InvalidPayload;
@@ -14,6 +13,7 @@ use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::{
     ChatRequest, Closed, Extra, HostRef, Llm, LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
 };
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use tokio::sync::mpsc;
 
 use crate::fallback::ChainPolicy;
@@ -257,7 +257,11 @@ impl<E: Env> Llm for FallbackLlm<E> {
                                     LlmChunk::has_response,
                                 )
                                 .await;
-                                stream.close(chain.teardown_deadline()).await;
+                                stream
+                                    .close(
+                                        chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT),
+                                    )
+                                    .await;
                                 outcome
                             }) as BoxFuture<'_, Attempt<()>>
                         },

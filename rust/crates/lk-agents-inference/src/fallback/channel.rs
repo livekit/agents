@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{Clock, Closed, StreamSource, Ts};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::fallback::chain::{Attempt, Backend, FallbackChain, Recovery};
@@ -94,10 +94,6 @@ pub(crate) async fn send_or_stop<T>(
     }
 }
 
-pub(crate) fn teardown_deadline(clock: &dyn Clock) -> Ts {
-    clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
-}
-
 /// Resolves once `stop` is true. A chain dropped without closing never stops its probes.
 pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
     if stop.wait_for(|s| *s).await.is_err() {
@@ -132,7 +128,7 @@ pub(crate) async fn drain_probe<T, S: StreamSource<T> + ?Sized>(
             Some(Err(e)) => break Err(e),
         }
     };
-    source.close(teardown_deadline(clock)).await;
+    source.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
     verdict
 }
 

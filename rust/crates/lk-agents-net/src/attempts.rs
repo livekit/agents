@@ -20,11 +20,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{ApiConnectOptions, Ts};
-
-/// How long an attempt's transport task may take to settle once asked to stop. Dropping an HTTP
-/// exchange is immediate, so a miss is a runtime defect, reported rather than waited on.
-pub const ATTEMPT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+use lk_agents_abi::{ApiConnectOptions, HOST_TEARDOWN_TIMEOUT, Ts};
 
 /// A retiring request's phases are bounded so it asks at least this many times inside its window:
 /// a silent attempt never holds the whole window, even when the caller set no limits.
@@ -453,7 +449,7 @@ impl Attempts {
     /// owes the report that its resources are released.
     fn close_attempt(&mut self, attempt: u32, now: Ts) {
         if let Some(deadline) = self.open.get_mut(&attempt) {
-            deadline.get_or_insert(now.saturating_add(ATTEMPT_CLEANUP_TIMEOUT));
+            deadline.get_or_insert(now.saturating_add(HOST_TEARDOWN_TIMEOUT));
         }
     }
 

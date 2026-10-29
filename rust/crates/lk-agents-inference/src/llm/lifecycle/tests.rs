@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use super::*;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
 
 const LLM: ResourceId = ResourceId(7);
@@ -278,7 +279,7 @@ fn a_superseded_attempts_events_are_ignored() {
 fn a_missed_cleanup_deadline_is_reported_once() {
     let mut request = start(policy());
     request.handle(LlmRequestEvent::Cancel, at(0));
-    let due = at(0).saturating_add(ATTEMPT_CLEANUP_TIMEOUT);
+    let due = at(0).saturating_add(HOST_TEARDOWN_TIMEOUT);
     assert_eq!(request.wake_at(), Some(due));
     assert_eq!(
         request.handle(LlmRequestEvent::Wake, due),

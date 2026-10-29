@@ -608,7 +608,11 @@ async fn closing_the_fallback_stream_early_closes_the_serving_member() {
         "the member is live while the consumer reads"
     );
 
-    let closed = within("the close", source.close(fb.chain().teardown_deadline())).await;
+    let closed = within(
+        "the close",
+        source.close(fb.chain().clock().now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)),
+    )
+    .await;
     assert_eq!(closed, Closed::Clean, "the task honoured the stop and reported done");
     assert!(
         a.sess(0).closed.load(Ordering::SeqCst),

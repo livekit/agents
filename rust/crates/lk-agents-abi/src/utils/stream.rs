@@ -122,7 +122,9 @@ pub type RetryReport =
 pub type CallLedger =
     std::sync::Arc<dyn Fn(bool) -> Vec<crate::metrics::base::AgentMetrics> + Send + Sync>;
 
-/// The reference's `INTERRUPTION_TIMEOUT`. Real teardowns take under a millisecond.
+/// How long any cleanup may take to settle (a stream's close, a request attempt, a run's
+/// cancelled work, the host loop's close) before it is reported incomplete; the reference's
+/// `INTERRUPTION_TIMEOUT`. Real teardowns take under a millisecond.
 pub const HOST_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

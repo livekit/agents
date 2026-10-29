@@ -467,9 +467,6 @@ async fn serve_dev_channel(
 /// orchestrator leaves between SIGTERM and SIGKILL, so the drain still gets its time.
 pub const EXIT_ESCALATION_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Final event-loop cleanup runs after the server has released its owned processes.
-pub const LOOP_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// No exit asked yet.

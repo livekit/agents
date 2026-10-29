@@ -8,11 +8,11 @@ use std::sync::{Arc, Mutex};
 use crate::tts::sentence_adapter::StreamAdapter;
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
-use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::tts::text::TtsTextProcessorFactory;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 
 mod ports;
@@ -445,7 +445,14 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
                                 ) {
                                     Ok(r) => Some(r),
                                     Err(e) => {
-                                        source.close(chain.teardown_deadline()).await;
+                                        source
+                                            .close(
+                                                chain
+                                                    .clock()
+                                                    .now()
+                                                    .saturating_add(HOST_TEARDOWN_TIMEOUT),
+                                            )
+                                            .await;
                                         return Attempt::Failed {
                                             error: ProviderError::Local(ApiError::new(format!(
                                                 "resampler: {e}"
@@ -518,7 +525,9 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
                             }
                             // An attempt that failed before any audio still anchors the request.
                             capture(&source);
-                            source.close(chain.teardown_deadline()).await;
+                            source
+                                .close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT))
+                                .await;
                             outcome
                         }) as BoxFuture<'_, Attempt<()>>
                     },

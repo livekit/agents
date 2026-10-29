@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiErrorKind;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -187,10 +188,6 @@ impl<B: Backend> FallbackChain<B> {
 
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.clock)
-    }
-
-    pub(crate) fn teardown_deadline(&self) -> lk_agents_abi::Ts {
-        super::channel::teardown_deadline(self.clock.as_ref())
     }
 
     pub fn entries(&self) -> &[Arc<B>] {
@@ -554,7 +551,7 @@ impl<B: Backend> FallbackChain<B> {
                 Either::Right((_, mut recovery)) => {
                     let _ = stop.send(true);
                     let cleanup = lk_agents_abi::Closed::bounded(
-                        clock.as_ref(), super::channel::teardown_deadline(clock.as_ref()),
+                        clock.as_ref(), clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
                         async { let _ = (&mut recovery).await; },
                     ).await;
                     if cleanup == lk_agents_abi::Closed::TimedOut {
@@ -635,7 +632,7 @@ impl<B: Backend> FallbackChain<B> {
             probes.into_iter().map(|p| (p.handle, p.done)).unzip();
         let closed = lk_agents_abi::Closed::bounded(
             self.clock.as_ref(),
-            self.teardown_deadline(),
+            self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
             async move {
                 for done in dones {
                     let _ = done.await;
@@ -747,7 +744,7 @@ impl<T, S> RunningAttempt<T, S> {
         let mut settled = None;
         let cleanup = lk_agents_abi::Closed::bounded(
             clock,
-            super::channel::teardown_deadline(clock),
+            clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
             async {
                 settled = (&mut self.result).await.ok();
             },

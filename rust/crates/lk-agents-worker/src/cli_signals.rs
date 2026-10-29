@@ -3,7 +3,7 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::cli::{EXIT_ESCALATION_TIMEOUT, ExitSignals, LOOP_CLOSE_TIMEOUT};
+use crate::cli::{EXIT_ESCALATION_TIMEOUT, ExitSignals};
 use lk_agents_abi::worker::cli::CliSignals as CliSignalsPort;
 
 pub struct CliSignals {
@@ -47,7 +47,7 @@ impl CliSignalsPort for CliSignals {
         let arm = self.state.0.lock().unwrap_or_else(|p| p.into_inner()).closing();
         self.state.1.notify_all();
         if arm {
-            self.arm_watchdog(LOOP_CLOSE_TIMEOUT, true);
+            self.arm_watchdog(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, true);
         }
     }
 

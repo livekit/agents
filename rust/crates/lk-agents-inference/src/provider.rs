@@ -184,7 +184,7 @@ impl Port for ProviderAttempts {
     }
 
     fn cleanup_timeout(&self) -> f64 {
-        lk_agents_net::attempts::ATTEMPT_CLEANUP_TIMEOUT.as_secs_f64()
+        lk_agents_abi::HOST_TEARDOWN_TIMEOUT.as_secs_f64()
     }
 
     fn cancel(&mut self, now_ns: u64) {
