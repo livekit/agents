@@ -35,9 +35,6 @@ pub trait Observer: Send + Sync {
     async fn event(&self, event: &TurnEvent) -> Result<(), StorageError>;
 }
 
-/// How many task rows the handler's context carries.
-const TASKS_IN_CONTEXT: i64 = 50;
-
 /// The handler's turn: its checkpoint verdicts in, its events out.
 type Handler = (Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>);
 
@@ -324,21 +321,20 @@ impl Turn {
                 Completion::Done
             }
             Operation::Handle(handle) => {
-                let lane = call.lane.name().to_owned();
                 let caller_history = call.caller_history.clone();
                 let run = call.run()?;
                 let ctx = TurnContext {
                     thread_id: self.thread.id().to_owned(),
-                    context_scope_id: format!("root:{lane}"),
-                    lane,
+                    context_scope_id: handle.context_scope_id,
+                    lane: handle.lane,
                     message: handle.message.payload,
                     batch: handle.batch,
                     history: run.history.clone(),
                     state: run.state.clone(),
                     context_scopes: run.context_scopes.clone(),
-                    read_only: run.lease().is_none(),
+                    read_only: handle.read_only,
                     task_id: handle.task_id,
-                    tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
+                    tasks: run.tasks.recent(handle.recent_tasks).await?,
                     caller_history,
                     answer_tool: handle.answer_tool,
                 };

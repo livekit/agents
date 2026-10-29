@@ -11,7 +11,8 @@ use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{ItemRow, TaskPatch, TaskRow};
 
 use super::{
-    Completion, Finish, Handle, HandlerEvent, Operation, Phase, RunEnd, Stage, TaskMachine,
+    Completion, Finish, Handle, HandlerEvent, Operation, Phase, RunEnd, Stage, TASKS_IN_CONTEXT,
+    TaskMachine,
 };
 use crate::a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TaskTransition, TurnIds, Verdict, answer_pending,
@@ -228,10 +229,16 @@ impl TaskMachine {
 
     fn open_handler(&mut self) -> Operation {
         let id = self.mint("item");
+        let lane = self.lane.clone();
+        let read_only = self.policy == Policy::Concurrent;
         let turn = self.turning();
         let message = batch_to_chat_message(&turn.batch, turn.at, id);
         turn.user_message = Some(message.clone());
         let handle = Handle {
+            context_scope_id: format!("root:{lane}"),
+            lane,
+            read_only,
+            recent_tasks: TASKS_IN_CONTEXT,
             message,
             batch: turn.batch.clone(),
             task_id: turn.answer_task.clone(),

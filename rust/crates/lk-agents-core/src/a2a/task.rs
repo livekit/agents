@@ -155,6 +155,8 @@ pub struct RunEnd {
 /// What the handler is opened on, besides what the open run loaded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handle {
+    pub lane: String,
+    pub context_scope_id: String,
     /// The batch as one user chat message.
     pub message: ItemRow,
     pub batch: Vec<Message>,
@@ -162,7 +164,14 @@ pub struct Handle {
     pub task_id: String,
     /// The tool the message is handed to before the model runs.
     pub answer_tool: Option<String>,
+    /// Without the lane's lease (`concurrent`) context fields are not written.
+    pub read_only: bool,
+    /// How many of the lane's newest task rows the handler's context carries.
+    pub recent_tasks: i64,
 }
+
+/// How many task rows the handler's context carries.
+const TASKS_IN_CONTEXT: i64 = 50;
 
 /// What the handler's stream says next.
 #[derive(Debug, Clone, PartialEq)]
