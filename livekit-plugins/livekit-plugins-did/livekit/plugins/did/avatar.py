@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import aiohttp
 
 from livekit import api, rtc
@@ -14,6 +12,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.job import server_setting
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -90,14 +89,16 @@ class AvatarSession(BaseAvatarSession):
     ) -> None:
         await super().start(agent_session, room)
 
-        _livekit_url = livekit_url if utils.is_given(livekit_url) else os.getenv("LIVEKIT_URL")
+        _livekit_url = livekit_url if utils.is_given(livekit_url) else server_setting("LIVEKIT_URL")
         _livekit_api_key = (
-            livekit_api_key if utils.is_given(livekit_api_key) else os.getenv("LIVEKIT_API_KEY")
+            livekit_api_key
+            if utils.is_given(livekit_api_key)
+            else server_setting("LIVEKIT_API_KEY")
         )
         _livekit_api_secret = (
             livekit_api_secret
             if utils.is_given(livekit_api_secret)
-            else os.getenv("LIVEKIT_API_SECRET")
+            else server_setting("LIVEKIT_API_SECRET")
         )
         if not _livekit_url or not _livekit_api_key or not _livekit_api_secret:
             raise DIDException(

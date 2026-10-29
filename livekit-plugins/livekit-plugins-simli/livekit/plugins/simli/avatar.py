@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 
 import aiohttp
@@ -15,6 +14,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.job import server_setting
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -99,9 +99,11 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
-        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
+        livekit_url = livekit_url or (server_setting("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (server_setting("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (
+            server_setting("LIVEKIT_API_SECRET") or NOT_GIVEN
+        )
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise Exception(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "

@@ -17,6 +17,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.job import server_setting
 from livekit.agents.utils import http_context
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -93,11 +94,11 @@ class AvatarSession(BaseAvatarSession):
         await super().start(agent_session, room)
 
         if livekit_url is NOT_GIVEN:
-            livekit_url = os.getenv("LIVEKIT_URL") or NOT_GIVEN
+            livekit_url = server_setting("LIVEKIT_URL") or NOT_GIVEN
         if livekit_api_key is NOT_GIVEN:
-            livekit_api_key = os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN
+            livekit_api_key = server_setting("LIVEKIT_API_KEY") or NOT_GIVEN
         if livekit_api_secret is NOT_GIVEN:
-            livekit_api_secret = os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN
+            livekit_api_secret = server_setting("LIVEKIT_API_SECRET") or NOT_GIVEN
 
         if (
             livekit_url is NOT_GIVEN

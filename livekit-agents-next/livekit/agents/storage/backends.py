@@ -70,7 +70,8 @@ def _seconds(value: timedelta | None, variable: str) -> float | None:
 
 class AgentDBStorage(Storage):
     """Threads on LiveKit Cloud's agentstore, reached through the public API of ``LIVEKIT_URL``'s
-    project.
+    project. It is built before the server runs: ``AgentServer(ws_url=, api_key=, api_secret=)``
+    does not configure it.
 
     Args:
         api_key, api_secret: The project's key pair, ``LIVEKIT_API_KEY`` and

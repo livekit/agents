@@ -25,6 +25,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.job import server_setting
 from livekit.agents.utils import is_given
 from livekit.agents.voice.avatar import (
     AvatarSession as BaseAvatarSession,
@@ -138,9 +139,11 @@ class AvatarSession(BaseAvatarSession):
         await super().start(agent_session, room)
         self._agent_session = agent_session
         self._room = room
-        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
-        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
+        livekit_url = livekit_url or (server_setting("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (server_setting("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (
+            server_setting("LIVEKIT_API_SECRET") or NOT_GIVEN
+        )
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise LiveAvatarException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set"

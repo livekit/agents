@@ -200,8 +200,10 @@ class _AuthHeaderProvider:
     """OTLP SDK adapter; credential construction and lifetime are runtime-owned."""
 
     def __init__(self) -> None:
+        from ..job import server_setting  # local import: job.py imports this module
+
         self._uploader = _core._core_SessionReportUpload(
-            os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", "")
+            server_setting("LIVEKIT_API_KEY") or "", server_setting("LIVEKIT_API_SECRET") or ""
         )
 
     def __call__(self) -> dict[str, str]:

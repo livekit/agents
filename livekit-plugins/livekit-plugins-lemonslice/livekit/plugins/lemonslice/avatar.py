@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import replace
 from datetime import timedelta
 
@@ -18,6 +17,7 @@ from livekit.agents import (
     VoiceSession,
     get_job_context,
 )
+from livekit.agents.job import server_setting
 from livekit.agents.voice import room_io
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -104,9 +104,11 @@ class AvatarSession(BaseAvatarSession):
         await super().start(agent_session, room)
         self._agent_session = agent_session
 
-        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
-        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
+        livekit_url = livekit_url or (server_setting("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (server_setting("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (
+            server_setting("LIVEKIT_API_SECRET") or NOT_GIVEN
+        )
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise LemonSliceException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "

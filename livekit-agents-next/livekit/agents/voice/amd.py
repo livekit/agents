@@ -10,12 +10,13 @@ handed beside the core's specs, and are never executed.
 from __future__ import annotations
 
 import asyncio
-import os
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _bindings, _core, inference
 from .._generated.amd import AMDCategory, AMDPredictionEvent, DetectionOptions
+from ..inference._utils import default_api_key, default_api_secret
+from ..job import server_setting
 from ..llm import LLM as _LLM
 from ..llm.tool_context import function_tool
 from ..log import logger
@@ -123,9 +124,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         super().__init__()
         if not is_given(llm) or not is_given(stt):
             auto_select = _core.amd_auto_select_models(
-                os.getenv("LIVEKIT_URL", ""),
-                os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY") or "",
-                os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv("LIVEKIT_API_SECRET") or "",
+                server_setting("LIVEKIT_URL") or "",
+                default_api_key(None),
+                default_api_secret(None),
             )
             if not is_given(llm):
                 llm = _CONSTANTS["default_llm_model"] if auto_select else None

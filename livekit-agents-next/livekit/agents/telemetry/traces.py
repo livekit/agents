@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
@@ -201,7 +200,12 @@ async def _upload_session_report(
         raise ValueError("session report summary exceeds the native input budget")
     metadata = dict(metadata or {})
     emission_context = otel_context.get_current()
-    credentials = (os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", ""))
+    from ..job import server_setting  # local import: job.py imports this module
+
+    credentials = (
+        server_setting("LIVEKIT_API_KEY") or "",
+        server_setting("LIVEKIT_API_SECRET") or "",
+    )
     credential_bytes = attribute_bytes(credentials)
     if credential_bytes > policy().max_record_bytes:
         raise ValueError("session report credentials exceed the native input budget")
