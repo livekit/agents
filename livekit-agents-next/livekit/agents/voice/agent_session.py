@@ -353,6 +353,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @property
     def thread(self) -> Thread | None:
+        """The call's thread: the one supplied, else an in-memory one once started."""
         return self._thread
 
     @property
@@ -495,11 +496,15 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             except StorageError as error:
                 logger.warning("the voice lane could not be loaded", extra={"error": str(error)})
         if self._store is None:
-            # no lane to save into: the call's context fields load and save in memory
+            # no lane to save into: the call's context fields load and save in memory, and a
+            # call with no thread gets an in-memory one, as a text run does
             from ..storage.backends import Storage
+            from ..storage.resolve import Thread
 
             self._memory = Storage({}, None)
             info = await self._memory.threads.create_thread()
+            if self._thread is None:
+                self._thread = Thread(self._memory, info.thread_id, agent_name=agent.name)
             self._store = ContextStore(
                 activation=await self._memory.threads._core_context_store(
                     info.thread_id, agent.name
