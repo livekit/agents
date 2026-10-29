@@ -110,12 +110,12 @@ impl PreConnectAudioHandler {
                     break;
                 }
             };
-            let admission = stream.info.attributes.get("trackId").map(|track| {
-                let track = TrackSid::from(track.clone());
-                let outcome =
-                    self.state.lock().unwrap().core.receive(track.clone(), stream.info.id.clone());
-                (track, outcome)
-            });
+            let admission = self
+                .state
+                .lock()
+                .unwrap()
+                .core
+                .receive_stream(&stream.info.attributes, stream.info.id.clone());
             self.changed.notify_waiters();
             if let Some((track, Ok(Some(id)))) = admission {
                 let owner = self.clone();

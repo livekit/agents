@@ -77,6 +77,18 @@ impl PreConnectState {
         Ok(self.new_slot(track.clone()))
     }
 
+    /// A stream names its track in its `trackId` attribute; one that names none is not
+    /// admitted (`None`). Otherwise the track and [`Self::receive`]'s outcome.
+    pub fn receive_stream(
+        &mut self,
+        attributes: &BTreeMap<String, String>,
+        transfer: String,
+    ) -> Option<(TrackSid, Result<Option<u64>>)> {
+        let track = TrackSid::from(attributes.get("trackId")?.clone());
+        let outcome = self.receive(track.clone(), transfer);
+        Some((track, outcome))
+    }
+
     /// `None` means a duplicate stream. Refusal settles an already admitted waiter.
     pub fn receive(&mut self, track: TrackSid, transfer: String) -> Result<Option<u64>> {
         let identity = (track.clone(), transfer);
