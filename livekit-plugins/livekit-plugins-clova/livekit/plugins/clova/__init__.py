@@ -17,6 +17,7 @@
 See https://docs.livekit.io/agents/integrations/stt/clova/ for more information.
 """
 
+from .log import logger
 from .stt import STT
 from .version import __version__
 
@@ -31,7 +32,7 @@ from livekit.agents import Plugin
 
 class ClovaSTTPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
         pass

@@ -17,6 +17,7 @@
 See https://docs.livekit.io/agents/integrations/smallestai/ for more information.
 """
 
+from .log import logger
 from .stt import STT as STT, SpeechStream as SpeechStream
 from .tts import TTS as TTS, ChunkedStream as ChunkedStream
 from .version import __version__ as __version__
@@ -28,7 +29,7 @@ from livekit.agents import Plugin
 
 class SmallestAIPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(SmallestAIPlugin())
