@@ -54,7 +54,9 @@ def test_callers_are_found_by_birthday_then_name(agent):
 
 
 async def test_birthday_lists_the_charts_to_match_the_name_against(agent, context):
-    result = json.loads(await agent.look_up_birthday(context, "1988-03-14"))
+    result = json.loads(
+        await agent.look_up_birthday(context, "1988-03-14", "Taylor Smith")
+    )
 
     assert result["charts"] == [
         {"name": "Taylor Smith", "letters": "T A Y L O R, S M I T H"}
@@ -62,16 +64,39 @@ async def test_birthday_lists_the_charts_to_match_the_name_against(agent, contex
     assert context.userdata.caller is None
 
 
-async def test_a_shared_birthday_lists_every_chart_on_it(agent, context, clinic):
+async def test_a_shared_birthday_lists_only_the_chart_spelled_as_given(
+    agent, context, clinic
+):
+    clinic.patients["Tyler Smith"] = date(1988, 3, 14)
     clinic.patients["Taylor Smythe"] = date(1988, 3, 14)
 
-    result = json.loads(await agent.look_up_birthday(context, "1988-03-14"))
+    result = json.loads(
+        await agent.look_up_birthday(context, "1988-03-14", "taylor smith")
+    )
+    assert [c["name"] for c in result["charts"]] == ["Taylor Smith"]
 
-    assert [c["name"] for c in result["charts"]] == ["Taylor Smith", "Taylor Smythe"]
+    result = json.loads(
+        await agent.look_up_birthday(context, "1988-03-14", "Tailor Smith")
+    )
+    assert result["charts"] == []
+
+
+async def test_a_corrected_spelling_finds_the_chart_behind_a_misheard_name(
+    agent, context
+):
+    heard = json.loads(
+        await agent.look_up_birthday(context, "1992-07-08", "Jordan Leigh")
+    )
+    spelled = json.loads(
+        await agent.look_up_birthday(context, "1992-07-08", "Jordan Lee")
+    )
+
+    assert heard["charts"] == []
+    assert [c["name"] for c in spelled["charts"]] == ["Jordan Lee"]
 
 
 async def test_opening_the_matched_chart_verifies_the_caller(agent, context):
-    await agent.look_up_birthday(context, "1988-03-14")
+    await agent.look_up_birthday(context, "1988-03-14", "Taylor Smith")
     result = json.loads(await agent.open_chart(context, "Taylor Smith"))
 
     assert result["upcoming"][0]["reason"] == "Knee pain follow-up"
@@ -85,14 +110,20 @@ async def test_only_a_chart_on_the_looked_up_birthday_opens(agent, context):
     with pytest.raises(ToolError, match="date of birth first"):
         await agent.open_chart(context, "Taylor Smith")
 
-    await agent.look_up_birthday(context, "1992-07-08")
+    await agent.look_up_birthday(context, "1992-07-08", "Taylor Smith")
     with pytest.raises(ToolError, match="No chart named"):
         await agent.open_chart(context, "Taylor Smith")
+
+    await agent.look_up_birthday(context, "1992-07-08", "Jordan Smith")
+    with pytest.raises(ToolError, match="No chart named"):
+        await agent.open_chart(context, "Jordan Lee")
     assert context.userdata.caller is None
 
 
 async def test_an_unknown_birthday_lists_no_charts(agent, context):
-    result = json.loads(await agent.look_up_birthday(context, "1989-08-01"))
+    result = json.loads(
+        await agent.look_up_birthday(context, "1989-08-01", "Shayne Parmelee")
+    )
 
     assert result["charts"] == []
     assert context.userdata.caller is None
@@ -104,7 +135,7 @@ async def test_new_patient_is_registered_under_the_confirmed_spelling(
     with pytest.raises(ToolError, match="date of birth before registering"):
         await agent.register_new_patient(context, "S H A Y N E", "P A R M E L E E")
 
-    await agent.look_up_birthday(context, "1989-08-01")
+    await agent.look_up_birthday(context, "1989-08-01", "Shayne Parmelee")
     await agent.register_new_patient(context, "S H A Y N E", "P A R M E L E E")
 
     assert context.userdata.caller.name == "Shayne Parmelee"
@@ -112,18 +143,20 @@ async def test_new_patient_is_registered_under_the_confirmed_spelling(
 
 
 async def test_spelled_names_keep_their_hyphens_and_apostrophes(agent, context):
-    await agent.look_up_birthday(context, "1990-01-01")
+    await agent.look_up_birthday(context, "1990-01-01", "Mary-Kate O'Brien")
     await agent.register_new_patient(context, "M A R Y - K A T E", "O ' B R I E N")
 
     assert context.userdata.caller.name == "Mary-Kate O'Brien"
-    result = json.loads(await agent.look_up_birthday(context, "1990-01-01"))
+    result = json.loads(
+        await agent.look_up_birthday(context, "1990-01-01", "mary kate obrien")
+    )
     assert result["charts"][0]["letters"] == (
         "M A R Y hyphen K A T E, O apostrophe B R I E N"
     )
 
 
 async def test_misheard_birth_date_cannot_open_a_second_chart(agent, context, clinic):
-    await agent.look_up_birthday(context, "1988-03-04")
+    await agent.look_up_birthday(context, "1988-03-04", "Taylor Smith")
 
     with pytest.raises(ToolError, match="already has a chart"):
         await agent.register_new_patient(context, "T A Y L O R", "S M I T H")
@@ -132,7 +165,7 @@ async def test_misheard_birth_date_cannot_open_a_second_chart(agent, context, cl
 
 
 async def test_new_patient_is_verified_once_registered(agent, context):
-    await agent.look_up_birthday(context, "1995-06-01")
+    await agent.look_up_birthday(context, "1995-06-01", "Casey Morgan")
     await agent.register_new_patient(context, "C A S E Y", "M O R G A N")
 
     assert context.userdata.caller.name == "Casey Morgan"
