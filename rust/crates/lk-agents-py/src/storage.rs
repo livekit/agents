@@ -13,7 +13,10 @@ use pyo3::types::{PyBytes, PyDict};
 use serde::de::DeserializeOwned;
 
 /// A storage failure as the `livekit.agents.storage` exception the ABI declares for it.
-pub(crate) use lk_agents_abi::storage::storage_error_to_py as to_py_err;
+/// The `livekit.agents.storage` exception a storage failure raises as.
+pub(crate) fn to_py_err(error: lk_agents_abi::storage::StorageError) -> PyErr {
+    lk_agents_abi::python::HostException::to_py_err(&error)
+}
 
 /// A request into the crate's serde type: a pydantic model (its JSON dump) or a dict in the
 /// model's shape; a malformed one is a `ValueError` naming the field.

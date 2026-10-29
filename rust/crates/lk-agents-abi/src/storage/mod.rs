@@ -14,8 +14,9 @@ pub use rows::*;
 /// `Rejected`, `LeaseLost`, `Unavailable`, `NotFound`, `VersionConflict`; the rest are the
 /// caller's (`Invalid`, `NotSerializable`, `TooLarge`, `Unauthorized`) or a cancelled turn.
 /// `Unavailable` is the one retryable error. The host raises the classes of
-/// `livekit.agents.storage`.
-#[crate::host(error(with = crate::storage::storage_error_to_py))]
+/// `livekit.agents.storage`: a cancelled turn is the `asyncio.CancelledError` the host raised, an
+/// invalid argument a `ValueError`, and a failure with no class of its own a plain `StorageError`.
+#[crate::host(error(kind = "livekit.agents.storage.errors.StorageError"))]
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum StorageError {
     /// A write sent and never answered: it may or may not have committed. Resolved by the run's
@@ -25,35 +26,44 @@ pub enum StorageError {
     /// The lane refused the run: another holder has it (`reject`, or a waiter whose wait ran
     /// out). The running task, when the journal names it.
     #[error("the lane is held by another run")]
+    #[host(kind = "livekit.agents.storage.errors.RunRejected", kwargs)]
     Rejected { running_task_id: Option<String> },
     /// The run's lease was taken, released or could not be renewed before it could lapse.
     #[error("lease lost: {0}")]
+    #[host(kind = "livekit.agents.storage.errors.LeaseLost")]
     LeaseLost(String),
     /// Retryable: a connection lost mid-request, a severed or unreachable database, a busy lock,
     /// an answer that did not decode.
     #[error("storage unavailable: {0}")]
+    #[host(kind = "livekit.agents.storage.errors.StorageUnavailable")]
     Unavailable(String),
     /// An unknown, deleted or expired thread, or a stream, task or database that is not there.
     #[error("not found: {0}")]
+    #[host(kind = "livekit.agents.storage.errors.ThreadNotFound")]
     NotFound(String),
     /// A fenced write that matched no row: the lane moved past the version the run loaded, or
     /// the lease token is no longer the lane's.
     #[error("version conflict on lane {lane}: expected version {expected}")]
+    #[host(kind = "livekit.agents.storage.errors.VersionConflict")]
     VersionConflict { lane: String, expected: i64 },
     /// A field that could not be serialized; the second string says why.
     #[error("field {0} is not serializable: {1}")]
+    #[host(kind = "livekit.agents.storage.errors.NotSerializable")]
     NotSerializable(String, String),
     #[error("{what} exceeds the limit of {limit} bytes")]
+    #[host(kind = "livekit.agents.storage.errors.TooLarge")]
     TooLarge { what: String, limit: usize },
     /// A refused token on either plane.
     #[error("unauthorized: {0}")]
     Unauthorized(String),
     /// The host cancelled the handler mid-turn: the run ended `canceled` and nothing was written.
     #[error("the turn was cancelled: {0}")]
+    #[host(kind = "asyncio.CancelledError")]
     Cancelled(String),
     /// A request the database or this client refuses as made: a bad argument, a statement the
     /// database rejected, a schema this client does not write.
     #[error("invalid: {0}")]
+    #[host(kind = "ValueError")]
     Invalid(String),
 }
 
@@ -62,46 +72,6 @@ impl StorageError {
     pub fn retryable(&self) -> bool {
         matches!(self, StorageError::Unavailable(_))
     }
-}
-
-/// The `livekit.agents.storage` class of `error`: `RunRejected` carries `running_task_id`, a
-/// cancelled turn is the `asyncio.CancelledError` the host raised, an invalid argument a
-/// `ValueError`, and every other failure a plain `StorageError`.
-#[cfg(feature = "python")]
-pub fn storage_error_to_py(error: StorageError) -> pyo3::PyErr {
-    use pyo3::prelude::*;
-
-    let message = error.to_string();
-    let class = match &error {
-        StorageError::NotFound(_) => "ThreadNotFound",
-        StorageError::LeaseLost(_) => "LeaseLost",
-        StorageError::VersionConflict { .. } => "VersionConflict",
-        StorageError::NotSerializable(..) => "NotSerializable",
-        StorageError::TooLarge { .. } => "TooLarge",
-        StorageError::Unavailable(_) => "StorageUnavailable",
-        StorageError::Rejected { .. } => "RunRejected",
-        StorageError::Invalid(_) => return pyo3::exceptions::PyValueError::new_err(message),
-        StorageError::Cancelled(_) => {
-            return pyo3::exceptions::asyncio::CancelledError::new_err(message);
-        }
-        _ => "StorageError",
-    };
-    if let StorageError::Rejected { running_task_id } = error {
-        return Python::attach(|py| {
-            let build = || -> pyo3::PyResult<_> {
-                let kwargs = pyo3::types::PyDict::new(py);
-                kwargs.set_item("running_task_id", running_task_id)?;
-                py.import("livekit.agents.storage.errors")?
-                    .getattr("RunRejected")?
-                    .call((message,), Some(&kwargs))
-            };
-            match build() {
-                Ok(instance) => pyo3::PyErr::from_value(instance),
-                Err(error) => error,
-            }
-        });
-    }
-    crate::python::host_exception("livekit.agents.storage.errors", class, message)
 }
 
 /// A native `Storage`, as an A2A door is opened over it.

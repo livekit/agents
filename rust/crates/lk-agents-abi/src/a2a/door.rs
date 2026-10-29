@@ -26,20 +26,14 @@ pub struct DoorFrame {
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-#[crate::host(error(with = crate::a2a::door::door_error_to_py))]
+#[crate::host(error)]
 pub enum DoorError {
     #[error(transparent)]
+    #[host(delegate)]
     Auth(#[from] AuthError),
     #[error(transparent)]
+    #[host(delegate)]
     Storage(#[from] StorageError),
-}
-
-#[cfg(feature = "python")]
-pub fn door_error_to_py(error: DoorError) -> pyo3::PyErr {
-    match error {
-        DoorError::Auth(error) => crate::python::HostException::to_py_err(&error),
-        DoorError::Storage(error) => crate::storage::storage_error_to_py(error),
-    }
 }
 
 #[crate::host(class(name = "_core_A2ADoor"))]
