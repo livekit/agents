@@ -21,9 +21,10 @@ from .test_http import FakeStream, parse_response, preamble, request_bytes
 pytestmark = pytest.mark.unit
 
 
-async def test_endpoint_route_inventory() -> None:
+async def test_endpoint_route_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
     key, secret = "APIroute", "route-inventory-secret-secret-secret"
-    storage = AgentDBStorage(url="wss://agents.invalid", api_key=key, api_secret=secret)
+    monkeypatch.setenv("LIVEKIT_URL", "wss://agents.invalid")
+    storage = AgentDBStorage(api_key=key, api_secret=secret)
     server = AgentServer(storage=storage, agent_name="routes", api_key=key, api_secret=secret)
 
     @server.a2a_session(endpoint="desk", description="Answers routing test messages.")

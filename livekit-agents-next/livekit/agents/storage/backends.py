@@ -16,6 +16,7 @@ from typing import Any
 
 from .. import _core
 from .._core import Streams, Thread
+from ..log import logger
 
 
 class Storage:
@@ -76,7 +77,6 @@ class AgentDBStorage(Storage):
     project.
 
     Args:
-        url: The project URL, ``LIVEKIT_URL`` when omitted.
         api_key, api_secret: The project's key pair, ``LIVEKIT_API_KEY`` and
             ``LIVEKIT_API_SECRET`` when omitted; the worker mints its own tokens from them.
         lease_ttl: Lease lifetime; ``LIVEKIT_AGENTDB_LEASE_TTL`` (float seconds) when omitted,
@@ -90,14 +90,13 @@ class AgentDBStorage(Storage):
     def __init__(
         self,
         *,
-        url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
         lease_ttl: timedelta | None = None,
         renew_interval: timedelta | None = None,
         holder: str | None = None,
     ) -> None:
-        url = url or os.environ.get("LIVEKIT_URL")
+        url = os.environ.get("LIVEKIT_URL")
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
         if not url or not api_key or not api_secret:
@@ -114,11 +113,6 @@ class AgentDBStorage(Storage):
             "renew_interval": _seconds(renew_interval, "LIVEKIT_AGENTDB_RENEW_INTERVAL"),
         }
         super().__init__(args, holder)
-
-    @property
-    def url(self) -> str:
-        """The public API agentstore is reached through."""
-        return self._core.location
 
 
 class SQLiteStorage(Storage):
@@ -140,19 +134,17 @@ class SQLiteStorage(Storage):
         renew_interval: timedelta | None = None,
         holder: str | None = None,
     ) -> None:
+        resolved = str(Path(directory).absolute())
+        # job processes rebuild from these args and do not log again
+        logger.info("thread storage directory", extra={"directory": resolved})
         args = {
-            "directory": str(Path(directory).absolute()),
+            "directory": resolved,
             "lease_ttl": lease_ttl.total_seconds() if lease_ttl is not None else None,
             "renew_interval": (
                 renew_interval.total_seconds() if renew_interval is not None else None
             ),
         }
         super().__init__(args, holder)
-
-    @property
-    def directory(self) -> str:
-        """The absolute directory the threads live in."""
-        return self._core.location
 
 
 __all__ = ["AgentDBStorage", "SQLiteStorage", "Storage"]
