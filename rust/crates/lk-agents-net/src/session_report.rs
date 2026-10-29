@@ -12,7 +12,6 @@ pub mod projection;
 pub mod records;
 pub mod transcript;
 
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -28,7 +27,7 @@ use reqwest::multipart::{Form, Part};
 use tokio::io::AsyncReadExt;
 
 use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
-use crate::env::Env;
+use crate::env::ProcessEnv;
 pub use admission::ReportAdmission;
 pub use events::EventRetention;
 pub use transcript::TranscriptBuilder;
@@ -62,19 +61,20 @@ struct RecordingUpload {
     disabled: bool,
 }
 
-/// Credentials for the session recording endpoint and host OTLP exporters. `E` lends the
-/// process's upload admission (decision 88).
-pub struct SessionReportUploader<E> {
+/// Credentials for the session recording endpoint and host OTLP exporters, under the process's
+/// upload admission (decision 88).
+pub struct SessionReportUploader {
     api_key: String,
     api_secret: String,
     admission: ReportAdmission,
     disabled: AtomicBool,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> SessionReportUpload for SessionReportUploader<E> {
-    fn new(api_key: String, api_secret: String) -> Result<Self, UploadError> {
-        Self::with_admission(api_key, api_secret, E::report_admission().map_err(UploadError)?)
+impl SessionReportUpload for SessionReportUploader {
+    type Env = ProcessEnv;
+
+    fn new(env: &ProcessEnv, api_key: String, api_secret: String) -> Result<Self, UploadError> {
+        Self::with_admission(api_key, api_secret, (env.report_admission)().map_err(UploadError)?)
     }
 
     fn bearer(&self) -> Result<String, UploadError> {
@@ -131,7 +131,7 @@ fn upload_error(err: impl std::fmt::Display) -> UploadError {
     UploadError(err.to_string())
 }
 
-impl<E: Env> SessionReportUploader<E> {
+impl SessionReportUploader {
     fn with_admission(
         api_key: String,
         api_secret: String,
@@ -139,13 +139,7 @@ impl<E: Env> SessionReportUploader<E> {
     ) -> Result<Self, UploadError> {
         // Validate credentials before retaining a report.
         crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
-        Ok(Self {
-            api_key,
-            api_secret,
-            admission,
-            disabled: AtomicBool::new(false),
-            env: PhantomData,
-        })
+        Ok(Self { api_key, api_secret, admission, disabled: AtomicBool::new(false) })
     }
 
     async fn send(&self, mut recording: RecordingUpload) -> Result<bool, UploadError> {

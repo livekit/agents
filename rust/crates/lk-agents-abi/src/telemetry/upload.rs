@@ -8,8 +8,12 @@ pub struct UploadError(pub String);
 /// Credentials for the session recording endpoint and host OTLP exporters.
 #[crate::host(class(name = "_core_SessionReportUpload"))]
 pub trait SessionReportUpload: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the constructor.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new(api_key: String, api_secret: String) -> Result<Self, UploadError>;
+    fn new(env: &Self::Env, api_key: String, api_secret: String) -> Result<Self, UploadError>;
 
     /// A fresh LiveKit observability credential. No token policy lives in the host adapter.
     #[host(call)]
@@ -48,8 +52,12 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
 /// append it off their event loop; no whole-history extraction crosses a binding call.
 #[crate::host(class(name = "_core_PreparedTranscript"))]
 pub trait PreparedTranscript: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the constructor.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new() -> Result<Self, UploadError>;
+    fn new(env: &Self::Env) -> Result<Self, UploadError>;
 
     /// Maximum items per append batch before the adapter returns control to its event loop.
     #[host(getter)]

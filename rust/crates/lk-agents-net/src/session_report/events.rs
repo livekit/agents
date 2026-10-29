@@ -2,13 +2,12 @@
 //! of its [`ReportAdmission`].
 
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::telemetry::upload::UploadError;
 
 use super::admission::{EventQuota, ReportAdmission};
-use crate::env::Env;
+use crate::env::ProcessEnv;
 
 /// Session report snapshots expire after one hour. These budgets apply before the host copies
 /// an event, independently of SDK exporter retention.
@@ -82,26 +81,23 @@ impl Drop for RetainedEvents {
     }
 }
 
-/// `E` lends the process's report admission (decision 88).
-pub struct EventRetention<E> {
+/// A session's retained events, charged to the process's report admission (decision 88).
+pub struct EventRetention {
     capture_content: bool,
     retained: RetainedEvents,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E> EventRetention<E> {
+impl EventRetention {
     fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
-        Self {
-            capture_content,
-            retained: RetainedEvents::new(admission.events.clone()),
-            env: PhantomData,
-        }
+        Self { capture_content, retained: RetainedEvents::new(admission.events.clone()) }
     }
 }
 
-impl<E: Env> lk_agents_abi::telemetry::observation::EventRetention for EventRetention<E> {
-    fn new(capture_content: bool) -> Result<Self, UploadError> {
-        Ok(Self::with_admission(capture_content, &E::report_admission().map_err(UploadError)?))
+impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
+    type Env = ProcessEnv;
+
+    fn new(env: &ProcessEnv, capture_content: bool) -> Result<Self, UploadError> {
+        Ok(Self::with_admission(capture_content, &(env.report_admission)().map_err(UploadError)?))
     }
 
     fn claim(&mut self, job_id: String) {
@@ -142,9 +138,8 @@ impl<E: Env> lk_agents_abi::telemetry::observation::EventRetention for EventRete
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::Standalone;
 
-    type Retention = EventRetention<Standalone>;
+    type Retention = EventRetention;
 
     #[test]
     fn event_retention_expires_charged_snapshots_and_refuses_live_or_denied_content() {

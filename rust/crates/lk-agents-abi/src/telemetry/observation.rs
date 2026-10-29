@@ -4,8 +4,12 @@
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
 #[crate::host(class(name = "_core_EventRetention"))]
 pub trait EventRetention: Send + Sized + 'static {
+    /// What the hosting process lends the constructor.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new(capture_content: bool) -> Result<Self, super::upload::UploadError>;
+    fn new(env: &Self::Env, capture_content: bool) -> Result<Self, super::upload::UploadError>;
 
     /// Bind report access to the first job that starts the session. Ownership cannot transfer.
     #[host(call)]

@@ -6,7 +6,6 @@ pub mod host;
 pub mod remote;
 
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -20,7 +19,7 @@ use lk_agents_core::a2a::client::{
 use lk_agents_core::a2a::rpc::TaskRef;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 
-use crate::env::{Env, Standalone};
+use crate::env::ProcessEnv;
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::source::{NativeSource, PullError, Pulled};
@@ -73,28 +72,24 @@ struct Inner {
     options: ApiConnectOptions,
 }
 
-/// A connection owns its outstanding exchanges; it holds no remote-tool conversation state. `E` is
-/// the process a host-constructed client runs in (decision 88).
-pub struct AgentClient<E: Env = Standalone> {
+/// A connection owns its outstanding exchanges; it holds no remote-tool conversation state.
+pub struct AgentClient {
     inner: Arc<Inner>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> AgentClient<E> {
+impl AgentClient {
     pub fn new(
+        env: &ProcessEnv,
         endpoint: String,
         token: Option<String>,
-        runtime: tokio::runtime::Handle,
-        clock: Arc<dyn Clock>,
     ) -> Result<Self, ClientError> {
-        Self::new_with_options(endpoint, token, runtime, clock, ApiConnectOptions::default())
+        Self::new_with_options(env, endpoint, token, ApiConnectOptions::default())
     }
 
     pub fn new_with_options(
+        env: &ProcessEnv,
         endpoint: String,
         token: Option<String>,
-        runtime: tokio::runtime::Handle,
-        clock: Arc<dyn Clock>,
         options: ApiConnectOptions,
     ) -> Result<Self, ClientError> {
         options.validate().map_err(|error| ClientError::InvalidInput(error.to_string()))?;
@@ -103,9 +98,9 @@ impl<E: Env> AgentClient<E> {
         Ok(Self {
             inner: Arc::new(Inner {
                 core: Mutex::new(core),
-                http: E::http().map_err(transport_error)?,
-                runtime,
-                clock,
+                http: (env.http)().map_err(transport_error)?,
+                runtime: (env.runtime)().map_err(transport_error)?,
+                clock: env.clock.clone(),
                 endpoint: endpoint_url,
                 options,
                 connect: AsyncMutex::new(()),
@@ -115,7 +110,6 @@ impl<E: Env> AgentClient<E> {
                 operations: Mutex::new(BTreeMap::new()),
                 observations: Mutex::new(Vec::new()),
             }),
-            env: PhantomData,
         })
     }
 
@@ -462,7 +456,7 @@ impl<E: Env> AgentClient<E> {
     }
 }
 
-impl<E: Env> Drop for AgentClient<E> {
+impl Drop for AgentClient {
     fn drop(&mut self) {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.closing.notify_waiters();

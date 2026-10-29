@@ -307,10 +307,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         && m.name.starts_with("__")
         && m.name.ends_with("__")
         && !matches!(m.name.as_str(), "__new__" | "__init__" | "__call__");
-    if m.kind != MethodKind::Setter
-        && !fixed_protocol
-        && m.params.iter().any(|p| p.ty != Ty::CallContext)
-    {
+    if m.kind != MethodKind::Setter && !fixed_protocol && m.params.iter().any(|p| !p.ty.hidden()) {
         s.push_str(&format!("{ind}#[pyo3(signature = ({}))]\n", signature(&m.params)));
     }
     let mut args = Vec::new();
@@ -319,6 +316,11 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         // Captured synchronously at the call's entry, before any native work is scheduled.
         if p.ty == Ty::CallContext {
             prelude.push_str(&format!("{ind}    let {} = crate::host::entered();\n", p.name));
+            continue;
+        }
+        // The runtime's, never the host's.
+        if p.ty == Ty::Env {
+            prelude.push_str(&format!("{ind}    let {} = crate::process::env();\n", p.name));
             continue;
         }
         let (ty, convert) = if p.ty == Ty::This {
@@ -610,7 +612,7 @@ fn source_class(name: &str, item: &Ty) -> Result<String, String> {
 fn signature(params: &[Param]) -> String {
     let mut parts = Vec::new();
     let mut star = false;
-    for p in params.iter().filter(|p| p.ty != Ty::CallContext) {
+    for p in params.iter().filter(|p| !p.ty.hidden()) {
         if p.kw_only && !star {
             parts.push("*".to_owned());
             star = true;

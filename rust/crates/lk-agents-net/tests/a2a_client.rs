@@ -15,6 +15,7 @@ use lk_agents_abi::{ApiConnectOptions, Clock, Closed, RealClock};
 use lk_agents_core::a2a::client::{ClientError, TaskUpdate};
 use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_net::a2a_client::{AgentClient, CleanupObservation, Reply};
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::source::{PullError, Pulled};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -334,14 +335,13 @@ fn message(id: &str, text: &str) -> Message {
     }
 }
 
+/// The test's runtime on `clock`.
+fn env(clock: Arc<dyn Clock>) -> ProcessEnv {
+    ProcessEnv { clock, ..ProcessEnv::current_runtime() }
+}
+
 fn client(peer: &Peer, clock: &Arc<RealClock>) -> AgentClient {
-    <AgentClient>::new(
-        peer.url.clone(),
-        Some("test-token".into()),
-        tokio::runtime::Handle::current(),
-        clock.clone(),
-    )
-    .unwrap()
+    AgentClient::new(&env(clock.clone()), peer.url.clone(), Some("test-token".into())).unwrap()
 }
 
 async fn updates(reply: &Reply) -> Vec<TaskUpdate> {
@@ -580,11 +580,10 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
 async fn a_request_lost_before_ack_is_reported_as_uncertain_and_is_never_resent() {
     let peer = Peer::start(Scenario::ResetBeforeAck).await;
     let clock = Arc::new(RealClock::new());
-    let client = <AgentClient>::new_with_options(
+    let client = AgentClient::new_with_options(
+        &env(clock.clone()),
         peer.url.clone(),
         Some("test-token".into()),
-        tokio::runtime::Handle::current(),
-        clock.clone(),
         ApiConnectOptions { max_retry: 0, ..Default::default() },
     )
     .unwrap();
@@ -759,11 +758,10 @@ async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
             total_timeout: total.then_some(0.05),
             ..Default::default()
         };
-        let client = <AgentClient>::new_with_options(
+        let client = AgentClient::new_with_options(
+            &env(clock),
             peer.url.clone(),
             Some("test-token".into()),
-            tokio::runtime::Handle::current(),
-            clock,
             options,
         )
         .unwrap();
@@ -801,11 +799,10 @@ async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
 async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_source() {
     let peer = Peer::start(Scenario::Waiting).await;
     let clock = Arc::new(RealClock::new());
-    let client = <AgentClient>::new_with_options(
+    let client = AgentClient::new_with_options(
+        &env(clock),
         peer.url.clone(),
         Some("test-token".into()),
-        tokio::runtime::Handle::current(),
-        clock,
         ApiConnectOptions { max_retry: 3, read_timeout: Some(0.05), ..Default::default() },
     )
     .unwrap();
@@ -886,11 +883,10 @@ async fn remote_redirect_cannot_leave_the_configured_origin() {
         socket.get_mut().write_all(format!("HTTP/1.1 303 See Other\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         socket.get_mut().shutdown().await.unwrap();
     });
-    let client = <AgentClient>::new_with_options(
+    let client = AgentClient::new_with_options(
+        &env(Arc::new(RealClock::new())),
         endpoint,
         Some("private-token".into()),
-        tokio::runtime::Handle::current(),
-        Arc::new(RealClock::new()),
         ApiConnectOptions { max_retry: 0, ..Default::default() },
     )
     .unwrap();

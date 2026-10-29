@@ -1,24 +1,23 @@
 //! The session transcript, prepared incrementally as bounded JSON, and the console report.
 
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::telemetry::upload::{PreparedTranscript, UploadError};
 use tokio::sync::OwnedSemaphorePermit;
 
 use super::{TRANSCRIPT_BYTES, upload_error};
-use crate::env::Env;
+use crate::env::ProcessEnv;
 
 pub(super) const TRANSCRIPT_ITEMS: usize = 10_000;
 pub(super) const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;
 
 /// Retains only bounded JSON, rather than a second copy of every native chat item.
-/// `E` lends the preparation admission and the blocking pool the console report serializes on
-/// (decision 88).
-pub struct TranscriptBuilder<E> {
+/// Prepared under the process's preparation admission; the console report serializes on the
+/// caller's blocking pool (decision 88).
+pub struct TranscriptBuilder {
     state: Mutex<TranscriptState>,
     permit: Arc<OwnedSemaphorePermit>,
-    env: PhantomData<fn() -> E>,
+    env: ProcessEnv,
 }
 
 struct TranscriptState {
@@ -31,9 +30,11 @@ struct TranscriptState {
     finished: bool,
 }
 
-impl<E: Env> PreparedTranscript for TranscriptBuilder<E> {
-    fn new() -> Result<Self, UploadError> {
-        let permit = E::report_admission()
+impl PreparedTranscript for TranscriptBuilder {
+    type Env = ProcessEnv;
+
+    fn new(env: &ProcessEnv) -> Result<Self, UploadError> {
+        let permit = (env.report_admission)()
             .map_err(UploadError)?
             .preparation()
             .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
@@ -50,7 +51,7 @@ impl<E: Env> PreparedTranscript for TranscriptBuilder<E> {
                 finished: false,
             }),
             permit: Arc::new(permit),
-            env: PhantomData,
+            env: env.clone(),
         })
     }
 
@@ -151,7 +152,8 @@ impl<E: Env> PreparedTranscript for TranscriptBuilder<E> {
             (std::mem::take(&mut state.bytes), std::mem::take(&mut state.events))
         };
         let permit = self.permit.clone();
-        E::caller_runtime()
+        self.env
+            .caller_runtime()
             .map_err(UploadError)?
             .spawn_blocking(move || {
                 let _retained = permit;

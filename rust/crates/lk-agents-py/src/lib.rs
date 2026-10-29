@@ -96,7 +96,8 @@ impl generated::Implementations for Selected {
     type WordTokenizer = lk_agents_runtime::cores::BasicWordTokenizer;
     type SentenceTokenizer = lk_agents_runtime::cores::BasicSentenceTokenizer;
     type BufferedTokens = lk_agents_runtime::cores::BufferedTokenStream;
-    type ChatContextDict = lk_agents_runtime::cores::ChatDict<lk_agents_runtime::cores::SpeechMarkup>;
+    type ChatContextDict =
+        lk_agents_runtime::cores::ChatDict<lk_agents_runtime::cores::SpeechMarkup>;
     type MarkupFunctions = lk_agents_runtime::cores::SpeechMarkup;
     type MarkupClass = lk_agents_runtime::cores::ProviderMarkup;
     type TranscriptStripper = lk_agents_runtime::cores::TranscriptMarkupStripper;
@@ -121,8 +122,7 @@ impl generated::Implementations for Selected {
     type HostRealtimeModel = lk_agents_runtime::inference::realtime::host::HostRealtimeModel<
         lk_agents_runtime::process::Process,
     >;
-    type AgentClient =
-        lk_agents_runtime::net::a2a_client::AgentClient<lk_agents_runtime::process::Process>;
+    type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient;
     type Reply = lk_agents_runtime::net::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
@@ -158,17 +158,13 @@ impl generated::Implementations for Selected {
     type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;
     type InferenceModels = lk_agents_runtime::inference::models::Models;
     type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;
-    type SessionReportProjection = lk_agents_runtime::net::session_report::projection::ReportProjection;
+    type SessionReportProjection =
+        lk_agents_runtime::net::session_report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
-    type EventRetention =
-        lk_agents_runtime::net::session_report::EventRetention<lk_agents_runtime::process::Process>;
-    type PreparedTranscript = lk_agents_runtime::net::session_report::TranscriptBuilder<
-        lk_agents_runtime::process::Process,
-    >;
+    type EventRetention = lk_agents_runtime::net::session_report::EventRetention;
+    type PreparedTranscript = lk_agents_runtime::net::session_report::TranscriptBuilder;
     type MetricSeries = lk_agents_runtime::cores::MetricSeries;
-    type SessionReportUpload = lk_agents_runtime::net::session_report::SessionReportUploader<
-        lk_agents_runtime::process::Process,
-    >;
+    type SessionReportUpload = lk_agents_runtime::net::session_report::SessionReportUploader;
     type TextSessionRunner = lk_agents_runtime::text_session::Runner;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;
@@ -196,11 +192,13 @@ impl generated::Implementations for Selected {
     type AdaptiveNoiseGate = lk_agents_runtime::inference::duplex::GateClass<
         lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
     >;
-    type DuplexRealtimeModel =
-        lk_agents_runtime::inference::duplex::NativeDuplexModel<lk_agents_runtime::process::Process>;
-    type InterruptionDetector = lk_agents_runtime::inference::interruption::NativeInterruptionDetector<
+    type DuplexRealtimeModel = lk_agents_runtime::inference::duplex::NativeDuplexModel<
         lk_agents_runtime::process::Process,
     >;
+    type InterruptionDetector =
+        lk_agents_runtime::inference::interruption::NativeInterruptionDetector<
+            lk_agents_runtime::process::Process,
+        >;
     type InferenceStt =
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;

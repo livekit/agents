@@ -9,7 +9,7 @@ use lk_agents_core::a2a::client::ClientError;
 use lk_agents_core::a2a::rpc::TaskRef;
 
 use super::{AgentClient, Reply};
-use crate::env::Env;
+use crate::env::ProcessEnv;
 use crate::source::{PullError, Pulled};
 
 fn client_error(error: ClientError) -> AgentClientError {
@@ -20,23 +20,18 @@ fn client_error(error: ClientError) -> AgentClientError {
     }
 }
 
-impl<E: Env> port::AgentClient for AgentClient<E> {
+impl port::AgentClient for AgentClient {
     type Reply = Reply;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         endpoint_url: String,
         token: Option<String>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self, AgentClientError> {
-        let runtime = E::runtime().map_err(AgentClientError::Protocol)?;
-        Self::new_with_options(
-            endpoint_url,
-            token,
-            runtime,
-            E::clock(),
-            conn_options.unwrap_or_default(),
-        )
-        .map_err(client_error)
+        Self::new_with_options(env, endpoint_url, token, conn_options.unwrap_or_default())
+            .map_err(client_error)
     }
 
     async fn connect(&self) -> Result<port::AgentCard, AgentClientError> {

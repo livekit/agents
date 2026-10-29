@@ -80,7 +80,13 @@ impl Resolver<'_> {
     fn assoc_type(&self, t: &syn::TraitItemType) -> Result<(Assoc, Option<Sink>), String> {
         let at = format!("{}::{}", self.at, t.ident);
         let entries = voc::read(&t.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["source", "handle", "class", "sink"])?;
+        voc::only(&at, &entries, &["source", "handle", "class", "sink", "env"])?;
+        if let Some(env) = voc::find(&entries, "env") {
+            if entries.len() > 1 || !env.nested.is_empty() || env.value.is_some() {
+                return Err(format!("{at}: #[host(env)] alone declares the process environment"));
+            }
+            return Ok((Assoc { rust_name: t.ident.to_string(), ty: Ty::Env }, None));
+        }
         if let Some(sink) = voc::find(&entries, "sink") {
             if entries.len() > 1 {
                 return Err(format!("{at}: an associated type declares one kind"));
@@ -294,7 +300,11 @@ impl Resolver<'_> {
             };
             let pat = format!("{at}({})", ident.ident);
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["kw", "default", "context", "shape_error", "one_or_many", "pcm"])?;
+            voc::only(
+                &pat,
+                &entries,
+                &["kw", "default", "context", "shape_error", "one_or_many", "pcm"],
+            )?;
             kw_only |= voc::find(&entries, "kw").is_some();
             if voc::find(&entries, "context").is_some() {
                 let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
@@ -343,7 +353,7 @@ impl Resolver<'_> {
             if pcm && ty != Ty::List(Box::new(Ty::Int(crate::decl::Int::U8))) {
                 return Err(format!("{pat}: pcm applies to bytes"));
             }
-            if params.iter().rfind(|p: &&Param| p.ty != Ty::CallContext).is_some_and(|p| {
+            if params.iter().rfind(|p: &&Param| !p.ty.hidden()).is_some_and(|p| {
                 (p.default.is_some() || matches!(p.ty, Ty::Maybe(_))) && !p.kw_only
             }) && default.is_none()
                 && !matches!(ty, Ty::Maybe(_))
@@ -353,7 +363,13 @@ impl Resolver<'_> {
                     "{pat}: a required positional parameter follows one with a default"
                 ));
             }
-            if ty == Ty::This {
+            if ty == Ty::Env {
+                if !by_ref || default.is_some() || kw_only {
+                    return Err(format!(
+                        "{pat}: the process environment is borrowed: `&Self::Env`"
+                    ));
+                }
+            } else if ty == Ty::This {
                 if !by_ref || !matches!(kind, MethodKind::Call | MethodKind::StaticCall) || detach {
                     return Err(format!(
                         "{pat}: an own-class input is borrowed as &Self by a synchronous class call"
@@ -378,7 +394,7 @@ impl Resolver<'_> {
         }
         let ret = self.ret(&f.sig.output, &at)?;
         if kind == MethodKind::Setter
-            && (params.iter().filter(|parameter| parameter.ty != Ty::CallContext).count() != 1
+            && (params.iter().filter(|parameter| !parameter.ty.hidden()).count() != 1
                 || ret.ok != Ty::Unit)
         {
             return Err(format!("{at}: a setter takes one value and returns unit"));

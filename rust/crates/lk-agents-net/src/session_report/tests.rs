@@ -1,35 +1,25 @@
 use super::transcript::{TRANSCRIPT_ITEM_BYTES, TRANSCRIPT_ITEMS};
 use super::*;
-use crate::env::Standalone;
 use lk_agents_abi::telemetry::upload::PreparedTranscript as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 /// Every report gets its own admission, so tests run concurrently.
-struct Isolated;
-
-impl Env for Isolated {
-    fn http() -> Result<std::sync::Arc<crate::http::GatewayHttp>, String> {
-        Standalone::http()
-    }
-
-    fn runtime() -> Result<tokio::runtime::Handle, String> {
-        Standalone::runtime()
-    }
-
-    fn clock() -> std::sync::Arc<dyn lk_agents_abi::Clock> {
-        Standalone::clock()
-    }
-
-    fn report_admission() -> Result<ReportAdmission, String> {
-        Ok(ReportAdmission::default())
+fn isolated() -> ProcessEnv {
+    ProcessEnv {
+        report_admission: || Ok(ReportAdmission::default()),
+        ..ProcessEnv::current_runtime()
     }
 }
 
-type Builder = TranscriptBuilder<Isolated>;
+type Builder = TranscriptBuilder;
 
-fn uploader() -> SessionReportUploader<Isolated> {
-    SessionReportUploader::new("key".into(), "secret".into()).unwrap()
+fn transcript() -> Builder {
+    Builder::new(&isolated()).unwrap()
+}
+
+fn uploader() -> SessionReportUploader {
+    SessionReportUploader::new(&isolated(), "key".into(), "secret".into()).unwrap()
 }
 
 struct Request {
@@ -202,14 +192,14 @@ fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversi
         .unwrap(),
     );
     let actual: serde_json::Value = {
-        let builder = Builder::new().unwrap();
+        let builder = transcript();
         for item in items {
             builder.append(item).unwrap();
         }
         serde_json::from_str(&builder.finish().unwrap()).unwrap()
     };
     assert_eq!(actual, expected);
-    let builder = Builder::new().unwrap();
+    let builder = transcript();
     let error = builder.append(message("x".repeat(TRANSCRIPT_ITEM_BYTES))).unwrap_err();
     assert!(error.0.contains("64 KiB"));
     assert!(builder.finish().is_err(), "an overflow must never upload a partial transcript");
@@ -240,12 +230,9 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
         drop(socket);
     });
     let admission = ReportAdmission::default();
-    let uploader = SessionReportUploader::<Isolated>::with_admission(
-        "key".into(),
-        "secret".into(),
-        admission.clone(),
-    )
-    .unwrap();
+    let uploader =
+        SessionReportUploader::with_admission("key".into(), "secret".into(), admission.clone())
+            .unwrap();
     let mut upload =
         tokio::spawn(async move { uploader.send(recording(format!("http://{address}"))).await });
     let mut early_result = None;
@@ -289,7 +276,7 @@ fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_f
             std::time::UNIX_EPOCH,
         ))
     };
-    let builder = Builder::new().unwrap();
+    let builder = transcript();
     let mut appended = 0;
     loop {
         match builder.append(message()) {
@@ -303,19 +290,19 @@ fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_f
     assert!(appended > 1 && appended < 64);
     assert!(builder.finish().is_err());
     drop(builder);
-    let builder = Builder::new().unwrap();
+    let builder = transcript();
     assert_eq!(builder.finish().unwrap(), "{\"items\":[]}");
     assert!(builder.append(message()).unwrap_err().0.contains("already finished"));
 }
 
 #[test]
 fn report_input_facts_refuse_oversize_before_item_conversion_and_poison_partial_output() {
-    let builder = Builder::new().unwrap();
+    let builder = transcript();
     builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES).unwrap();
     assert!(builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES + 1).is_err());
     assert!(builder.finish().is_err());
     drop(builder);
-    let builder = Builder::new().unwrap();
+    let builder = transcript();
     assert!(builder.check_input(TRANSCRIPT_ITEMS + 1, 0).is_err());
     assert!(builder.finish().is_err());
 }

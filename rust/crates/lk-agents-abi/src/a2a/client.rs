@@ -179,9 +179,13 @@ pub trait Reply: Send + Sync + Sized + 'static {
 pub trait AgentClient: Send + Sync + Sized + 'static {
     #[host(class(name = "Reply"))]
     type Reply;
+    /// What the hosting process lends the constructor.
+    #[host(env)]
+    type Env;
 
     #[host(new)]
     fn new(
+        env: &Self::Env,
         endpoint_url: String,
         #[host(kw, default = None)] token: Option<String>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,

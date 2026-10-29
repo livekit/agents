@@ -166,7 +166,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let mut moved = String::new();
     let mut args = Vec::new();
     // A `CallContext` is what the call runs in, never an argument.
-    for q in m.params.iter().filter(|q| q.ty != Ty::CallContext) {
+    for q in m.params.iter().filter(|q| !q.ty.hidden()) {
         moved.push_str(&format!("        let {}_arg = {};\n", q.name, owned(q)));
         let value = to_host(&format!("{}_arg", q.name), &q.ty, &at)?;
         if m.kind == ProxyCall::Notify

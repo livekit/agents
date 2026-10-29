@@ -45,7 +45,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 own.push(c.name.clone());
             }
             for (name, item) in crate::adapter::sources(c) {
-                body.push_str(&source_stub(&name, &annotation(&c.name, &item, Dir::Out, &mut imports)));
+                body.push_str(&source_stub(
+                    &name,
+                    &annotation(&c.name, &item, Dir::Out, &mut imports),
+                ));
                 own.push(name);
             }
             for (sink, output) in crate::adapter::duplexes(c) {
@@ -407,7 +410,7 @@ pub(crate) fn signature_parts(
 pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(String, bool)> {
     m.params
         .iter()
-        .filter(|p| p.ty != Ty::CallContext)
+        .filter(|p| !p.ty.hidden())
         .map(|p| {
             let ty = if let (true, Ty::List(item)) = (p.one_or_many, &p.ty) {
                 let item = annotation(&c.name, item, Dir::In, imports);
@@ -453,7 +456,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
-        Ty::CallContext => "object".into(),
+        Ty::CallContext | Ty::Env => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Duration => "float".into(),
@@ -488,7 +491,11 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             } else {
                 "dict"
             };
-            format!("{map}[{}, {}]", annotation(this, k, dir, imports), annotation(this, t, dir, imports))
+            format!(
+                "{map}[{}, {}]",
+                annotation(this, k, dir, imports),
+                annotation(this, t, dir, imports)
+            )
         }
         Ty::Set(t) => format!("frozenset[{}]", annotation(this, t, dir, imports)),
         Ty::Tuple(ts) => format!(
@@ -543,7 +550,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 let params = method
                     .params
                     .iter()
-                    .filter(|parameter| parameter.ty != Ty::CallContext)
+                    .filter(|parameter| !parameter.ty.hidden())
                     .map(|parameter| annotation(this, &parameter.ty, Dir::Out, imports))
                     .collect::<Vec<_>>()
                     .join(", ");

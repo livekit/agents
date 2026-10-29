@@ -463,6 +463,10 @@ pub enum Ty {
     /// Never crosses: a class method's binding captures it at the call's entry (hidden from the
     /// host's signature); a proxy call runs in it and does not pass it.
     CallContext,
+    /// `Self::Env`, a `#[host(env)]` associated type: what the hosting process lends the class
+    /// (`lk_agents_net::env::ProcessEnv`). Never crosses: the binding passes the runtime's
+    /// (`crate::process::env()`), hidden from the host's signature.
+    Env,
     /// The declaring class itself (`Self`).
     This,
     /// `Arc<dyn Trait>` of a `#[host(proxy)]` trait: a native class as itself, any other host
@@ -598,11 +602,17 @@ impl Ty {
         }
     }
 
+    /// A parameter the binding supplies itself, absent from the host's signature.
+    pub fn hidden(&self) -> bool {
+        matches!(self, Ty::CallContext | Ty::Env)
+    }
+
     /// The Rust type, written from outside the ABI crate.
     pub fn rust(&self) -> String {
         match self {
             Ty::Unit => "()".into(),
             Ty::CallContext => "::lk_agents_abi::invoke::CallContext".into(),
+            Ty::Env => "::lk_agents_runtime::net::env::ProcessEnv".into(),
             Ty::Bool => "bool".into(),
             Ty::Int(i) => i.rust().into(),
             Ty::Float => "f64".into(),

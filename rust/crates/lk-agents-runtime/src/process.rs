@@ -131,6 +131,21 @@ pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
     }
 }
 
+/// What this process lends the declared classes (decision 100). Reading it starts nothing: the
+/// runtime-bound handles start the process runtime on first use.
+pub fn env() -> lk_agents_net::env::ProcessEnv {
+    lk_agents_net::env::ProcessEnv {
+        runtime: || handle().map_err(|error| error.to_string()),
+        spawner: host_spawner,
+        clock: host_clock(),
+        http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
+        report_admission: || {
+            with_started(|started| started.report_admission.clone())
+                .map_err(|error| error.to_string())
+        },
+    }
+}
+
 /// The process services selected by host-constructed clients through the shared environment.
 #[derive(Clone)]
 pub struct Process;

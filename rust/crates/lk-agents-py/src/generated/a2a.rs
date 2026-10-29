@@ -182,7 +182,8 @@ impl AgentClient {
     #[pyo3(signature = (endpoint_url, *, token = None, conn_options = None))]
     fn new(endpoint_url: ::std::string::String, token: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<AgentClient> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::new(endpoint_url, token, conn_options).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::new(&env, endpoint_url, token, conn_options).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentClient(::std::sync::Arc::new(out)))
     }
 
