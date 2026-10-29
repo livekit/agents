@@ -54,6 +54,7 @@ mod preemptive_reply_latency;
 mod realtime_close_interrupts;
 mod realtime_cut_after_text_failure;
 mod realtime_cut_reply_tool_runs;
+mod realtime_generation_without_message;
 mod realtime_items_filled;
 mod realtime_onset_reply_heard;
 mod realtime_outputs_before_next_reply;

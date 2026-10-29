@@ -124,8 +124,14 @@ impl RealtimePlayout {
         heard.frames == 0
             && heard.complete
             && has_text_output
-            && self.segments.len() > self.segment_start
+            && self.carried_message()
             && self.has_audio_output
+    }
+
+    /// Whether the current binding played a message. One the generation ended before any
+    /// message still closes its transcript chain, or the chain's drain never ends.
+    pub fn carried_message(&self) -> bool {
+        self.segments.len() > self.segment_start
     }
 
     pub fn closed(&mut self) {

@@ -119,6 +119,11 @@ pub(crate) async fn realtime_generation_task(
         }
         generation.unvoice().await;
         generation.end_message();
+        if !generation.state.carried_message()
+            && let Some(text) = &generation.text_out
+        {
+            text.flush();
+        }
         let text_result = match generation.text_out.as_deref() {
             Some(text) => super::forward::finish_text(text, handle, played.is_err()).await,
             None => Ok(()),
