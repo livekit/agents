@@ -67,10 +67,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install the project
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --dev --group docs
 
       - name: Download NLTK data
         run: uv run python -c "import nltk; nltk.download('punkt_tab')"
+
+      # Imports every test module of every category without running any, so a module the
+      # unit gate never selects still fails CI when it no longer imports.
+      - name: Collect every test category
+        run: uv run --no-sync pytest --collect-only -q
 
       - name: Run tests
         run: make unit-tests
