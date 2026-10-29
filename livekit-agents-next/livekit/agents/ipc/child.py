@@ -327,9 +327,9 @@ class _JobProc:
 
     def _core_span(self, name: str, callback: str | None) -> trace.Span:
         attributes = {trace_types.ATTR_CALLBACK_NAME: callback} if callback else None
-        return tracer.start_span(
-            name, context=trace.set_span_in_context(self._shutdown_span), attributes=attributes
-        )
+        # the shutdown's callbacks are children of its span, opened when shutdown began
+        parent = trace.set_span_in_context(self._shutdown_span) if self._shutdown_span else None
+        return tracer.start_span(name, context=parent, attributes=attributes)
 
     def _core_log(
         self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
@@ -443,8 +443,8 @@ def log_to_stdout(
     from ..cli import setup_logging
 
     if config is None:
-        level = logging.getLevelName(levels.get("root", logging.WARNING))
-        config = (level, "dev" if sys.stdout.isatty() else "json")
+        root = logging.getLevelName(levels.get("root", logging.WARNING))
+        config = (root, "dev" if sys.stdout.isatty() else "json")
     setup_logging(*config).addFilter(_Stamp(fields))
     for name, level in levels.items():
         logging.getLogger(name).setLevel(level)

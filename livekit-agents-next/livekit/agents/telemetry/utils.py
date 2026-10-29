@@ -62,7 +62,7 @@ def participant_attributes(participant: rtc.Participant) -> dict[str, str]:
 
 def record_exception(
     span: trace.Span,
-    exception: Exception,
+    exception: BaseException,
     *,
     redacted: NotGivenOr[bool] = NOT_GIVEN,
     record_event: bool = True,

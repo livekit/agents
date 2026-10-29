@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable, Generator, Sequence
 from enum import Enum
 from multiprocessing.context import BaseContext
 from types import FrameType
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from .. import _core, utils
 from .._generated.worker_ipc import ProcessCompletion
@@ -455,7 +455,7 @@ class ProcPool(
 
     @property
     def processes(self) -> list[JobExecutor]:
-        return cast(list[JobExecutor], self._pool.processes)
+        return self._pool.processes
 
     @property
     def _jobs_waiting_for_process(self) -> int:
