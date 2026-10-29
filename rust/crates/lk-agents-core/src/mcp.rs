@@ -9,6 +9,8 @@ use lk_agents_abi::llm::mcp::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod http;
+
 /// `_resolve_tool_options`: `{**defaults, **config}`, key by key.
 pub fn resolve_tool_options(config: Option<&McpToolOptionsPatch>) -> McpToolOptions {
     let (d, p) = (McpToolOptions::default(), config.copied().unwrap_or_default());

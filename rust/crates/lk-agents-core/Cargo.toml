@@ -26,3 +26,5 @@ fancy-regex = "0.19.0"
 log.workspace = true
 base64.workspace = true
 thiserror.workspace = true
+# MCP legacy SSE endpoint resolution and its same-origin rule.
+url = "2"

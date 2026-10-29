@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures_util::{Sink, Stream, StreamExt};
 use lk_agents_core::mcp::TransportSettlement;
+use lk_agents_core::mcp::http::{LegacySse, sse_message};
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::service::RoleClient;
 use rmcp::transport::async_rw::AsyncRwTransport;
@@ -360,14 +361,14 @@ async fn connect_sse(
     url: &str,
     receipt: Arc<TransportReceipt>,
 ) -> Result<(Posts, Messages), McpError> {
-    let base = url::Url::parse(url).map_err(conn)?;
+    let legacy = LegacySse::new(url).map_err(conn)?;
     let mut events = client.legacy_get(url).await.map_err(conn)?;
     let endpoint = loop {
         match events.next().await {
-            Ok(Some(event)) if event.event == "endpoint" => {
-                break base.join(&event.data).map_err(conn)?;
-            }
-            Ok(Some(_)) => continue,
+            Ok(Some(event)) => match legacy.endpoint(&event.event, &event.data) {
+                Some(endpoint) => break endpoint.map_err(conn)?,
+                None => continue,
+            },
             Err(error) => return Err(conn(error)),
             Ok(None) => {
                 return Err(conn(std::io::Error::new(
@@ -377,27 +378,21 @@ async fn connect_sse(
             }
         }
     };
-    if endpoint.origin() != base.origin() {
-        return Err(conn(std::io::Error::other("SSE endpoint origin differs from connection")));
-    }
     events.expect_response(false);
     let events = receipt.track_reader(events.into_stream());
     let messages = events
         .scan((), move |_, event| {
             std::future::ready(match event {
-                Ok(event) if event.event == "message" => {
-                    match (!event.data.is_empty()).then_some(event.data) {
-                        Some(data) => match serde_json::from_str(&data) {
-                            Ok(message) => Some(Some(message)),
-                            Err(error) => {
-                                receipt.fail(McpError::Decode(Arc::new(error)));
-                                None
-                            }
-                        },
-                        None => Some(None),
-                    }
-                }
-                Ok(_) => Some(None),
+                Ok(event) => match sse_message(&event.event, &event.data) {
+                    Some(data) => match serde_json::from_str(data) {
+                        Ok(message) => Some(Some(message)),
+                        Err(error) => {
+                            receipt.fail(McpError::Decode(Arc::new(error)));
+                            None
+                        }
+                    },
+                    None => Some(None),
+                },
                 Err(error) => {
                     receipt.fail(conn(error));
                     None

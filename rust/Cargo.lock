@@ -1430,6 +1430,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]
@@ -1582,7 +1583,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
- "url",
 ]
 
 [[package]]
