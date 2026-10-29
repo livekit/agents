@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::agent::{
     AgentDefinition, AgentFrame, AgentHost, ArgumentIdentity, FunctionToolInfo, Invocation,
     OutputCandidate, OutputSpec, PreparedArguments, ReadBack, ReadBackAnswer, ToolArgumentError,
-    ValidatedOutput, VoiceAgent, VoiceAgentFrame,
+    ValidatedOutput, VoiceAgent,
 };
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
 use lk_agents_voice::speech_handle::SpeechHandle;
-use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport};
+use lk_agents_voice::tool_executor::{HostedTool, ToolOutcome, ToolReport, VoiceAgentFrame};
 use tokio::sync::oneshot;
 
 use super::{Control, Registry, Slot};
@@ -350,9 +350,8 @@ mod tests {
             group_id: None,
         };
         let frame = frame(&registry, "agent");
-        let invocation = |call: &FunctionCall| {
-            frame.invocation("s/speech_1".into(), 0, Some(call.clone()), None, speech.object())
-        };
+        let invocation =
+            |call: &FunctionCall| HostedTool::of(&frame, "s", &speech, 0, call).invocation;
         let first_invocation = invocation(&call);
         let first =
             tools.prepare_tool(&first_invocation, Default::default()).await.unwrap().unwrap();

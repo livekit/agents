@@ -251,32 +251,6 @@ pub trait AgentFrame: Send + Sync {
     fn definition(&self) -> &AgentDefinition;
     fn host(&self) -> &Arc<dyn AgentHost>;
     fn host_context(&self) -> &HostRef;
-
-    /// The invocation of one callback on a voice reply: `invocation_id` names the reply,
-    /// `operation` the callback within it.
-    fn invocation(
-        &self,
-        invocation_id: String,
-        operation: u64,
-        function_call: Option<FunctionCall>,
-        approval: Option<Approval>,
-        speech: crate::CoreObject,
-    ) -> Invocation {
-        Invocation {
-            operation,
-            invocation_id,
-            agent_name: self.definition().name.clone(),
-            execution_id: None,
-            frame_id: None,
-            context_scope: None,
-            application_context: None,
-            history: Vec::new(),
-            function_call,
-            approval,
-            speech: Some(speech),
-            host_context: Some(self.host_context().clone()),
-        }
-    }
 }
 
 impl std::fmt::Debug for dyn AgentFrame {
@@ -291,33 +265,6 @@ impl std::fmt::Debug for dyn AgentFrame {
 pub trait VoiceAgent: AgentFrame + Sized + 'static {
     #[host(new)]
     fn new(definition: AgentDefinition, host: Arc<dyn AgentHost>, host_context: HostRef) -> Self;
-}
-
-/// The [`AgentFrame`] a host builds: the parts as given.
-pub struct VoiceAgentFrame {
-    definition: AgentDefinition,
-    host: Arc<dyn AgentHost>,
-    host_context: HostRef,
-}
-
-impl AgentFrame for VoiceAgentFrame {
-    fn definition(&self) -> &AgentDefinition {
-        &self.definition
-    }
-
-    fn host(&self) -> &Arc<dyn AgentHost> {
-        &self.host
-    }
-
-    fn host_context(&self) -> &HostRef {
-        &self.host_context
-    }
-}
-
-impl VoiceAgent for VoiceAgentFrame {
-    fn new(definition: AgentDefinition, host: Arc<dyn AgentHost>, host_context: HostRef) -> Self {
-        VoiceAgentFrame { definition, host, host_context }
-    }
 }
 
 /// `FunctionToolInfo`: one tool as the model and the gate see it.

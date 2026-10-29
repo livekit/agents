@@ -509,6 +509,37 @@ impl std::fmt::Debug for Toolset {
 
 pub use lk_agents_abi::agent::{AgentFrame, FunctionToolInfo};
 
+/// The [`AgentFrame`] a host builds (`_core.VoiceAgent`): the parts as given.
+pub struct VoiceAgentFrame {
+    definition: lk_agents_abi::agent::AgentDefinition,
+    host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+    host_context: lk_agents_abi::HostRef,
+}
+
+impl AgentFrame for VoiceAgentFrame {
+    fn definition(&self) -> &lk_agents_abi::agent::AgentDefinition {
+        &self.definition
+    }
+
+    fn host(&self) -> &Arc<dyn lk_agents_abi::agent::AgentHost> {
+        &self.host
+    }
+
+    fn host_context(&self) -> &lk_agents_abi::HostRef {
+        &self.host_context
+    }
+}
+
+impl lk_agents_abi::agent::VoiceAgent for VoiceAgentFrame {
+    fn new(
+        definition: lk_agents_abi::agent::AgentDefinition,
+        host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+        host_context: lk_agents_abi::HostRef,
+    ) -> Self {
+        VoiceAgentFrame { definition, host, host_context }
+    }
+}
+
 /// A hosted call: the host running its callbacks and the invocation they run in, which its cancel
 /// names.
 #[derive(Clone)]
@@ -518,21 +549,29 @@ pub struct HostedTool {
 }
 
 impl HostedTool {
-    /// `call` of `speech`, the `operation`th of its session, hosted by `agent`.
-    pub(crate) fn of(
+    /// `call` of `speech`, the `operation`th of its session, hosted by `agent`: the invocation of
+    /// one callback on a voice reply, which `{session}/{speech}` names.
+    pub fn of(
         agent: &Arc<dyn AgentFrame>,
         session: &str,
         speech: &Arc<crate::speech_handle::SpeechHandle>,
         operation: u64,
         call: &FunctionCall,
     ) -> HostedTool {
-        let invocation = agent.invocation(
-            format!("{session}/{}", speech.speech_id()),
+        let invocation = lk_agents_abi::agent::Invocation {
             operation,
-            Some(call.clone()),
-            lk_agents_core::approval::mark(call),
-            speech.object(),
-        );
+            invocation_id: format!("{session}/{}", speech.speech_id()),
+            agent_name: agent.definition().name.clone(),
+            execution_id: None,
+            frame_id: None,
+            context_scope: None,
+            application_context: None,
+            history: Vec::new(),
+            function_call: Some(call.clone()),
+            approval: lk_agents_core::approval::mark(call),
+            speech: Some(speech.object()),
+            host_context: Some(agent.host_context().clone()),
+        };
         HostedTool { host: Arc::clone(agent.host()), invocation }
     }
 
