@@ -11,6 +11,7 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::generation::TurnAccumulator;
+use lk_agents_voice::generation::playout::{Playout, PlayoutEffect, SinkReport};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{PlayoutStep, SinkCall};
 use lk_agents_voice::transcription::Heard;
@@ -19,20 +20,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-/// A pushed frame's length when none has been pushed yet: what every TTS in the tree emits.
-const DEFAULT_FRAME_LEN: Duration = Duration::from_millis(20);
-
 /// Scheduler hops a cut segment gives the sink to report the cut. Hops, not time: a speech cut at
 /// `Closing` has no clock advancing it.
 const CUT_REPORT_HOPS: usize = 16;
 
 /// How long a cut segment then waits on the clock for a host output's report of the cut.
 const CUT_REPORT_WAIT: Duration = Duration::from_secs(1);
-
-/// How late a sink's finish may be, once it reported all the audio played, before the playout
-/// takes it as lost. The reference's `DataStreamAudioOutput(clear_buffer_timeout=2.0)`: its one
-/// sink whose reports cross a transport marks the playout done after this "to avoid deadlock".
-const LOST_FINISH_MARGIN: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub(crate) enum Next {
@@ -135,23 +128,12 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     let (tx, events) = mpsc::unbounded_channel();
     out.tracker().observe(Arc::new(SinkReports(tx)));
     let mut playing = Playing {
-        segment_key: out.tracker().current_segment(),
-        finish_due: None,
+        state: Playout::new(handle.id(), out.tracker().current_segment()),
         shared,
         handle,
         out,
         events,
         chain: OutputChain::new(out.sample_rate()),
-        started: false,
-        owed: None,
-        pushed: 0,
-        pushed_len: Duration::ZERO,
-        played: Duration::ZERO,
-        completed: Duration::ZERO,
-        reported: 0,
-        batch: 0,
-        first_segment: None,
-        cut_below: false,
     };
     let mut ended = loop {
         if handle.interrupted() {
@@ -183,7 +165,8 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         };
         // The frame may have taken a while to arrive: a speech cut meanwhile never starts playing.
         // The launch hold: the speech's first frame waits while the user speaks.
-        if handle.interrupted() || (playing.pushed == 0 && !wait_launch(shared, handle).await) {
+        if handle.interrupted() || (playing.state.pushed == 0 && !wait_launch(shared, handle).await)
+        {
             break Ended::Cut;
         }
         playing.drain(segment);
@@ -209,7 +192,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             // What was synthesised plays out before the caller forwards the rest as text: the
             // reference waits for the playout whether or not the TTS failed (`forward_generation`).
             let mut synchronized = None;
-            if playing.pushed > 0 {
+            if playing.state.pushed > 0 {
                 playing.flush_batch();
                 match with_playout_controls(segment, playing.played_out_report()).await {
                     Ok(Some(ev)) => {
@@ -224,7 +207,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             Err(SourceFailed { error: e, synchronized, heard: Some(playing.confirmed_heard()) })
         }
         // No audio: flushing would make `wait_for_playout` answer with the previous event.
-        Ended::Audio if playing.pushed == 0 => Ok(silent(text, true)),
+        Ended::Audio if playing.state.pushed == 0 => Ok(silent(text, true)),
         Ended::Audio => {
             playing.flush_batch();
             let ev = match with_playout_controls(segment, playing.played_out_report()).await {
@@ -243,9 +226,9 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             Ok(Heard {
                 text: synchronized(ev.synchronized_transcript, text),
                 position: ev.playback_position,
-                complete: !ev.interrupted && !playing.cut_below,
-                frames: playing.pushed,
-                played: playing.completed.max(ev.playback_position),
+                complete: !ev.interrupted && !playing.state.cut_below,
+                frames: playing.state.pushed,
+                played: playing.state.completed.max(ev.playback_position),
             })
         }
     }
@@ -319,18 +302,6 @@ pub(super) fn unheard() -> Heard {
     silent(String::new(), false)
 }
 
-/// What the sink reported for this segment, on one channel, in order. `Shown`: a synchroniser
-/// below released a word as of the played position; journalled, and the playout wakes at the
-/// release, ahead of the words' forwarder, so a finished segment's stream closes before its words
-/// reach the text output. `Reset`: the sink's playback count was reset under it. `Finished`
-/// carries the tracker's number for the segment it closed.
-enum SinkReport {
-    Playback(PlaybackEvent),
-    Finished { segment: PlaybackSegment, ev: PlaybackFinished },
-    Shown(lk_agents_abi::TimedString),
-    Reset,
-}
-
 struct SinkReports(mpsc::UnboundedSender<SinkReport>);
 
 impl PlaybackObserver for SinkReports {
@@ -399,31 +370,12 @@ enum Ended {
 /// `next()` can be pending while reports are folded (`watched`) and settled once it is free
 /// (`settle`).
 struct Playing<'a> {
-    segment_key: Option<PlaybackSegment>,
-    finish_due: Option<lk_agents_abi::Ts>,
+    state: Playout,
     shared: &'a Arc<SessionShared>,
     handle: &'a SpeechHandle,
     out: &'a dyn AudioOutput,
     events: mpsc::UnboundedReceiver<SinkReport>,
     chain: OutputChain,
-    started: bool,
-    /// The first-frame instant owed to the segment's `started_speaking`, until it is free.
-    owed: Option<f64>,
-    /// The frame length `AudioPlayed` counts in.
-    pushed: u64,
-    pushed_len: Duration,
-    played: Duration,
-    /// What the segments the sink reported played out held: the forwarding's heard audio before
-    /// the segment now playing.
-    completed: Duration,
-    reported: u64,
-    /// Pushed since the last boundary: one `SinkCall::Push` record per stretch.
-    batch: u64,
-    /// The tracker's number for this forwarding's first segment, once a frame opened it.
-    first_segment: Option<PlaybackSegment>,
-    /// The sink reported one of this forwarding's segments cut under it (a reset): not all of
-    /// it played, whatever the last segment reports.
-    cut_below: bool,
 }
 
 impl Playing<'_> {
@@ -447,7 +399,7 @@ impl Playing<'_> {
         self.sink_call(SinkCall::End);
         // Cut before its first frame left: never started, so no finish. Journalled as the sink
         // reported it: a segment cut below earlier makes the speech incomplete, not this finish.
-        if self.started || !(ev.interrupted && ev.playback_position.is_zero()) {
+        if self.state.started || !(ev.interrupted && ev.playback_position.is_zero()) {
             self.finished(ev.playback_position, ev.interrupted);
         }
     }
@@ -458,107 +410,43 @@ impl Playing<'_> {
         self.drain_reports();
         Heard {
             text: String::new(),
-            position: self.played.saturating_sub(self.completed),
+            position: self.state.played.saturating_sub(self.state.completed),
             complete: false,
-            frames: self.pushed,
-            played: self.played,
+            frames: self.state.pushed,
+            played: self.state.played,
         }
     }
 
     fn report_push(&self) {
-        if self.batch > 0 {
-            self.sink_call(SinkCall::Push { frames: self.batch });
+        if self.state.batch > 0 {
+            self.sink_call(SinkCall::Push { frames: self.state.batch });
         }
     }
 
     fn flush_batch(&mut self) {
-        if std::mem::take(&mut self.batch) > 0 {
+        if self.state.take_flush() {
             self.sink_call(SinkCall::Flush);
             self.out.flush();
-            let remaining = self.pushed_len.saturating_sub(self.played);
-            let at =
-                self.shared.time.now().saturating_add(remaining).saturating_add(LOST_FINISH_MARGIN);
-            self.finish_due = Some(at);
-            self.trace(PlayoutStep::FinishDue { speech: self.handle.id(), at });
+            let step = self.state.flushed(self.shared.time.now());
+            self.trace(step);
         }
     }
 
     fn on_event(&mut self, report: SinkReport) {
-        let speech = self.handle.id();
-        match report {
-            SinkReport::Shown(word) => self.trace(PlayoutStep::TranscriptShown {
-                speech,
-                text: word.text,
-                start: word.start_time.unwrap_or_default(),
-                end: word.end_time.unwrap_or_default(),
-                played: self.played,
-            }),
-            SinkReport::Reset => {
-                self.trace(PlayoutStep::SinkReset { speech });
+        let now = self.shared.time.read();
+        for effect in self.state.handle(report, now) {
+            match effect {
+                PlayoutEffect::Trace(step) => self.trace(step),
+                PlayoutEffect::Started => {
+                    self.shared.report(GenEvent::PlaybackStarted { speech: self.handle.id() });
+                }
             }
-            SinkReport::Playback(PlaybackEvent::Started(s)) => {
-                if self.segment_key.is_some_and(|key| key != s.segment) {
-                    return;
-                }
-                let time = &self.shared.time;
-                let at = time.wall_secs()
-                    - time.now().saturating_duration_since(s.created_at).as_secs_f64();
-                self.start(at);
-            }
-            SinkReport::Playback(PlaybackEvent::Progressed(p)) => {
-                if self.segment_key.is_some_and(|key| key != p.segment) {
-                    return;
-                }
-                let (offset, duration) = (p.offset, p.duration);
-                self.trace(PlayoutStep::PlaybackProgressed { speech, offset, duration });
-                self.played += p.duration;
-                self.report_played();
-            }
-            // Started/progressed only: a tracker reports finishes with their segment.
-            SinkReport::Playback(PlaybackEvent::Finished { .. }) => {}
-            SinkReport::Finished { segment, ev: f } => {
-                if self.segment_key.is_some_and(|key| key != segment) {
-                    return;
-                }
-                if f.interrupted && self.first_segment.is_some_and(|first| segment == first) {
-                    self.cut_below = true;
-                }
-                // A sink with no `Started` (a bare recorder) still played it, unless cut at zero.
-                if !(f.interrupted && f.playback_position.is_zero()) {
-                    self.start(self.shared.time.wall_secs());
-                }
-                self.played = self.played.max(f.playback_position);
-                if f.interrupted {
-                } else {
-                    self.completed += f.playback_position;
-                }
-                self.report_played();
-            }
-        }
-    }
-
-    fn start(&mut self, at: f64) {
-        if !std::mem::replace(&mut self.started, true) {
-            self.shared.report(GenEvent::PlaybackStarted { speech: self.handle.id() });
-            self.owed = Some(at);
-        }
-    }
-
-    fn report_played(&mut self) {
-        let len =
-            if self.pushed == 0 { DEFAULT_FRAME_LEN } else { self.pushed_len / self.pushed as u32 };
-        let len = len.as_nanos().max(1);
-        let total = ((self.played.as_nanos() + len / 2) / len) as u64;
-        if total > self.reported {
-            let frames = total - self.reported;
-            self.trace(PlayoutStep::AudioPlayed { speech: self.handle.id(), frames });
-            self.reported = total;
         }
     }
 
     /// Now that nothing borrows it.
     fn settle<S: Segment>(&mut self, segment: &mut S) {
-        if let Some(at) = self.owed.take() {
+        if let Some(at) = self.state.take_started() {
             segment.started_speaking(at);
         }
     }
@@ -594,20 +482,21 @@ impl Playing<'_> {
     async fn played_out_report(&mut self) -> Result<Option<PlaybackFinished>, DriverError> {
         let out = self.out;
         let time = self.shared.time.clone();
-        let due = self.finish_due.expect("accepted audio was flushed before awaiting playback");
+        let due =
+            self.state.finish_due.expect("accepted audio was flushed before awaiting playback");
         let left = due.saturating_duration_since(time.now());
         match self.watched(time.timeout(left, out.wait_for_playout())).await {
             None => Ok(None),
             Some(Ok(event)) => Ok(Some(event)),
             Some(Err(_)) => {
-                let position = self.played.saturating_sub(self.completed);
+                let position = self.state.played.saturating_sub(self.state.completed);
                 self.trace(PlayoutStep::FinishLost {
                     speech: self.handle.id(),
-                    segment: self.segment_key.expect("captured audio has a playback key"),
+                    segment: self.state.segment_key.expect("captured audio has a playback key"),
                     position,
                 });
                 Err(DriverError::PlaybackReportTimeout(
-                    self.segment_key.expect("captured audio has a playback key"),
+                    self.state.segment_key.expect("captured audio has a playback key"),
                 ))
             }
         }
@@ -625,13 +514,8 @@ impl Playing<'_> {
             self.settle(segment);
             match pushed {
                 Some(Ok(())) => {
-                    if self.first_segment.is_none() {
-                        self.first_segment = self.out.tracker().current_segment();
-                        self.segment_key = self.first_segment;
-                    }
-                    self.pushed += 1;
-                    self.pushed_len += frame_duration(frame);
-                    self.batch += 1;
+                    self.state
+                        .captured(self.out.tracker().current_segment(), frame_duration(frame));
                     // The recording's agent channel, placed by the sink's own segment reports.
                     if let Some(tap) = self.shared.recorder_tap() {
                         tap.recorder.capture_frame(tap.now(), frame);
@@ -651,12 +535,12 @@ impl Playing<'_> {
 
     async fn cut<S: Segment>(&mut self, segment: &mut S, text: String) -> Heard {
         // Synchronous: interruption may not wait for a lock.
-        clear_sink(self.shared, self.handle.id(), self.out, self.batch > 0);
+        clear_sink(self.shared, self.handle.id(), self.out, self.state.batch > 0);
         self.drain(segment);
         let (heard, reported) = self.heard_at_cut(text).await;
         self.drain(segment);
         // Never started (a bare recorder), or the sink never said: no finish to journal.
-        if let (true, Some(interrupted)) = (self.started, reported) {
+        if let (true, Some(interrupted)) = (self.state.started, reported) {
             self.finished(heard.position, interrupted);
         }
         heard
@@ -667,7 +551,7 @@ impl Playing<'_> {
     /// the sink says it cut the segment (one that had played out before the clear reached it
     /// reports a whole finish); `None` when it said nothing.
     async fn heard_at_cut(&mut self, text: String) -> (Heard, Option<bool>) {
-        let frames = self.pushed;
+        let frames = self.state.pushed;
         if frames == 0 {
             // Nothing reached the sink, so no position (the tracker's would be another segment's).
             return (unheard(), Some(true));
@@ -689,7 +573,7 @@ impl Playing<'_> {
         }
         let Some(ev) = report else {
             let position = self.out.tracker().position();
-            let played = self.completed + position;
+            let played = self.state.completed + position;
             return (Heard { text, position, complete: false, frames, played }, None);
         };
         // The segments before were counted as they finished; a report that is not the cut is one
@@ -697,7 +581,7 @@ impl Playing<'_> {
         self.drain_reports();
         let cut = if ev.interrupted { ev.playback_position } else { Duration::ZERO };
         let text = synchronized(ev.synchronized_transcript, text);
-        let played = self.completed + cut;
+        let played = self.state.completed + cut;
         let heard = Heard { text, position: ev.playback_position, complete: false, frames, played };
         (heard, Some(ev.interrupted))
     }
