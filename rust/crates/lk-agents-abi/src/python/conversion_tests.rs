@@ -440,6 +440,13 @@ fn generated_collections_validate_typed_keys_and_nested_values_in_both_direction
     });
 }
 
+#[derive(Debug, Default, lk_agents_host_derive::Host)]
+#[binding(extract, emit, from_items)]
+struct NullableUpdate {
+    #[binding(default, skip_if_none)]
+    value: crate::Maybe<Option<String>>,
+}
+
 #[test]
 fn unicode_float_and_newtype_boundaries_keep_their_declared_semantics() {
     attach(|py| {
