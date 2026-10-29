@@ -13,7 +13,8 @@ use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
 use lk_agents_abi::{AudioFrame, ChatItem, ToolChoice};
 
 pub use gate::{AdaptiveNoiseGate, AudioGate, FixedGate};
-pub use host::{GateClass, NativeDuplexModel};
+pub use host::GateClass;
+pub use session::NativeDuplexModel;
 pub use lk_agents_abi::llm::duplex::DuplexCapabilities;
 pub use segmenter::{AUDIO_TIMEOUT, Fragment, Segmenter, Step};
 

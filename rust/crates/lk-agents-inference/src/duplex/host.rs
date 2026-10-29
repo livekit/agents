@@ -2,7 +2,6 @@
 //! adapter's declared host views. The plugin session's updates apply one after the other, its
 //! output audio and events are pulled here.
 
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,12 +15,12 @@ use lk_agents_abi::llm::realtime::{
 use lk_agents_abi::{AbortHandle, AudioFrame, Realtime, Spawner, SpawnerExt};
 use tokio::sync::mpsc;
 
-use super::session::{DuplexHost, DuplexHostSession, DuplexModel};
+use super::session::{DuplexHost, DuplexHostSession, NativeDuplexModel};
 use super::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment,
 };
-use crate::env::{Env, Standalone};
+use crate::env::Env;
 
 // ------------------------------------------------------------------------------------ gates
 
@@ -29,26 +28,18 @@ use crate::env::{Env, Standalone};
 pub struct GateClass<G>(Arc<Mutex<G>>);
 
 impl<G: AudioGate> GateClass<G> {
-    fn new(gate: G) -> Self {
-        GateClass(Arc::new(Mutex::new(gate)))
-    }
-
-    fn update(&self, frame: &AudioFrame) -> Result<bool, String> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).update(frame)
-    }
-
-    fn deactivate(&self) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).deactivate();
+    fn gate(&self) -> std::sync::MutexGuard<'_, G> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 
 impl<G: AudioGate + 'static> abi::AudioGate for GateClass<G> {
     fn update(&self, frame: AudioFrame) -> Result<bool, HostError> {
-        GateClass::update(self, &frame).map_err(HostError::new)
+        self.gate().update(&frame).map_err(HostError::new)
     }
 
     fn deactivate(&self) -> Result<(), HostError> {
-        GateClass::deactivate(self);
+        self.gate().deactivate();
         Ok(())
     }
 }
@@ -60,20 +51,17 @@ impl abi::FixedGate for GateClass<FixedGate> {
         deactivation_ratio: f64,
         min_silence_duration: f64,
     ) -> Self {
-        GateClass::new(FixedGate::new(
-            silence,
-            activation_ratio,
-            deactivation_ratio,
-            min_silence_duration,
-        ))
+        let gate =
+            FixedGate::new(silence, activation_ratio, deactivation_ratio, min_silence_duration);
+        GateClass(Arc::new(Mutex::new(gate)))
     }
 
     fn update(&self, frame: AudioFrame) -> Result<bool, InvalidPayload> {
-        GateClass::update(self, &frame).map_err(InvalidPayload)
+        self.gate().update(&frame).map_err(InvalidPayload)
     }
 
     fn deactivate(&self) {
-        GateClass::deactivate(self);
+        self.gate().deactivate();
     }
 }
 
@@ -84,20 +72,21 @@ impl abi::AdaptiveNoiseGate for GateClass<AdaptiveNoiseGate> {
         min_silence_duration: f64,
         window: f64,
     ) -> Self {
-        GateClass::new(AdaptiveNoiseGate::new(
+        let gate = AdaptiveNoiseGate::new(
             activation_ratio,
             deactivation_ratio,
             min_silence_duration,
             window,
-        ))
+        );
+        GateClass(Arc::new(Mutex::new(gate)))
     }
 
     fn update(&self, frame: AudioFrame) -> Result<bool, InvalidPayload> {
-        GateClass::update(self, &frame).map_err(InvalidPayload)
+        self.gate().update(&frame).map_err(InvalidPayload)
     }
 
     fn deactivate(&self) {
-        GateClass::deactivate(self);
+        self.gate().deactivate();
     }
 }
 
@@ -336,13 +325,6 @@ impl DuplexHostSession for HostSession {
 
 // ------------------------------------------------------------------------------------ the model
 
-/// `DuplexRealtimeAdapter`'s engine; `E` is the hosting process whose runtime and clock its
-/// sessions run on.
-pub struct NativeDuplexModel<E: Env = Standalone> {
-    model: Arc<DuplexModel>,
-    env: PhantomData<fn() -> E>,
-}
-
 impl<E: Env> abi::DuplexRealtimeModel for NativeDuplexModel<E> {
     fn new(host: Arc<dyn abi::DuplexHost>, audio_timeout: f64) -> Result<Self, HostError> {
         let label = host.label()?;
@@ -350,29 +332,10 @@ impl<E: Env> abi::DuplexRealtimeModel for NativeDuplexModel<E> {
         let spawner = E::spawner().map_err(HostError::new)?;
         let host = Arc::new(HostModel { host, label, caps, spawner });
         let timeout = Duration::from_secs_f64(audio_timeout.max(0.0));
-        let model = DuplexModel::new(host, timeout, E::clock());
-        Ok(NativeDuplexModel { model: Arc::new(model), env: PhantomData })
+        Ok(NativeDuplexModel::new(host, timeout, E::clock()))
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {
-        Realtime::capabilities(&*self.model)
-    }
-}
-
-impl<E: Env> Realtime for NativeDuplexModel<E> {
-    fn label(&self) -> String {
-        self.model.label()
-    }
-
-    fn capabilities(&self) -> RealtimeCapabilities {
-        Realtime::capabilities(&*self.model)
-    }
-
-    fn session(
-        &self,
-        turn_detection_disabled: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn lk_agents_abi::RealtimeSession>, ProviderError>>
-    {
-        self.model.session(turn_detection_disabled)
+        Realtime::capabilities(self)
     }
 }
