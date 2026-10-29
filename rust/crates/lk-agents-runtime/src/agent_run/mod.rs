@@ -33,7 +33,7 @@ const PROGRESS_QUEUE: usize = 32;
 
 /// What a run executes against.
 #[derive(Clone)]
-pub struct Ports {
+pub struct RunSetup {
     pub llm: Arc<dyn Llm>,
     pub tools_host: Option<HostRef>,
     pub host: Arc<dyn AgentHost>,
@@ -44,7 +44,7 @@ pub struct Ports {
 }
 
 /// The running invocation. Dropping it cancels the run; its work still settles.
-pub struct AgentRunHandle {
+pub struct ActiveRun {
     cancel: Option<oneshot::Sender<()>>,
     progress: Progress,
     model_error: oneshot::Receiver<ProviderError>,
@@ -81,7 +81,7 @@ impl Progress {
     }
 }
 
-impl AgentRunHandle {
+impl ActiveRun {
     /// Where the run's tool bodies report their progress.
     pub fn progress(&self) -> Progress {
         self.progress.clone()
@@ -101,7 +101,7 @@ impl AgentRunHandle {
     }
 }
 
-impl Drop for AgentRunHandle {
+impl Drop for ActiveRun {
     fn drop(&mut self) {
         self.cancel();
     }
@@ -112,9 +112,9 @@ pub fn start(
     runtime: &tokio::runtime::Handle,
     agent: AgentDefinition,
     input: RunInput,
-    ports: Ports,
+    setup: RunSetup,
     updates: usize,
-) -> Result<(AgentRunHandle, mpsc::Receiver<RunUpdate>), AgentError> {
+) -> Result<(ActiveRun, mpsc::Receiver<RunUpdate>), AgentError> {
     let input_id = input.invocation_id.clone();
     let run = AgentRun::new(agent, input)?.with_checkpoints();
     let (cancel, cancelled) = oneshot::channel();
@@ -124,7 +124,7 @@ pub fn start(
     let (model_error_tx, model_error) = oneshot::channel();
     let driver = Driver {
         run,
-        work: Execution::new(ports, runtime.clone(), Reporter { id: input_id, tx: events_tx }),
+        work: Execution::new(setup, runtime.clone(), Reporter { id: input_id, tx: events_tx }),
         updates: update_tx,
         model_error: Some(model_error_tx),
         finished: false,
@@ -132,7 +132,7 @@ pub fn start(
     let driving = Arc::new(TaskSet::default());
     let spawner = TokioSpawner::new(runtime.clone());
     driving.spawn(&spawner, "agent run", driver.drive(events, progress, cancelled));
-    let handle = AgentRunHandle {
+    let handle = ActiveRun {
         cancel: Some(cancel),
         progress: Progress(progress_tx),
         model_error,
@@ -157,7 +157,7 @@ impl Driver {
         mut cancelled: oneshot::Receiver<()>,
     ) {
         let mut cancel_seen = false;
-        let mut effects = self.run.handle(Event::Start, self.work.ports.clock.now());
+        let mut effects = self.run.handle(Event::Start, self.work.setup.clock.now());
         loop {
             for effect in effects.drain(..) {
                 if let Some(update) = self.work.execute(effect).await {
@@ -176,7 +176,7 @@ impl Driver {
                 return;
             }
             let wake = self.run.wake_at();
-            let clock = self.work.ports.clock.clone();
+            let clock = self.work.setup.clock.clone();
             let event = tokio::select! {
                 biased;
                 () = wait(clock.as_ref(), wake) => Event::Wake,
@@ -190,7 +190,7 @@ impl Driver {
                 Some((_, report)) = events.recv() => self.work.report(report).0,
                 _ = self.work.invoker.settled() => continue,
             };
-            effects = self.run.handle(event, self.work.ports.clock.now());
+            effects = self.run.handle(event, self.work.setup.clock.now());
         }
     }
 }

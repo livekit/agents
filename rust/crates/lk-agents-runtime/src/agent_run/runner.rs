@@ -14,7 +14,7 @@ use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
 use tokio::sync::mpsc;
 
-use super::{AgentRunHandle, PROGRESS_QUEUE, Ports, Progress, ProgressRefused, start};
+use super::{ActiveRun, PROGRESS_QUEUE, RunSetup, Progress, ProgressRefused, start};
 use lk_agents_net::env::ProcessEnv;
 
 /// Updates the consumer may lag behind by before the run waits for it.
@@ -73,7 +73,7 @@ impl AgentRunner for Runner {
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
-        let ports = Ports {
+        let setup = RunSetup {
             tools_host: request.tools_host,
             llm: self.llm.clone(),
             host: self.host.clone(),
@@ -101,7 +101,7 @@ impl AgentRunner for Runner {
         };
         let invocation_id = input.invocation_id.clone();
         let (handle, updates) =
-            start(&runtime, self.definition.clone(), input, ports, UPDATE_QUEUE)
+            start(&runtime, self.definition.clone(), input, setup, UPDATE_QUEUE)
                 .map_err(|e| InvalidRun(e.to_string()))?;
         let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
         running.retain(|(_, progress)| !progress.ended());
@@ -132,7 +132,7 @@ impl AgentRunner for Runner {
 
 /// One invocation's updates. Dropping it cancels the run; its work still settles.
 pub struct Updates {
-    run: AgentRunHandle,
+    run: ActiveRun,
     updates: mpsc::Receiver<RunUpdate>,
     clock: Arc<dyn Clock>,
 }

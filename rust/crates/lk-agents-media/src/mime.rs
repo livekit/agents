@@ -24,7 +24,7 @@ pub fn mime_to_av_format(mime: Option<&str>) -> Option<&'static str> {
 
 /// What an `AudioEmitter` does with the mime type a TTS provider declares for its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecodePlan {
+pub enum AudioDecoding {
     /// `audio/pcm` or `audio/raw`: no decoder is built.
     Passthrough,
     /// Carries the normalised (trimmed, lower-cased) mime `Decoder::new` takes.
@@ -51,15 +51,15 @@ impl std::error::Error for UnknownMime {}
 /// `AudioEmitter.initialize`'s branch. Unknown types are refused here because ffmpeg would
 /// otherwise probe them, and an ID3 tag framed as PCM is noise, not an error. The PCM test is a
 /// prefix match, as the reference's is.
-pub fn decode_plan(mime_type: &str) -> Result<DecodePlan, UnknownMime> {
+pub fn audio_decoding(mime_type: &str) -> Result<AudioDecoding, UnknownMime> {
     let mt = mime_type.trim().to_ascii_lowercase();
     if mt.starts_with("audio/pcm") || mt.starts_with("audio/raw") {
-        return Ok(DecodePlan::Passthrough);
+        return Ok(AudioDecoding::Passthrough);
     }
     if mime_to_av_format(Some(&mt)).is_none() {
         return Err(UnknownMime(mime_type.to_owned()));
     }
-    Ok(DecodePlan::Decode(mt))
+    Ok(AudioDecoding::Decode(mt))
 }
 
 #[cfg(test)]
@@ -74,7 +74,7 @@ mod tests {
         for mime in
             ["audio/pcm", "audio/raw", "AUDIO/PCM", " audio/pcm;rate=24000 ", "audio/raw;bits=16"]
         {
-            assert_eq!(decode_plan(mime), Ok(DecodePlan::Passthrough), "{mime}");
+            assert_eq!(audio_decoding(mime), Ok(AudioDecoding::Passthrough), "{mime}");
         }
     }
 
@@ -82,18 +82,18 @@ mod tests {
     // "we decode containers now" -- and the sentence, which a plugin author reads in a traceback.
     #[test]
     fn a_known_container_is_decoded_under_its_normalised_name_and_an_unknown_one_is_refused() {
-        assert_eq!(decode_plan(" Audio/MPEG "), Ok(DecodePlan::Decode("audio/mpeg".to_owned())));
+        assert_eq!(audio_decoding(" Audio/MPEG "), Ok(AudioDecoding::Decode("audio/mpeg".to_owned())));
         assert_eq!(
-            decode_plan("audio/webm;codecs=opus"),
-            Ok(DecodePlan::Decode("audio/webm;codecs=opus".to_owned())),
+            audio_decoding("audio/webm;codecs=opus"),
+            Ok(AudioDecoding::Decode("audio/webm;codecs=opus".to_owned())),
             "the parameter survives normalisation; the table strips it on lookup"
         );
-        let err = decode_plan("audio/x-not-a-real-container").unwrap_err();
+        let err = audio_decoding("audio/x-not-a-real-container").unwrap_err();
         assert_eq!(
             err.0, "audio/x-not-a-real-container",
             "the provider's own spelling is reported"
         );
-        assert!(decode_plan("").is_err(), "an empty declaration is not PCM");
+        assert!(audio_decoding("").is_err(), "an empty declaration is not PCM");
     }
 
     // Catches: a typo or dropped row in the alias table (`audio/x-wav` taking the ffmpeg path

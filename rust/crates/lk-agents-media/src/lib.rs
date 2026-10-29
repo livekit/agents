@@ -33,7 +33,7 @@ pub use error::{CodecError, Result};
 pub use filters::{ExpFilter, MovingAverage};
 pub use frame_resampler::{FrameResampler, OnChange};
 pub use lk_agents_abi::{Quality, ResampleError, Resampler};
-pub use mime::{DecodePlan, UnknownMime, decode_plan, mime_to_av_format};
+pub use mime::{AudioDecoding, UnknownMime, audio_decoding, mime_to_av_format};
 pub use resample::LinearResampler;
 #[cfg(feature = "resample")]
 pub use soxr::SoxrResampler;

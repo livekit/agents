@@ -17,7 +17,7 @@ use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedStri
 use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::pool::MediaPool;
-use lk_agents_media::{DecodePlan, Decoder};
+use lk_agents_media::{AudioDecoding, Decoder};
 use tokio::sync::{Notify, watch};
 
 use crate::codecs::{self, DecoderInput, decoder_limits};
@@ -427,16 +427,16 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         stream: bool,
     ) -> Result<(), EmitterError> {
         let me = &self.0;
-        let decode = match lk_agents_media::decode_plan(&mime_type)
+        let decode = match lk_agents_media::audio_decoding(&mime_type)
             .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?
         {
-            DecodePlan::Passthrough => Decode::Pcm,
-            DecodePlan::Decode(mime)
+            AudioDecoding::Passthrough => Decode::Pcm,
+            AudioDecoding::Decode(mime)
                 if lk_agents_media::mime_to_av_format(Some(&mime)) == Some("wav") =>
             {
                 Decode::Wav(Mutex::new(None))
             }
-            DecodePlan::Decode(mime) => {
+            AudioDecoding::Decode(mime) => {
                 lk_agents_media::source::check_stream(&mime)
                     .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?;
                 Decode::Container(Queue {

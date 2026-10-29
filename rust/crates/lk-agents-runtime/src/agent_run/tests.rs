@@ -304,7 +304,7 @@ fn tool(name: &str) -> FunctionToolInfo {
 }
 
 struct Setup {
-    handle: AgentRunHandle,
+    handle: ActiveRun,
     updates: mpsc::Receiver<RunUpdate>,
     host: Arc<FakeHost>,
     closed: Arc<AtomicUsize>,
@@ -357,7 +357,7 @@ fn setup(
         approval: None,
         host_context: Some(HostRef::new(0, &registry)),
     };
-    let ports = Ports {
+    let setup = RunSetup {
         tools_host: None,
         llm,
         host: host.clone(),
@@ -366,7 +366,7 @@ fn setup(
         entry,
     };
     let (handle, updates) =
-        start(&tokio::runtime::Handle::current(), agent, input, ports, 4).unwrap();
+        start(&tokio::runtime::Handle::current(), agent, input, setup, 4).unwrap();
     *host.progress.lock().unwrap() = Some(handle.progress());
     Setup { handle, updates, host, closed }
 }

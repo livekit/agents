@@ -20,7 +20,7 @@ use lk_agents_core::text_session::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::agent_run::Ports;
+use crate::agent_run::RunSetup;
 use crate::agent_run::execution::{Execution, Report, Reporter};
 
 const UPDATE_QUEUE: usize = 16;
@@ -115,7 +115,7 @@ impl Driver {
                 history,
             } => {
                 let agent = &self.agents[&agent_name];
-                let ports = Ports {
+                let setup = RunSetup {
                     tools_host: agent.tools_host.clone(),
                     llm: agent.llm.clone(),
                     host: agent.host.clone(),
@@ -140,7 +140,7 @@ impl Driver {
                 self.work.insert(
                     invocation_id.clone(),
                     Execution::new(
-                        ports,
+                        setup,
                         self.runtime.clone(),
                         Reporter { id: invocation_id, tx: self.events_tx.clone() },
                     ),

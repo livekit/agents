@@ -45,7 +45,7 @@ enum Work {
 
 pub(crate) struct Execution {
     pub invoker: HostInvoker,
-    pub(super) ports: Ports,
+    pub(super) setup: RunSetup,
     runtime: tokio::runtime::Handle,
     events_tx: Reporter,
     pub requests: BTreeMap<RequestId, Option<oneshot::Sender<()>>>,
@@ -59,10 +59,10 @@ pub(crate) struct Execution {
 }
 
 impl Execution {
-    pub fn new(ports: Ports, runtime: tokio::runtime::Handle, events_tx: Reporter) -> Self {
+    pub fn new(setup: RunSetup, runtime: tokio::runtime::Handle, events_tx: Reporter) -> Self {
         Self {
-            invoker: HostInvoker::new(ports.entry.clone()),
-            ports,
+            invoker: HostInvoker::new(setup.entry.clone()),
+            setup,
             runtime,
             events_tx,
             requests: BTreeMap::new(),
@@ -105,7 +105,7 @@ impl Execution {
                 unreachable!("only a coordinated run asks its coordinator")
             }
             Effect::HostCheckpoint { checkpoint, list_tools } => {
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 self.invoke(
                     Work::Checkpoint(checkpoint),
                     None,
@@ -143,14 +143,14 @@ impl Execution {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
                 let req = ChatRequest {
-                    tools_host: self.ports.tools_host.clone(),
+                    tools_host: self.setup.tools_host.clone(),
                     chat_ctx,
                     tools,
-                    conn_options: self.ports.conn_options,
+                    conn_options: self.setup.conn_options,
                     ..Default::default()
                 };
-                let llm = self.ports.llm.clone();
-                let clock = self.ports.clock.clone();
+                let llm = self.setup.llm.clone();
+                let clock = self.setup.clock.clone();
                 let events = self.events_tx.clone();
                 self.runtime
                     .spawn(stream_request(request, req, llm, clock, events, cancelled));
@@ -161,7 +161,7 @@ impl Execution {
                 }
             }
             Effect::InstructionsRender { render } => {
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 self.invoke(
                     Work::Render(render),
                     None,
@@ -183,7 +183,7 @@ impl Execution {
                 function_call,
             } => {
                 self.calls.insert(call, function_call.clone());
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 let resource = self.mint();
                 self.invoke(Work::Call(call), Some(function_call), None, move |inv, events| async move {
                     let report = match host.prepare_tool(&inv, arguments).await {
@@ -205,7 +205,7 @@ impl Execution {
                 let Some(args) = self.prepared.get(&prepared).cloned() else {
                     return None;
                 };
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(
                     Work::Call(call),
@@ -220,7 +220,7 @@ impl Execution {
                 );
             }
             Effect::TemplateRender { call, template } => {
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(
                     Work::Call(call),
@@ -246,7 +246,7 @@ impl Execution {
                 let Some(args) = self.prepared.remove(&prepared) else {
                     return None;
                 };
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 self.invoke(
                     Work::Call(call),
                     Some(function_call),
@@ -283,7 +283,7 @@ impl Execution {
                 validation,
                 candidate,
             } => {
-                let host = self.ports.host.clone();
+                let host = self.setup.host.clone();
                 self.invoke(
                     Work::Validation(validation),
                     None,
@@ -442,7 +442,7 @@ impl Execution {
             .get(&work)
             .and_then(|op| self.invoker.live(*op))
         {
-            self.ports.host.cancel(invocation);
+            self.setup.host.cancel(invocation);
         }
     }
 
