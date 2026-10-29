@@ -4,8 +4,7 @@
 /// docs/CONTRACTS.md §4.7's provider traits, re-exported so a call site names one crate.
 pub use lk_agents_abi as abi;
 
-// What the hosting process lends every client (decision 88).
-// Conversation judges: model calls run concurrently on one conversation (decision 79).
+// Conversation judges: model calls run concurrently on one conversation.
 pub mod evals;
 
 pub mod extra;

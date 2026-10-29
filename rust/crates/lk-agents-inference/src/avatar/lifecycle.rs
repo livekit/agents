@@ -169,13 +169,13 @@ pub enum AvatarSessionEffect {
         session: ProviderSession,
         error: ApiError,
     },
-    /// An attempt missed its cleanup deadline; the runtime still owns it (decision 14).
+    /// An attempt missed its cleanup deadline; the runtime still owns it.
     CleanupIncomplete {
         request: AvatarRequestId,
         attempt: u32,
     },
     /// A retiring create was still unanswered at its deadline: a session it may have made bills
-    /// until the provider's idle timeout; a later answer is still terminated (decision 14).
+    /// until the provider's idle timeout; a later answer is still terminated.
     RetirementIncomplete {
         request: AvatarRequestId,
     },

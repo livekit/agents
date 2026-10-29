@@ -354,7 +354,7 @@ pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
     }
 }
 
-/// `E` is the hosting process a host-built chain takes its executor and clock from.
+/// A host-built chain takes its executor and clock from its env.
 pub struct FallbackStt {
     chain: Arc<FallbackChain<SttBackend>>,
     spawner: Arc<dyn Spawner>,

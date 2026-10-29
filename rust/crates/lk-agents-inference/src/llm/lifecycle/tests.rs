@@ -274,7 +274,7 @@ fn a_superseded_attempts_events_are_ignored() {
 }
 
 // Catches: an attempt that never settles reported as clean termination, or reported forever
-// (decision 14: one typed observation, ownership stays with the runtime).
+// (one typed observation, ownership stays with the runtime).
 #[test]
 fn a_missed_cleanup_deadline_is_reported_once() {
     let mut request = start(policy());

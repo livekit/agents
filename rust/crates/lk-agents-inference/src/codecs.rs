@@ -1,7 +1,7 @@
 //! Background decoding: one admitted native job runs a `lk_agents_media::source` decode and hands
 //! its frames to an async consumer through a bounded queue. Pulls yield cooperatively;
 //! cancellation retains native ownership through worker settlement. The pool is the process's,
-//! lent by [`Env`](crate::env::Env) (decision 88).
+//! lent through [`ProcessEnv`](lk_agents_net::env::ProcessEnv).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};

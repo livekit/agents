@@ -77,7 +77,7 @@ impl Backend for LlmBackend {
     }
 }
 
-/// `E` is the process a host-constructed chain runs in (decision 88).
+/// A host-constructed chain runs on the executor and clock its env lends.
 pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
     spawner: Arc<dyn Spawner>,

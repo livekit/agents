@@ -98,7 +98,6 @@ impl Connect {
 }
 
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
-/// `E` is the process a host-constructed model runs in (decision 88).
 pub struct NativeRealtime {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.

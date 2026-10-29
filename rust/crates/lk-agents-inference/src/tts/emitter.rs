@@ -23,7 +23,7 @@ use tokio::sync::{Notify, watch};
 use crate::codecs::{self, DecoderInput, decoder_limits};
 use lk_agents_net::env::ProcessEnv;
 
-/// What the emitter runs on, lent by the process (decision 88).
+/// What the emitter runs on, lent by the process.
 pub struct EmitterEnv {
     pub spawner: Arc<dyn Spawner>,
     pub clock: Arc<dyn Clock>,

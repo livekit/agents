@@ -248,7 +248,7 @@ async fn close_during_a_received_create_asks_again_under_its_key_and_terminates(
     assert!(seen[2].0.starts_with("POST /v1/avatar/sessions/terminate "), "{}", seen[2].0);
 }
 
-// Catches (decision 14): close waiting forever on a received creation that never answers, or
+// Catches: close waiting forever on a received creation that never answers, or
 // reporting a clean close while it may still create a billable session.
 #[tokio::test(start_paused = true)]
 async fn close_reports_incomplete_cleanup_when_a_creation_never_answers() {

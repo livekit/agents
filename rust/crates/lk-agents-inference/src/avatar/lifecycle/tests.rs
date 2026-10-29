@@ -211,7 +211,7 @@ fn close_during_creation_settles_the_caller_and_retires_the_result() {
 }
 
 // Catches: an unsent create kept running after its caller left, or a stopped attempt that never
-// releases reported as clean or waited on forever (decision 14: one typed observation, the
+// releases reported as clean or waited on forever (one typed observation, the
 // runtime keeps the attempt).
 #[test]
 fn a_missed_cleanup_deadline_is_reported_once() {
@@ -336,7 +336,7 @@ fn a_create_failed_after_it_was_received_is_retired_once_its_caller_has_the_erro
 }
 
 // Catches: a retirement that cannot learn the operation's outcome waited on forever, or ended
-// silently (decision 14: one typed report; a later answer is still terminated).
+// silently (one typed report; a later answer is still terminated).
 #[test]
 fn a_retirement_unanswered_by_its_deadline_is_reported_once() {
     let mut avatar = creating();

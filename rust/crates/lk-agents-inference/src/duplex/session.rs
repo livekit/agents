@@ -37,8 +37,8 @@ pub trait DuplexHostSession: Send + Sync {
     async fn aclose(&self);
 }
 
-/// `DuplexRealtimeAdapter`'s engine: the session's realtime model; `E` is the hosting process
-/// whose runtime and clock its sessions run on.
+/// `DuplexRealtimeAdapter`'s engine: the session's realtime model, its sessions on the clock
+/// and executor it was built with.
 pub struct NativeDuplexModel {
     host: Arc<dyn DuplexHost>,
     label: String,
