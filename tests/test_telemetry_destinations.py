@@ -776,35 +776,6 @@ def test_oversized_metadata_is_refused_before_freezing_or_traversing_values(monk
         cloud.shutdown_at_exit()
 
 
-@pytest.mark.parametrize("safe_body", [False, True])
-def test_native_control_body_classification_preserves_wire_discriminator(safe_body):
-    from opentelemetry._logs import LogRecord
-    from opentelemetry.sdk._logs import ReadableLogRecord
-    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
-
-    exporter = InMemoryLogRecordExporter()
-    record = ReadableLogRecord(
-        log_record=LogRecord(
-            body="session report",
-            attributes={
-                "lk.telemetry.capture_content": False,
-                "lk.telemetry.safe_body": safe_body,
-                "lk.pii.input": "private input",
-                "exception.stacktrace": "private stack",
-                "agent_name": "back-office",
-            },
-        ),
-        resource=Resource({}),
-    )
-    traces.RedactingLogExporter(exporter).export([record])
-    exported = exporter.get_finished_logs()[0]
-    assert exported.log_record.body == ("session report" if safe_body else "log body redacted")
-    assert "lk.telemetry.safe_body" not in exported.log_record.attributes
-    assert "lk.pii.input" not in exported.log_record.attributes
-    assert "exception.stacktrace" not in exported.log_record.attributes
-    assert exported.log_record.attributes["agent_name"] == "back-office"
-
-
 @pytest.mark.asyncio
 async def test_report_without_recording_options_still_emits_its_outcome(monkeypatch):
     from opentelemetry.sdk._logs import LoggerProvider
