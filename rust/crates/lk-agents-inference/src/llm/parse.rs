@@ -152,6 +152,8 @@ impl ChoiceAccumulator {
 
         let content = filter.strip(delta.content.clone(), choice.finish_reason.is_some());
 
+        // Every call the delta closes, in order: a provider may send several calls in one delta.
+        let mut closed = Vec::new();
         for tool in &delta.tool_calls {
             // `if not tool.function: continue` (some providers send only `{"index": 0}`).
             let Some(function) = tool.function.as_ref() else { continue };
@@ -161,8 +163,9 @@ impl ChoiceAccumulator {
                 && tool.id.as_deref().is_some_and(|s| !s.is_empty())
                 && tool.index != self.tool_index;
 
-            let call_chunk = boundary
-                .then(|| self.take_call_chunk(id, content.clone(), delta.extra_content.clone()));
+            if boundary {
+                closed.push(self.take_call());
+            }
 
             // `if tool.function.name:` -- an empty name is a continuation.
             if function.name.as_deref().is_some_and(|s| !s.is_empty()) {
@@ -178,18 +181,25 @@ impl ChoiceAccumulator {
                     .get_or_insert_with(String::new)
                     .push_str(function.arguments.as_deref().unwrap_or_default());
             }
-
-            if let Some(chunk) = call_chunk {
-                // The reference returns from inside the loop; the next delta continues the call.
-                return Some(chunk);
-            }
         }
 
         let finished_with_call = matches!(choice.finish_reason.as_deref(), Some("tool_calls") | Some("stop"))
             // An empty accumulated id means there is no call to close.
             && self.tool_call_id.as_deref().is_some_and(|s| !s.is_empty());
         if finished_with_call {
-            return Some(self.take_call_chunk(id, content, delta.extra_content.clone()));
+            closed.push(self.take_call());
+        }
+        if !closed.is_empty() {
+            return Some(LlmChunk {
+                id: id.to_owned(),
+                delta: Some(ChoiceDelta {
+                    role: Some(Role::Assistant),
+                    content,
+                    tool_calls: closed,
+                    extra: delta.extra_content.clone(),
+                }),
+                ..Default::default()
+            });
         }
 
         // `if not delta.content and not delta_extra`: an empty delta would start the TTFT clock.
@@ -212,27 +222,12 @@ impl ChoiceAccumulator {
     }
 
     /// `tool_index` is not cleared: the next boundary compares against it.
-    fn take_call_chunk(
-        &mut self,
-        id: &str,
-        content: Option<String>,
-        extra: Option<Extra>,
-    ) -> LlmChunk {
-        let call = FunctionToolCall {
+    fn take_call(&mut self) -> FunctionToolCall {
+        FunctionToolCall {
             name: self.fnc_name.take().unwrap_or_default(),
             arguments: self.fnc_raw_arguments.take().unwrap_or_default(),
             call_id: self.tool_call_id.take().unwrap_or_default(),
             extra: self.tool_extra.take(),
-        };
-        LlmChunk {
-            id: id.to_owned(),
-            delta: Some(ChoiceDelta {
-                role: Some(Role::Assistant),
-                content,
-                tool_calls: vec![call],
-                extra,
-            }),
-            ..Default::default()
         }
     }
 }
@@ -432,6 +427,24 @@ mod tests {
         .unwrap();
         assert_eq!(calls(&done)[0].call_id, "call_b", "call_b kept accumulating");
         assert_eq!(calls(&done)[0].arguments, "{");
+    }
+
+    // Catches: returning at the first closed call inside a delta, which lost every call after the
+    // second one a provider sends in a single delta.
+    #[test]
+    fn every_call_in_one_delta_is_assembled() {
+        let mut acc = ChoiceAccumulator::new();
+        let done = parse(
+            &mut acc,
+            json!({"id": "c", "choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "call_a", "function": {"name": "a", "arguments": "{}"}},
+                {"index": 1, "id": "call_b", "function": {"name": "b", "arguments": "{}"}},
+                {"index": 2, "id": "call_c", "function": {"name": "c", "arguments": "{}"}}
+            ]}, "finish_reason": "tool_calls"}]}),
+        )
+        .expect("the delta closes its calls");
+        let ids: Vec<_> = calls(&done).iter().map(|call| call.call_id.as_str()).collect();
+        assert_eq!(ids, ["call_a", "call_b", "call_c"]);
     }
 
     // Catches: closing an accumulated call only on `finish_reason == "tool_calls"`.
