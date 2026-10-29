@@ -20,7 +20,7 @@ from .. import _bindings, utils
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContent, ChatRole
-    from .tool_context import Tool
+    from ..llm.tool_context import Tool
 
 
 class ImageContent(BaseModel):

@@ -907,7 +907,7 @@ fn static_class_calls_construct_values_and_compare_borrowed_instances() {
         text.contains("@staticmethod\n    def from_parts(parts: Sequence[str]) -> Value"),
         "{text}"
     );
-    assert!(text.contains("def __eq__(self, other: Value) -> bool"), "{text}");
+    assert!(text.contains("def __eq__(self, other: object) -> bool"), "{text}");
     let unsupported = read(
         r#"
         #[crate::host(class)]

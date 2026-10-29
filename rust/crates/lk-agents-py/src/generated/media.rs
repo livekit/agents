@@ -428,7 +428,7 @@ impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/media/emitter.rs.
 
-/// [`::lk_agents_abi::media::emitter::EmitterOutput`] over a host `livekit.agents.utils.aio.Chan`.
+/// [`::lk_agents_abi::media::emitter::EmitterOutput`] over a host `livekit.agents.utils.aio.Chan[livekit.agents.tts.SynthesizedAudio]`.
 #[derive(Clone)]
 pub struct EmitterOutputProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

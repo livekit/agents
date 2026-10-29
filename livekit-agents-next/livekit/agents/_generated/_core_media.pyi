@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import Chan
 from livekit.agents.utils.images import _FrameReader
@@ -37,7 +38,7 @@ async def serialize_image_url(
     """A URL's inline bytes and MIME type, or the URL itself when it is external."""
 
 class AudioEmitter:
-    def __init__(self, *, label: str, dst_ch: Chan) -> None: ...
+    def __init__(self, *, label: str, dst_ch: Chan[SynthesizedAudio]) -> None: ...
     def initialize(
         self,
         *,

@@ -67,7 +67,6 @@ const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/types/identity.rs",
     "rust/crates/lk-agents-abi/src/voice/rtc.rs",
     "rust/crates/lk-agents-abi/src/voice/calls.rs",
-    "rust/crates/lk-agents-abi/src/worker/remote_session.rs",
     "rust/crates/lk-agents-abi/src/llm/fallback.rs",
     "rust/crates/lk-agents-abi/src/inference/fallback.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/steering.rs",

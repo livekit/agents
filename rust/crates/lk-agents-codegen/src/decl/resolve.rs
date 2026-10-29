@@ -788,12 +788,19 @@ impl Resolver<'_> {
             .ok_or_else(|| format!("{at}: `{}` is not a #[host(proxy)] trait", tr.ident))?;
         let host = voc::text(at, &proxy.nested, "host")?
             .ok_or_else(|| format!("{at}: proxy `{}` names no host class", tr.ident))?;
+        // A provider base with `events` is an `EventEmitter` generic over the plugin's own events.
+        type Metas = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;
         let generic = tr.attrs.iter().any(|a| {
             a.path().is_ident("python")
-                && a.parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-                )
-                .is_ok_and(|metas| metas.iter().any(|m| m.path().is_ident("provider")))
+                && a.parse_args_with(Metas::parse_terminated).is_ok_and(|metas| {
+                    metas.iter().any(|m| {
+                        let syn::Meta::List(provider) = m else { return false };
+                        provider.path.is_ident("provider")
+                            && provider
+                                .parse_args_with(Metas::parse_terminated)
+                                .is_ok_and(|args| args.iter().any(|a| a.path().is_ident("events")))
+                    })
+                })
         });
         let declared = declares_calls(tr).then(|| {
             (k.modules[module].path.first().cloned().unwrap_or_default(), tr.ident.to_string())

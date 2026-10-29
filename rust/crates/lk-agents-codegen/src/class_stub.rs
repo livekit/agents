@@ -331,7 +331,15 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
     } else {
         vec!["self".to_owned()]
     };
-    let (parameters, ret) = signature_parts(c, m, imports);
+    let (mut parameters, ret) = signature_parts(c, m, imports);
+    // Python compares with any object; pyo3 answers `NotImplemented` for a foreign type.
+    if matches!(m.name.as_str(), "__eq__" | "__ne__") {
+        for (parameter, _) in &mut parameters {
+            if let Some((name, _)) = parameter.split_once(':') {
+                *parameter = format!("{name}: object");
+            }
+        }
+    }
     let mut star = false;
     for (parameter, kw_only) in parameters {
         if kw_only && !star {
@@ -561,8 +569,8 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 }
                 return format!("Callable[[{params}], {result}]");
             }
-            let (module, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
-            let name = imports.external(module, name);
+            // A dotted class, with its type arguments when it is generic (`aio.Chan[..]`).
+            let name = imports.annotation(host, "");
             if *generic {
                 imports.add("typing", "Any");
                 format!("{name}[Any]")

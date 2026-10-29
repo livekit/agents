@@ -9,7 +9,7 @@ use crate::{AudioFrame, TimedString};
 /// Where a synthesis' audio goes: `tts.py`'s `_EmitterOutput` over the host channel. Its calls
 /// queue in order and run on the host loop, in the context the emitter was built in.
 #[crate::host(proxy(
-    host = "livekit.agents.utils.aio.Chan",
+    host = "livekit.agents.utils.aio.Chan[livekit.agents.tts.SynthesizedAudio]",
     view = "livekit.agents.tts._EmitterOutput"
 ))]
 pub trait EmitterOutput: Send + Sync {

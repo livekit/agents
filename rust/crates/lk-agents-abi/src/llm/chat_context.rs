@@ -614,7 +614,7 @@ pub struct AgentConfigUpdate {
     #[python(
         private,
         ty = "list[Tool]",
-        type_import = ".tool_context:Tool",
+        type_import = "..llm.tool_context:Tool",
         default_factory = "list"
     )]
     #[python(required)]
