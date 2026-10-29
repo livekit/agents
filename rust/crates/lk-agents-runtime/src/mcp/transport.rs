@@ -14,7 +14,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::transport::{StreamableHttpClientTransport, Transport};
 use tokio::sync::Notify;
 
-use super::http_client::CleanupClient;
+use super::http::CleanupClient;
 use super::{McpError, McpTransport, conn};
 use lk_agents_abi::llm::mcp::McpInvocation;
 

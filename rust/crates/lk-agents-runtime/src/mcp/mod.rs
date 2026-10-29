@@ -1,7 +1,7 @@
 //! The MCP session and its transports: thin I/O over the upstream SDK. The tool logic is
 //! `lk_agents_core::mcp`.
 
-mod http_client;
+mod http;
 mod session;
 mod transport;
 
