@@ -100,16 +100,6 @@ pub fn host_clock() -> Arc<dyn Clock> {
 pub struct Process;
 
 impl lk_agents_net::env::Env for Process {
-    type Services = lk_agents_inference::env::Services;
-
-    fn services() -> Self::Services {
-        Self::Services {
-            workers: || workers().map_err(|error| error.to_string()),
-            images: images(),
-            strip_assistant_markup: lk_agents_voice::tts::markup::strip_expr_markup,
-        }
-    }
-
     fn http() -> Result<Arc<lk_agents_net::http::GatewayHttp>, String> {
         with_started(|started| started.http.clone()).map_err(|error| error.to_string())
     }
@@ -132,6 +122,20 @@ impl lk_agents_net::env::Env for Process {
     }
 }
 
+impl lk_agents_inference::env::Env for Process {
+    fn workers() -> Result<MediaWorkers, String> {
+        workers().map_err(|error| error.to_string())
+    }
+
+    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+        images()
+    }
+
+    fn strip_assistant_markup(text: &str) -> String {
+        lk_agents_voice::tts::markup::strip_expr_markup(text)
+    }
+}
+
 impl lk_agents_worker::env::Env for Process {
     fn worker_io() -> Result<lk_agents_worker::io::WorkerIo, String> {
         worker_io().map_err(|error| error.to_string())
@@ -145,7 +149,7 @@ fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send
 
 #[cfg(not(feature = "media-images"))]
 fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    lk_agents_inference::env::Services::default().images
+    <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
 }
 
 /// The voice core's speech text in the native synthesis clients and the judges' transcripts.

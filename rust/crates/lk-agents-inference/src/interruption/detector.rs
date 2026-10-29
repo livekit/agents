@@ -8,19 +8,18 @@ use lk_agents_abi::inference::InvalidOption;
 use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSource};
 use lk_agents_abi::{ApiConnectOptions, WallAnchor};
 use lk_agents_net::credentials::resolve_credential;
-use lk_agents_net::env::Env;
 
 use super::{AdaptiveInterruptionDetector, ConnectionConfig, InterruptionLeg, InterruptionOptions};
-use crate::env::{Services, Standalone};
+use crate::env::{Env, Standalone};
 use crate::headers::default_inference_url_from_env;
 
 /// `E` is the hosting process whose clock the streams time against.
-pub struct NativeInterruptionDetector<E: Env<Services = Services> = Standalone> {
+pub struct NativeInterruptionDetector<E: Env = Standalone> {
     detector: AdaptiveInterruptionDetector,
     env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env<Services = Services>> lk_agents_abi::turn::inference::InterruptionDetector
+impl<E: Env> lk_agents_abi::turn::inference::InterruptionDetector
     for NativeInterruptionDetector<E>
 {
     fn new(
@@ -70,7 +69,7 @@ impl<E: Env<Services = Services>> lk_agents_abi::turn::inference::InterruptionDe
     }
 }
 
-impl<E: Env<Services = Services>> InterruptionSource for NativeInterruptionDetector<E> {
+impl<E: Env> InterruptionSource for NativeInterruptionDetector<E> {
     fn open(&self, anchor: WallAnchor) -> Arc<dyn InterruptionPort> {
         InterruptionLeg::open(&self.detector, anchor)
     }

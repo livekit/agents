@@ -7,17 +7,12 @@ use std::sync::{Arc, LazyLock};
 
 use lk_agents_abi::{Clock, Spawner};
 
+use crate::http::GatewayHttp;
 use crate::session_report::ReportAdmission;
 
 pub trait Env: Send + Sync + 'static {
-    /// Subject-specific services supplied by the process, without an edge to their crate.
-    type Services: Send + Sync + 'static;
-    fn services() -> Self::Services;
-
     /// The process's shared connection pool, supplied to each client constructor.
-    fn http() -> Result<Arc<crate::http::GatewayHttp>, String> {
-        crate::http::GatewayHttp::new().map(Arc::new)
-    }
+    fn http() -> Result<Arc<GatewayHttp>, String>;
 
     /// The runtime this crate's tasks and sockets run on.
     fn runtime() -> Result<tokio::runtime::Handle, String>;
@@ -36,13 +31,13 @@ pub trait Env: Send + Sync + 'static {
 }
 
 /// A Rust caller with no host: the current Tokio runtime and the wall clock.
-pub struct Standalone<S = ()>(std::marker::PhantomData<fn() -> S>);
+pub struct Standalone;
 
-impl<S: Default + Send + Sync + 'static> Env for Standalone<S> {
-    type Services = S;
-
-    fn services() -> S {
-        S::default()
+impl Env for Standalone {
+    /// A pool per client: a pool's connections belong to the runtime that opened them, and a
+    /// standalone caller's runtime may not outlive the client (a test's).
+    fn http() -> Result<Arc<GatewayHttp>, String> {
+        GatewayHttp::new().map(Arc::new)
     }
 
     fn runtime() -> Result<tokio::runtime::Handle, String> {

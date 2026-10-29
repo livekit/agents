@@ -23,7 +23,7 @@ fn judge_prompts_strip_only_assistant_markup_in_conversation_and_reference() {
     let prompt = prompts::built_in("conciseness").unwrap().prompt(
         &conversation,
         Some(&reference),
-        Process::services().strip_assistant_markup,
+        <Process as lk_agents_inference::env::Env>::strip_assistant_markup,
     );
     assert!(prompt.contains("Conversation:\nassistant: Hello.\nuser: <expr"));
     assert!(prompt.contains("Reference:\nassistant: Hello."));

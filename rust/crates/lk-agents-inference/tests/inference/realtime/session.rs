@@ -21,13 +21,13 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::RealClock;
 use lk_agents_abi::TokioSpawner;
+use lk_agents_inference::env::Env;
 use lk_agents_inference::env::Standalone;
 use lk_agents_inference::realtime::native::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, NativeRealtime, OPENAI,
     OptionsPatch, SeqIds, XAI,
 };
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
-use lk_agents_net::env::Env;
 use serde_json::json;
 
 /// No test may block for longer than this. A driver bug that parks forever fails as a timeout
@@ -65,7 +65,7 @@ fn model(ws: Arc<FakeWs>, dialect: lk_agents_inference::realtime::Dialect) -> Na
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     )
     .with_ids(Arc::new(SeqIds::default()))
 }
@@ -238,7 +238,7 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     )
     .with_connect(connect)
     .with_ids(Arc::new(SeqIds::default()));
@@ -273,7 +273,7 @@ async fn a_send_that_stalls_fails_the_connection_within_the_write_timeout() {
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     )
     .with_connect(connect)
     .with_ids(Arc::new(SeqIds::default()));
@@ -308,7 +308,7 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     )
     .with_ids(Arc::new(SeqIds::default()));
     let session = realtime.session(false).await;
@@ -443,7 +443,7 @@ async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_t
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     )
     .with_connect(connect);
     let session = realtime.session(false).await;
@@ -536,7 +536,7 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
             release: std::sync::Mutex::new(wait),
             settled: std::sync::Mutex::new(Some(settled)),
         }),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     );
     let session = model.session(false).await;
     frames(&ws, 1).await;
@@ -584,7 +584,7 @@ async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     )
     .with_connect(connect);
     let session = model.session(false).await;
@@ -667,7 +667,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     );
     let session = Arc::new(model.session(false).await);
     frames(&transport.socket, 1).await;
@@ -734,7 +734,7 @@ async fn realtime_unsent_say_never_claims_a_proactive_server_response() {
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(NoImages),
-        <Standalone as Env>::services().workers,
+        <Standalone as Env>::workers,
     );
     let session = model.session(false).await;
     assert!(matches!(next_event(&session).await, Event::Metrics(_)));

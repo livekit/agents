@@ -11,16 +11,11 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
-use crate::env::Services;
-use lk_agents_net::env::Env;
+use crate::env::Env;
 
-pub struct LlmAlgorithms<E: Env<Services = Services> = crate::env::Standalone>(
-    PhantomData<fn() -> E>,
-);
+pub struct LlmAlgorithms<E: Env = crate::env::Standalone>(PhantomData<fn() -> E>);
 
-impl<E: Env<Services = Services>> lk_agents_abi::llm::provider_format::host::LlmAlgorithms
-    for LlmAlgorithms<E>
-{
+impl<E: Env> lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms<E> {
     async fn prepare_provider_format(
         format: String,
         items: Vec<ChatItem>,
@@ -29,7 +24,7 @@ impl<E: Env<Services = Services>> lk_agents_abi::llm::provider_format::host::Llm
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
     ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
-        (E::services().workers)()
+        E::workers()
             .map_err(LlmAlgorithmError)?
             .try_spawn(lk_agents_media::workers::MediaWorkerClass::Formatting, move || {
                 provider_format::host::to_provider_format(

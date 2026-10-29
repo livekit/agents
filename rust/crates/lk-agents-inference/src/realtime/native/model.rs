@@ -13,10 +13,9 @@ use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, NativeRealtime};
 use super::wire::Azure;
-use crate::env::Services;
+use crate::env::Env;
 use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
-use lk_agents_net::env::Env;
 
 fn json_option(value: Option<RealtimeJsonOption>) -> Maybe<Option<Value>> {
     match value {
@@ -53,7 +52,7 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl<E: Env<Services = Services>> NativeRealtimeModel for NativeRealtime<E> {
+impl<E: Env> NativeRealtimeModel for NativeRealtime<E> {
     fn new(config: NativeRealtimeConfig) -> Result<Self, RealtimeConfigurationError> {
         let dialect = match config.dialect {
             Some(name) => name.parse().map_err(|e: crate::realtime::dialect::UnknownDialect| {
@@ -132,8 +131,8 @@ impl<E: Env<Services = Services>> NativeRealtimeModel for NativeRealtime<E> {
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_abi::RealClock::default()),
-            E::services().images,
-            E::services().workers,
+            E::images(),
+            E::workers,
         )
         .with_options(opts, turn_detection_given)
         .with_connect(connect);

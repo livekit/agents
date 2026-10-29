@@ -14,7 +14,6 @@ use lk_agents_abi::llm::realtime::{
     RealtimeModelError,
 };
 use lk_agents_abi::{AbortHandle, AudioFrame, Realtime, Spawner, SpawnerExt};
-use lk_agents_net::env::Env;
 use tokio::sync::mpsc;
 
 use super::session::{DuplexHost, DuplexHostSession, DuplexModel};
@@ -22,7 +21,7 @@ use super::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment,
 };
-use crate::env::{Services, Standalone};
+use crate::env::{Env, Standalone};
 
 // ------------------------------------------------------------------------------------ gates
 
@@ -339,12 +338,12 @@ impl DuplexHostSession for HostSession {
 
 /// `DuplexRealtimeAdapter`'s engine; `E` is the hosting process whose runtime and clock its
 /// sessions run on.
-pub struct NativeDuplexModel<E: Env<Services = Services> = Standalone> {
+pub struct NativeDuplexModel<E: Env = Standalone> {
     model: Arc<DuplexModel>,
     env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env<Services = Services>> abi::DuplexRealtimeModel for NativeDuplexModel<E> {
+impl<E: Env> abi::DuplexRealtimeModel for NativeDuplexModel<E> {
     fn new(host: Arc<dyn abi::DuplexHost>, audio_timeout: f64) -> Result<Self, HostError> {
         let label = host.label()?;
         let caps = host.capabilities()?;
@@ -360,7 +359,7 @@ impl<E: Env<Services = Services>> abi::DuplexRealtimeModel for NativeDuplexModel
     }
 }
 
-impl<E: Env<Services = Services>> Realtime for NativeDuplexModel<E> {
+impl<E: Env> Realtime for NativeDuplexModel<E> {
     fn label(&self) -> String {
         self.model.label()
     }

@@ -11,16 +11,15 @@ use lk_agents_abi::tokenize::language::{
 };
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModels};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, EotPrediction, ProviderId};
-use lk_agents_net::env::Env;
 
 use super::{
     CloudOptions, CloudTransport, EotRequestId, EotSession, EotStream, EotTransport, LocalEotModel,
     LocalTransport, MetricsCallback, TransportFactory, TransportShell, TungsteniteEotConnector,
 };
-use crate::env::{Services, Standalone};
+use crate::env::{Env, Standalone};
 
 /// `E` is the hosting process whose runtime the streams run on.
-pub struct NativeEot<E: Env<Services = Services> = Standalone> {
+pub struct NativeEot<E: Env = Standalone> {
     thresholds: Arc<Mutex<ThresholdOptions>>,
     local_fallback: bool,
     base_url: String,
@@ -32,7 +31,7 @@ pub struct NativeEot<E: Env<Services = Services> = Standalone> {
     env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env<Services = Services>> NativeEot<E> {
+impl<E: Env> NativeEot<E> {
     fn table(&self) -> MutexGuard<'_, ThresholdOptions> {
         self.thresholds.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -77,7 +76,7 @@ impl<E: Env<Services = Services>> NativeEot<E> {
     }
 }
 
-impl<E: Env<Services = Services>> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
+impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
     type Stream = DetectorStream;
 
     fn new(
