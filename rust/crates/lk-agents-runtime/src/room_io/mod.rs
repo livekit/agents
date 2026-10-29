@@ -6,10 +6,9 @@ mod owner;
 pub mod pre_connect_audio;
 
 use self::output::transcription::SegmentIds;
-use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::RoomIoConfig;
-use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomVideoInput};
-use lk_agents_abi::voice::rtc::{ParticipantIdentity, capabilities::RtcRoom};
+use lk_agents_abi::voice::room_owner;
+use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::{Clock, Spawner};
 use std::sync::Arc;
 
@@ -86,65 +85,6 @@ impl room_owner::RoomRuntime for RoomFactory {
             }
             None => room_owner::RoomSession(Arc::new(DetachedSession(time))),
         }
-    }
-}
-
-impl room_owner::RoomIo for RoomIo {
-    fn forward_events(
-        self: Arc<Self>,
-        listener: Arc<dyn Fn(room_owner::RoomIoEvent) -> bool + Send + Sync>,
-        rtc_listener: Arc<dyn Fn(lk_agents_abi::voice::rtc::RoomEvent) -> bool + Send + Sync>,
-    ) {
-        RoomIo::forward_events(&self, listener, rtc_listener);
-    }
-    fn audio_input(&self) -> Option<Arc<dyn AudioInput>> {
-        RoomIo::audio_input(self)
-    }
-    fn audio_input_leg(&self) -> Option<Arc<RoomAudioInput>> {
-        RoomIo::audio_input_leg(self).map(|input| Arc::new(RoomAudioInput(input)))
-    }
-    fn video_input(&self) -> Option<Arc<RoomVideoInput>> {
-        RoomIo::video_input(self).map(|input| Arc::new(RoomVideoInput(input)))
-    }
-    fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
-        RoomIo::audio_output(self)
-    }
-    fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
-        RoomIo::transcription_output(self)
-    }
-    fn wants_transcript_sync(&self, external_audio: bool) -> bool {
-        RoomIo::wants_transcript_sync(self, external_audio)
-    }
-    fn linked_participant(&self) -> Option<ParticipantIdentity> {
-        RoomIo::linked_participant(self)
-    }
-    fn start(self: Arc<Self>) {
-        RoomIo::start(&self);
-    }
-    fn on_agent_state_changed(self: Arc<Self>, state: &str) {
-        RoomIo::on_agent_state_changed(&self, state);
-    }
-    fn wait_for_ready<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { RoomIo::wait_for_ready(self).await })
-    }
-    fn set_participant<'a>(
-        &'a self,
-        identity: Option<ParticipantIdentity>,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { RoomIo::set_participant(self, identity).await })
-    }
-    fn unset_participant<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { RoomIo::unset_participant(self).await })
-    }
-    fn on_user_input_transcribed<'a>(
-        &'a self,
-        transcript: &'a str,
-        is_final: bool,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { RoomIo::on_user_input_transcribed(self, transcript, is_final).await })
-    }
-    fn aclose(self: Arc<Self>) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
-        Box::pin(async move { RoomIo::aclose(&self).await })
     }
 }
 

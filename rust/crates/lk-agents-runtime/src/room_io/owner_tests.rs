@@ -54,7 +54,7 @@ async fn publication_failure_settles_every_room_readiness_waiter() {
     let mut second = Box::pin(io.wait_for_ready());
     pending(first.as_mut()).await;
     pending(second.as_mut()).await;
-    io.start();
+    io.clone().start();
     let completed =
         lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(1), async {
             let first = first.await.expect_err("publication failure must fail readiness");
@@ -63,7 +63,7 @@ async fn publication_failure_settles_every_room_readiness_waiter() {
             assert!(first.to_string().contains("publication refused"));
         })
         .await;
-    io.aclose().await;
+    io.clone().aclose().await;
     assert!(completed.is_ok(), "publication failure must release every readiness waiter");
 }
 
@@ -72,8 +72,8 @@ async fn closing_before_linking_settles_room_readiness() {
     let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("closed-ready");
     let io = room_io(room, clock, config());
-    io.start();
-    io.aclose().await;
+    io.clone().start();
+    io.clone().aclose().await;
     let ready = lk_agents_abi::timeout(
         &lk_agents_abi::RealClock::new(),
         Duration::from_secs(1),
@@ -89,10 +89,10 @@ async fn repeated_room_start_keeps_one_event_subscription() {
     let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("one-start");
     let io = room_io(room.clone(), clock, config());
-    io.start();
-    io.start();
+    io.clone().start();
+    io.clone().start();
     assert_eq!(room.event_subscriber_count(), 1);
-    io.aclose().await;
+    io.clone().aclose().await;
 }
 
 struct StreamingRoom {
@@ -184,7 +184,7 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
     config.text_input = true;
     let io = room_io(room.clone(), clock, config);
     let mut events = io.events().unwrap();
-    io.start();
+    io.clone().start();
     let _ = io.wait_for_ready().await;
     while events.try_recv().is_ok() {}
     let (chunks, receiver) = mpsc::channel(4);
@@ -220,7 +220,7 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
     assert!(
         matches!(delivered, RoomIoEvent::TextInput(TextInput { text, .. }) if text == "current attachment")
     );
-    io.aclose().await;
+    io.clone().aclose().await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -230,14 +230,14 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     let native_room = room.clone();
     room.add_participant("person", ParticipantKind::Standard);
     let io = room_io(room.clone(), clock.clone(), config());
-    io.start();
+    io.clone().start();
     io.wait_for_ready().await.unwrap();
     let source = room.local_participant().sources()[0].clone();
     source.flow_closes(false);
     let output = io.audio_output().unwrap();
     let frame = lk_agents_abi::AudioFrame::new(vec![0; 960], 24_000, 1, 480);
     lk_agents_abi::voice::io::AudioOutputExt::capture_frame(output.as_ref(), &frame).await.unwrap();
-    let mut first = Box::pin(io.aclose());
+    let mut first = Box::pin(io.clone().aclose());
     pending(first.as_mut()).await;
     source.wait_for_close_started().await;
     let playback = lk_agents_abi::timeout(
@@ -247,7 +247,7 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     )
     .await;
     drop(first);
-    let mut second = Box::pin(io.aclose());
+    let mut second = Box::pin(io.clone().aclose());
     pending(second.as_mut()).await;
     clock.advance(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
     let outcome =
@@ -263,7 +263,7 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     })
     .await
     .expect("the SDK cleanup owner survives its waiters");
-    io.aclose().await;
+    io.clone().aclose().await;
     let playback =
         playback.expect("closing a segment must settle playback before SDK cleanup completes");
     assert!(playback.interrupted);
@@ -277,7 +277,7 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
         lk_agents_abi::Closed::TimedOut
     );
     assert_eq!(
-        io.aclose().await,
+        io.clone().aclose().await,
         lk_agents_abi::Closed::TimedOut,
         "repeated close must retain the original timeout outcome"
     );
@@ -288,7 +288,7 @@ async fn room_disconnection_settles_readiness_before_a_participant_links() {
     let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("disconnected-ready");
     let io = room_io(room.clone(), clock, config());
-    io.start();
+    io.clone().start();
     room.close(DisconnectReason::ClientInitiated);
     let ready = lk_agents_abi::timeout(
         &lk_agents_abi::RealClock::new(),
@@ -296,7 +296,7 @@ async fn room_disconnection_settles_readiness_before_a_participant_links() {
         io.wait_for_ready(),
     )
     .await;
-    io.aclose().await;
+    io.clone().aclose().await;
     assert!(ready.is_ok(), "a disconnected room must settle readiness without a participant");
     assert!(ready.unwrap().is_err(), "a disconnected room cannot become ready");
 }
@@ -310,9 +310,9 @@ async fn room_relinks_input_after_the_linked_participant_is_replaced() {
     let mut config = config();
     config.audio_input = Some(AudioInputConfig { pre_connect_audio: false, ..Default::default() });
     let io = room_io(room.clone(), clock, config);
-    io.start();
+    io.clone().start();
     io.wait_for_ready().await.unwrap();
-    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("TR_first".into()));
+    assert_eq!(io.audio_input_leg().unwrap().0.reading(), Some("TR_first".into()));
     room.remove_participant(&"first".into(), DisconnectReason::ClientInitiated);
     let replacement = room.add_participant("second", ParticipantKind::Standard);
     replacement.publish_microphone("TR_second");
@@ -320,16 +320,14 @@ async fn room_relinks_input_after_the_linked_participant_is_replaced() {
         tokio::task::yield_now().await;
     }
     let linked = io.linked_participant();
-    let reading = io.audio_input_leg().unwrap().reading();
-    io.aclose().await;
+    let reading = io.audio_input_leg().unwrap().0.reading();
+    io.clone().aclose().await;
     assert_eq!(linked, Some("second".into()), "the replacement participant must become linked");
     assert_eq!(reading, Some("TR_second".into()), "the microphone must follow the new link");
 }
 
 #[tokio::test]
 async fn selecting_the_same_participant_retires_buffered_input_from_the_old_attachment() {
-    use lk_agents_abi::voice::io::AudioInput;
-
     let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("reselected-input");
     let person = room.add_participant("person", ParticipantKind::Standard);
@@ -337,9 +335,9 @@ async fn selecting_the_same_participant_retires_buffered_input_from_the_old_atta
     let mut config = config();
     config.audio_input = Some(AudioInputConfig { pre_connect_audio: false, ..Default::default() });
     let io = room_io(room, clock, config);
-    io.start();
+    io.clone().start();
     io.wait_for_ready().await.unwrap();
-    let input = io.audio_input_leg().unwrap();
+    let input = io.audio_input().unwrap();
     assert!(
         microphone.push_frame(lk_agents_abi::AudioFrame::new(vec![1; 960], 24_000, 1, 480)) > 0
     );
@@ -351,7 +349,7 @@ async fn selecting_the_same_participant_retires_buffered_input_from_the_old_atta
         microphone.push_frame(lk_agents_abi::AudioFrame::new(vec![2; 960], 24_000, 1, 480)) > 0
     );
     let received = input.next_frame().await.unwrap().unwrap();
-    io.aclose().await;
+    io.clone().aclose().await;
     assert_eq!(received.data.as_ref(), &[2; 960], "old queued audio must not cross reattachment");
 }
 
@@ -366,7 +364,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     config.audio_input = Some(AudioInputConfig { pre_connect_audio: false, ..Default::default() });
     let io = room_io(room.clone(), clock, config);
     let mut events = io.events().unwrap();
-    io.start();
+    io.clone().start();
     io.wait_for_ready().await.unwrap();
     room.remove_participant(&"person".into(), DisconnectReason::ClientInitiated);
     let current = room.add_participant("person", ParticipantKind::Standard);
@@ -384,8 +382,8 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     })
     .await
     .expect("the current participant must remain linked after the delayed old departure");
-    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("microphone".into()));
-    io.aclose().await;
+    assert_eq!(io.audio_input_leg().unwrap().0.reading(), Some("microphone".into()));
+    io.clone().aclose().await;
 }
 
 #[tokio::test]
@@ -403,7 +401,7 @@ async fn saturated_room_events_are_reported_to_the_selection_caller() {
     assert!(
         matches!(io.set_participant(Some("first".into())).await, Err(IoError::Rtc(error)) if error.contains("capacity exceeded"))
     );
-    io.aclose().await;
+    io.clone().aclose().await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -417,7 +415,7 @@ async fn a_rejoined_identity_gets_a_new_attachment_without_an_explicit_selection
     config.audio_input = Some(AudioInputConfig { pre_connect_audio: false, ..Default::default() });
     let io = room_io(room.clone(), clock, config);
     let mut events = io.events().unwrap();
-    io.start();
+    io.clone().start();
     io.wait_for_ready().await.unwrap();
     while events.try_recv().is_ok() {}
     room.remove_participant(&"person".into(), DisconnectReason::ClientInitiated);
@@ -433,8 +431,8 @@ async fn a_rejoined_identity_gets_a_new_attachment_without_an_explicit_selection
     assert!(
         matches!(event, Some(RoomIoEvent::ParticipantLinked(ParticipantLinked { identity })) if identity.as_str()=="person")
     );
-    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("new-track".into()));
-    io.aclose().await;
+    assert_eq!(io.audio_input_leg().unwrap().0.reading(), Some("new-track".into()));
+    io.clone().aclose().await;
 }
 
 // Catches: a burst of transcripts the performer had not drained yet latched a capacity failure,
@@ -448,7 +446,7 @@ async fn a_transcript_burst_leaves_the_room_audio_output_open() {
     let mut config = config();
     config.text_output = Some(lk_agents_abi::voice::room_io::TextOutputConfig::default());
     let io = room_io(room.clone(), clock, config);
-    io.start();
+    io.clone().start();
     io.wait_for_ready().await.unwrap();
     for n in 0..8 {
         io.on_user_input_transcribed(&format!("word {n}"), n % 2 == 1)
@@ -460,7 +458,7 @@ async fn a_transcript_burst_leaves_the_room_audio_output_open() {
         tokio::task::yield_now().await;
     }
     let closing = io.is_closing();
-    io.aclose().await;
+    io.clone().aclose().await;
     assert!(!closing, "a transcription backlog must not close the room's audio output");
     let streams = room.local_participant().text_streams();
     assert_eq!(

@@ -11,15 +11,17 @@ use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
     ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
-use lk_agents_abi::voice::room_owner::RoomIoEvent;
+use lk_agents_abi::voice::room_owner::{
+    self, RoomAudioInput, RoomIo as _, RoomIoEvent, RoomVideoInput,
+};
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::voice::rtc::events::RoomEvent;
 use lk_agents_abi::voice::rtc::{
     ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind,
 };
 use lk_agents_abi::{
-    ATTRIBUTE_AGENT_STATE, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner, SpawnerExt,
-    TOPIC_CHAT, TaskSet, Ts,
+    ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner,
+    SpawnerExt, TOPIC_CHAT, TaskSet, Ts,
 };
 use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
 use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
@@ -166,88 +168,6 @@ impl RoomIo {
         self.events_rx.lock().unwrap().take()
     }
 
-    pub fn audio_input(&self) -> Option<Arc<dyn AudioInput>> {
-        self.audio_input.clone().map(|a| a as Arc<dyn AudioInput>)
-    }
-
-    /// The microphone leg itself, as the session hands it to the host.
-    pub fn audio_input_leg(&self) -> Option<Arc<ParticipantAudioInput>> {
-        self.audio_input.clone()
-    }
-
-    pub fn video_input(&self) -> Option<Arc<ParticipantVideoInput>> {
-        self.video_input.clone()
-    }
-
-    /// The caller wraps it with a synchroniser if configured.
-    pub fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
-        self.audio_output.clone().map(|a| a as Arc<dyn AudioOutput>)
-    }
-
-    pub fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
-        self.agent_tr.clone().map(|a| a as Arc<dyn TextOutput>)
-    }
-
-    pub fn wants_transcript_sync(&self, has_external_audio_output: bool) -> bool {
-        lk_agents_voice::room_io::wants_transcript_sync(
-            &self.config,
-            self.audio_output.is_some() || has_external_audio_output,
-        )
-    }
-
-    pub fn linked_participant(&self) -> Option<ParticipantIdentity> {
-        self.coordinator.borrow().state().linked
-    }
-
-    /// `wait_for_ready`.
-    pub async fn wait_for_ready(&self) -> Result<()> {
-        let mut state = self.coordinator.subscribe();
-        let state = state
-            .wait_for(|state| state.state().ready.is_some())
-            .await
-            .expect("RoomIo retains the state sender");
-        state.state().ready.expect("readiness matched a terminal outcome")
-    }
-
-    pub fn start(self: &Arc<Self>) {
-        if !self.coordinate(RoomCoordinator::start) {
-            return;
-        }
-        if let Some(pc) = &self.pre_connect {
-            pc.register();
-        }
-        if self.config.text_input {
-            self.register_text_input();
-        }
-        if self.begin_work() {
-            let this = self.clone();
-            let events = self.room.events();
-            self.spawn_reserved("room events", async move {
-                this.read_events(events).await;
-            });
-        }
-        if self.begin_work() {
-            let this = self.clone();
-            self.spawn_reserved("room startup", async move {
-                let stopped = this.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if this.is_closing() { return; }
-                tokio::select! {
-                    biased;
-                    () = &mut stopped => {},
-                    result = this.clone().init() => { if let Err(error) = result { this.fail(error); } },
-                }
-            });
-        }
-        if self.begin_work() {
-            let this = self.clone();
-            self.spawn_reserved("room participant attributes", async move {
-                this.write_agent_state().await;
-            });
-        }
-    }
-
     async fn read_events(
         self: Arc<Self>,
         mut events: lk_agents_abi::voice::rtc::Receiver<RoomEvent>,
@@ -282,7 +202,7 @@ impl RoomIo {
                 ) {
                     let last = self.agent_state.borrow().clone();
                     if let Some(state) = last {
-                        self.on_agent_state_changed(&state);
+                        self.clone().on_agent_state_changed(&state);
                     }
                 }
             }
@@ -335,38 +255,6 @@ impl RoomIo {
         };
         self.coordinate(|coordinator| coordinator.finish_start(outcome));
         Ok(())
-    }
-
-    /// `set_participant`.
-    pub async fn set_participant(&self, identity: Option<ParticipantIdentity>) -> Result<()> {
-        let participant = match &identity {
-            Some(identity) => self.room.participant(identity)?,
-            None => None,
-        };
-        let listed = participant.as_ref().map(|p| p.sid().to_owned());
-        let Some(relink) = self.coordinate(|coordinator| {
-            coordinator.set_participant(identity.clone(), listed.as_deref())
-        }) else {
-            return Ok(());
-        };
-        if relink.announce
-            && let Some(identity) = &identity
-        {
-            self.emit(RoomIoEvent::ParticipantLinked(ParticipantLinked {
-                identity: identity.clone(),
-            }))?;
-        }
-        if relink.detach {
-            self.attach_participant(None).await?;
-        }
-        match identity {
-            Some(identity) => self.attach_participant(Some(identity)).await,
-            None => Ok(()),
-        }
-    }
-
-    pub async fn unset_participant(&self) -> Result<()> {
-        self.set_participant(None).await
     }
 
     async fn attach_participant(&self, identity: Option<ParticipantIdentity>) -> Result<()> {
@@ -505,13 +393,6 @@ impl RoomIo {
         Ok(())
     }
 
-    /// Keep one ordered writer; a newer state cancels the pending older write.
-    pub fn on_agent_state_changed(self: &Arc<Self>, state: &str) {
-        if !self.is_closing() {
-            self.agent_state.send_replace(Some(state.to_owned()));
-        }
-    }
-
     async fn write_agent_state(self: Arc<Self>) {
         let mut updates = self.agent_state.subscribe();
         loop {
@@ -545,16 +426,6 @@ impl RoomIo {
                 changed = updates.changed() => { if changed.is_err() { return; } },
             }
         }
-    }
-
-    /// `_on_user_input_transcribed`, then `_forward_user_transcript`, as one await.
-    pub async fn on_user_input_transcribed(&self, transcript: &str, is_final: bool) -> Result<()> {
-        let Some(user_tr) = &self.user_tr else { return Ok(()) };
-        user_tr.capture_text(transcript).await?;
-        if is_final {
-            user_tr.flush();
-        }
-        Ok(())
     }
 
     fn register_text_input(self: &Arc<Self>) {
@@ -660,42 +531,6 @@ impl RoomIo {
         }
     }
 
-    pub(super) fn forward_events(
-        self: &Arc<Self>,
-        listener: Arc<dyn Fn(RoomIoEvent) -> bool + Send + Sync>,
-        rtc_listener: Arc<dyn Fn(RoomEvent) -> bool + Send + Sync>,
-    ) {
-        if !self.begin_work() {
-            return;
-        }
-        let Some(mut events) = self.events() else {
-            self.finish_starting();
-            return;
-        };
-        let mut rtc_events = self.room.events();
-        let owner = self.clone();
-        self.spawn_reserved("room session events", async move {
-            loop {
-                let stopped = owner.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if owner.is_closing() { break; }
-                tokio::select! {
-                    biased;
-                    () = &mut stopped => break,
-                    event = events.recv() => { if event.is_none_or(|event| !listener(event)) { break; } },
-                    event = rtc_events.next() => match event {
-                        Ok(Some(event)) => { if !rtc_listener(event) { break; } },
-                        Ok(None) => break,
-                        Err(error) => { owner.fail(IoError::from(error)); break; },
-                    },
-                }
-            }
-            let deadline = owner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-            owner.record_cleanup(rtc_events.close(deadline).await);
-        });
-    }
-
     fn reserve_event(&self) -> Result<mpsc::Permit<'_, RoomIoEvent>> {
         self.events_tx.try_reserve().map_err(|error| {
             IoError::Rtc(match error {
@@ -762,16 +597,6 @@ impl RoomIo {
                 owner.coordinate(|coordinator| coordinator.finish_close(outcome));
             });
         }
-    }
-
-    pub async fn aclose(self: &Arc<Self>) -> Closed {
-        self.request_close();
-        let mut state = self.coordinator.subscribe();
-        let state = state
-            .wait_for(|state| state.state().closed.is_some())
-            .await
-            .expect("RoomIo retains the cleanup result sender");
-        state.state().closed.expect("cleanup matched a terminal outcome")
     }
 
     async fn close(&self, deadline: Ts) -> Closed {
@@ -871,6 +696,200 @@ impl RoomIo {
             outcome = outcome.and(closed);
         }
         outcome
+    }
+}
+
+impl room_owner::RoomIo for RoomIo {
+    fn forward_events(
+        self: Arc<Self>,
+        listener: Arc<dyn Fn(RoomIoEvent) -> bool + Send + Sync>,
+        rtc_listener: Arc<dyn Fn(RoomEvent) -> bool + Send + Sync>,
+    ) {
+        if !self.begin_work() {
+            return;
+        }
+        let Some(mut events) = self.events() else {
+            self.finish_starting();
+            return;
+        };
+        let mut rtc_events = self.room.events();
+        let owner = self.clone();
+        self.spawn_reserved("room session events", async move {
+            loop {
+                let stopped = owner.stopped.notified();
+                tokio::pin!(stopped);
+                stopped.as_mut().enable();
+                if owner.is_closing() { break; }
+                tokio::select! {
+                    biased;
+                    () = &mut stopped => break,
+                    event = events.recv() => { if event.is_none_or(|event| !listener(event)) { break; } },
+                    event = rtc_events.next() => match event {
+                        Ok(Some(event)) => { if !rtc_listener(event) { break; } },
+                        Ok(None) => break,
+                        Err(error) => { owner.fail(IoError::from(error)); break; },
+                    },
+                }
+            }
+            let deadline = owner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+            owner.record_cleanup(rtc_events.close(deadline).await);
+        });
+    }
+
+    fn audio_input(&self) -> Option<Arc<dyn AudioInput>> {
+        self.audio_input.clone().map(|a| a as Arc<dyn AudioInput>)
+    }
+
+    /// The microphone leg itself, as the session hands it to the host.
+    fn audio_input_leg(&self) -> Option<Arc<RoomAudioInput>> {
+        self.audio_input.clone().map(|input| Arc::new(RoomAudioInput(input)))
+    }
+
+    fn video_input(&self) -> Option<Arc<RoomVideoInput>> {
+        self.video_input.clone().map(|input| Arc::new(RoomVideoInput(input)))
+    }
+
+    /// The caller wraps it with a synchroniser if configured.
+    fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
+        self.audio_output.clone().map(|a| a as Arc<dyn AudioOutput>)
+    }
+
+    fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
+        self.agent_tr.clone().map(|a| a as Arc<dyn TextOutput>)
+    }
+
+    fn wants_transcript_sync(&self, external_audio: bool) -> bool {
+        lk_agents_voice::room_io::wants_transcript_sync(
+            &self.config,
+            self.audio_output.is_some() || external_audio,
+        )
+    }
+
+    fn linked_participant(&self) -> Option<ParticipantIdentity> {
+        self.coordinator.borrow().state().linked
+    }
+
+    fn start(self: Arc<Self>) {
+        if !self.coordinate(RoomCoordinator::start) {
+            return;
+        }
+        if let Some(pc) = &self.pre_connect {
+            pc.register();
+        }
+        if self.config.text_input {
+            self.register_text_input();
+        }
+        if self.begin_work() {
+            let this = self.clone();
+            let events = self.room.events();
+            self.spawn_reserved("room events", async move {
+                this.read_events(events).await;
+            });
+        }
+        if self.begin_work() {
+            let this = self.clone();
+            self.spawn_reserved("room startup", async move {
+                let stopped = this.stopped.notified();
+                tokio::pin!(stopped);
+                stopped.as_mut().enable();
+                if this.is_closing() { return; }
+                tokio::select! {
+                    biased;
+                    () = &mut stopped => {},
+                    result = this.clone().init() => { if let Err(error) = result { this.fail(error); } },
+                }
+            });
+        }
+        if self.begin_work() {
+            let this = self.clone();
+            self.spawn_reserved("room participant attributes", async move {
+                this.write_agent_state().await;
+            });
+        }
+    }
+
+    /// Keep one ordered writer; a newer state cancels the pending older write.
+    fn on_agent_state_changed(self: Arc<Self>, state: &str) {
+        if !self.is_closing() {
+            self.agent_state.send_replace(Some(state.to_owned()));
+        }
+    }
+
+    /// `wait_for_ready`.
+    fn wait_for_ready<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut state = self.coordinator.subscribe();
+            let state = state
+                .wait_for(|state| state.state().ready.is_some())
+                .await
+                .expect("RoomIo retains the state sender");
+            state.state().ready.expect("readiness matched a terminal outcome")
+        })
+    }
+
+    /// `set_participant`.
+    fn set_participant<'a>(
+        &'a self,
+        identity: Option<ParticipantIdentity>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let participant = match &identity {
+                Some(identity) => self.room.participant(identity)?,
+                None => None,
+            };
+            let listed = participant.as_ref().map(|p| p.sid().to_owned());
+            let Some(relink) = self.coordinate(|coordinator| {
+                coordinator.set_participant(identity.clone(), listed.as_deref())
+            }) else {
+                return Ok(());
+            };
+            if relink.announce
+                && let Some(identity) = &identity
+            {
+                self.emit(RoomIoEvent::ParticipantLinked(ParticipantLinked {
+                    identity: identity.clone(),
+                }))?;
+            }
+            if relink.detach {
+                self.attach_participant(None).await?;
+            }
+            match identity {
+                Some(identity) => self.attach_participant(Some(identity)).await,
+                None => Ok(()),
+            }
+        })
+    }
+
+    fn unset_participant<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
+        self.set_participant(None)
+    }
+
+    /// `_on_user_input_transcribed`, then `_forward_user_transcript`, as one await.
+    fn on_user_input_transcribed<'a>(
+        &'a self,
+        transcript: &'a str,
+        is_final: bool,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let Some(user_tr) = &self.user_tr else { return Ok(()) };
+            user_tr.capture_text(transcript).await?;
+            if is_final {
+                user_tr.flush();
+            }
+            Ok(())
+        })
+    }
+
+    fn aclose(self: Arc<Self>) -> BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.request_close();
+            let mut state = self.coordinator.subscribe();
+            let state = state
+                .wait_for(|state| state.state().closed.is_some())
+                .await
+                .expect("RoomIo retains the cleanup result sender");
+            state.state().closed.expect("cleanup matched a terminal outcome")
+        })
     }
 }
 
