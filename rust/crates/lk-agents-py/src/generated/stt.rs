@@ -95,7 +95,7 @@ impl FallbackStt {
         crate::host::future_into_py(py, async move {
             let out = <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::stream(&this, language, start_time_offset, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (sink, source) = out; FallbackRecognizeStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (sink, source) = out; FallbackRecognizeStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }, py))
         })
     }
 }
@@ -116,7 +116,7 @@ type FallbackRecognizeStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_a
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
 #[pyclass(frozen, name = "FallbackRecognizeStream", module = "livekit.agents._core")]
-pub struct FallbackRecognizeStream(::std::boxed::Box<FallbackRecognizeStreamImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::SpeechEvent>);
+pub struct FallbackRecognizeStream(::std::boxed::Box<FallbackRecognizeStreamImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::SpeechEvent>);
 
 #[pymethods]
 impl FallbackRecognizeStream {
@@ -233,7 +233,7 @@ impl InferenceStt {
     fn stream(&self, language: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_inference_stt_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<InferenceSttStream> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::stream(&self.0, language, start_time_offset, conn_options).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok({ let (sink, source) = out; InferenceSttStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) })
+        Ok({ let (sink, source) = out; InferenceSttStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) })
     }
 }
 
@@ -253,7 +253,7 @@ type InferenceSttStreamImpl = dyn ::lk_agents_abi::stt::inference::InferenceSttA
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
 #[pyclass(frozen, name = "InferenceSttStream", module = "livekit.agents._core")]
-pub struct InferenceSttStream(::std::boxed::Box<InferenceSttStreamImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::SpeechEvent>);
+pub struct InferenceSttStream(::std::boxed::Box<InferenceSttStreamImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::SpeechEvent>);
 
 #[pymethods]
 impl InferenceSttStream {
@@ -338,7 +338,7 @@ impl SttStreamAdapter {
         crate::host::future_into_py(py, async move {
             let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::stream(&this, language, start_time_offset, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (sink, source) = out; SttAdapterStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (sink, source) = out; SttAdapterStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }, py))
         })
     }
 }
@@ -359,7 +359,7 @@ type SttAdapterStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::Aud
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
 #[pyclass(frozen, name = "SttAdapterStream", module = "livekit.agents._core")]
-pub struct SttAdapterStream(::std::boxed::Box<SttAdapterStreamImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::SpeechEvent>);
+pub struct SttAdapterStream(::std::boxed::Box<SttAdapterStreamImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::SpeechEvent>);
 
 #[pymethods]
 impl SttAdapterStream {

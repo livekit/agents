@@ -17,16 +17,17 @@ use lk_agents_core::a2a::auth::{allows, allows_first_message};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_storage::db::TaskQuery;
-use lk_agents_storage::schema::TaskRow;
-
+use lk_agents_storage::host::HostStorage;
 use lk_agents_storage::run::{REASON_KEY, REASON_THREAD_NOT_FOUND};
+use lk_agents_storage::schema::TaskRow;
+use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::a2a::Turn;
-use crate::storage::{HostStorage, Storage, Thread, now_ms, shortuuid};
+use crate::process::Process;
 use stream::Sender;
 
 const RESPONSE_CAPACITY: usize = 64;
@@ -45,7 +46,7 @@ pub struct Door {
 /// first use.
 enum Store {
     Open(Arc<dyn Storage>),
-    Namespace(Arc<HostStorage>),
+    Namespace(Arc<HostStorage<Process>>),
 }
 
 struct Inner {
@@ -108,7 +109,7 @@ impl A2ADoor for Door {
         host: Arc<dyn TurnHost>,
     ) -> Result<Self, StorageError> {
         let storage: Arc<dyn Any + Send + Sync> = storage;
-        let storage = storage.downcast::<HostStorage>().map_err(|_| {
+        let storage = storage.downcast::<HostStorage<Process>>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
         let runtime = crate::process::caller_handle()

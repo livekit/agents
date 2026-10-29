@@ -88,7 +88,7 @@ impl InferenceVad {
     fn stream(&self) -> PyResult<InferenceVadStream> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok({ let (sink, source) = out; InferenceVadStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) })
+        Ok({ let (sink, source) = out; InferenceVadStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) })
     }
 }
 
@@ -108,7 +108,7 @@ type InferenceVadStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::A
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
 #[pyclass(frozen, name = "InferenceVadStream", module = "livekit.agents._core")]
-pub struct InferenceVadStream(::std::boxed::Box<InferenceVadStreamImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::VadEvent>);
+pub struct InferenceVadStream(::std::boxed::Box<InferenceVadStreamImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::VadEvent>);
 
 #[pymethods]
 impl InferenceVadStream {

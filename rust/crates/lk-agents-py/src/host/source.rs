@@ -2,7 +2,7 @@
 //! next item (crossing by `to_py`, the item's generated conversion) or `None` at the end;
 //! `aclose()` releases the source.
 
-use lk_agents_runtime::source::{NativeSource, PullError, Pulled};
+use lk_agents_runtime::net::source::{NativeSource, PullError, Pulled};
 use pyo3::prelude::*;
 
 pub fn recv<'py, T: Send + 'static>(

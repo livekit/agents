@@ -13,7 +13,7 @@ use lk_agents_storage::StorageError;
 use lk_agents_storage::schema::TaskRow;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::storage::{ResponseStreams, now_ms, shortuuid};
+use lk_agents_storage::{ResponseStreams, now_ms, shortuuid};
 
 pub type Sender = mpsc::Sender<Result<DoorFrame, DoorError>>;
 

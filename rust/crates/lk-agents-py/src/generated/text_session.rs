@@ -40,7 +40,7 @@ impl TextSessionRunner {
         ::lk_agents_abi::python::check_pid()?;
         let request = crate::generated::records::text_session::text_session_request_from_py(&request)?;
         let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(TextSessionUpdates(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
+        Ok(TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 
     /// Acknowledge selected presentation before the child can release its parent.
@@ -62,7 +62,7 @@ impl TextSessionRunner {
 
 /// One stream of `::lk_agents_abi::text_session::TextSessionUpdate` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "TextSessionUpdates", module = "livekit.agents._core")]
-pub struct TextSessionUpdates(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::text_session::TextSessionUpdate>);
+pub struct TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::text_session::TextSessionUpdate>);
 
 #[pymethods]
 impl TextSessionUpdates {

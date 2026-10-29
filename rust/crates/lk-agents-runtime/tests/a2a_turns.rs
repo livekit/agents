@@ -16,7 +16,7 @@ use lk_agents_core::a2a::{
     TurnResult, Verdict,
 };
 use lk_agents_runtime::a2a::Turn;
-use lk_agents_runtime::storage::{RunOptions, Thread, shortuuid};
+use lk_agents_storage::{RunOptions, Thread, shortuuid};
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::db::Receive;
 use lk_agents_storage::run::{

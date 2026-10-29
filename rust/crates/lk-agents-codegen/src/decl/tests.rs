@@ -262,13 +262,13 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
     assert!(root.contains("m.add_class::<llm::Live>()?;"), "{root}");
-    assert!(!llm.contains("pub struct Live(::lk_agents_runtime::source::NativeSource"), "{llm}");
+    assert!(!llm.contains("pub struct Live(::lk_agents_runtime::net::source::NativeSource"), "{llm}");
     for expected in [
-        "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
+        "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
         "::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
         "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        ::lk_agents_abi::python::check_pid()?;\n        ::lk_agents_abi::StreamSink::end_input(&*self.0);",
         "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&*self.0, model)",
-        "{ let (sink, source) = out; Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }",
+        "{ let (sink, source) = out; Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }",
     ] {
         assert!(llm.contains(expected), "{expected}\n{llm}");
     }
@@ -329,7 +329,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
     assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?"), "{llm}");
     assert!(llm.contains("HostProxy>::from_host(&v)"), "{llm}");
     assert!(llm.contains("(&self.0, &items, conn, reporter)"), "{llm}");
-    assert!(llm.contains("NativeStream(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out)))"), "{llm}");
+    assert!(llm.contains("NativeStream(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out)))"), "{llm}");
     assert!(
         llm.contains("#[pyo3(signature = (timeout = 1.5))]")
             && llm.contains("future_into_py(py, async move"),

@@ -63,7 +63,7 @@ impl generated::Implementations for Selected {
     type WarmTransfer = lk_agents_runtime::voice::workflows::warm_transfer::WarmTransfer;
     type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;
-    type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;
+    type TtsTokenLog = lk_agents_runtime::inference::fallback::TokenLog;
     type FallbackTts =
         lk_agents_runtime::inference::fallback::FallbackTts<lk_agents_runtime::process::Process>;
     type InferenceTts =
@@ -85,15 +85,15 @@ impl generated::Implementations for Selected {
     type SearchIndex = lk_agents_runtime::cores::Bm25;
     type ToolSearch = lk_agents_runtime::cores::ToolDiscovery;
 
-    type ExpFilter = lk_agents_runtime::filters::ExpFilter;
-    type MovingAverage = lk_agents_runtime::filters::MovingAverage;
+    type ExpFilter = lk_agents_runtime::media::filters::ExpFilter;
+    type MovingAverage = lk_agents_runtime::media::filters::MovingAverage;
     type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<
         lk_agents_runtime::process::Process,
     >;
-    type ProviderAttempts = lk_agents_runtime::cores::ProviderAttempts;
+    type ProviderAttempts = lk_agents_runtime::inference::provider::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
-    type VoiceStore = lk_agents_runtime::storage::VoiceStore;
+    type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
     type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime<
         lk_agents_runtime::process::Process,
     >;
@@ -106,14 +106,14 @@ impl generated::Implementations for Selected {
     type Reply = lk_agents_runtime::net::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
-    type ContextActivation = lk_agents_runtime::storage::ContextStore;
+    type ContextActivation = lk_agents_runtime::storage::context::store::ContextStore;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type JudgeRunner =
         lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;
     type Evaluations = lk_agents_runtime::inference::evals::Rules;
     type Credentials = lk_agents_runtime::net::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::net::a2a_auth::Credentials;
-    type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;
+    type EndpointCard = lk_agents_runtime::cores::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
     type WorkerProcSupervisor =
@@ -133,9 +133,9 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::worker::server_host::AgentRuntime<lk_agents_runtime::process::Process>;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
-    type InferenceCredentials = lk_agents_runtime::cores::InferenceCredentials;
+    type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;
     type InferenceModels = lk_agents_runtime::inference::models::Models;
-    type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
+    type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;
     type SessionReportProjection = lk_agents_abi::telemetry::report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
     type EventRetention =
@@ -183,9 +183,10 @@ impl generated::Implementations for Selected {
     >;
     type InferenceStt =
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
-    type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;
-    type CompletionWire = lk_agents_runtime::cores::CompletionWire;
-    type Storage = lk_agents_runtime::storage::HostStorage;
+    type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;
+    type CompletionWire = lk_agents_runtime::inference::llm::parse::CompletionWire;
+    type Storage =
+        lk_agents_runtime::storage::host::HostStorage<lk_agents_runtime::process::Process>;
 }
 
 #[pymodule]

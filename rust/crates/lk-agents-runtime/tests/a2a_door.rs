@@ -260,7 +260,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
     let thread = store.storage.open(&created.thread_id, "holding-worker").await.unwrap();
     let mut held = thread
         .lane("desk")
-        .open(lk_agents_runtime::storage::RunOptions::new("hold", "held-task"))
+        .open(lk_agents_storage::RunOptions::new("hold", "held-task"))
         .await
         .unwrap();
     let door =
@@ -332,7 +332,7 @@ async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend
     assert_eq!(saved.internal.unwrap().streams.len(), 2);
     let mut questions = thread
         .lane("desk")
-        .open(lk_agents_runtime::storage::RunOptions::new("questions", "question-batch"))
+        .open(lk_agents_storage::RunOptions::new("questions", "question-batch"))
         .await
         .unwrap();
     for id in ["AST_older", "AST_newer"] {

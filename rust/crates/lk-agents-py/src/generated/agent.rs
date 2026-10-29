@@ -140,7 +140,7 @@ impl AgentRunner {
         ::lk_agents_abi::python::check_pid()?;
         let request = crate::generated::records::agent_run::run_request_from_py(&request)?;
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(AgentRunUpdates(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
+        Ok(AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
@@ -156,7 +156,7 @@ impl AgentRunner {
 
 /// One stream of `::lk_agents_abi::agent::run::RunUpdate` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "AgentRunUpdates", module = "livekit.agents._core")]
-pub struct AgentRunUpdates(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::agent::run::RunUpdate>);
+pub struct AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::agent::run::RunUpdate>);
 
 #[pymethods]
 impl AgentRunUpdates {

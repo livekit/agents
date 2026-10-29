@@ -24,7 +24,7 @@ use lk_agents_storage::run::{
     ItemRow, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, TaskRow, TaskState,
 };
 
-use crate::storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
+use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 
 /// Who watches a turn from outside: its response stream.
 #[async_trait::async_trait]

@@ -1,4 +1,4 @@
-//! The turn surface of `_core`: `lk_agents_runtime::storage` and `lk_agents_runtime::a2a` as Python
+//! The turn surface of `_core`: `lk_agents_storage` and `lk_agents_runtime::a2a` as Python
 //! sees them.
 //! `Thread` is one open thread (`Storage.open`); `Thread.open_run` takes a lane for a `Run` the host
 //! drives itself (the voice lane); `Turn(thread, lane, host, options)` is one text door's turns,

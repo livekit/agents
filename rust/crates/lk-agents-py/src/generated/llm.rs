@@ -233,7 +233,7 @@ impl FallbackLlm {
         crate::host::future_into_py(py, async move {
             let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx_host, tools, tools_host, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(FallbackLlmChunks(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))), py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(FallbackLlmChunks(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))), py))
         })
     }
 }
@@ -252,7 +252,7 @@ impl FallbackLlm {
 
 /// One stream of `::lk_agents_abi::LlmChunk` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "FallbackLlmChunks", module = "livekit.agents._core")]
-pub struct FallbackLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::LlmChunk>);
+pub struct FallbackLlmChunks(::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::LlmChunk>);
 
 #[pymethods]
 impl FallbackLlmChunks {
@@ -476,7 +476,7 @@ impl InferenceLlm {
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(InferenceLlmChunks(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
+        Ok(InferenceLlmChunks(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 }
 
@@ -494,7 +494,7 @@ impl InferenceLlm {
 
 /// One stream of `::lk_agents_abi::LlmChunk` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "InferenceLlmChunks", module = "livekit.agents._core")]
-pub struct InferenceLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::LlmChunk>);
+pub struct InferenceLlmChunks(::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::LlmChunk>);
 
 #[pymethods]
 impl InferenceLlmChunks {

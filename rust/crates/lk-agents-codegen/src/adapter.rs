@@ -531,7 +531,7 @@ fn duplex_class(
         ..c.clone()
     };
     let mut s = format!(
-        "type {name}Impl = dyn {trait_path};\n{extractors}\n/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::std::boxed::Box<{name}Impl>, ::lk_agents_runtime::source::NativeSource<{output}>);\n\n#[pymethods]\nimpl {name} {{\n",
+        "type {name}Impl = dyn {trait_path};\n{extractors}\n/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::std::boxed::Box<{name}Impl>, ::lk_agents_runtime::net::source::NativeSource<{output}>);\n\n#[pymethods]\nimpl {name} {{\n",
         trait_path = sink.trait_path,
         extractors = numeric_extractors(&control)?,
         output = output.rust(),
@@ -556,7 +556,7 @@ fn source_class(name: &str, item: &Ty) -> Result<String, String> {
         format!("Ok({}.unbind())", crate::records::emit(item, "item")?)
     };
     Ok(format!(
-        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        crate::host::source::recv(&self.0, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        crate::host::source::aclose(&self.0, py)\n    }}\n}}\n",
+        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::net::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        crate::host::source::recv(&self.0, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        crate::host::source::aclose(&self.0, py)\n    }}\n}}\n",
         item = item.rust()
     ))
 }
@@ -839,13 +839,13 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Duplex { class, .. } => (
             class.clone(),
             format!(
-                "{{ let (sink, source) = {{}}; {class}(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }}"
+                "{{ let (sink, source) = {{}}; {class}(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }}"
             ),
         ),
         Ty::Source { class, .. } => (
             class.clone(),
             format!(
-                "{class}(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new({{}})))"
+                "{class}(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new({{}})))"
             ),
         ),
         other => (
