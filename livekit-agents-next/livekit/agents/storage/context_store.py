@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import MISSING, dataclass, field, fields, is_dataclass
+from dataclasses import _MISSING_TYPE, MISSING, dataclass, field, fields, is_dataclass
 from typing import (
-    Any,
     Protocol,
     Self,
     TypeVar,
@@ -33,9 +32,18 @@ def persisted(*, default_factory: Callable[[], T]) -> T: ...
 def persisted(*, default: T) -> T: ...
 
 
-def persisted(*, default: Any = MISSING, default_factory: Any = MISSING) -> Any:
+def persisted(
+    *,
+    default: object = MISSING,
+    default_factory: Callable[[], object] | _MISSING_TYPE = MISSING,
+) -> object:
     """Mark a dataclass field for explicit context loading and saving."""
-    return field(default=default, default_factory=default_factory, metadata={_FIELD_MARKER: True})
+    metadata = {_FIELD_MARKER: True}
+    if default_factory is MISSING:
+        return field(default=default, metadata=metadata)
+    if default is not MISSING:
+        raise ValueError("cannot specify both default and default_factory")
+    return field(default_factory=default_factory, metadata=metadata)
 
 
 @dataclass
