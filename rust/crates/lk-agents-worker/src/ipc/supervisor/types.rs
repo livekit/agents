@@ -1,9 +1,9 @@
-//! Supervision commands, outcomes, timing options and diagnostics.
+//! Supervision outcomes, timing options and diagnostics.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
+use super::super::wire::{PROTOCOL_VERSION, StartJob, WireError};
 
 /// How often the memory monitor samples the process.
 pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
@@ -129,71 +129,6 @@ pub use lk_agents_abi::secs;
 /// `round(x, digits)`: Python rounds the exact binary value half to even, as formatting does.
 pub(super) fn round(x: f64, digits: usize) -> f64 {
     format!("{x:.digits$}").parse().unwrap_or(x)
-}
-
-#[derive(Debug)]
-pub enum Input {
-    Launched(u32),
-    LaunchFailed(String),
-    LaunchRejected(String),
-    Reaped(i64),
-    KillFinished(Result<(), String>),
-    Written {
-        id: u64,
-        result: Result<(), Arc<WireError>>,
-    },
-    /// Send `Hello` and wait for `Ready`, within the initialize timeout.
-    Initialize(Hello),
-    /// The initialization settled: pings, the pong deadline and the memory monitor start.
-    Supervise,
-    StartJob {
-        request_id: u64,
-        job: Box<StartJob>,
-    },
-    Message(ToParent),
-    /// The child's end closed, or (`Some`) sent a frame this side cannot read.
-    ReaderClosed(Option<Arc<WireError>>),
-    /// The graceful close: `Shutdown`, then the ack and the exit, each within the close timeout.
-    Shutdown,
-    Kill,
-    /// The kill sequence's first step ran: whether a signal went out (the stack dump), `None`
-    /// when the process was already dead.
-    KillBegun(Option<bool>),
-    Sampled(Sample),
-    /// The process exited and was reaped.
-    Exited(Option<i64>),
-}
-
-#[derive(Debug)]
-pub enum Sample {
-    Mb(f64, String),
-    Unavailable(String),
-    /// Logged by the driver, which holds the host's error.
-    Failed,
-    Interrupted,
-}
-
-#[derive(Debug)]
-pub enum Effect {
-    Send {
-        id: u64,
-        message: ToChild,
-    },
-    IncompleteCleanup(CleanupObservation),
-    SignalFailed(SignalFailure),
-    Log(Level, String, Extra),
-    /// The kill sequence's first step: unless dead, SIGUSR1 (the child dumps its stacks; on
-    /// Windows a `DumpStacks`), then `KillBegun`.
-    BeginKill,
-    /// SIGKILL, unless already dead.
-    Kill,
-    SampleMemory,
-    /// The initialization settled: how long it took, `None` when it timed out.
-    Initialized(Result<Option<Duration>, InitError>),
-    JobStarted {
-        request_id: u64,
-        result: Result<(), StartJobError>,
-    },
 }
 
 /// A native termination request failed; exit/reaping ownership remains unchanged.
