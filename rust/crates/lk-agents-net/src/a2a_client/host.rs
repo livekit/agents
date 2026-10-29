@@ -61,7 +61,7 @@ impl port::AgentClient for AgentClient {
             .map(|items| CallerHistory::from_chat_items(&items, None, &HistorySharing::default()))
             .transpose()
             .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
-        self.send_with_history(message, thread_id.as_deref(), task_id.as_deref(), history.as_ref())
+        AgentClient::send(self, message, thread_id.as_deref(), task_id.as_deref(), history.as_ref())
             .await
             .map_err(client_error)
     }

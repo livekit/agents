@@ -141,7 +141,7 @@ impl AgentClient {
 
     /// An explicitly supplied, validated conversation is sent only to a capable peer and
     /// omitted when an explicit caller thread lets the endpoint load its permitted history.
-    pub async fn send_with_history(
+    pub async fn send(
         &self,
         mut message: Message,
         thread_id: Option<&str>,
