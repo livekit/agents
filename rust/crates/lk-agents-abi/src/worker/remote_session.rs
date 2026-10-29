@@ -9,6 +9,24 @@ use crate::voice::events::{
     ToolCallUpdated, ToolReplyUpdated, UserInputTranscribed, UserStateChanged,
 };
 
+#[crate::host(file(module = "remote_session_wire"))]
+const _: () = ();
+
+/// The option keys a [`SessionState`] row's `options` carries, in the reference's order. Only the
+/// key set is pinned: values are the host's `str()` of each option.
+#[crate::host(constant)]
+pub const STATE_OPTION_FIELDS: &[&str] = &[
+    "endpointing",
+    "interruption",
+    "max_tool_steps",
+    "user_away_timeout",
+    "transcription_timeout",
+    "preemptive_generation",
+    "min_consecutive_speech_delay",
+    "use_tts_aligned_transcript",
+    "ivr_detection",
+];
+
 /// `id` and `created_at` are left unset, as in the reference (`remote_session.py:533`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCallRef {

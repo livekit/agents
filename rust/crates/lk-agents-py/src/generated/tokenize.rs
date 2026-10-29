@@ -60,6 +60,14 @@ pub fn xml_has_unclosed_tags(text: ::std::string::String) -> PyResult<bool> {
     Ok(out)
 }
 
+/// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
+#[pyfunction]
+#[pyo3(signature = (word))]
+pub fn hyphenate_word(word: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
+    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::hyphenate_word(word);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
 type HostTokenizationImpl = <crate::Selected as super::Implementations>::HostTokenization;
 

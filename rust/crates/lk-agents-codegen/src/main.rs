@@ -33,6 +33,8 @@ const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/a2a/metadata.rs",
     "rust/crates/lk-agents-abi/src/worker/endpoint/reset_codes.rs",
     "rust/crates/lk-agents-abi/src/voice/speech.rs",
+    "rust/crates/lk-agents-abi/src/voice/workflows/prompts.rs",
+    "rust/crates/lk-agents-abi/src/worker/remote_session.rs",
     "rust/crates/lk-agents-abi/src/telemetry/attributes.rs",
     "rust/crates/lk-agents-abi/src/voice/events.rs",
     "rust/crates/lk-agents-abi/src/metrics/base.rs",
@@ -90,7 +92,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/agent_activity/options.rs",
     "rust/crates/lk-agents-voice/src/speech_handle.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs",
-    "rust/crates/lk-agents-voice/src/workflows/prompts.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
@@ -99,7 +100,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/agent_session/api/host.rs",
     "rust/crates/lk-agents-abi/src/metrics/usage.rs",
     "rust/crates/lk-agents-abi/src/worker/job.rs",
-    "rust/crates/lk-agents-voice/src/remote_session.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/mood.rs",
     "rust/crates/lk-agents-abi/src/llm/chat_context.rs",
     "rust/crates/lk-agents-abi/src/voice/io.rs",
@@ -115,7 +115,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/realtime.rs",
     "rust/crates/lk-agents-abi/src/tokenize/language/code.rs",
     "rust/crates/lk-agents-abi/src/media/images.rs",
-    "rust/crates/lk-agents-voice/src/transcription/synchronizer.rs",
     "rust/crates/lk-agents-voice/src/agent_session/commands.rs",
     "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
 ];

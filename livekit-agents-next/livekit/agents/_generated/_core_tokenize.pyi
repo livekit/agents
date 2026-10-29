@@ -36,6 +36,9 @@ def tokenize_paragraphs(text: str) -> list[str]: ...
 
 def xml_has_unclosed_tags(text: str) -> bool: ...
 
+def hyphenate_word(word: str) -> list[str]:
+    """`hyphenate_word(word)`: the pieces, broken at the possible hyphenation points."""
+
 def xml_tokenize(
     tokenize_fnc: Callable[[str], Iterable[TokenizerToken]],
     text: str,

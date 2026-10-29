@@ -331,6 +331,8 @@ const _: () = {
 
 pub mod dtmf;
 
+pub mod prompts;
+
 pub mod warm_transfer;
 
 /// Why a date of birth is refused (`ValueError`).

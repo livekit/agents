@@ -12,6 +12,7 @@ from google.protobuf.json_format import MessageToDict
 
 from .. import _core, llm
 from .._core_view import to_core_items
+from .._generated.remote_session_wire import STATE_OPTION_FIELDS
 from ..job import get_job_context
 from ..log import logger
 from ..version import __version__
@@ -65,7 +66,7 @@ class SessionPort:
             self._session.agent_state,
             self._session.user_state,
             self._session.current_agent.name,
-            {k: str(options.get(k)) for k, _ in _core.session_state_option_fields()},
+            {k: str(options.get(k)) for k in STATE_OPTION_FIELDS},
             self._session._started_at,
         )
 

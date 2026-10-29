@@ -51,6 +51,11 @@ pub trait TokenizeFunctions {
 
     #[host(function)]
     fn xml_has_unclosed_tags(text: String) -> bool;
+
+    /// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
+    #[host(function)]
+    #[python(forward(module = "tokenize_basic"))]
+    fn hyphenate_word(word: String) -> Vec<String>;
 }
 
 /// Tokenization through an application tokenizer: the host calls the voice core's steps request.

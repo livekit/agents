@@ -38,7 +38,6 @@ from ._generated._core_agent import (
     VoiceAgent as VoiceAgent,
 )
 from ._generated._core_classes import (
-    END_CALL_DESCRIPTION as END_CALL_DESCRIPTION,
     TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
     AcceptArguments as AcceptArguments,
@@ -83,11 +82,9 @@ from ._generated._core_classes import (
     VideoFrameRef as VideoFrameRef,
     VoiceSession as VoiceSession,
     _core_RoomSession as _core_RoomSession,
-    hyphenate_word as hyphenate_word,
     resolve_interruption_detector as resolve_interruption_detector,
     rt_server_turn_detection as rt_server_turn_detection,
     rtc_wire_names as rtc_wire_names,
-    session_state_option_fields as session_state_option_fields,
     video_queue_frames as video_queue_frames,
 )
 from ._generated._core_errors import (
@@ -237,6 +234,7 @@ from ._generated._core_tokenize import (
     TokenBuffer as TokenBuffer,
     base_language as base_language,
     basic_split_sentences as basic_split_sentences,
+    hyphenate_word as hyphenate_word,
     keyword_search as keyword_search,
     language_iso as language_iso,
     language_name as language_name,

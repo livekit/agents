@@ -18,6 +18,7 @@ from typing import Any, Protocol
 from typing_extensions import Self
 
 from .. import _core
+from .._generated.workflow_prompts import END_CALL_DESCRIPTION
 from ..job import get_job_context
 from ..llm import ToolFlag, Toolset, function_tool
 from ..llm.tool_context import (
@@ -72,7 +73,7 @@ class EndCallTool(Toolset):
         end_call_tool = function_tool(
             self._end_call,
             name="end_call",
-            description=f"{_core.END_CALL_DESCRIPTION}\n{extra_description}",
+            description=f"{END_CALL_DESCRIPTION}\n{extra_description}",
             flags=ToolFlag.IGNORE_ON_ENTER if ignore_on_enter else ToolFlag.NONE,
         )
         super().__init__(id="end_call", tools=[end_call_tool])

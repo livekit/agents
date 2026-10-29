@@ -2,7 +2,6 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the declarations in:
 #     rust/crates/lk-agents-abi/src/tokenize/bindings.rs
-#     rust/crates/lk-agents-voice/src/transcription/synchronizer.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.

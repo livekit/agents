@@ -58,6 +58,9 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
     fn tokenize_paragraphs(text: String) -> Vec<String> {
         tokenize_paragraphs(&text)
     }
+    fn hyphenate_word(word: String) -> Vec<String> {
+        crate::transcription::synchronizer::hyphenate_word(&word)
+    }
     fn xml_has_unclosed_tags(text: String) -> bool {
         xml::has_unclosed_tags(&text)
     }

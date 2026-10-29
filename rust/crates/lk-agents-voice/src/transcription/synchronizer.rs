@@ -86,8 +86,6 @@ fn table() -> &'static Table {
 }
 
 /// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
-#[lk_agents_abi::host(export(pid = false))]
-#[python(forward(module = "tokenize_basic"))]
 pub fn hyphenate_word(word: &str) -> Vec<String> {
     let chars: Vec<char> = word.chars().collect();
     // "Short words aren't hyphenated." Characters, not bytes.

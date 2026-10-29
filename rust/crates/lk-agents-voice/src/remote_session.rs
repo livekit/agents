@@ -16,22 +16,6 @@ use lk_agents_abi::worker::remote_session::{
 };
 use prost::Message as _;
 
-/// The option keys a [`SessionState`] row's `options` carries, in the reference's order, and whether each is
-/// a record the host expands first. Only the key set is pinned: values are Python `str()` output,
-/// which stays with the host rather than a second `repr` implementation here.
-#[lk_agents_abi::host(export(name = "session_state_option_fields"))]
-pub const STATE_OPTION_FIELDS: &[(&str, bool)] = &[
-    ("endpointing", true),
-    ("interruption", true),
-    ("max_tool_steps", false),
-    ("user_away_timeout", false),
-    ("transcription_timeout", false),
-    ("preemptive_generation", true),
-    ("min_consecutive_speech_delay", false),
-    ("use_tts_aligned_transcript", false),
-    ("ivr_detection", false),
-];
-
 /// `_TCP_HEADER_SIZE` (`remote_session.py:184`): big-endian `>I`.
 pub const HEADER_SIZE: usize = 4;
 

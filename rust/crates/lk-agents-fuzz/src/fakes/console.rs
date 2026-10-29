@@ -148,9 +148,9 @@ impl remote_session::SessionPort for FakeConsolePort {
         &self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::SessionState, HostError>> {
         Box::pin(async move {
-            let options = remote_session::STATE_OPTION_FIELDS
+            let options = lk_agents_abi::worker::remote_session::STATE_OPTION_FIELDS
                 .iter()
-                .map(|(key, _)| ((*key).to_owned(), "None".to_owned()))
+                .map(|key| ((*key).to_owned(), "None".to_owned()))
                 .collect();
             Ok(("listening".into(), "listening".into(), "agent".into(), options, Some(0.0)))
         })

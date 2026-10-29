@@ -298,6 +298,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tokenize::split_paragraphs, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::tokenize_paragraphs, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::xml_has_unclosed_tags, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::hyphenate_word, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::xml_tokenize, m)?)?;
     m.add_class::<tokenize::BasicWordTokenizer>()?;
     m.add_class::<tokenize::BasicSentenceTokenizer>()?;
