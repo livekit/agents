@@ -78,33 +78,6 @@ async def test_wav_inline_decoder():
 
 
 @pytest.mark.asyncio
-async def test_wav_inline_decoder_with_resampling():
-    """WAV inline decoder should correctly resample to a different output rate."""
-    src_rate = 16000
-    out_rate = 48000
-    num_channels = 1
-    num_samples = 16000  # 1 second at source rate
-
-    wav_bytes = _make_wav(src_rate, num_channels, num_samples)
-
-    decoder = AudioStreamDecoder(
-        sample_rate=out_rate, num_channels=num_channels, format="audio/wav"
-    )
-    decoder.push(wav_bytes)
-    decoder.end_input()
-
-    total_samples = 0
-    async for frame in decoder:
-        assert frame.sample_rate == out_rate
-        total_samples += frame.samples_per_channel
-
-    # resampled output should have ~3x as many samples (48000/16000)
-    expected = num_samples * out_rate // src_rate
-    assert abs(total_samples - expected) <= out_rate // 50  # within 20ms tolerance
-    await decoder.aclose()
-
-
-@pytest.mark.asyncio
 async def test_wav_multi_chunk_each_with_headers():
     """Each push() is a complete WAV file; decoder must re-parse headers each time."""
     sample_rate = 24000

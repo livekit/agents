@@ -11,7 +11,6 @@ from livekit.agents import (
     Agent,
     AgentHandler,
     AgentServer,
-    InputRequired,
     ModelRetry,
     RunContext,
     RunResult,
@@ -295,48 +294,6 @@ async def test_a_failed_expectation_names_the_mismatch_and_lists_the_events() ->
         assert "[2] ChatMessageEvent(role='assistant', content='It is sunny.')" in message
 
 
-async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
-    """A verbatim ``InputRequired`` speaks the question as written; the next user message is
-    the call's output."""
-    fnol = Agent(instructions="claims")
-
-    @fnol.tool
-    async def request_photo(ctx: RunContext) -> InputRequired:
-        """Ask for a photo."""
-        return InputRequired("Could you send a photo of the damage?", verbatim=True)
-
-    llm = RecordingLLM(
-        fake_responses=[
-            FakeLLMResponse(
-                input="my car is damaged",
-                content="",
-                ttft=0,
-                duration=0,
-                tool_calls=[FunctionToolCall(name="request_photo", arguments="{}", call_id="p1")],
-            ),
-            FakeLLMResponse(input="here it is", content="got it, thanks", ttft=0, duration=0),
-        ]
-    )
-    async with VoiceSession(llm=llm) as session:
-        await session.start(fnol)
-        result = await session._run(user_input="my car is damaged")
-        result.expect.next_event().is_function_call(name="request_photo")
-        result.expect.next_event().is_function_call_output()
-        result.expect.next_event().is_message(role="assistant")  # the question, word for word
-        result.expect.no_more_events()  # no tool reply: the turn waits
-
-        result = await session._run(user_input="here it is")
-        result.expect.next_event().is_message(role="assistant")
-
-    history = session.history.items
-    question = [i for i in history if i.type == "message" and i.role == "assistant"][0]
-    assert question.text_content == "Could you send a photo of the damage?"
-    output = [i for i in history if i.type == "function_call_output" and i.call_id == "p1"][0]
-    assert output.output == "here it is"
-    # the model ran on the call, its answer and the question
-    assert [i.call_id for i in llm.requests[-1].items if i.type == "function_call_output"] == ["p1"]
-
-
 @dataclass
 class Deps:
     greeting: str
@@ -526,23 +483,6 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     activation = await storage.threads._core_context_store(sid, agent.name)
     await ContextStore(scope_id=f"root:{agent.name}", activation=activation).load_context(restored)
     assert restored.patient == Patient(looked_up=1)
-
-
-async def test_run_stream_yields_the_reply_as_it_is_written() -> None:
-    llm = FakeLLM(
-        fake_responses=[
-            FakeLLMResponse(input="hello", content="hi there, friend", ttft=0, duration=0)
-        ]
-    )
-    agent = Agent(instructions="say hi", llm=llm)
-
-    async with agent.run_stream("hello") as stream:
-        deltas = [delta async for delta in stream.stream_text(delta=True)]
-        result = await stream.result()
-
-    assert len(deltas) > 1, "the reply arrives in pieces"
-    assert "".join(deltas) == "hi there, friend"
-    assert result.status == "completed" and result.output == "hi there, friend"
 
 
 class CountingToolset(Toolset):

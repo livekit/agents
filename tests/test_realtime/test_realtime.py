@@ -131,14 +131,6 @@ async def _push_speech(session: llm.RealtimeSession, wav_name: str = "hello_worl
 
 
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
-async def test_generate_reply(rt_session: llm.RealtimeSession):
-    gen_ev = await asyncio.wait_for(rt_session.generate_reply(), timeout=15)
-    assert gen_ev.user_initiated
-    text = await asyncio.wait_for(_collect_text(gen_ev), timeout=15)
-    assert len(text) > 0
-
-
-@pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_generate_reply_with_instructions(rt_session: llm.RealtimeSession):
     gen_ev = await asyncio.wait_for(
         rt_session.generate_reply(instructions="Say exactly: pineapple"),

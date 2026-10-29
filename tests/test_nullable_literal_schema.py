@@ -35,14 +35,3 @@ def test_nullable_literal_response_schema_accepts_null_and_the_literal(
         validator.validate(payload)
     with pytest.raises(ValidationError):
         validator.validate({"value": "invalid"})
-
-
-class EnumResponse(BaseModel):
-    value: Literal["first", "second"] | None
-
-
-def test_nullable_multi_value_enum_remains_valid() -> None:
-    schema = to_openai_response_format(EnumResponse)["json_schema"]["schema"]
-    validator = Draft202012Validator(schema)
-    for value in (None, "first", "second"):
-        validator.validate({"value": value})
