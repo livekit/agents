@@ -44,7 +44,7 @@ compiled=(
     "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
 )
 outside=(
-    "lk-agents-storage: ci.yml storage-tests (cargo test, real SQLite and a fake AgentDB); the A2A survey fakes its port"
+    "lk-agents-storage: ci.yml storage-tests (cargo test, real SQLite and a fake AgentDB); the A2A survey runs real storage with injected faults"
 )
 
 if [[ ${1:-} == --skip-architecture ]]; then

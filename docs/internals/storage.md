@@ -587,8 +587,9 @@ backend configured through the host's `Storage` namespace, so the A2A door's
 tests run its one construction path. A fake
 AgentDB server injects faults (disconnects, lost acknowledgments, rejections,
 slow responses) to reach every typed error; AgentDB integration tests use a
-Cloud project; local tests need only a temporary directory. The DST fakes the
-storage port and injects every error kind into the A2A decisions. Cover:
+Cloud project; local tests need only a temporary directory. The A2A DST runs the
+runtime's door over real storage, on an in-memory SQLite connection that
+injects every error kind. Cover:
 
 - Thread lifecycle, expiry visibility, paging, and recovery from partial
   creation or deletion.

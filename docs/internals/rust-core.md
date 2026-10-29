@@ -723,8 +723,8 @@ decisions in `lk_agents_core::a2a` are sans-I/O over request/result records and
 error types declared in ABI; core has no dependency on storage. The runtime's
 thin A2A door executes core's storage effects by calling storage and feeds the
 typed results back. Storage is tested against real SQLite and a fake AgentDB
-server with injected faults; the DST fakes the storage port and injects every
-error kind.
+server with injected faults; the A2A DST runs the door over real storage, on an
+in-memory SQLite connection that injects every error kind.
 
 Tests cover concurrent arrivals, lost ownership, duplicate messages, uncertain
 writes, commit failure, worker loss and pending human input. The same storage

@@ -50,7 +50,7 @@ fn decode(error: serde_json::Error) -> StorageError {
 }
 
 /// A revision mismatch fails a NOT NULL constraint, rolling back the enclosing batch. A
-/// mismatched lane fence writes nothing, so the normal commit decoder reports VersionConflict.
+/// mismatched lane fence writes nothing, so the commit reports VersionConflict.
 pub fn write(
     lane: &str,
     write: &ContextScopeWrite,
