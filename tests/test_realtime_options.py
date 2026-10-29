@@ -6,7 +6,7 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel, Field
 
-from livekit.agents import _core
+from livekit.agents import NOT_GIVEN, _core
 from livekit.agents.llm._realtime import RealtimeModel
 from livekit.agents.llm.realtime import RealtimeModel as HostRealtimeModel, RealtimeSession
 
@@ -64,3 +64,20 @@ def test_fallback_rejects_invalid_cooldown_before_opening_a_session(cooldown: fl
     native = RealtimeModel(api_key="test")
     with pytest.raises(ValueError, match="cooldown"):
         _core.RealtimeFallbackModel([native._core_native()], cooldown=cooldown)
+
+
+# Catches: a message cut before any word was heard (transcript "") truncated as "not given",
+# which keeps the whole text on the plugin's side.
+def test_an_empty_truncate_transcript_reaches_the_plugin_as_empty() -> None:
+    from livekit.agents._generated import realtime_wire
+
+    from .fake_realtime import FakeRealtimeModel
+
+    session = FakeRealtimeModel().session()
+    for transcript in ("", None):
+        session._core_send(
+            realtime_wire.Truncate(
+                message_id="m1", has_audio=False, audio_end_ms=0, audio_transcript=transcript
+            )
+        )
+    assert session.truncated == ["", NOT_GIVEN]

@@ -310,12 +310,13 @@ pub mod a2a_client {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+    static MESSAGE_INPUT__MESSAGE: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
     pub fn message_input_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::client::MessageInput> {
         if obj.is_instance_of::<::pyo3::types::PyString>() {
             return Ok(::lk_agents_abi::a2a::client::MessageInput::Text(obj.extract::<::std::string::String>()?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.a2a_client")?.getattr("Message")?)? {
+        if obj.is_instance(MESSAGE_INPUT__MESSAGE.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.a2a_client")?.getattr("Message")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::a2a::client::MessageInput::Message(crate::generated::records::a2a_client::message_from_py(obj)?));
         }
         Err(super::not_a(obj, "MessageInput"))
@@ -492,15 +493,17 @@ pub mod agent_nodes {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+    static NODE_CHUNK__FLUSH_SENTINEL: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static NODE_CHUNK__CHAT_CHUNK: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
     pub fn node_chunk_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::nodes::NodeChunk> {
         if obj.is_instance_of::<::pyo3::types::PyString>() {
             return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Text(obj.extract::<::std::string::String>()?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents.types")?.getattr("FlushSentinel")?)? {
+        if obj.is_instance(NODE_CHUNK__FLUSH_SENTINEL.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents.types")?.getattr("FlushSentinel")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Flush);
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.llm")?.getattr("ChatChunk")?)? {
+        if obj.is_instance(NODE_CHUNK__CHAT_CHUNK.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.llm")?.getattr("ChatChunk")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::voice::nodes::NodeChunk::Chunk(obj.extract::<::lk_agents_abi::LlmChunk>().map_err(::std::convert::Into::<PyErr>::into)?));
         }
         Err(super::not_a(obj, "NodeChunk"))
@@ -1126,12 +1129,14 @@ pub mod avatar {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
+    static AUDIO_RECEIVER_FRAME__AUDIO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static AUDIO_RECEIVER_FRAME__AUDIO_SEGMENT_END: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
     pub fn audio_receiver_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::AudioReceiverFrame> {
-        if obj.is_instance(&obj.py().import("livekit.rtc")?.getattr("AudioFrame")?)? {
+        if obj.is_instance(AUDIO_RECEIVER_FRAME__AUDIO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("AudioFrame")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?)? {
+        if obj.is_instance(AUDIO_RECEIVER_FRAME__AUDIO_SEGMENT_END.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::SegmentEnd);
         }
         Err(super::not_a(obj, "AudioReceiverFrame"))
@@ -1265,12 +1270,14 @@ pub mod duplex {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+    static DUPLEX_EVENT__DUPLEX_TRANSCRIPT: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static DUPLEX_EVENT__EVENT: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
     pub fn duplex_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::duplex::DuplexEvent> {
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.duplex")?.getattr("DuplexTranscript")?)? {
+        if obj.is_instance(DUPLEX_EVENT__DUPLEX_TRANSCRIPT.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.duplex")?.getattr("DuplexTranscript")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::duplex::DuplexEvent::Transcript(crate::generated::records::duplex::duplex_transcript_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("Event")?)? {
+        if obj.is_instance(DUPLEX_EVENT__EVENT.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("Event")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::duplex::DuplexEvent::Session(crate::generated::records::realtime_wire::event_from_py(obj)?));
         }
         Err(super::not_a(obj, "DuplexEvent"))
@@ -2227,54 +2234,70 @@ pub mod realtime_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
+    static EVENT__INPUT_SPEECH_STARTED: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__INPUT_SPEECH_STOPPED: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__INPUT_TRANSCRIPTION: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__GENERATION_CREATED: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__SERVER_GENERATION: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__MESSAGE_STARTED: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__TEXT_DELTA: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__AUDIO_DELTA: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__MESSAGE_MODALITIES: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__MESSAGE_DONE: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__FUNCTION_CALL_READY: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__GENERATION_DONE: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__REMOTE_ITEM_ADDED: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__SESSION_RECONNECTED: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__REALTIME_METRICS: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static EVENT__HOST_REALTIME_ERROR: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
     pub fn event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::Event> {
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("InputSpeechStarted")?)? {
+        if obj.is_instance(EVENT__INPUT_SPEECH_STARTED.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("InputSpeechStarted")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::InputSpeechStarted(crate::generated::records::realtime_wire::input_speech_started_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("InputSpeechStopped")?)? {
+        if obj.is_instance(EVENT__INPUT_SPEECH_STOPPED.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("InputSpeechStopped")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::InputSpeechStopped(crate::generated::records::realtime_wire::input_speech_stopped_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("InputTranscription")?)? {
+        if obj.is_instance(EVENT__INPUT_TRANSCRIPTION.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("InputTranscription")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::InputTranscription(crate::generated::records::realtime_wire::input_transcription_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("GenerationCreated")?)? {
+        if obj.is_instance(EVENT__GENERATION_CREATED.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("GenerationCreated")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::GenerationCreated(crate::generated::records::realtime_wire::generation_created_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("ServerGeneration")?)? {
+        if obj.is_instance(EVENT__SERVER_GENERATION.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("ServerGeneration")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::ServerGeneration(crate::generated::records::realtime_wire::server_generation_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("MessageStarted")?)? {
+        if obj.is_instance(EVENT__MESSAGE_STARTED.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("MessageStarted")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::MessageStarted(crate::generated::records::realtime_wire::message_started_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("TextDelta")?)? {
+        if obj.is_instance(EVENT__TEXT_DELTA.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("TextDelta")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::TextDelta(crate::generated::records::realtime_wire::text_delta_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("AudioDelta")?)? {
+        if obj.is_instance(EVENT__AUDIO_DELTA.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("AudioDelta")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::AudioDelta(crate::generated::records::realtime_wire::audio_delta_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("MessageModalities")?)? {
+        if obj.is_instance(EVENT__MESSAGE_MODALITIES.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("MessageModalities")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::MessageModalities(crate::generated::records::realtime_wire::message_modalities_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("MessageDone")?)? {
+        if obj.is_instance(EVENT__MESSAGE_DONE.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("MessageDone")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::MessageDone(crate::generated::records::realtime_wire::message_done_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("FunctionCallReady")?)? {
+        if obj.is_instance(EVENT__FUNCTION_CALL_READY.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("FunctionCallReady")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::FunctionCall(crate::generated::records::realtime_wire::function_call_ready_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("GenerationDone")?)? {
+        if obj.is_instance(EVENT__GENERATION_DONE.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("GenerationDone")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::GenerationDone(crate::generated::records::realtime_wire::generation_done_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("RemoteItemAdded")?)? {
+        if obj.is_instance(EVENT__REMOTE_ITEM_ADDED.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("RemoteItemAdded")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::RemoteItemAdded(crate::generated::records::realtime_wire::remote_item_added_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("SessionReconnected")?)? {
+        if obj.is_instance(EVENT__SESSION_RECONNECTED.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("SessionReconnected")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::SessionReconnected(crate::generated::records::realtime_wire::session_reconnected_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("RealtimeMetrics")?)? {
+        if obj.is_instance(EVENT__REALTIME_METRICS.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("RealtimeMetrics")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::Metrics(crate::generated::records::realtime_wire::realtime_metrics_from_py(obj)?));
         }
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("HostRealtimeError")?)? {
+        if obj.is_instance(EVENT__HOST_REALTIME_ERROR.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.realtime_wire")?.getattr("HostRealtimeError")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::llm::realtime::Event::HostError(crate::generated::records::realtime_wire::host_realtime_error_from_py(obj)?));
         }
         Err(super::not_a(obj, "Event"))
@@ -5187,9 +5210,10 @@ pub mod workflows {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    static INSTRUCTIONS_ARG__WORKFLOW_INSTRUCTIONS: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
     pub fn instructions_arg_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::workflows::InstructionsArg> {
-        if obj.is_instance(&obj.py().import("livekit.agents._generated.workflows")?.getattr("WorkflowInstructions")?)? {
+        if obj.is_instance(INSTRUCTIONS_ARG__WORKFLOW_INSTRUCTIONS.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents._generated.workflows")?.getattr("WorkflowInstructions")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::voice::workflows::InstructionsArg::Workflow(crate::generated::records::workflows::workflow_instructions_from_py(obj)?));
         }
         if obj.is_instance_of::<::pyo3::types::PyString>() {

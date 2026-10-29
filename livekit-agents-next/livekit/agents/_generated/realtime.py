@@ -377,7 +377,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
                     message_id=cmd.message_id,
                     modalities=["audio", "text"] if cmd.has_audio else ["text"],
                     audio_end_ms=cmd.audio_end_ms,
-                    audio_transcript=cmd.audio_transcript or NOT_GIVEN,
+                    audio_transcript=(
+                        NOT_GIVEN if cmd.audio_transcript is None else cmd.audio_transcript
+                    ),
                 )
             case _:
                 raise ValueError(f"unknown session command {cmd!r}")

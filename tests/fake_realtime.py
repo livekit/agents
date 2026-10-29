@@ -57,6 +57,7 @@ class FakeRealtimeSession(RealtimeSession):
         self.committed = False
         self.audio_cleared = False
         self.pushed_audio: list[rtc.AudioFrame] = []
+        self.truncated: list[NotGivenOr[str]] = []
         self.generate_reply_calls = 0
         self.updated_instructions: str | None = None
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
@@ -130,7 +131,7 @@ class FakeRealtimeSession(RealtimeSession):
         audio_end_ms: int,
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        pass
+        self.truncated.append(audio_transcript)
 
     def start_user_activity(self) -> None:
         self.user_activity_started = True

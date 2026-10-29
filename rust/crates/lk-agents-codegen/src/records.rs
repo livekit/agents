@@ -508,6 +508,14 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
     let mut reads = String::new();
     let mut arms = String::new();
     let mut kinds: Vec<String> = Vec::new();
+    // Each class a member is told apart by, looked up once.
+    let mut cells = String::new();
+    let mut is_a = |module: &str, name: &str| {
+        let cell = format!("{}__{}", cell(&r.name), cell(name));
+        // A class or a union alias of classes (a transparent record's members).
+        cells.push_str(&format!("static {cell}: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();\n"));
+        format!("obj.is_instance({cell}.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import({module:?})?.getattr({name:?})?.unbind()))?.bind(obj.py()))?")
+    };
     for v in variants {
         let f = match &v.shape {
             VariantShape::Native => {
@@ -518,8 +526,9 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             VariantShape::Unit => {
                 if let Some((module, name)) = &v.host_type {
                     if r.extract {
+                        let test = is_a(module, name);
                         reads.push_str(&format!(
-                            "    if obj.is_instance(&obj.py().import({module:?})?.getattr({name:?})?)? {{\n        return Ok({rust}::{});\n    }}\n",
+                            "    if {test} {{\n        return Ok({rust}::{});\n    }}\n",
                             v.rust_name
                         ));
                     }
@@ -563,10 +572,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 ..
             }) => (
                 "",
-                format!(
-                    "obj.is_instance(&obj.py().import({:?})?.getattr({name:?})?)?",
-                    format!("{PACKAGE}.{module}")
-                ),
+                is_a(&format!("{PACKAGE}.{module}"), name),
             ),
             Ty::Record(Record { host: HostForm::Annotation(text), .. }) => {
                 let names = crate::class_stub::annotation_names(text);
@@ -579,7 +585,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 let Some((module, name)) = path.rsplit_once('.') else {
                     return Err(format!("{}::{}: an opaque transparent member names a qualified host class", r.rust, v.rust_name));
                 };
-                ("", format!("obj.is_instance(&obj.py().import({module:?})?.getattr({name:?})?)?"))
+                ("", is_a(module, name))
             }
             Ty::Tuple(_) => ("tuple", "obj.is_instance_of::<::pyo3::types::PyTuple>()".into()),
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
@@ -614,7 +620,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             read(&f.ty, "obj", &format!("{}.{}", r.name, v.rust_name))?
         ));
     }
-    let mut s = String::new();
+    let mut s = cells;
     if r.extract {
         s.push_str(&format!(
             "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n{reads}    Err(super::not_a(obj, {:?}))\n}}\n",
