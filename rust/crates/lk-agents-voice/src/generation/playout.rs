@@ -117,9 +117,10 @@ impl Playout {
         let speech = self.speech;
         let mut effects = Vec::new();
         match report {
-            // Words a late report of another forwarding's playback released are not this one's.
+            // Words a playback released are its forwarding's: never one that has no playback yet,
+            // which a late report of another's would otherwise reach.
             SinkReport::Shown(segment, word) => {
-                if segment.is_some_and(|segment| !self.owns(segment)) {
+                if segment.is_some_and(|segment| !self.segments.contains(&segment)) {
                     return effects;
                 }
                 effects.push(PlayoutEffect::Trace(PlayoutStep::TranscriptShown {
@@ -618,5 +619,15 @@ mod tests {
         let cut = PlaybackFinished { interrupted: true, ..PlaybackFinished::default() };
         playout.handle(SinkReport::Finished { segment: segment(1), ev: cut }, now());
         assert!(playout.cut_below, "the first segment's cut was dropped");
+    }
+
+    // Catches: a playout with no playback yet took the words a late report of another
+    // forwarding's playback released, as no key filtered them.
+    #[test]
+    fn a_playout_with_no_playback_takes_no_released_words() {
+        let mut playout = Playout::new(SpeechId(1), None);
+        let word = lk_agents_abi::TimedString::new("late".to_owned());
+        let effects = playout.handle(SinkReport::Shown(Some(segment(7)), word), now());
+        assert!(effects.is_empty(), "a word another playback released was taken");
     }
 }

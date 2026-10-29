@@ -32,8 +32,6 @@ struct SyncCore {
     forwarder_done: Arc<Monotone<bool>>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
     tracker: Arc<PlaybackTracker>,
-    /// The playback whose report is being stepped: the words it releases are its own.
-    reporting: Mutex<Option<PlaybackSegment>>,
 }
 
 impl SyncCore {
@@ -45,11 +43,12 @@ impl SyncCore {
         self.state.lock().unwrap().lifecycle.handle(event)
     }
 
-    /// Step the pure lifecycle and perform its ordered synchronous effects.
-    fn apply(&self, event: SyncEvent) -> Option<Heard> {
+    /// Step the pure lifecycle and perform its ordered synchronous effects. The words released
+    /// are `reported`'s, the playback whose report this is, if any.
+    fn apply(&self, event: SyncEvent, reported: Option<PlaybackSegment>) -> Option<Heard> {
         let mut heard = None;
         for effect in self.decide(event) {
-            if let Some(report) = self.perform(effect) {
+            if let Some(report) = self.perform(effect, reported) {
                 heard = Some(report);
             }
         }
@@ -57,18 +56,15 @@ impl SyncCore {
     }
 
     fn step(&self, input: SyncInput) -> Option<Heard> {
-        self.apply(SyncEvent::Input(input))
+        self.apply(SyncEvent::Input(input), None)
     }
 
     /// `input` from `segment`'s playback report.
     fn step_reported(&self, segment: PlaybackSegment, input: SyncInput) -> Option<Heard> {
-        *self.reporting.lock().unwrap() = Some(segment);
-        let heard = self.step(input);
-        *self.reporting.lock().unwrap() = None;
-        heard
+        self.apply(SyncEvent::Input(input), Some(segment))
     }
 
-    fn perform(&self, effect: SyncEffect) -> Option<Heard> {
+    fn perform(&self, effect: SyncEffect, reported: Option<PlaybackSegment>) -> Option<Heard> {
         match effect {
             SyncEffect::Pace(PaceEffect::Forward { word, start_time, end_time }) => {
                 let shown = TimedString {
@@ -76,8 +72,7 @@ impl SyncCore {
                     end_time: Some(end_time),
                     ..TimedString::new(word)
                 };
-                let segment = *self.reporting.lock().unwrap();
-                self.tracker.transcript_shown(segment, &shown);
+                self.tracker.transcript_shown(reported, &shown);
                 self.send(Out::Word(TimedString { start_time: None, ..shown }));
             }
             SyncEffect::Pace(PaceEffect::Flush) => self.send(Out::Flush),
@@ -91,7 +86,7 @@ impl SyncCore {
                 }
             }
             SyncEffect::RetireText { admitted } => {
-                self.apply(SyncEvent::TextRetired { admitted });
+                self.apply(SyncEvent::TextRetired { admitted }, reported);
             }
             _ => unreachable!("a chain operation must be performed by its owning output"),
         }
@@ -99,12 +94,12 @@ impl SyncCore {
     }
 
     fn send(&self, out: Out) {
-        self.apply(SyncEvent::Output(out));
+        self.apply(SyncEvent::Output(out), None);
     }
 
     /// The physical attachment callback completed; only then does the gate change.
     fn on_attachment_changed(&self, audio: Option<bool>, text: Option<bool>) {
-        self.apply(SyncEvent::AttachmentChanged { audio, text });
+        self.apply(SyncEvent::AttachmentChanged { audio, text }, None);
     }
 
     /// The forwarder: the only task and the only place the text sink is awaited.
@@ -278,7 +273,7 @@ impl SyncedTextOutput {
                     }
                 }
                 effect => {
-                    self.core.perform(effect);
+                    self.core.perform(effect, None);
                 }
             }
         }
@@ -315,7 +310,7 @@ impl TextOutput for SyncedTextOutput {
                     }
                 }
                 effect => {
-                    self.core.perform(effect);
+                    self.core.perform(effect, None);
                 }
             }
         }
@@ -331,14 +326,14 @@ impl TextOutput for SyncedTextOutput {
                     self.core.on_attachment_changed(None, Some(true));
                 }
                 effect => {
-                    self.core.perform(effect);
+                    self.core.perform(effect, None);
                 }
             }
         }
     }
 
     fn on_detached(&self) {
-        self.core.apply(SyncEvent::DetachText);
+        self.core.apply(SyncEvent::DetachText, None);
     }
 }
 
@@ -385,7 +380,6 @@ impl TranscriptSynchronizer {
             tx: Mutex::new(Some(tx)),
             forwarder_done: Arc::new(Monotone::new(false)),
             tracker: Arc::new(PlaybackTracker::new()),
-            reporting: Mutex::new(None),
         });
         // The task holds only the done flag, so it never keeps the core alive.
         let forwarder_done = Arc::clone(&core.forwarder_done);
@@ -420,7 +414,7 @@ impl TranscriptSynchronizer {
 
     /// End the live segment now and start a fresh one.
     pub fn rotate_segment(&self) {
-        self.core.apply(SyncEvent::Rotate);
+        self.core.apply(SyncEvent::Rotate, None);
     }
 
     /// Close: end the live segment and give the forwarder [`lk_agents_abi::HOST_TEARDOWN_TIMEOUT`] to drain.
@@ -443,11 +437,11 @@ impl TranscriptSynchronizer {
                             self.core.forwarder_done.wait_for(|set| *set),
                         )
                         .await;
-                        self.core.apply(SyncEvent::WaitFinished);
+                        self.core.apply(SyncEvent::WaitFinished, None);
                     }
                 }
                 effect => {
-                    self.core.perform(effect);
+                    self.core.perform(effect, None);
                 }
             }
         }
