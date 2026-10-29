@@ -14,6 +14,7 @@ from check import (
     executor_violations,
     host_call_violations,
     length_violations,
+    locked_host_call_violations,
     path_violations,
     pyo3_violations,
     ratchet,
@@ -558,3 +559,41 @@ class WarningContracts(unittest.TestCase):
         for records in ([], self.transcript(success=False), self.transcript()):
             with self.subTest(records=len(records)), self.assertRaises(ValueError):
                 warning_violations(records, self.NAMES)
+
+
+class LockedHostCallContracts(unittest.TestCase):
+    """review13: a host call under a blocking guard deadlocks against a host thread holding the GIL."""
+
+    def test_a_host_call_while_a_guard_is_held_is_a_violation(self):
+        runtime = "rust/crates/lk-agents-runtime/src"
+        files = {
+            # Logged, emitted, attached and fanned out under a guard.
+            f"{runtime}/logged.rs": "fn f(&self) {\n    let state = self.state.lock();\n    if state.done { log::warn!(\"done\"); }\n}\n",
+            f"{runtime}/emitted.rs": "fn f(&self) {\n    if let Some(e) = self.closed.lock().take() {\n        self.host.emit(e);\n    }\n}\n",
+            f"{runtime}/attached.rs": "fn f(&self) {\n    match self.q.lock().unwrap().pop() {\n        Some(x) => Python::attach(|py| x.call(py)),\n        None => {}\n    }\n}\n",
+            "rust/crates/lk-agents-worker/src/pool.rs": "fn f(&self) {\n    let mut st = self.0.state.lock().unwrap_or_else(|p| p.into_inner());\n    crate::diagnostics::emit(st.take());\n}\n",
+            "rust/crates/lk-agents-py/src/fanout.rs": "fn f(&self) {\n    let p = self.playback.lock();\n    self.tracker.playback_finished(p.segment, p.event);\n}\n",
+            # Released first, block-scoped, a temporary, an async lock, a test, outside the crates.
+            f"{runtime}/dropped.rs": "fn f(&self) {\n    let state = self.state.lock();\n    let done = state.done;\n    drop(state);\n    if done { log::warn!(\"done\"); }\n}\n",
+            f"{runtime}/scoped.rs": "fn f(&self) {\n    let done = {\n        let state = self.state.lock();\n        state.done\n    };\n    log::warn!(\"{done}\");\n}\n",
+            f"{runtime}/temporary.rs": "fn f(&self) {\n    let done = self.state.lock().done();\n    log::warn!(\"{done}\");\n}\n",
+            f"{runtime}/bound.rs": "fn f(&self) {\n    if let Ok(mut q) = self.q.try_lock() {\n        let x = q.take();\n        drop(q);\n        log::warn!(\"{x:?}\");\n    }\n}\n",
+            f"{runtime}/awaited.rs": "async fn f(&self) {\n    let state = self.state.lock().await;\n    log::warn!(\"{}\", state.done);\n}\n",
+            f"{runtime}/pool_tests.rs": "fn f(&self) {\n    let state = self.state.lock();\n    log::warn!(\"x\");\n}\n",
+            "rust/crates/lk-agents-voice/src/core.rs": "fn f(&self) {\n    let state = self.state.lock();\n    log::warn!(\"x\");\n}\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            self.assertEqual(
+                locked_host_call_violations(root, list(files)),
+                {
+                    f"locked-host-call:{runtime}/logged.rs:let state = self.state.lock();": 1,
+                    f"locked-host-call:{runtime}/emitted.rs:if let Some(e) = self.closed.lock().take() {{": 1,
+                    f"locked-host-call:{runtime}/attached.rs:match self.q.lock().unwrap().pop() {{": 1,
+                    "locked-host-call:rust/crates/lk-agents-worker/src/pool.rs:let mut st = self.0.state.lock().unwrap_or_else(|p| p.into_inner());": 1,
+                    "locked-host-call:rust/crates/lk-agents-py/src/fanout.rs:let p = self.playback.lock();": 1,
+                },
+            )

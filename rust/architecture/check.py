@@ -228,6 +228,71 @@ def executor_violations(root: Path, paths: list[str]) -> dict[str, int]:
     return violations
 
 
+# A blocking guard held across a host call deadlocks against a host thread that holds the GIL and
+# takes the same lock (review13, 8837e6dcd): a guard's scope makes no host call. Logging is one
+# (pyo3-log takes the GIL), as are `Python::attach`, an emit and the playback tracker's fan-out
+# to host observers. A lock-scoped block returns what to log or emit; the caller does it after.
+LOCKING = tuple(
+    f"rust/crates/lk-agents-{name}/src/"
+    for name in ("runtime", "worker", "net", "inference", "storage", "py")
+)
+LOCK = r"\.(?:try_)?lock\(\)(?!\s*\.await)"
+GUARD = re.compile(
+    r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*[\w.:()]*?" + LOCK
+    + r"(?:\.unwrap\(\)|\.expect\([^()]*\)|\.unwrap_or_else\((?:\|\w+\|\s*\w+\.into_inner\(\)|[\w:]+)\))?\s*;"
+)
+SCRUTINEE = re.compile(r"\b(?:if\s+let|while\s+let|match|for)\b[^{};]*?" + LOCK + r"[^{};]*\{")
+HOST_UNDER_LOCK = re.compile(
+    r"\blog::\w+!|(?<![\w:])(?:warn|error|info|debug|trace)!|\bPython::(?:attach|with_gil)\b"
+    r"|[.:]emit\w*\(|\.(?:playback_started|playback_progressed|playback_finished|transcript_shown)\("
+)
+
+
+def guard_scopes(code: str):
+    """The text each blocking guard is held across: from a `let` guard to its `drop` or the end of
+    its block, and a guard taken in an `if let`/`while let`/`match`/`for` head across its body."""
+    def block_end(at: int, depth: int = 0) -> int:
+        while at < len(code):
+            depth += {"{": 1, "}": -1}.get(code[at], 0)
+            if depth < 0 or (depth == 0 and code[at] == "}"):
+                return at
+            at += 1
+        return at
+
+    def held(start: int, end: int, name: str | None) -> str:
+        released = name and re.search(rf"\bdrop\(\s*{name}\s*\)", code[start:end])
+        return code[start : start + released.start() if released else end]
+
+    for match in GUARD.finditer(code):
+        yield match.start(), held(match.end(), block_end(match.end()), match.group(1))
+    for match in SCRUTINEE.finditer(code):
+        # `if let Ok(guard) = m.try_lock()` binds the guard itself, which a `drop` releases.
+        bound = re.match(r"\w+\s+let\s+(?:Ok|Some)\(\s*(?:mut\s+)?(\w+)\s*\)\s*=", match.group(0))
+        name = bound.group(1) if bound else None
+        yield match.start(), held(match.end(), block_end(match.end(), 1), name)
+
+
+def locked_host_call_violations(root: Path, paths: list[str]) -> dict[str, int]:
+    """Per file and enclosing guard (its line's text), the host calls made under it, outside
+    comments, strings and tests."""
+    violations = {}
+    for path in paths:
+        if not path.startswith(LOCKING) or any(
+            part.removesuffix(".rs").endswith("tests") for part in Path(path).parts
+        ):
+            continue
+        text = (root / path).read_text()
+        if generated(text):
+            continue
+        code = without_test_modules(NOT_CODE.sub(blank, text))
+        for start, scope in guard_scopes(code):
+            if count := len(HOST_UNDER_LOCK.findall(scope)):
+                line = code[start : code.find("\n", start)].strip()
+                key = f"locked-host-call:{path}:{line}"
+                violations[key] = violations.get(key, 0) + count
+    return violations
+
+
 def pyo3_violations(metadata: dict, root: Path, paths: list[str]) -> set[str]:
     """A pyo3-family dependency of any other workspace crate (every feature), and every tracked
     Rust file of another crate naming pyo3, generated output included."""
@@ -484,6 +549,7 @@ def check_boundaries() -> int:
         ("pyo3", pyo3_violations(metadata, root, paths)),
         ("host-calls", host_call_violations(root, paths)),
         ("executors", executor_violations(root, paths)),
+        ("locked-host-calls", locked_host_call_violations(root, paths)),
         ("uses", use_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
