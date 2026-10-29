@@ -8,8 +8,8 @@
 //! objects and converted here with the parameter's name as the error path.
 
 use crate::decl::{
-    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Param, Record, RecordDecl,
-    Sink, Ty,
+    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Param, Proxy, Record,
+    RecordDecl, Sink, Ty,
 };
 use crate::python::Out;
 
@@ -72,6 +72,11 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             root.push_str(&format!("    m.add_class::<{}::{}>()?;\n", c.family, sink.class));
         }
     }
+    for p in &decls.proxies {
+        for (class, _) in proxy_sources(decls, p) {
+            root.push_str(&format!("    m.add_class::<{}::{class}>()?;\n", p.family));
+        }
+    }
     for r in &decls.records {
         for f in functions(r) {
             root.push_str(&format!(
@@ -103,6 +108,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         for p in decls.proxies.iter().filter(|p| p.family == *family) {
             text.push('\n');
             text.push_str(&crate::proxy::proxy(p)?);
+            for (name, item) in proxy_sources(decls, p) {
+                text.push('\n');
+                text.push_str(&source_class(&name, &item)?);
+            }
         }
         for r in decls.records.iter().filter(|r| r.persisted && r.family == *family) {
             text.push('\n');
@@ -473,6 +482,38 @@ pub fn sources(c: &Class) -> Vec<(String, Ty)> {
     let mut out: Vec<(String, Ty)> = Vec::new();
     for m in &c.methods {
         if let Ty::Source { class, item } = &m.ret.ok
+            && !out.iter().any(|(n, _)| n == class)
+        {
+            out.push((class.clone(), (**item).clone()));
+        }
+    }
+    out
+}
+
+/// The stream classes a proxy's calls hand the host (`source(class = ..)` parameters) that no
+/// class of its family hands out already.
+pub fn proxy_sources(decls: &Declarations, p: &Proxy) -> Vec<(String, Ty)> {
+    let mut out: Vec<(String, Ty)> = Vec::new();
+    let handed_out = |name: &str| {
+        decls
+            .classes
+            .iter()
+            .filter(|c| c.family == p.family)
+            .any(|c| sources(c).iter().any(|(n, _)| n == name))
+    };
+    let earlier = decls.proxies.iter().take_while(|o| !std::ptr::eq(*o, p));
+    let earlier: Vec<String> = earlier
+        .filter(|o| o.family == p.family)
+        .flat_map(|o| o.methods.iter().flat_map(|m| m.params.iter()))
+        .filter_map(|q| match &q.ty {
+            Ty::Source { class, .. } => Some(class.clone()),
+            _ => None,
+        })
+        .collect();
+    for q in p.methods.iter().flat_map(|m| m.params.iter()) {
+        if let Ty::Source { class, item } = &q.ty
+            && !handed_out(class)
+            && !earlier.contains(class)
             && !out.iter().any(|(n, _)| n == class)
         {
             out.push((class.clone(), (**item).clone()));

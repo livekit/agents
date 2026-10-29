@@ -392,10 +392,13 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         Ty::Native { rust, .. } => {
             format!("<dyn {rust} as super::NativeToHost>::to_host(py, {v})?")
         }
+        // A core stream, handed over as its generated stream class (this family's).
+        Ty::Source { class, .. } => format!(
+            "::pyo3::Bound::new(py, {class}(::lk_agents_runtime::net::source::NativeSource::new({v})))?.into_any()"
+        ),
         Ty::Unit
         | Ty::This
         | Ty::Proxy { .. }
-        | Ty::Source { .. }
         | Ty::Sink { .. }
         | Ty::Duplex { .. }
         | Ty::HostSource(_)

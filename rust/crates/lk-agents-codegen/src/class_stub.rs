@@ -20,6 +20,13 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 .filter(|r| crate::adapter::has_functions(r))
                 .map(|r| r.family.as_str()),
         )
+        .chain(
+            decls
+                .proxies
+                .iter()
+                .filter(|p| !crate::adapter::proxy_sources(decls, p).is_empty())
+                .map(|p| p.family.as_str()),
+        )
         .collect();
     families.sort();
     families.dedup();
@@ -38,15 +45,12 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 own.push(c.name.clone());
             }
             for (name, item) in crate::adapter::sources(c) {
-                let item = annotation(c, &item, Dir::Out, &mut imports);
-                body.push_str(&format!(
-                    "\nclass {name}:\n    async def recv(self) -> {item} | None: ...\n    async def aclose(self) -> None: ...\n"
-                ));
+                body.push_str(&source_stub(&name, &annotation(&c.name, &item, Dir::Out, &mut imports)));
                 own.push(name);
             }
             for (sink, output) in crate::adapter::duplexes(c) {
-                let input = annotation(c, &sink.item, Dir::In, &mut imports);
-                let output = annotation(c, &output, Dir::Out, &mut imports);
+                let input = annotation(&c.name, &sink.item, Dir::In, &mut imports);
+                let output = annotation(&c.name, &output, Dir::Out, &mut imports);
                 let control = Class {
                     name: sink.class.clone(),
                     methods: sink.methods.clone(),
@@ -63,6 +67,12 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                     "    async def recv(self) -> {output} | None: ...\n    async def aclose(self) -> None: ...\n"
                 ));
                 own.push(sink.class.clone());
+            }
+        }
+        for p in decls.proxies.iter().filter(|p| p.family == family) {
+            for (name, item) in crate::adapter::proxy_sources(decls, p) {
+                body.push_str(&source_stub(&name, &annotation("", &item, Dir::Out, &mut imports)));
+                own.push(name);
             }
         }
         for r in decls.records.iter().filter(|r| r.persisted && r.family == family) {
@@ -290,6 +300,13 @@ pub(crate) fn annotation_names(text: &str) -> Vec<(std::ops::Range<usize>, &str)
     names
 }
 
+/// A stream class: `recv()` the next item, `None` at the end.
+fn source_stub(name: &str, item: &str) -> String {
+    format!(
+        "\nclass {name}:\n    async def recv(self) -> {item} | None: ...\n    async def aclose(self) -> None: ...\n"
+    )
+}
+
 fn class(c: &Class, imports: &mut Imports) -> String {
     if c.form == Form::Functions {
         return c.methods.iter().map(|m| format!("\n{}", method(c, m, imports))).collect();
@@ -348,7 +365,7 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         MethodKind::Next => {
             imports.add("typing", "Self");
             let item = match &m.ret.ok {
-                Ty::Optional(item) => annotation(c, item, Dir::Out, imports),
+                Ty::Optional(item) => annotation(&c.name, item, Dir::Out, imports),
                 other => unreachable!("next returns an option, not {other:?}"),
             };
             s.push_str("    def __aiter__(self) -> Self: ...\n");
@@ -379,9 +396,9 @@ pub(crate) fn signature_parts(
     let result = match &m.future {
         Some(ty) => {
             imports.add("asyncio", "Future");
-            format!("Future[{}]", annotation(c, ty, Dir::Out, imports))
+            format!("Future[{}]", annotation(&c.name, ty, Dir::Out, imports))
         }
-        None => annotation(c, &m.ret.ok, Dir::Out, imports),
+        None => annotation(&c.name, &m.ret.ok, Dir::Out, imports),
     };
     (parameters(c, m, imports), result)
 }
@@ -393,14 +410,14 @@ pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(S
         .filter(|p| p.ty != Ty::CallContext)
         .map(|p| {
             let ty = if let (true, Ty::List(item)) = (p.one_or_many, &p.ty) {
-                let item = annotation(c, item, Dir::In, imports);
+                let item = annotation(&c.name, item, Dir::In, imports);
                 format!("{item} | list[{item}]")
             } else if p.pcm {
                 "bytes | bytearray | memoryview".to_owned()
             } else if p.shape_error.as_ref().is_some_and(|policy| policy.items) {
                 strict_list_input(c, &p.ty, imports)
             } else {
-                annotation(c, &p.ty, Dir::In, imports)
+                annotation(&c.name, &p.ty, Dir::In, imports)
             };
             let name = p.name.trim_start_matches("r#");
             let text = match &p.default {
@@ -417,8 +434,8 @@ pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(S
 fn strict_list_input(c: &Class, ty: &Ty, imports: &mut Imports) -> String {
     match ty {
         Ty::Optional(inner) => format!("{} | None", strict_list_input(c, inner, imports)),
-        Ty::List(item) => format!("list[{}]", annotation(c, item, Dir::In, imports)),
-        other => annotation(c, other, Dir::In, imports),
+        Ty::List(item) => format!("list[{}]", annotation(&c.name, item, Dir::In, imports)),
+        other => annotation(&c.name, other, Dir::In, imports),
     }
 }
 
@@ -431,7 +448,8 @@ enum Dir {
 }
 
 /// What the host passes (`In`) or receives (`Out`): an emitted record is a dict of its fields.
-fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
+/// `this`: the class whose method it annotates (`Self`).
+fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
@@ -442,10 +460,10 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Str => "str".into(),
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
-        Ty::Optional(t) => format!("{} | None", annotation(c, t, dir, imports)),
+        Ty::Optional(t) => format!("{} | None", annotation(this, t, dir, imports)),
         Ty::Maybe(t) => {
             imports.add("..types", "NotGivenOr");
-            format!("NotGivenOr[{}]", annotation(c, t, dir, imports))
+            format!("NotGivenOr[{}]", annotation(this, t, dir, imports))
         }
         Ty::List(t) if dir == Dir::Out && matches!(**t, Ty::Int(crate::decl::Int::U8)) => {
             "bytes".into()
@@ -456,13 +474,13 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::List(t) if matches!(**t, Ty::Int(crate::decl::Int::U8)) => "bytes".into(),
         Ty::List(t) if dir == Dir::In => {
             imports.add("collections.abc", "Sequence");
-            format!("Sequence[{}]", annotation(c, t, dir, imports))
+            format!("Sequence[{}]", annotation(this, t, dir, imports))
         }
         Ty::List(t) if dir == Dir::ProxyResult => {
             imports.add("collections.abc", "Iterable");
-            format!("Iterable[{}]", annotation(c, t, dir, imports))
+            format!("Iterable[{}]", annotation(this, t, dir, imports))
         }
-        Ty::List(t) => format!("list[{}]", annotation(c, t, dir, imports)),
+        Ty::List(t) => format!("list[{}]", annotation(this, t, dir, imports)),
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             let map = if dir == Dir::In && matches!(ty, Ty::Map(..)) {
                 imports.add("collections.abc", "Mapping");
@@ -470,12 +488,12 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             } else {
                 "dict"
             };
-            format!("{map}[{}, {}]", annotation(c, k, dir, imports), annotation(c, t, dir, imports))
+            format!("{map}[{}, {}]", annotation(this, k, dir, imports), annotation(this, t, dir, imports))
         }
-        Ty::Set(t) => format!("frozenset[{}]", annotation(c, t, dir, imports)),
+        Ty::Set(t) => format!("frozenset[{}]", annotation(this, t, dir, imports)),
         Ty::Tuple(ts) => format!(
             "tuple[{}]",
-            ts.iter().map(|t| annotation(c, t, dir, imports)).collect::<Vec<_>>().join(", ")
+            ts.iter().map(|t| annotation(this, t, dir, imports)).collect::<Vec<_>>().join(", ")
         ),
         Ty::Record(r)
             if dir == Dir::Out
@@ -510,7 +528,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             HostForm::WireStrs => "str".into(),
             HostForm::Annotation(text) => imports.annotation(text, &r.rust),
         },
-        Ty::This => c.name.clone(),
+        Ty::This => this.to_owned(),
         Ty::Proxy { host, generic, declared, .. } => {
             if host == "collections.abc.Callable"
                 && let Some((family, name)) = declared
@@ -526,10 +544,10 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                     .params
                     .iter()
                     .filter(|parameter| parameter.ty != Ty::CallContext)
-                    .map(|parameter| annotation(c, &parameter.ty, Dir::Out, imports))
+                    .map(|parameter| annotation(this, &parameter.ty, Dir::Out, imports))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let mut result = annotation(c, &method.ret.ok, Dir::ProxyResult, imports);
+                let mut result = annotation(this, &method.ret.ok, Dir::ProxyResult, imports);
                 if method.kind == ProxyCall::Await {
                     imports.add("collections.abc", "Awaitable");
                     result = format!("Awaitable[{result}]");
@@ -550,12 +568,12 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         }
         Ty::HostSource(item) => {
             imports.add("collections.abc", "AsyncIterable");
-            format!("AsyncIterable[{}]", annotation(c, item, dir, imports))
+            format!("AsyncIterable[{}]", annotation(this, item, dir, imports))
         }
         Ty::Error(_) => "BaseException".into(),
         Ty::HostDuplex { output, .. } => {
             imports.add("collections.abc", "AsyncIterable");
-            format!("AsyncIterable[{}]", annotation(c, output, dir, imports))
+            format!("AsyncIterable[{}]", annotation(this, output, dir, imports))
         }
         Ty::Handle { class, .. } | Ty::Instance { class, .. } | Ty::Shared { class, .. } => {
             imports.add(".._core", class);

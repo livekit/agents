@@ -527,6 +527,24 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
 // Catches: a proxy call with no context to enter (or two), a failure swallowed into a default, an
 // error or refusal with no declared conversion, a call kind guessed from the signature, or a
 // value handed to the host that it cannot receive.
+// Catches: a core stream handed to a host call converted as anything but its generated stream
+// class, or that class missing from the proxy's family and registration.
+#[test]
+fn a_core_stream_reaches_a_host_call_as_its_generated_stream_class() {
+    let decls = read(&proxy(
+        "#[host(notify)] fn f(&self, #[host(source(class = \"ChunkStream\"))] s: Box<dyn crate::utils::stream::StreamSource<String>>);",
+    ))
+    .expect("resolves");
+    let p = &decls.proxies[0];
+    assert!(matches!(&p.methods[0].params[0].ty, Ty::Source { class, .. } if class == "ChunkStream"));
+    assert_eq!(crate::adapter::proxy_sources(&decls, p).len(), 1);
+    let text = crate::proxy::proxy(p).expect("emits");
+    assert!(
+        text.contains("::pyo3::Bound::new(py, ChunkStream(::lk_agents_runtime::net::source::NativeSource::new(s_arg)))"),
+        "{text}"
+    );
+}
+
 #[test]
 fn incomplete_proxy_declarations_fail_generation() {
     for (body, want) in [

@@ -141,7 +141,7 @@ impl Resolver<'_> {
             let name = name.trim_start_matches('_').to_owned();
             let pat = format!("{at}({name})");
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["context"])?;
+            voc::only(&pat, &entries, &["context", "source"])?;
             if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
                 return Err(format!("{at}: one parameter is the call's #[host(context)]"));
             }
@@ -171,6 +171,21 @@ impl Resolver<'_> {
                     Some(elem) => (true, Ty::Optional(Box::new(self.borrowed(elem, &pat)?))),
                     None => (false, self.ty(other, &pat)?),
                 },
+            };
+            // `source(class = "X")`: a core stream handed to the host as the stream class `X`.
+            let ty = match (voc::find(&entries, "source"), ty) {
+                (Some(source), Ty::HostSource(item)) if !by_ref => {
+                    voc::only(&pat, &source.nested, &["class"])?;
+                    let class = voc::text(&pat, &source.nested, "class")?
+                        .ok_or_else(|| format!("{pat}: source(class = \"..\") names its stream class"))?;
+                    Ty::Source { item, class }
+                }
+                (Some(_), _) => {
+                    return Err(format!(
+                        "{pat}: source(class = ..) is a `Box<dyn StreamSource<T>>` passed by value"
+                    ));
+                }
+                (None, ty) => ty,
             };
             // It crosses to the host; a declared proxy as the host object behind it.
             check_argument(&pat, &ty)?;
