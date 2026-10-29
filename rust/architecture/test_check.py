@@ -16,6 +16,7 @@ from check import (
     length_violations,
     path_violations,
     pyo3_violations,
+    use_violations,
     ratchet,
     read_baselines,
     tracked_rust_paths,
@@ -424,6 +425,49 @@ class ExecutorContracts(unittest.TestCase):
 
 class Pyo3Contracts(unittest.TestCase):
     """Decision 74: pyo3 is the extension crate's alone."""
+
+    def test_uses_are_counted_per_file_item_and_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "rust/crates/lk-agents-abi/src/err.rs": (
+                    "use pyo3::prelude::*; // pyo3::Python in a comment\n"
+                    "impl FromHostErr for E {\n"
+                    "    fn from_host(py: pyo3::Python<'_>) -> Self {\n"
+                    "        let s = \"pyo3::fake\"; let c = '{';\n"
+                    "        if s.is_empty() { pyo3::Python::attach(|_| ()); }\n"
+                    "        pyo3::Python::attach(|_| ())\n"
+                    "    }\n"
+                    "}\n"
+                ),
+                "rust/crates/lk-agents-voice/src/host.rs": (
+                    "#[async_trait::async_trait]\npub trait Host<'a> { async fn f(&'a self); }\n"
+                ),
+                "rust/crates/lk-agents-inference/src/net.rs": "#[async_trait::async_trait]\ntrait Free {}\n",
+                "rust/crates/lk-agents-py/src/lib.rs": "use pyo3::prelude::*;\n",
+            }
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            uses = use_violations(root, list(files))
+            err = "pyo3-use:rust/crates/lk-agents-abi/src/err.rs"
+            self.assertEqual(
+                uses,
+                {
+                    f"{err}:<file>:pyo3::prelude": 1,
+                    f"{err}:impl FromHostErr for E::from_host:pyo3::Python": 1,
+                    f"{err}:impl FromHostErr for E::from_host:pyo3::Python::attach": 2,
+                    "async-trait-use:rust/crates/lk-agents-voice/src/host.rs:Host:async_trait::async_trait": 1,
+                },
+            )
+            # Another use in an item already carrying one grows its count; removing a use
+            # elsewhere does not pay for it.
+            grown = dict(uses, **{f"{err}:impl FromHostErr for E::from_host:pyo3::Python::attach": 3})
+            del grown[f"{err}:<file>:pyo3::prelude"]
+            self.assertEqual(
+                ratchet(grown, uses),
+                [f"grew: {err}:impl FromHostErr for E::from_host:pyo3::Python::attach: 2 -> 3"],
+            )
 
     def test_pyo3_outside_the_extension_crate_is_a_violation(self):
         with tempfile.TemporaryDirectory() as tmp:

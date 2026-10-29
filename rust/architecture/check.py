@@ -234,6 +234,92 @@ def pyo3_violations(metadata: dict, root: Path, paths: list[str]) -> set[str]:
     return violations
 
 
+# A pyo3 path (`pyo3::types::PyDict`, `pyo3_async_runtimes`) and an `async_trait` use, counted per
+# file, enclosing item and path: a new use in a file or item already carrying others still grows.
+PYO3_USE = re.compile(r"\bpyo3\w*(?:::\w+)*")
+ASYNC_TRAIT_USE = re.compile(r"\basync_trait(?:::async_trait)?\b")
+# Comments, strings and char literals, blanked before reading items so their text is no use.
+NOT_CODE = re.compile(
+    r"//[^\n]*|/\*.*?\*/|b?r(#*)\".*?\"\1|b?\"(?:\\.|[^\\\"])*\"|'(?:\\u\{[0-9a-fA-F]+\}|\\.|[^\\'\n])'",
+    re.S,
+)
+ATTRIBUTE = re.compile(r"#!?\[[^\]]*\]")
+ITEM = re.compile(
+    r"^(?:pub(?:\([^)]*\))?\s+)?(?:(?:const|async|unsafe|default|extern\s+\"\w+\")\s+)*"
+    r"(?:(fn|struct|enum|trait|mod|union)\s+(\w+)|macro_rules!\s*(\w+)|(impl\b.*))",
+    re.S,
+)
+
+
+def blank(match: re.Match) -> str:
+    return re.sub(r"[^\n]", " ", match.group(0))
+
+
+def item_uses(text: str, pattern: re.Pattern) -> dict[str, int]:
+    """`pattern`'s matches outside comments and strings, keyed by the enclosing named items
+    (`impl Trait for X::method`) and the matched text, with their counts."""
+    code = NOT_CODE.sub(blank, text)
+    uses: dict[str, int] = {}
+    stack: list[str | None] = []
+    events = sorted(
+        [(m.start(), m.group(0)) for m in re.finditer(r"[{};]", code)]
+        + [(m.start(), m) for m in pattern.finditer(code)],
+        key=lambda event: event[0],
+    )
+    def record(names: list[str], found: list[str]) -> None:
+        for text in found:
+            key = f"{'::'.join(names) or '<file>'}:{text}"
+            uses[key] = uses.get(key, 0) + 1
+
+    # A use belongs to the item whose header it is in (a signature, an attribute), else to the
+    # enclosing items; it is placed when its header ends.
+    header_start, pending = 0, []
+    for at, event in events:
+        if isinstance(event, re.Match):
+            pending.append(event.group(0))
+            continue
+        names = [name for name in stack if name]
+        if event == "{":
+            header = " ".join(ATTRIBUTE.sub(" ", code[header_start:at]).split())
+            item = ITEM.match(header)
+            name = None
+            if item and item.group(4):
+                name = " ".join(item.group(4).split())
+            elif item:
+                name = item.group(2) or item.group(3)
+            stack.append(name)
+            record(names + [name] if name else names, pending)
+        else:
+            record(names, pending)
+            if event == "}" and stack:
+                stack.pop()
+        header_start, pending = at + 1, []
+    record([name for name in stack if name], pending)
+    return uses
+
+
+def use_violations(root: Path, paths: list[str]) -> dict[str, int]:
+    """Every pyo3 use outside the extension and generator crates, and every async-trait use in a
+    subject core or ABI, by file, enclosing item and path; each count is a ceiling."""
+    violations = {}
+    for path in paths:
+        parts = Path(path).parts
+        if parts[:2] != ("rust", "crates") or len(parts) < 4:
+            continue
+        checks = []
+        if parts[2] not in GENERATORS | {HOST_LANGUAGE}:
+            checks.append(("pyo3", PYO3_USE))
+        if parts[2] in PURE:
+            checks.append(("async-trait", ASYNC_TRAIT_USE))
+        if not checks:
+            continue
+        text = (root / path).read_text()
+        for kind, pattern in checks:
+            for key, count in item_uses(text, pattern).items():
+                violations[f"{kind}-use:{path}:{key}"] = count
+    return violations
+
+
 def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
     violations = {}
     for path in paths:
@@ -373,6 +459,7 @@ def check_boundaries() -> int:
         ("pyo3", pyo3_violations(metadata, root, paths)),
         ("host-calls", host_call_violations(root, paths)),
         ("executors", executor_violations(root, paths)),
+        ("uses", use_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

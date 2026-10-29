@@ -21,6 +21,10 @@ the workspace Rust flags.
   workspace crate, or another crate's tracked Rust file naming pyo3 (generated output included),
   is an identity of the shrink-only `pyo3-baseline.json`. The generator crates, which write the
   extension's code as text, are exempt.
+- Each use is ratcheted too, not only its file or crate: every pyo3 path outside the extension
+  and generator crates, and every `async_trait` in a subject core or ABI, is counted per file,
+  enclosing item and path (comments and strings excluded) in `uses-baseline.json`; a new use in
+  a file or item that already has others grows a ceiling.
 - Every Rust-to-host call goes through HostInvoker: a file naming pyo3 that calls into host code
   (`call*`, `call_soon_threadsafe`, `into_future`, `future_into_py`) outside the Python entry
   `lk-agents-py/src/host/` is an identity of the shrink-only `host-calls-baseline.json`; generated
