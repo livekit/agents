@@ -65,6 +65,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
         video_sampler: None,
         realtime: None,
         toolset: Default::default(),
+        tool_retries: lk_agents_abi::agent::Retries::default().tool,
         // `dst` is enabled by the runtime's test dependency so SessionCores has the same shape.
     };
     (builder, steps)

@@ -509,6 +509,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tools=frame["tools"],
                 tools_host=frame["tools_host"],
                 tool_runner=frame["tool_runner"],
+                tool_retries=frame["tool_retries"],
                 room_io_config=room_options._to_core() if is_given(room_options) else None,
                 video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
                 using_default_vad=self._using_default_vad,
@@ -880,6 +881,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "agent_host": agent,
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),
+            "tool_retries": agent._retries.tool,
         }
         # every leg a node may wrap is given, so the previous frame's node never stays on it; the
         # session's STT and TTS stay as they are, under the agent's nodes

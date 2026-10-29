@@ -90,6 +90,8 @@ impl SessionApi {
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
         tools_host: Option<lk_agents_abi::HostRef>,
         tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+        // The first agent's tool retry budget (`Retries.tool`); `None` is the default.
+        tool_retries: Option<u32>,
         transcription_node: Option<Arc<dyn NodeFactory>>,
         realtime_audio_output_node: Option<Arc<dyn NodeFactory>>,
         llm_node: Option<Arc<dyn NodeFactory>>,
@@ -322,6 +324,7 @@ impl SessionApi {
             room_events: None,
             room_link: Some(room_link),
             toolset,
+            tool_retries: tool_retries.unwrap_or(lk_agents_abi::agent::Retries::default().tool),
         };
 
         let mut api = SessionApi {

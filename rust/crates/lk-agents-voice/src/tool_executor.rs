@@ -766,7 +766,7 @@ impl Driver {
             out.machine().emit(SessionEvent::Diagnostic(diagnostic));
         }
         let Some(answer) = answer else { return };
-        let limit = lk_agents_abi::agent::Retries::default().tool;
+        let limit = self.activity.tool_retries;
         let retried = end.executions.iter().map(|e| (e.call.name.as_str(), e.retry));
         let retries_exceeded =
             self.activity.tools.retries.entry(speech).or_default().step(retried, limit);

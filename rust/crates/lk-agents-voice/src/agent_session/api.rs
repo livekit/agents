@@ -494,6 +494,7 @@ impl SessionApi {
             tools,
             tools_host,
             tool_runner,
+            tool_retries,
             chat_ctx,
             llm,
             tts,
@@ -522,6 +523,7 @@ impl SessionApi {
             instructions,
             dynamic_instructions,
             toolset: host_toolset(tools, tools_host, tool_runner),
+            tool_retries,
             chat_ctx,
             llm,
             tts,
@@ -1061,6 +1063,8 @@ pub struct UpdateAgentArgs {
     pub tools_host: Option<lk_agents_abi::HostRef>,
     #[host(kwarg(default = None))]
     pub tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+    /// The agent's tool retry budget (`Retries.tool`).
+    pub tool_retries: u32,
     #[host(kwarg(default = None))]
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     pub llm: Maybe<Option<Arc<dyn Llm>>>,

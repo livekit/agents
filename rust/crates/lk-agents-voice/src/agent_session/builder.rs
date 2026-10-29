@@ -168,6 +168,8 @@ pub struct DriverBuilder {
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: crate::tool_executor::Toolset,
+    /// The first agent's tool retry budget.
+    pub tool_retries: u32,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     pub session_id: String,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
@@ -501,6 +503,7 @@ impl DriverBuilder {
             dynamic_instructions: self.dynamic_instructions.take(),
             output_nodes: std::mem::take(&mut self.output_nodes),
             toolset: Arc::new(std::mem::take(&mut self.toolset)),
+            tool_retries: self.tool_retries,
             tools: Default::default(),
             audio_recognition,
             speech_scheduler: SpeechScheduler::new(),

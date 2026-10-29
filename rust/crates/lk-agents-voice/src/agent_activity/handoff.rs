@@ -348,6 +348,7 @@ impl Driver {
             instructions,
             dynamic_instructions,
             toolset,
+            tool_retries,
             chat_ctx,
             llm,
             tts,
@@ -371,6 +372,7 @@ impl Driver {
             dynamic_instructions,
             output_nodes,
             toolset,
+            tool_retries,
         );
         self.session.apply_providers(llm, tts, out);
 

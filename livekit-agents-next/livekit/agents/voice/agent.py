@@ -206,6 +206,8 @@ class Agent(Generic[Context_T, Output_T]):
         self._hook_fns: dict[str, _HookFn] = {}
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
+        # the retry budgets every invocation of this agent reads, in text and on a call
+        self._retries = Retries()
 
         # a type, or an output function whose return value is the output
         self._output_type_explicit = output_type is not None
@@ -413,7 +415,7 @@ class Agent(Generic[Context_T, Output_T]):
             dynamic_instructions=bool(self._instruction_fns),
             tools=tool_infos(tools),
             output=self._host._output.spec(validated=bool(self._output_validators)),
-            retries=Retries(),
+            retries=self._retries,
         )
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
