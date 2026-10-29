@@ -145,6 +145,10 @@ class _core_RemoteInteraction:
         offers_extension: bool,
         history: Sequence[ChatItem],
     ) -> Message: ...
+    def answer(self, request_id: str, text: str) -> Message:
+        """The person's answer to the retained input request `request_id`, on its task; refused
+        once that request was settled or superseded.
+        """
     def update(self, update: TaskUpdate) -> RemoteEvent: ...
     def cancelled(self) -> None: ...
     @property

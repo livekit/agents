@@ -375,6 +375,15 @@ impl _core_RemoteInteraction {
         Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
     }
 
+    /// The person's answer to the retained input request `request_id`, on its task; refused
+    /// once that request was settled or superseded.
+    #[pyo3(signature = (request_id, text))]
+    fn answer<'py>(&self, py: Python<'py>, request_id: ::std::string::String, text: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::answer(&self.0, request_id, text).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
+    }
+
     #[pyo3(signature = (update))]
     fn update<'py>(&self, py: Python<'py>, update: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;

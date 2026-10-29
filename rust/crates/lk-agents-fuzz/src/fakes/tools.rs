@@ -92,6 +92,7 @@ fn tool_info(name: &str) -> FunctionToolInfo {
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
         retries: None,
+        remote: None,
     }
 }
 

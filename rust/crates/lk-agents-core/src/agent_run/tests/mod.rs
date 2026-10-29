@@ -43,6 +43,7 @@ pub(super) fn tool(name: &str, description: &str, schema: Value) -> FunctionTool
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
         retries: None,
+        remote: None,
     }
 }
 

@@ -167,6 +167,10 @@ class FunctionToolInfo:
     duplicate_scope: DuplicateScope
     retries: int | None
     """`retries=` on the tool: its own budget in place of the run's `Retries.tools`."""
+    remote: str | None = None
+    """A `RemoteAgent(...).as_tool()`'s endpoint: with the tool's name, its configured identity
+    as an expert on a voice session.
+    """
 
 
 ReadBack: TypeAlias = Literal["default", "function"]

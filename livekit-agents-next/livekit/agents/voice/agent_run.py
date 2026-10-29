@@ -323,6 +323,7 @@ def run_error(error: RunError) -> BaseException:
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     """The core's ``FunctionToolInfo`` of each function tool."""
     from .._core_view import tool_specs
+    from ..a2a.remote import _ExpertTool
 
     specs = {spec["name"]: spec for spec in tool_specs(list(tools.function_tools.values()))}
     infos = []
@@ -338,6 +339,7 @@ def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
                 on_duplicate=tool.info.on_duplicate,
                 duplicate_scope=tool.info.duplicate_scope,
                 retries=tool.info.retries,
+                remote=tool.endpoint if isinstance(tool, _ExpertTool) else None,
             )
         )
     return infos

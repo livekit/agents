@@ -48,6 +48,11 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         history: Vec<ChatItem>,
     ) -> Result<Message, AgentClientError>;
 
+    /// The person's answer to the retained input request `request_id`, on its task; refused
+    /// once that request was settled or superseded.
+    #[host(call)]
+    fn answer(&self, request_id: String, text: String) -> Result<Message, AgentClientError>;
+
     #[host(call)]
     fn update(&self, update: TaskUpdate) -> Result<RemoteEvent, AgentClientError>;
 

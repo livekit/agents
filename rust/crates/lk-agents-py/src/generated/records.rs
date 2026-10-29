@@ -655,6 +655,7 @@ pub mod agent_run {
                 on_duplicate: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "on_duplicate", |v| v.extract::<::lk_agents_abi::llm::mcp::DuplicateMode>().map_err(::std::convert::Into::<PyErr>::into))?,
                 duplicate_scope: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "duplicate_scope", |v| v.extract::<::lk_agents_abi::llm::mcp::DuplicateScope>().map_err(::std::convert::Into::<PyErr>::into))?,
                 retries: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "retries", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "FunctionToolInfo.retries")).map(Some) })?,
+                remote: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "remote", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
             })
     }
 

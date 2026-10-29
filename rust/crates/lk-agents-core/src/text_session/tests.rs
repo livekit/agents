@@ -29,6 +29,7 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
         retries: None,
+        remote: None,
     };
     let agent = |name: &str, tools, output| SessionAgent {
         definition: AgentDefinition {

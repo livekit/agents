@@ -280,6 +280,10 @@ pub struct FunctionToolInfo {
     pub duplicate_scope: DuplicateScope,
     /// `retries=` on the tool: its own budget in place of the run's `Retries.tools`.
     pub retries: Option<u32>,
+    /// A `RemoteAgent(...).as_tool()`'s endpoint: with the tool's name, its configured identity
+    /// as an expert on a voice session.
+    #[host(default = None)]
+    pub remote: Option<String>,
 }
 
 /// How a `needs_approval` tool asks.

@@ -157,6 +157,7 @@ fn config(setup: &Setup) -> TextSessionConfig {
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
         retries: None,
+        remote: None,
     };
     let structured = OutputSpec::Structured {
         schema: json!({"type":"object", "properties":{"reference":{"type":"string"}}}),

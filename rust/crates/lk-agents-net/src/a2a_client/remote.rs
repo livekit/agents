@@ -103,6 +103,17 @@ impl Port for RemoteInteraction {
         Ok(message_from_wire(message))
     }
 
+    fn answer(&self, request_id: String, text: String) -> Result<Message, AgentClientError> {
+        let mut state = self.inner.lock().map_err(protocol)?;
+        state.policy.accepts_reply(&request_id).map_err(protocol)?;
+        let livekit = state.livekit;
+        let message = state
+            .policy
+            .message(text, crate::strings::shortuuid("msg_"), None, "", None, livekit, None)
+            .map_err(protocol)?;
+        Ok(message_from_wire(message))
+    }
+
     fn update(&self, update: TaskUpdate) -> Result<RemoteEvent, AgentClientError> {
         let mut state = self.inner.lock().map_err(protocol)?;
         let update = retained::update_from_host(update).map_err(protocol)?;

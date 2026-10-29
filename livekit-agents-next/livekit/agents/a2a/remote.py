@@ -39,13 +39,21 @@ class RemoteAgent:
         return _RemoteTool(self._url, self._token, self._conn_options)
 
 
+class _ExpertTool(RawFunctionTool):
+    """The remote tool: its endpoint and name are its configured identity as an expert."""
+
+    def __init__(self, tool: RawFunctionTool, endpoint: str) -> None:
+        super().__init__(tool._func, tool.info)
+        self.endpoint = endpoint
+
+
 class _RemoteTool(Toolset):
     def __init__(self, url: str, token: str | None, conn_options: APIConnectOptions | None) -> None:
         self._url = url
         self._token = token
         self._conn_options = conn_options
         self._card: AgentCard | None = None
-        self._tool: RawFunctionTool | None = None
+        self._tool: _ExpertTool | None = None
         super().__init__(id=url)
 
     @property
@@ -63,7 +71,7 @@ class _RemoteTool(Toolset):
             finally:
                 await client.aclose()
             self._id = self._card.name
-            self._tool = function_tool(
+            tool = function_tool(
                 self._invoke,
                 raw_schema={
                     "name": self._card.name,
@@ -71,6 +79,7 @@ class _RemoteTool(Toolset):
                     "parameters": self._card.input_schema,
                 },
             )
+            self._tool = _ExpertTool(tool, self._url)
         return self
 
     async def _invoke(self, ctx: RunContext, raw_arguments: dict[str, object]) -> ToolReport:
