@@ -422,7 +422,7 @@ pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option:
 
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
 
-/// [`::lk_agents_abi::a2a::turn::TurnHost`] over a host `livekit.agents.storage.context.TurnHost`.
+/// [`::lk_agents_abi::a2a::turn::TurnHost`] over a host `livekit.agents.storage.context._TurnHost`.
 #[derive(Clone)]
 pub struct TurnHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

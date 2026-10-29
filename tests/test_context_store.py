@@ -40,7 +40,7 @@ async def test_scope_aliases_share_hydrated_values_without_persisting_services()
     child_app.draft.reference = "child-booking"
     await fresh_child.save_context(child_app)
     records = store._scope_writes
-    store.close()
+    store._close()
 
     service = object()
     restored = BookingContext(service)
@@ -53,7 +53,7 @@ async def test_scope_aliases_share_hydrated_values_without_persisting_services()
     resumed = BookingContext(object())
     await resumed_child.load_context(resumed)
     assert resumed.draft.reference == "child-booking"
-    next_turn.close()
+    next_turn._close()
 
 
 async def test_runtime_supplied_direct_store_saves_before_returning(
@@ -71,7 +71,7 @@ async def test_runtime_supplied_direct_store_saves_before_returning(
     await stale.load_context(old)
     app.draft.reference = "durable"
     await first.save_context(app)
-    first.close()
+    first._close()
 
     restored = await open_store()
     loaded = BookingContext(object())
@@ -82,5 +82,5 @@ async def test_runtime_supplied_direct_store_saves_before_returning(
         await stale.save_context(old)
     await stale.load_context(old)
     assert old.draft.reference == "durable"
-    restored.close()
-    stale.close()
+    restored._close()
+    stale._close()

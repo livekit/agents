@@ -24,7 +24,7 @@ from typing_extensions import Unpack
 from .._core import ServerConfig, endpoint_url_base
 from .._generated.storage_options import Policy, TurnOptions
 from ..storage.backends import Storage
-from ..storage.context import Handler
+from ..storage.context import _Handler
 from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
 from .methods import A2AService
@@ -53,7 +53,7 @@ class A2ASessionOptions(TypedDict, total=False):
 
 def a2a_session(
     *, endpoint: str, description: str, **options: Unpack[A2ASessionOptions]
-) -> Callable[[Handler], A2AEndpoint]:
+) -> Callable[[_Handler], A2AEndpoint]:
     """The text door as a decorator with no handler: the door is an object a module defines and
     ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``endpoint`` is the
     last path segment of its URL and ``description`` what another agent reads to decide whether
@@ -69,7 +69,7 @@ class A2AEndpoint:
 
     def __init__(
         self,
-        handler: Handler,
+        handler: _Handler,
         *,
         endpoint: str,
         description: str,

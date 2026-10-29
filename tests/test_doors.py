@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.unit]
 
 
 async def lanes_of(storage: Storage, thread_id: str) -> set[str]:
-    core = await storage.open(thread_id)
+    core = await storage._open(thread_id)
     try:
         return {lane.lane for lane in await core.lanes()}
     finally:

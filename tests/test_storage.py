@@ -27,10 +27,11 @@ from livekit.agents.a2a.extension import (
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
-from livekit.agents.storage import RunRejected, Storage
-from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
+from livekit.agents.storage import Storage
+from livekit.agents.storage.context import A2ASessionContext, _Handler, _TurnHost
+from livekit.agents.storage.errors import RunRejected
 from livekit.agents.storage.protocol import payload_to_item
-from livekit.agents.storage.resolve import Thread, resolve_thread
+from livekit.agents.storage.resolve import Thread, _resolve_thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import lease_ttl, let_the_lease_lapse, new_session
@@ -78,7 +79,7 @@ async def run_turn(
     lane: str,
     message: dict[str, Any],
     policy: str | None,
-    handler: Handler,
+    handler: _Handler,
     *,
     debounce: timedelta | None = None,
     task_id: str | None = None,
@@ -90,11 +91,11 @@ async def run_turn(
         debounce=debounce.total_seconds() if debounce is not None else None,
         wait_timeout=wait_timeout,
     )
-    host = TurnHost(
+    host = _TurnHost(
         handler,
         thread=Thread(storage, thread_id, agent_name=lane),
     )
-    core = await storage.open(thread_id)
+    core = await storage._open(thread_id)
     try:
         return await _core.Turn(core, lane, host, options).run(message, task_id)
     finally:
@@ -114,7 +115,7 @@ async def task_of(storage: Storage, thread_id: str, lane: str, task_id: str) -> 
 
 
 async def lane_row(storage: Storage, thread_id: str, lane: str) -> LaneRow | None:
-    core = await storage.open(thread_id)
+    core = await storage._open(thread_id)
     try:
         return await core.lane_info(lane)
     finally:
@@ -123,7 +124,7 @@ async def lane_row(storage: Storage, thread_id: str, lane: str) -> LaneRow | Non
 
 async def run_outcomes(storage: Storage, thread_id: str) -> list[str]:
     """What ``run_ended`` recorded, oldest first."""
-    core = await storage.open(thread_id)
+    core = await storage._open(thread_id)
     try:
         events = await core.events()
     finally:
@@ -730,9 +731,9 @@ async def test_session_resolution_follows_the_threads_service(
     thread_storage: Storage,
 ) -> None:
     threads = thread_storage.threads
-    fresh = await resolve_thread(threads)
+    fresh = await _resolve_thread(threads)
     assert fresh.created and fresh.id.startswith("AT_")
-    by_id = await resolve_thread(threads, context_id=fresh.id)
+    by_id = await _resolve_thread(threads, context_id=fresh.id)
     assert by_id.id == fresh.id and not by_id.created
 
 
@@ -744,7 +745,7 @@ async def test_the_rtc_door_resolves_the_call_thread(thread_storage: Storage) ->
     import pickle
     from types import SimpleNamespace
 
-    from livekit.agents.storage.resolve import CallThreadEntrypoint as _CallThreadEntrypoint
+    from livekit.agents.storage.resolve import _CallThreadEntrypoint as _CallThreadEntrypoint
 
     seen: list[Thread | None] = []
 
@@ -851,7 +852,7 @@ async def test_create_thread_creates_the_database(thread_storage: Storage) -> No
     assert info.database_id == created.database_id
     second = await run_turn(storage, thread_id, "front", a2a("again", "m2"), "queue", echo)
     assert second.output == "reply to: again"
-    core = await storage.open(info.thread_id)
+    core = await storage._open(info.thread_id)
     items = await core.history("front")
     assert [payload_to_item(i.payload).text_content for i in items] == [
         "hi",

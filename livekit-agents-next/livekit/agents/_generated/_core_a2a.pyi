@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Self
 
 from livekit.agents._core import Storage
-from livekit.agents.storage.context import TurnHost
+from livekit.agents.storage.context import _TurnHost
 from livekit.agents.types import APIConnectOptions
 
 from .._core import ChatItem
@@ -106,7 +106,7 @@ class AgentClient:
     async def aclose(self) -> None: ...
 
 class _core_A2ADoor:
-    def __init__(self, storage: Storage, config: DoorConfig, host: TurnHost) -> None:
+    def __init__(self, storage: Storage, config: DoorConfig, host: _TurnHost) -> None:
         """The door over `storage`'s namespace, which opens its backend on first use; accepted work
         is settled by the storage's `aclose`.
         """

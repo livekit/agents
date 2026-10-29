@@ -550,7 +550,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
         "function_call_output",
         "message",
     ]
-    db = await storage.open(sid)
+    db = await storage._open(sid)
     row = await db.lane_info(agent.name)
     db.close()
     assert row is not None

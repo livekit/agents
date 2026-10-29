@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import _core
-from .._core import Streams, Thread
+from .._core import Thread
 from ..log import logger
 
 
@@ -44,11 +44,7 @@ class Storage:
         ``update_thread``, ``delete_thread``, ``get_thread_items``, ``get_thread_tasks``."""
         return self._core
 
-    async def streams(self) -> Streams:
-        """The response streams a task's subscribers read."""
-        return await self._core.streams()
-
-    async def open(self, thread_id: str) -> Thread:
+    async def _open(self, thread_id: str) -> Thread:
         """The thread's handle, its writes under this worker's holder. Takes no lease."""
         return await self._core.open(thread_id, self.holder)
 

@@ -20,7 +20,7 @@ from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
 from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import Storage
-from livekit.agents.storage.context import TurnStream
+from livekit.agents.storage.context import _TurnStream
 from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 
 pytestmark = pytest.mark.unit
@@ -51,8 +51,8 @@ class Host:
         self.contexts: list[TurnContext] = []
         self.yielded: list[bool] = []
 
-    async def _core_handle(self, ctx: TurnContext) -> TurnStream:
-        return TurnStream(lambda checkpoint: self.run(ctx, checkpoint))
+    async def _core_handle(self, ctx: TurnContext) -> _TurnStream:
+        return _TurnStream(lambda checkpoint: self.run(ctx, checkpoint))
 
     async def run(
         self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]
@@ -102,7 +102,7 @@ async def thread_of(storage: Storage) -> str:
 
 async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> None:
     thread_id = await thread_of(thread_storage)
-    session = await thread_storage.open(thread_id)
+    session = await thread_storage._open(thread_id)
     assert session.id == thread_id
     assert session.holder.startswith("worker-a/")
 
@@ -147,7 +147,7 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
 
 
 async def test_debounce_delays_the_turn(thread_storage: Storage) -> None:
-    session = await thread_storage.open(await thread_of(thread_storage))
+    session = await thread_storage._open(await thread_of(thread_storage))
     turn = _core.Turn(session, LANE, Host(), TurnOptions(policy="queue", debounce=0.4))
     started = time.monotonic()
     result = await turn.run(a2a("hello", "m1"))
@@ -161,14 +161,14 @@ async def test_a_waiter_past_wait_timeout_fails_lease_timeout(
 ) -> None:
     storage_a, storage_b = thread_storages
     thread_id = await thread_of(storage_a)
-    session_a = await storage_a.open(thread_id)
+    session_a = await storage_a._open(thread_id)
     gate = asyncio.Event()
     host_a = Host(gate)
     turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(policy="queue", debounce=0))
     first = asyncio.ensure_future(turn_a.run(a2a("first", "m1")))
     await asyncio.wait_for(host_a.entered.wait(), 10)
 
-    session_b = await storage_b.open(thread_id)
+    session_b = await storage_b._open(thread_id)
     options = TurnOptions(policy="queue", debounce=0, wait_timeout=0.5)
     turn_b = _core.Turn(session_b, LANE, Host(), options)
     second = await asyncio.wait_for(turn_b.run(a2a("second", "m2")), 30)
@@ -188,7 +188,7 @@ async def test_a_second_message_under_interrupt_yields_the_first(
 ) -> None:
     storage_a, storage_b = thread_storages
     thread_id = await thread_of(storage_a)
-    session_a = await storage_a.open(thread_id)
+    session_a = await storage_a._open(thread_id)
     gate = asyncio.Event()
     host_a = Host(gate)
     turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(policy="interrupt", debounce=0))
@@ -196,7 +196,7 @@ async def test_a_second_message_under_interrupt_yields_the_first(
     first = asyncio.ensure_future(turn_a.run(a2a("first", "m1")))
     await asyncio.wait_for(host_a.entered.wait(), 10)
 
-    session_b = await storage_b.open(thread_id)
+    session_b = await storage_b._open(thread_id)
     host_b = Host()
     turn_b = _core.Turn(session_b, LANE, host_b, TurnOptions(policy="interrupt", debounce=0))
     second = asyncio.ensure_future(turn_b.run(a2a("second", "m2")))
@@ -233,7 +233,7 @@ async def test_a_second_message_under_interrupt_yields_the_first(
 
 
 async def test_turn_options_apply_scalar_and_channel_policies(thread_storage: Storage) -> None:
-    session = await thread_storage.open(await thread_of(thread_storage))
+    session = await thread_storage._open(await thread_of(thread_storage))
     try:
         all_channels = _core.Turn(
             session,

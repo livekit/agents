@@ -30,8 +30,8 @@ from .job import (
 )
 from .log import logger
 from .simulation import SimulationContext
-from .storage.context import Handler
-from .storage.resolve import CallThreadEntrypoint
+from .storage.context import _Handler
+from .storage.resolve import _CallThreadEntrypoint
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import http_context, is_given
 from .version import __version__
@@ -119,7 +119,7 @@ class AgentHandler:
 
     def a2a_session(
         self, *, endpoint: str, description: str, **options: Unpack[A2ASessionOptions]
-    ) -> Callable[[Handler], A2AEndpoint]:
+    ) -> Callable[[_Handler], A2AEndpoint]:
         """The text door on this handler's lane, as ``livekit.agents.a2a_session``: one A2A
         endpoint served under ``/<endpoint>``::
 
@@ -128,7 +128,7 @@ class AgentHandler:
         """
         from .a2a.endpoint import A2AEndpoint
 
-        def decorator(handler: Handler) -> A2AEndpoint:
+        def decorator(handler: _Handler) -> A2AEndpoint:
             ep = A2AEndpoint(
                 handler, endpoint=endpoint, description=description, lane=self.lane, **options
             )
@@ -331,7 +331,7 @@ class _ServerHost:
         storage = self._server._storage
         self._proc_pool = ipc.ProcPool(
             job_entrypoint_fnc=(
-                CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
+                _CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
             ),
             session_end_fnc=door.on_session_end,
             simulation_end_fnc=door.on_simulation_end,

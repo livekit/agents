@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class ResolvedThread:
+class _ResolvedThread:
     thread: ThreadInfo
     created: bool
 
@@ -35,15 +35,15 @@ class ResolvedThread:
         return self.thread.thread_id
 
 
-async def resolve_thread(
+async def _resolve_thread(
     threads: _core.Storage, *, context_id: str | None = None, scope: str = ""
-) -> ResolvedThread:
+) -> _ResolvedThread:
     """Exactly one thread for a request (plan 4.4): the one ``context_id`` names, else a new one
     in ``scope``. A thread is the project's, not one agent's: any agent picks it up."""
     if context_id:
-        return ResolvedThread(thread=await threads.get_thread(context_id), created=False)
+        return _ResolvedThread(thread=await threads.get_thread(context_id), created=False)
 
-    return ResolvedThread(thread=await threads.create_thread(scope=scope), created=True)
+    return _ResolvedThread(thread=await threads.create_thread(scope=scope), created=True)
 
 
 class Thread:
@@ -129,7 +129,7 @@ class Thread:
             core.close()
 
     async def _open(self) -> _core.Thread:
-        return await self._storage.open(self._id)
+        return await self._storage._open(self._id)
 
 
 class Lane:
@@ -160,7 +160,7 @@ class Lane:
 
 
 @dataclass(frozen=True)
-class CallThreadEntrypoint:
+class _CallThreadEntrypoint:
     """The ``rtc_session`` entrypoint of a server with storage: the call's thread is resolved
     first, the ``thread_id`` of the dispatch metadata, else a new thread, as ``ctx.thread``.
     An unknown or deleted id, or a storage failure, is logged and the call runs with no
@@ -178,7 +178,7 @@ class CallThreadEntrypoint:
         if not isinstance(thread_id, str):
             thread_id = None
         try:
-            thread_id = (await resolve_thread(self.storage.threads, context_id=thread_id)).id
+            thread_id = (await _resolve_thread(self.storage.threads, context_id=thread_id)).id
             ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
         except StorageError as e:
             logger.warning(

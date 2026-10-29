@@ -203,7 +203,7 @@ class _TextRun(Generic[Context_T]):
                 store, self._store = self._store, None
                 owns_store, self._owns_store = self._owns_store, False
                 if owns_store and store is not None:
-                    store.close()
+                    store._close()
             finally:
                 storage, self._owned_storage = self._owned_storage, None
                 if storage is not None:

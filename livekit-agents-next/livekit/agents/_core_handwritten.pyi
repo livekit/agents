@@ -41,7 +41,7 @@ def init(role: Role) -> None: ...
 # that constructed the object and is cancelled when Rust drops the operation.
 
 class Streams:
-    """The response streams of one storage (``Storage.streams()``)."""
+    """The response streams of one storage (``_core.Storage.streams()``)."""
 
     def create(self, ttl_seconds: int | None = None) -> Awaitable[StreamInfo]: ...
     def append(self, stream_id: str, record: bytes) -> None:
@@ -158,7 +158,7 @@ class Run:
 
 class TurnHostProtocol(Protocol):
     """What ``Turn`` calls back into: ``_core_handle`` receives a ``storage_turn.TurnContext``
-    dict and returns the turn's event stream (``storage.context.TurnStream``)."""
+    dict and returns the turn's event stream (``storage.context._TurnStream``)."""
 
     async def _core_handle(self, ctx: TurnContext) -> Any: ...
 

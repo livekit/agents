@@ -14,9 +14,7 @@ from .context_store import (
 from .errors import (
     LeaseLost,
     NotSerializable,
-    RunRejected,
     StorageError,
-    StorageUnavailable,
     ThreadNotFound,
     TooLarge,
     VersionConflict,
@@ -35,10 +33,8 @@ __all__ = [
     "Storage",
     "LeaseLost",
     "NotSerializable",
-    "RunRejected",
     "ThreadNotFound",
     "StorageError",
-    "StorageUnavailable",
     "TooLarge",
     "VersionConflict",
 ]

@@ -81,7 +81,7 @@ async def test_frontdesk_booking_approval_and_saved_email_survive_handler_restar
             history = result.all_messages()
         finally:
             reset_run_hooks(token)
-            store.close()
+            store._close()
         if message == "Book the first opening.":
             assert result.status == "input_required" and "email" in result.question
             assert example.cal.appointments == []
@@ -131,7 +131,7 @@ async def test_hotel_verification_and_cancellation_resume_after_handler_restart(
             history = result.all_messages()
         finally:
             reset_run_hooks(token)
-            store.close()
+            store._close()
         if message == "My booking?":
             assert result.status == "input_required" and "confirmation code" in result.question
         elif message == "Check it again.":

@@ -132,7 +132,7 @@ async def test_text_interrupt_across_workers_does_not_deliver_stale_answer(
         )
         # Observe the durable waiter before allowing A's tool to return.
         storage = AgentDBStorage()
-        core = await storage.open(thread)
+        core = await storage._open(thread)
         try:
             while True:
                 lane = await core.lane_info("e2e")

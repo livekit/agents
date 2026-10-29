@@ -39,7 +39,8 @@ from livekit.agents.a2a.extension import (
     as_dict,
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
-from livekit.agents.storage import Storage, StorageUnavailable
+from livekit.agents.storage import Storage
+from livekit.agents.storage.errors import StorageUnavailable
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -195,7 +196,7 @@ async def history_items(storage: Storage, thread_id: str, lane: str) -> list[Cha
 
 
 async def waiter_of(storage: Storage, thread_id: str, lane: str) -> str:
-    db = await storage.open(thread_id)
+    db = await storage._open(thread_id)
     try:
         row = await db.lane_info(lane)
     finally:

@@ -96,7 +96,7 @@ pub enum TurnEvent {
     Token { task_id: String, delta: String },
 }
 
-#[crate::host(proxy(host = "livekit.agents.storage.context.TurnHost"))]
+#[crate::host(proxy(host = "livekit.agents.storage.context._TurnHost"))]
 pub trait TurnHost: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle<'a>(

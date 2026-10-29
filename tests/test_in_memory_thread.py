@@ -10,8 +10,9 @@ import pytest
 
 from livekit.agents import Agent, RunContext, persisted
 from livekit.agents.llm import FunctionToolCall, Toolset
-from livekit.agents.storage import Storage, StorageUnavailable
+from livekit.agents.storage import Storage
 from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.errors import StorageUnavailable
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -121,7 +122,7 @@ async def test_toolset_setup_failure_releases_each_owned_resource_once(
     events: list[str] = []
     stores: list[ContextStore] = []
     storages: list[Storage] = []
-    close_store = ContextStore.close
+    close_store = ContextStore._close
     close_storage = Storage.aclose
 
     def record_store_close(store: ContextStore) -> None:
@@ -132,7 +133,7 @@ async def test_toolset_setup_failure_releases_each_owned_resource_once(
         storages.append(storage)
         await close_storage(storage)
 
-    monkeypatch.setattr(ContextStore, "close", record_store_close)
+    monkeypatch.setattr(ContextStore, "_close", record_store_close)
     monkeypatch.setattr(Storage, "aclose", record_storage_close)
 
     class Startup(Toolset):

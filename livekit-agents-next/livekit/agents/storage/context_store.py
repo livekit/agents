@@ -213,7 +213,7 @@ class ContextStore:
     def _acknowledge(self) -> None:
         self._activation.acknowledge()
 
-    def close(self) -> None:
+    def _close(self) -> None:
         self._closed = True
         if self._owns_activation:
             self._activation.close()

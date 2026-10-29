@@ -80,7 +80,7 @@ async def test_the_answer_goes_to_the_tool_that_asked(thread_storage: Storage) -
     artifacts = [p for p in second if hasattr(p, "artifact")]
     assert "".join(part.text for event in artifacts for part in event.artifact.parts) == "All set."
 
-    db = await thread_storage.open(ctx_id)
+    db = await thread_storage._open(ctx_id)
     try:
         history = [payload_to_item(row.payload) for row in await db.history("front-desk")]
     finally:

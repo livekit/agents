@@ -1,7 +1,7 @@
 """What an ``a2a_session`` handler receives, and the host the Rust turn drives.
 
 ``_core.Turn`` runs the policies and the commit. It opens the handler through
-``TurnHost._core_handle`` on the ``TurnContext`` and reads the turn's events back: each
+``_TurnHost._core_handle`` on the ``TurnContext`` and reads the turn's events back: each
 checkpoint the run reaches, which ``_core`` answers ``continue`` or ``yield``, then the
 ``HandlerOutput``. The handler's progress and tokens go straight to the door's live response.
 """
@@ -41,13 +41,13 @@ from .protocol import (
 )
 from .resolve import Thread
 
-Handler = Callable[["A2ASessionContext"], Awaitable[object]]
+_Handler = Callable[["A2ASessionContext"], Awaitable[object]]
 """The developer's handler: the context in, the answer out (docs/server.md)."""
 
-UpdateHook = Callable[[str, str], Awaitable[None]]
+_UpdateHook = Callable[[str, str], Awaitable[None]]
 """``(task_id, text)``: a progress message to the door's live response."""
 
-TokenHook = Callable[[str, str], Awaitable[None]]
+_TokenHook = Callable[[str, str], Awaitable[None]]
 """``(task_id, delta)``: one streamed token to the door's live response."""
 
 
@@ -65,8 +65,8 @@ class A2ASessionContext:
         *,
         store: ContextStore,
         thread: Thread,
-        on_update: UpdateHook | None,
-        on_token: TokenHook | None,
+        on_update: _UpdateHook | None,
+        on_token: _TokenHook | None,
     ) -> None:
         self.message = cast(ChatMessage, payload_to_item(turn.message))
         self.messages: list[Message] = list(turn.batch)
@@ -112,24 +112,24 @@ class A2ASessionContext:
         return "".join(parts)
 
 
-class TurnHost:
+class _TurnHost:
     """What ``_core.Turn`` drives for one door: the handler, its progress and tokens to the
     door's wire hooks."""
 
     def __init__(
         self,
-        handler: Handler,
+        handler: _Handler,
         *,
         thread: Thread,
-        on_update: UpdateHook | None = None,
-        on_token: TokenHook | None = None,
+        on_update: _UpdateHook | None = None,
+        on_token: _TokenHook | None = None,
     ) -> None:
         self._handler = handler
         self._thread = thread
         self._on_update = on_update
         self._on_token = on_token
 
-    async def _core_handle(self, ctx: TurnContext) -> TurnStream:
+    async def _core_handle(self, ctx: TurnContext) -> _TurnStream:
         """The handler opened on one turn, as the stream of its events."""
 
         async def update(task_id: str, text: str) -> None:
@@ -142,15 +142,15 @@ class TurnHost:
             if self._on_token is not None:
                 await self._on_token(task_id, delta)
 
-        stream = TurnStream(lambda checkpoint: self._run(ctx, checkpoint, update, token))
+        stream = _TurnStream(lambda checkpoint: self._run(ctx, checkpoint, update, token))
         return stream
 
     async def _run(
         self,
         ctx: TurnContext,
         checkpoint: Callable[[], Awaitable[bool]],
-        on_update: UpdateHook,
-        on_token: TokenHook,
+        on_update: _UpdateHook,
+        on_token: _TokenHook,
     ) -> HandlerOutput:
         """The developer's handler on one turn, the run hooks installed around it."""
         thread = self._thread
@@ -203,7 +203,7 @@ class TurnHost:
             )
         finally:
             reset_run_hooks(token)
-            context.store.close()
+            context.store._close()
 
         return self._output(context, output, results, interrupted=hooks.interrupted)
 
@@ -268,7 +268,7 @@ class TurnHost:
         )
 
 
-class TurnStream:
+class _TurnStream:
     """One turn's events to ``_core``: ``{"kind": "checkpoint"}`` each time the run reaches one,
     answered through ``_core_push`` (``"continue"`` or ``"yield"``), then ``{"kind": "output"}``
     with the ``HandlerOutput``. The run starts on the first ``__anext__``; ``aclose`` cancels it."""
@@ -282,7 +282,7 @@ class TurnStream:
         self._verdict: asyncio.Future[str] | None = None
         self._task: asyncio.Task[None] | None = None
 
-    def __aiter__(self) -> TurnStream:
+    def __aiter__(self) -> _TurnStream:
         return self
 
     async def __anext__(self) -> TurnEvent:

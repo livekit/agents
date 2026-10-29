@@ -11,7 +11,7 @@ from .. import _core
 from .._generated.a2a_card import EndpointDescriptor
 from .._generated.a2a_door import DoorConfig
 from ..storage.backends import Storage
-from ..storage.context import TurnHost
+from ..storage.context import _TurnHost
 from ..storage.resolve import Thread
 from .auth import Credentials, Principal
 
@@ -46,7 +46,7 @@ class A2AService:
 
     def _open(self) -> _core._core_A2ADoor:
         endpoint = self._endpoint
-        host = TurnHost(
+        host = _TurnHost(
             endpoint.handler,
             thread=Thread(self._storage, "", agent_name=self.lane),
         )
