@@ -100,6 +100,7 @@ pub trait Implementations: 'static {
     type WordTokenizer: ::lk_agents_abi::tokenize::bindings::WordTokenizer;
     type SentenceTokenizer: ::lk_agents_abi::tokenize::bindings::SentenceTokenizer;
     type BufferedTokens: ::lk_agents_abi::tokenize::bindings::BufferedTokens;
+    type LanguageFunctions: ::lk_agents_abi::tokenize::language::LanguageFunctions;
     type SearchDocument: ::lk_agents_abi::tokenize::search::SearchDocument;
     type SearchIndex: ::lk_agents_abi::tokenize::search::SearchIndex<Document = Self::SearchDocument>;
     type ToolSearch: ::lk_agents_abi::tokenize::search::ToolSearch<Document = Self::SearchDocument>;
@@ -286,6 +287,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tokenize::BasicWordTokenizer>()?;
     m.add_class::<tokenize::BasicSentenceTokenizer>()?;
     m.add_class::<tokenize::TokenBuffer>()?;
+    m.add_function(wrap_pyfunction!(tokenize::normalize_language, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::base_language, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::language_region, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::language_iso, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::language_name, m)?)?;
     m.add_class::<tokenize::SearchDocument>()?;
     m.add_class::<tokenize::BM25Index>()?;
     m.add_function(wrap_pyfunction!(tokenize::keyword_search, m)?)?;

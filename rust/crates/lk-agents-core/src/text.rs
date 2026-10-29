@@ -1,5 +1,7 @@
 //! Character classification shared by text processing and speech tokenization.
 
+use lk_agents_abi::tokenize::language;
+
 /// Python's whitespace set includes the four ASCII information separators.
 pub fn is_py_space(c: char) -> bool {
     lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c)
@@ -35,4 +37,25 @@ pub fn py_repr(s: &str) -> String {
     }
     out.push(quote);
     out
+}
+
+/// The host's language helpers, over the `LanguageCode` functions.
+pub struct Languages;
+
+impl lk_agents_abi::tokenize::language::LanguageFunctions for Languages {
+    fn normalize(code: &str) -> String {
+        language::normalize(code)
+    }
+    fn base_language(code: &str) -> String {
+        language::base_language(code).to_owned()
+    }
+    fn region(code: &str) -> Option<String> {
+        language::region(code).map(str::to_owned)
+    }
+    fn iso(code: &str) -> String {
+        language::iso(code)
+    }
+    fn language_name(code: &str) -> Option<String> {
+        language::language_name(code).map(str::to_owned)
+    }
 }

@@ -210,6 +210,51 @@ impl TokenBuffer {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/tokenize/language/code.rs.
+type LanguageFunctionsImpl = <crate::Selected as super::Implementations>::LanguageFunctions;
+
+/// Normalise a language code or name to BCP-47.
+#[pyfunction]
+#[pyo3(signature = (code))]
+pub fn normalize_language(code: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::normalize(&code);
+    Ok(out)
+}
+
+/// Base language code (ISO 639-1 when possible).
+///
+/// E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
+#[pyfunction]
+#[pyo3(signature = (code))]
+pub fn base_language(code: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::base_language(&code);
+    Ok(out)
+}
+
+/// Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``.
+#[pyfunction]
+#[pyo3(signature = (code))]
+pub fn language_region(code: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::region(&code);
+    Ok(out)
+}
+
+/// ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``.
+#[pyfunction]
+#[pyo3(signature = (code))]
+pub fn language_iso(code: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::iso(&code);
+    Ok(out)
+}
+
+/// Return the English language name (e.g. ``'english'``), or ``None`` if unknown.
+#[pyfunction]
+#[pyo3(signature = (code))]
+pub fn language_name(code: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::language_name(&code);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/tokenize/search.rs.
 type SearchDocumentImpl = <crate::Selected as super::Implementations>::SearchDocument;
 

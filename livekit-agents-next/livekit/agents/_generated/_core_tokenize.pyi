@@ -92,6 +92,24 @@ class TokenBuffer:
         """The tokens ``text`` proves complete, batched."""
     def flush(self) -> list[str]: ...
 
+def normalize_language(code: str) -> str:
+    """Normalise a language code or name to BCP-47."""
+
+def base_language(code: str) -> str:
+    """Base language code (ISO 639-1 when possible).
+
+    E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
+    """
+
+def language_region(code: str) -> str | None:
+    """Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``."""
+
+def language_iso(code: str) -> str:
+    """ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``."""
+
+def language_name(code: str) -> str | None:
+    """Return the English language name (e.g. ``'english'``), or ``None`` if unknown."""
+
 class SearchDocument:
     """One tool as the search sees it; identity stays with the host."""
     def __init__(

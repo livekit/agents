@@ -44,6 +44,7 @@ impl generated::Implementations for Selected {
     type BackgroundAudioPlayer =
         lk_agents_runtime::voice::background_audio::HostBackgroundAudioPlayer;
     type PlayState = lk_agents_runtime::voice::background_audio::PlayState;
+    type LanguageFunctions = lk_agents_runtime::cores::Languages;
     type ImageFunctions = lk_agents_runtime::images::ImageFunctions;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;

@@ -11,6 +11,7 @@
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
     pub use lk_agents_core::llm::chat_dict::ChatDict;
+    pub use lk_agents_core::text::Languages;
     pub use lk_agents_core::telemetry::loop_monitor::{LoopMonitorOptions, LoopMonitorPolicy};
     pub use lk_agents_core::telemetry::metrics::MetricSeries;
     pub use lk_agents_core::telemetry::policy::DestinationPolicy;

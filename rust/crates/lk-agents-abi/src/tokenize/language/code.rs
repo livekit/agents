@@ -8,7 +8,6 @@ use super::data;
 // In the reference's order: English names (`"english"`), then ISO 639-3 (`"eng"`), then compound
 // tags (case fixed, `_` -> `-`, primary subtag left alone so `cmn-Hans-CN` round-trips to Google
 // STT), else lowercased passthrough (`"multi"`). Bare `"cmn"` does become `"zh"`.
-#[crate::host(export(name = "normalize_language", pid = false))]
 pub fn normalize(code: &str) -> String {
     let lowered = code.trim().to_lowercase();
 
@@ -47,7 +46,6 @@ pub fn normalize(code: &str) -> String {
 /// Base language code (ISO 639-1 when possible).
 ///
 /// E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
-#[crate::host(export(pid = false))]
 pub fn base_language(code: &str) -> &str {
     let base = code.split('-').next().unwrap_or(code);
     match data::iso_639_3_to_1(base) {
@@ -58,13 +56,11 @@ pub fn base_language(code: &str) -> &str {
 
 /// Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``.
 // The first two-character subtag after the primary (`None` for `"es-419"`).
-#[crate::host(export(name = "language_region", pid = false))]
 pub fn region(code: &str) -> Option<&str> {
     code.split('-').skip(1).find(|part| part.chars().count() == 2)
 }
 
 /// ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``.
-#[crate::host(export(name = "language_iso", pid = false))]
 pub fn iso(code: &str) -> String {
     let base = base_language(code);
     match region(code) {
@@ -74,9 +70,34 @@ pub fn iso(code: &str) -> String {
 }
 
 /// Return the English language name (e.g. ``'english'``), or ``None`` if unknown.
-#[crate::host(export(pid = false))]
 pub fn language_name(code: &str) -> Option<&'static str> {
     data::code_to_name(base_language(code))
+}
+
+/// The language helpers [`LanguageCode`]'s host class applies to its string.
+#[crate::host(functions(pid = false))]
+pub trait LanguageFunctions {
+    /// Normalise a language code or name to BCP-47.
+    #[host(function, name = "normalize_language")]
+    fn normalize(code: &str) -> String;
+
+    /// Base language code (ISO 639-1 when possible).
+    ///
+    /// E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
+    #[host(function)]
+    fn base_language(code: &str) -> String;
+
+    /// Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``.
+    #[host(function, name = "language_region")]
+    fn region(code: &str) -> Option<String>;
+
+    /// ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``.
+    #[host(function, name = "language_iso")]
+    fn iso(code: &str) -> String;
+
+    /// Return the English language name (e.g. ``'english'``), or ``None`` if unknown.
+    #[host(function)]
+    fn language_name(code: &str) -> Option<String>;
 }
 
 /// Normalized BCP-47 language identifier. Accepts any common format.
