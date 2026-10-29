@@ -140,7 +140,7 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
     lanes = await session.lanes()
     assert [lane.lane for lane in lanes] == [LANE]
     assert lanes[0].lease_until <= time.time(), "the lease was released by the commit"
-    events = await session.events()
+    events = await session.journal()
     assert [e.type for e in events][:1] == ["run_started"]
     assert "run_ended" in {e.type for e in events}
     session.close()
