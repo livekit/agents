@@ -21,7 +21,7 @@ from livekit.agents.utils.aio import ChanEmpty
 
 from .fake_tts import FakeSynthesizeStream, FakeTTS
 
-pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
 class FallbackAdapterTester(FallbackAdapter):

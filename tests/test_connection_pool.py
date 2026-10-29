@@ -9,7 +9,7 @@ from yarl import URL
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
 from livekit.agents.utils import ConnectionPool, connection_pool
 
-pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 NO_POOL_WAIT = APIConnectOptions(pool_timeout=0)
 

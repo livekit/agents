@@ -24,8 +24,6 @@ use tokio::sync::oneshot;
 
 #[cfg(test)]
 mod cancellation_tests;
-/// A virtual-time asyncio loop as the core's executor and clock.
-pub mod loop_time;
 #[cfg(test)]
 mod node_tests;
 #[cfg(test)]
@@ -292,16 +290,13 @@ pub fn read<'py>(obj: &Bound<'py, PyAny>, name: &str) -> PyResult<Bound<'py, PyA
     obj.call_method0(name)
 }
 
-/// A Rust future as the awaitable a `_core` coroutine method returns: polled on the loop when
-/// virtual time applies to it, else on the process runtime.
+/// A Rust future as the awaitable a `_core` coroutine method returns, polled on the process
+/// runtime.
 pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
     T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
-    if let Some(rt) = loop_time::LoopRuntime::current(py) {
-        return rt.future_into_py(py, fut);
-    }
     process_handle()?;
     pyo3_async_runtimes::generic::future_into_py::<ProcessRuntime, _, _>(py, fut)
 }
@@ -312,30 +307,6 @@ fn erased_future_into_py<'py>(
     fut: BoxFuture<'static, PyResult<Py<PyAny>>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     future_into_py(py, fut)
-}
-
-fn loop_clock(py: Python<'_>) -> Option<Arc<dyn lk_agents_abi::Clock>> {
-    loop_time::LoopRuntime::current(py).map(|rt| rt.clock())
-}
-
-fn loop_spawner() -> Option<Arc<dyn lk_agents_abi::Spawner>> {
-    Python::try_attach(loop_time::LoopRuntime::current).flatten().map(|rt| rt.spawner())
-}
-
-/// The host's time as the runtime reads it, installed by `#[pymodule]`.
-pub struct HostTime;
-
-impl lk_agents_runtime::process::HostTime for HostTime {
-    /// The running loop's clock on virtual time, else the wall clock.
-    fn clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
-        Python::try_attach(loop_clock)
-            .flatten()
-            .unwrap_or_else(|| Arc::new(lk_agents_runtime::net::clock::RealClock::new()))
-    }
-
-    fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>> {
-        loop_spawner()
-    }
 }
 
 /// The host's executor; a forked child's refusal raises.

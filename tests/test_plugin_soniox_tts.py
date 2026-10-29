@@ -4,8 +4,6 @@ The plugin buffers LLM chunks into complete sentences, feeds them into one
 shared Soniox stream, and rotates to a fresh ``stream_id`` when input goes
 idle for ``stream_idle_timeout`` or after a transient failure (batch replay).
 These tests drive the real ``SynthesizeStream`` against a fake ``_Connection``.
-
-Idle-timeout tests use ``virtual_time`` so timers advance deterministically.
 """
 
 from __future__ import annotations
@@ -28,7 +26,6 @@ from livekit.plugins.soniox.tts import _Connection
 
 pytestmark = [
     pytest.mark.plugin("soniox"),
-    pytest.mark.virtual_time,
     pytest.mark.no_concurrent,
 ]
 
@@ -42,7 +39,6 @@ SENTENCES = [
 ]
 
 
-@pytest.mark.real_time
 async def test_websocket_authenticates_once_for_multiple_streams() -> None:
     sent: asyncio.Queue[str] = asyncio.Queue()
     auth_headers: list[str | None] = []

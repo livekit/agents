@@ -24,7 +24,7 @@ from livekit.agents.utils.audio import AudioBuffer, silence_frame
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD
 
-pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
 class _DummyStream(RecognizeStream):
@@ -162,7 +162,6 @@ async def test_recognize_still_retries_a_retryable_error() -> None:
     assert stt.attempts == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
 
 
-@pytest.mark.real_time
 async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
     recognize_delay = 0.5
     frame = silence_frame(duration=0.1, sample_rate=16_000)
@@ -199,13 +198,19 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
     assert final_event.created_at - end_event.created_at >= recognize_delay
 
 
+# a connect timeout short enough for a real-time test: an attempt outlives it in 0.1 s
+_FLAP_OPTIONS = dataclasses.replace(
+    DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0, connect_timeout=0.05
+)
+
+
 class _FlappingStream(RecognizeStream):
     """Every connection succeeds, stays up for `uptime` seconds without a result, then drops."""
 
     def __init__(self, *, stt: STT, uptime: float, drops: int) -> None:
         super().__init__(
             stt=stt,
-            conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0),
+            conn_options=_FLAP_OPTIONS,
         )
         self.runs = 0
         self._uptime = uptime
@@ -223,8 +228,8 @@ class _FlappingStream(RecognizeStream):
 async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_timeout() -> None:
     # a caller who never speaks produces no FINAL_TRANSCRIPT, so this is the only reset that
     # keeps an idle socket (Cartesia closes it every ~3 minutes) from exhausting the budget
-    drops = DEFAULT_API_CONNECT_OPTIONS.max_retry * 3
-    stream = _FlappingStream(stt=_DummySTT(), uptime=180.0, drops=drops)
+    drops = _FLAP_OPTIONS.max_retry * 3
+    stream = _FlappingStream(stt=_DummySTT(), uptime=0.1, drops=drops)
     stream.end_input()
     try:
         await stream._task
@@ -234,10 +239,10 @@ async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_ti
 
 
 async def test_retry_budget_still_gives_up_on_consecutive_short_lived_attempts() -> None:
-    stream = _FlappingStream(stt=_DummySTT(), uptime=1.0, drops=100)
+    stream = _FlappingStream(stt=_DummySTT(), uptime=0.01, drops=100)
     try:
         with pytest.raises(APIConnectionError):
             await stream._task
-        assert stream.runs == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
+        assert stream.runs == _FLAP_OPTIONS.max_retry + 1
     finally:
         await stream.aclose()

@@ -905,7 +905,6 @@ async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPat
         await model.aclose()
 
 
-@pytest.mark.virtual_time
 async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

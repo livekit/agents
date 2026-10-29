@@ -83,7 +83,7 @@ pub trait Clock: Send + Sync {
     fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()>;
 
     /// For `ChatItem::created_at` only. Strictly increasing even within one instant: `ChatContext`
-    /// orders by `created_at` (the reference nudges 1 µs, `tests/virtual_time.py:57`).
+    /// orders by `created_at`, so equal readings are nudged by [`TICK_EPSILON`].
     fn wall(&self) -> SystemTime;
 }
 
@@ -92,7 +92,7 @@ pub fn simulated_epoch() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200)
 }
 
-/// `_TICK_EPSILON` in `tests/virtual_time.py`: wall stamps stay strictly increasing.
+/// The nudge that keeps wall stamps strictly increasing.
 pub const TICK_EPSILON: Duration = Duration::from_micros(1);
 
 pub struct VirtualClock {

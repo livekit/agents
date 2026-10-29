@@ -208,7 +208,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nothing here may spawn, connect, or allocate a runtime. The core's `log` lines reach the
     // Python logger of the same name from import on (installing a logger starts nothing).
     let _ = pyo3_log::try_init();
-    lk_agents_runtime::process::Process::install_host_time(std::sync::Arc::new(host::HostTime));
     runtime::register_all(m)?;
     generated::register(m)
 }

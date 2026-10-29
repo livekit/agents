@@ -1667,9 +1667,8 @@ Importing `_core` starts no runtime, thread or socket. Linux defaults to
 `forkserver`; macOS and Windows use `spawn`. An explicit `forkserver` choice
 outside Linux falls back to `spawn`.
 
-Production bindings use a lazy process-wide Tokio runtime after process
-initialization. Virtual-time Python tests use `LoopRuntime` on the asyncio
-loop so the test observes task readiness and clock advances.
+Bindings use a lazy process-wide Tokio runtime after process initialization.
+Python tests run on the real clock; deterministic time is the DST's.
 
 `_core.init(role)` declares the process. A process that never declares a role
 is a job. Entry points check the PID before using inherited native state;

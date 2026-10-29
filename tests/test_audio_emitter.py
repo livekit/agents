@@ -251,7 +251,6 @@ async def test_push_frame_is_not_rechunked():
 
 @pytest.mark.asyncio
 @pytest.mark.no_concurrent
-@pytest.mark.virtual_time
 @pytest.mark.parametrize("num_channels", [1, 2])
 @pytest.mark.parametrize("stream", [False, True])
 async def test_automatic_flush_preserves_partial_pcm_sample(

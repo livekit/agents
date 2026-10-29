@@ -35,23 +35,13 @@ struct State {
     started: Option<Started>,
     /// The host's frame reader, installed once as the host starts.
     frames: Option<Arc<dyn FrameReader>>,
-    /// The host's time, installed once as the host loads.
-    time: Option<Arc<dyn HostTime>>,
     /// The process that declared itself the core's (`_core.init`, else its first entry or the
     /// runtime's start): the runtime, when started, is this process's.
     owner: Option<u32>,
 }
 
 static PROCESS: Mutex<State> =
-    Mutex::new(State { started: None, frames: None, time: None, owner: None });
-
-/// The host's clock and executor. Each read resolves the caller's: a host whose
-/// running loop is on virtual time answers with that loop's.
-pub trait HostTime: Send + Sync {
-    fn clock(&self) -> Arc<dyn Clock>;
-    /// The running loop's executor when it has its own, else `None`: the process runtime's.
-    fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>>;
-}
+    Mutex::new(State { started: None, frames: None, owner: None });
 
 fn state() -> std::sync::MutexGuard<'static, State> {
     PROCESS.lock().unwrap_or_else(|p| p.into_inner())
@@ -126,26 +116,16 @@ pub fn reinit() {
     }
 }
 
-fn host_time() -> Option<Arc<dyn HostTime>> {
-    state().time.clone()
-}
-
-/// The host loop's clock (virtual in a virtual-time test), else the real one.
+/// The host's clock: the wall clock.
 pub fn host_clock() -> Arc<dyn Clock> {
-    match host_time() {
-        Some(time) => time.clock(),
-        None => Arc::new(lk_agents_net::clock::RealClock::new()),
-    }
+    Arc::new(lk_agents_net::clock::RealClock::new())
 }
 
-/// The host loop's executor (on virtual time in a virtual-time test), else the process runtime's.
+/// The host's executor: the process runtime's.
 pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
-    match host_time().and_then(|time| time.spawner()) {
-        Some(spawner) => Ok(spawner),
-        None => Ok(Arc::new(lk_agents_net::task::TokioSpawner::new(
-            handle().map_err(|error| error.to_string())?,
-        ))),
-    }
+    Ok(Arc::new(lk_agents_net::task::TokioSpawner::new(
+        handle().map_err(|error| error.to_string())?,
+    )))
 }
 
 /// What this process lends the declared classes. Reading it starts nothing: the
@@ -186,13 +166,6 @@ impl lk_agents_abi::media::images::FrameReaderInstall for Process {
     /// The first one installed stays.
     fn install_frame_reader(reader: Arc<dyn FrameReader>) {
         state().frames.get_or_insert(reader);
-    }
-}
-
-impl Process {
-    /// Takes the host's time as the host loads; the first one installed stays.
-    pub fn install_host_time(time: Arc<dyn HostTime>) {
-        state().time.get_or_insert(time);
     }
 }
 

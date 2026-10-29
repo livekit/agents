@@ -1119,19 +1119,8 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   to first audio from the corpus; five replies of a call, each heard within the voice's own delay
   and 50 ms. With 54c213e74 reverted reply 0 takes 417 ms against 217 ms owed; with only its
   prewarm reverted, the same.
-- **`fuzz.py`** (`livekit-agents-next/scripts/fuzz.py`, run by `smoke.py`): seeded random calls
-  through the real Python `VoiceSession` over `_core.FakeRoom` on the reference tests'
-  virtual-time loop, with providers whose delays are drawn from `corpus/calibration.json`:
-  pipeline (streaming, recognize-only over a VAD, or fallback STT; a chunked or streaming voice)
-  or realtime (server turn detection or not, the default VAD or none), room options, a toolset
-  that fails its setup, a plugin stream that ends in the close's cancellation, and a quarter of
-  the seeds inside a console job. Per seed: nothing raises, logs a traceback or emits an error
-  event; every speech finishes; the session closes once and leaves no task running; a reply asked
-  of an idle agent is heard within its providers' drawn delays and 0.4 s; a realtime reply is
-  asked only once earlier updates applied, and the server's turn detection is kept unless a
-  detector was named; in a job the entrypoint, session end and shutdown callbacks see the job's
-  context, the session is the job's primary and connected the room once, and the parent hears
-  shutting down and exiting. 64 seeds take about 5 s (`smoke.py` runs them), 200 about 15 s.
+- **`fuzz.py`** (deleted with the Python virtual-time loop, decision 117): seeded random calls
+  through the Python `VoiceSession` over `_core.FakeRoom`; its classes are the DST's.
 - **`smoke.py`**: `decoder` (a 16 kHz WAV decodes at 16 kHz with `sample_rate=None`) and
   `llm_prewarm` (the gateway LLM sends `GET /models` as the session starts).
 - **The launch gate runs the provider clients' unit tests** (`lk-agents-inference`,
