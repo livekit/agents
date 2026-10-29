@@ -4,6 +4,7 @@
 # declarations in:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
 #     rust/crates/lk-agents-abi/src/voice/room_io.rs
+#     rust/crates/lk-agents-abi/src/voice/session_effects.rs
 
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from .._core import ChatItem
     from .agent_run import RunError
     from .events import CloseReason
+    from .telemetry import RecordingOptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -351,6 +353,18 @@ class TextInputWire:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class DeleteRoomRequested:
     room: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class StartPlan:
+    """The decision `start()` gets back."""
+
+    recording: RecordingOptions
+    is_primary: bool
+    hosting: bool
+    """`is_primary and (session_host if given else True)`: a second session must never host."""
+    records: bool
+    """`records_anything` on the resolved options."""
 
 
 ToolUpdateWire: TypeAlias = ToolCallStartedWire | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated

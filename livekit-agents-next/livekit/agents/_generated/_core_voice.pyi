@@ -15,6 +15,7 @@ from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, Sound, _core_Ro
 from ..types import NotGivenOr
 from .avatar import AudioReceiverFrame
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
+from .session_wire import StartPlan
 from .workflows import InstructionsArg
 
 class DataStreamAudioOutput:
@@ -214,6 +215,16 @@ class PlayoutLedger:
     def add_discarded(self, duration: float) -> None: ...
     def snapshot(self, queued: float) -> PlaybackInfo: ...
     def settle(self) -> PlaybackInfo: ...
+
+def plan_session_start(
+    *,
+    job_default: bool,
+    has_job_context: bool,
+    another_session_is_primary: bool,
+) -> StartPlan:
+    """The job's recording and whether this session is its primary (records) and hosts the
+    remote session protocol; `another_session_is_primary` is the job's claim already taken.
+    """
 
 class GetDtmfResult:
     """A collected, space-separated keypad sequence."""

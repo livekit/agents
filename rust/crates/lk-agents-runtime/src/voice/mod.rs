@@ -30,7 +30,7 @@ use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEff
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
 
-pub use lk_agents_voice::agent_session::SessionApi;
+pub use lk_agents_voice::agent_session::{SessionApi, SessionStartPlans};
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 
 pub struct Runtime {

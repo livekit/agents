@@ -4,8 +4,8 @@ use crate::voice::session_options::RecordingOptions;
 use lk_agents_host_derive::Host;
 
 /// The decision `start()` gets back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartPlan {
     pub recording: RecordingOptions,
     pub is_primary: bool,
@@ -13,6 +13,28 @@ pub struct StartPlan {
     pub hosting: bool,
     /// `records_anything` on the resolved options.
     pub records: bool,
+}
+
+/// A second session asked to record, explicitly. The reference raises with how to proceed.
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "Only one `AgentSession` can be the primary at a time. If you want to ignore primary \
+     designation, use session.start(record=False)."
+)]
+pub struct NotPrimary;
+
+/// How a job's session starts, decided before its loop opens.
+#[crate::host(functions)]
+pub trait SessionStart {
+    /// The job's recording and whether this session is its primary (records) and hosts the
+    /// remote session protocol; `another_session_is_primary` is the job's claim already taken.
+    #[host(function)]
+    fn plan_session_start(
+        #[host(kw)] job_default: bool,
+        has_job_context: bool,
+        another_session_is_primary: bool,
+    ) -> Result<StartPlan, NotPrimary>;
 }
 
 /// What a filler's callable answered: nothing, its text to say, or anything else (a speech it

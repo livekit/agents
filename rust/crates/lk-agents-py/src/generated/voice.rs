@@ -630,6 +630,19 @@ impl PlayoutLedger {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
+type SessionStartImpl = <crate::Selected as super::Implementations>::SessionStart;
+
+/// The job's recording and whether this session is its primary (records) and hosts the
+/// remote session protocol; `another_session_is_primary` is the job's claim already taken.
+#[pyfunction]
+#[pyo3(signature = (*, job_default, has_job_context, another_session_is_primary))]
+pub fn plan_session_start<'py>(py: Python<'py>, job_default: bool, has_job_context: bool, another_session_is_primary: bool) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <SessionStartImpl as ::lk_agents_abi::voice::session_effects::SessionStart>::plan_session_start(job_default, has_job_context, another_session_is_primary).map_err(|e: ::lk_agents_abi::voice::session_effects::NotPrimary| <::lk_agents_abi::voice::session_effects::NotPrimary as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(crate::generated::records::session_wire::start_plan_to_py(py, out)?)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
 type GetDtmfResultImpl = <crate::Selected as super::Implementations>::DtmfResult;
 

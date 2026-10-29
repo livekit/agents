@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import contextvars
 import copy
+import dataclasses
 import inspect
 import time
 import weakref
@@ -465,8 +466,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 has_job_context=True,
                 another_session_is_primary=not job_ctx._claim_session(self),
             )
-            self._recording_options = plan["recording"]
-            hosting = hosting or plan["hosting"]
+            self._recording_options = cast(RecordingOptions, dataclasses.asdict(plan.recording))
+            hosting = hosting or plan.hosting
             job_ctx.init_recording(self._recording_options)
 
         if self._thread is not None:

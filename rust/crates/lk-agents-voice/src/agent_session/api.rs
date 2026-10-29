@@ -624,26 +624,30 @@ impl SessionApi {
     }
 }
 
-/// A second session asked to record, explicitly. The reference raises with how to proceed.
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "Only one `AgentSession` can be the primary at a time. If you want to ignore primary \
-     designation, use session.start(record=False)."
-)]
-pub struct NotPrimary;
+pub use lk_agents_abi::voice::session_effects::NotPrimary;
 
-/// `{recording, is_primary, hosting, records}`; the refusal raises `RuntimeError`.
-#[lk_agents_abi::host(export(
-    name = "plan_session_start",
-    kw_only,
-    defaults(
-        job_default = false,
-        has_job_context = false,
-        another_session_is_primary = false,
-        text_only = false
-    )
-))]
+/// The session's start planning (`_core.plan_session_start`).
+pub struct SessionStartPlans;
+
+impl lk_agents_abi::voice::session_effects::SessionStart for SessionStartPlans {
+    fn plan_session_start(
+        job_default: bool,
+        has_job_context: bool,
+        another_session_is_primary: bool,
+    ) -> Result<StartPlan, NotPrimary> {
+        plan_session_start(
+            None,
+            job_default,
+            has_job_context,
+            another_session_is_primary,
+            None,
+            false,
+        )
+    }
+}
+
+/// `{recording, is_primary, hosting, records}`; an explicit request a second session cannot
+/// honour is refused.
 pub fn plan_session_start(
     requested: Option<RecordingRequest>,
     job_default: bool,
