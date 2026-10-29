@@ -7,9 +7,9 @@ use lk_agents_host_derive::Host;
 
 // `classifier.py:28`. The wire strings are public API (enum values, an OTel attribute, the job
 // tagger key).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Host)]
-#[python(enum, module = "amd", path = "livekit.agents.voice.amd", name = "AMDCategory")]
-#[host(wire(msg = format!("unknown amd category {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[crate::host(record(module = "amd", name = "AMDCategory", emit, extract, enum))]
+#[crate::host(wire_strs(msg = format!("unknown amd category {s:?}")))]
 pub enum AmdCategory {
     #[host(rename = "human")]
     Human,

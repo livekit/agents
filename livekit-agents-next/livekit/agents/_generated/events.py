@@ -1,19 +1,22 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import Literal
+from typing import Literal, TypeAlias
 
-# The declared records.
+UserState: TypeAlias = Literal["speaking", "listening", "away"]
+"""Whether the user is speaking, listening, or has gone away."""
+
+
+AgentState: TypeAlias = Literal["initializing", "idle", "listening", "thinking", "speaking"]
+"""The agent's lifecycle label."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -156,18 +159,6 @@ class UserTurnExceededEvent:
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
 
 
-# --- the two state vocabularies ---------------------------------------------------------------
-
-UserState = Literal["speaking", "listening", "away"]
-"""Whether the user is speaking, listening, or has gone away."""
-
-
-AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"]
-"""The agent's lifecycle label."""
-
-
-# --- limits, errors and the close -------------------------------------------------------------
-
 @unique
 class CloseReason(str, Enum):
     ERROR = "error"
@@ -175,13 +166,3 @@ class CloseReason(str, Enum):
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
     TASK_COMPLETED = "task_completed"
-
-
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
-CloseReason.__module__ = "livekit.agents.voice.events"

@@ -19,9 +19,9 @@ const _: () = ();
 // --- the two state vocabularies ------------------------------------------------------------------
 
 /// Whether the user is speaking, listening, or has gone away.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, Serialize, Deserialize)]
-#[python(literal, name = "UserState")]
-#[host(wire(msg = format!("unknown user state {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[crate::host(record(module = "events", emit, extract))]
+#[crate::host(wire_strs(msg = format!("unknown user state {s:?}")))]
 #[serde(rename_all = "snake_case")]
 pub enum UserState {
     #[host(rename = "speaking")]
@@ -33,9 +33,9 @@ pub enum UserState {
 }
 
 /// The agent's lifecycle label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, Serialize, Deserialize)]
-#[python(literal, name = "AgentState")]
-#[host(wire(msg = format!("unknown agent state {s:?}")))]
+#[crate::host(record(module = "events", emit, extract))]
+#[crate::host(wire_strs(msg = format!("unknown agent state {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     #[host(rename = "initializing")]
@@ -260,9 +260,8 @@ pub struct UserTurnExceededEvent {
 // `//`, not `///`: the reference has no docstring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Host)]
-#[python(enum, name = "CloseReason")]
-#[host(wire(msg = format!("unknown close reason {s:?}")))]
+#[crate::host(record(module = "events", emit, extract, enum))]
+#[crate::host(wire_strs(msg = format!("unknown close reason {s:?}")))]
 pub enum CloseReason {
     #[host(rename = "error")]
     Error,

@@ -15,6 +15,15 @@ from typing import Literal, TypedDict
 # The declared records.
 
 
+@unique
+class AMDCategory(str, Enum):
+    HUMAN = "human"
+    MACHINE_IVR = "machine-ivr"
+    MACHINE_VM = "machine-vm"
+    MACHINE_UNAVAILABLE = "machine-unavailable"
+    UNCERTAIN = "uncertain"
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class AMDPredictionEvent:
     speech_duration: float
@@ -56,15 +65,6 @@ class AmdConstants(TypedDict):
     max_extension_secs: float
 
 
-@unique
-class AMDCategory(str, Enum):
-    HUMAN = "human"
-    MACHINE_IVR = "machine-ivr"
-    MACHINE_VM = "machine-vm"
-    MACHINE_UNAVAILABLE = "machine-unavailable"
-    UNCERTAIN = "uncertain"
-
-
 # --- the user's tuning, as the host takes it --------------------------------------------------
 
 class DetectionOptions(TypedDict, total=False):
@@ -84,5 +84,4 @@ class DetectionOptions(TypedDict, total=False):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-AMDCategory.__module__ = "livekit.agents.voice.amd"
 DetectionOptions.__module__ = "livekit.agents.voice.amd"

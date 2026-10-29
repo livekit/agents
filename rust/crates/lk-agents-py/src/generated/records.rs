@@ -1044,6 +1044,34 @@ pub mod amd {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+    static A_M_D_CATEGORY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn a_m_d_category_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::amd::AmdCategory> {
+        let py = obj.py();
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "human" => Ok(::lk_agents_abi::voice::amd::AmdCategory::Human),
+                "machine-ivr" => Ok(::lk_agents_abi::voice::amd::AmdCategory::MachineIvr),
+                "machine-vm" => Ok(::lk_agents_abi::voice::amd::AmdCategory::MachineVm),
+                "machine-unavailable" => Ok(::lk_agents_abi::voice::amd::AmdCategory::MachineUnavailable),
+                "uncertain" => Ok(::lk_agents_abi::voice::amd::AmdCategory::Uncertain),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("AMDCategory: {other:?} is not one of 'human', 'machine-ivr', 'machine-vm', 'machine-unavailable', 'uncertain'"))),
+            }
+    }
+
+    pub fn a_m_d_category_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::amd::AmdCategory) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::voice::amd::AmdCategory::Human => "human",
+                ::lk_agents_abi::voice::amd::AmdCategory::MachineIvr => "machine-ivr",
+                ::lk_agents_abi::voice::amd::AmdCategory::MachineVm => "machine-vm",
+                ::lk_agents_abi::voice::amd::AmdCategory::MachineUnavailable => "machine-unavailable",
+                ::lk_agents_abi::voice::amd::AmdCategory::Uncertain => "uncertain",
+            };
+            Ok(crate::host::construct(A_M_D_CATEGORY.import(py, "livekit.agents._generated.amd", "AMDCategory")?.as_any(), (value,), None)?)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
     static A_M_D_PREDICTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -1054,7 +1082,7 @@ pub mod amd {
             }
             Ok(::lk_agents_abi::voice::amd::AmdPrediction {
                 speech_duration: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "speech_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "AMDPredictionEvent.speech_duration").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("AMDPredictionEvent.speech_duration: {e}")))))?,
-                category: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "category", |v| v.extract::<::lk_agents_abi::voice::amd::AmdCategory>().map_err(::std::convert::Into::<PyErr>::into))?,
+                category: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "category", |v| crate::generated::records::amd::a_m_d_category_from_py(v))?,
                 reason: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "reason", |v| v.extract::<::lk_agents_abi::voice::amd::AmdReason>().map_err(::std::convert::Into::<PyErr>::into))?,
                 transcript: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "transcript", |v| v.extract::<::std::string::String>())?,
                 delay: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "delay", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "AMDPredictionEvent.delay").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("AMDPredictionEvent.delay: {e}")))))?,
@@ -1065,7 +1093,7 @@ pub mod amd {
             let ::lk_agents_abi::voice::amd::AmdPrediction { speech_duration, category, reason, transcript, delay } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration.as_secs_f64(), py)?)?;
-            kwargs.set_item("category", ::pyo3::IntoPyObjectExt::into_bound_py_any(category, py)?)?;
+            kwargs.set_item("category", crate::generated::records::amd::a_m_d_category_to_py(py, category)?)?;
             kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
             kwargs.set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
             kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay.as_secs_f64(), py)?)?;
@@ -1350,14 +1378,60 @@ pub mod events {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn user_state_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::events::UserState> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "speaking" => Ok(::lk_agents_abi::voice::events::UserState::Speaking),
+                "listening" => Ok(::lk_agents_abi::voice::events::UserState::Listening),
+                "away" => Ok(::lk_agents_abi::voice::events::UserState::Away),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("UserState: {other:?} is not one of 'speaking', 'listening', 'away'"))),
+            }
+    }
+
+    pub fn user_state_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserState) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::voice::events::UserState::Speaking => "speaking",
+                ::lk_agents_abi::voice::events::UserState::Listening => "listening",
+                ::lk_agents_abi::voice::events::UserState::Away => "away",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn agent_state_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::events::AgentState> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "initializing" => Ok(::lk_agents_abi::voice::events::AgentState::Initializing),
+                "idle" => Ok(::lk_agents_abi::voice::events::AgentState::Idle),
+                "listening" => Ok(::lk_agents_abi::voice::events::AgentState::Listening),
+                "thinking" => Ok(::lk_agents_abi::voice::events::AgentState::Thinking),
+                "speaking" => Ok(::lk_agents_abi::voice::events::AgentState::Speaking),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("AgentState: {other:?} is not one of 'initializing', 'idle', 'listening', 'thinking', 'speaking'"))),
+            }
+    }
+
+    pub fn agent_state_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::AgentState) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::voice::events::AgentState::Initializing => "initializing",
+                ::lk_agents_abi::voice::events::AgentState::Idle => "idle",
+                ::lk_agents_abi::voice::events::AgentState::Listening => "listening",
+                ::lk_agents_abi::voice::events::AgentState::Thinking => "thinking",
+                ::lk_agents_abi::voice::events::AgentState::Speaking => "speaking",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
     static USER_STATE_CHANGED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn user_state_changed_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserStateChanged) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::events::UserStateChanged { old_state, new_state, created_at } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("old_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(old_state, py)?)?;
-            kwargs.set_item("new_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(new_state, py)?)?;
+            kwargs.set_item("old_state", crate::generated::records::events::user_state_to_py(py, old_state)?)?;
+            kwargs.set_item("new_state", crate::generated::records::events::user_state_to_py(py, new_state)?)?;
             kwargs.set_item("created_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(created_at, py)?)?;
             crate::host::construct(USER_STATE_CHANGED_EVENT.import(py, "livekit.agents._generated.events", "UserStateChangedEvent")?.as_any(), (), Some(&kwargs))
     }
@@ -1369,8 +1443,8 @@ pub mod events {
     pub fn agent_state_changed_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::AgentStateChanged) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::events::AgentStateChanged { old_state, new_state, created_at: _ } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("old_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(old_state, py)?)?;
-            kwargs.set_item("new_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(new_state, py)?)?;
+            kwargs.set_item("old_state", crate::generated::records::events::agent_state_to_py(py, old_state)?)?;
+            kwargs.set_item("new_state", crate::generated::records::events::agent_state_to_py(py, new_state)?)?;
             crate::host::construct(AGENT_STATE_CHANGED_EVENT.import(py, "livekit.agents._generated.events", "AgentStateChangedEvent")?.as_any(), (), Some(&kwargs))
     }
 
@@ -1493,6 +1567,34 @@ pub mod events {
             kwargs.set_item("accumulated_word_count", ::pyo3::IntoPyObjectExt::into_bound_py_any(accumulated_word_count, py)?)?;
             kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration.as_secs_f64(), py)?)?;
             crate::host::construct(USER_TURN_EXCEEDED_EVENT.import(py, "livekit.agents._generated.events", "UserTurnExceededEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static CLOSE_REASON: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn close_reason_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::events::CloseReason> {
+        let py = obj.py();
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "error" => Ok(::lk_agents_abi::voice::events::CloseReason::Error),
+                "job_shutdown" => Ok(::lk_agents_abi::voice::events::CloseReason::JobShutdown),
+                "participant_disconnected" => Ok(::lk_agents_abi::voice::events::CloseReason::ParticipantDisconnected),
+                "user_initiated" => Ok(::lk_agents_abi::voice::events::CloseReason::UserInitiated),
+                "task_completed" => Ok(::lk_agents_abi::voice::events::CloseReason::TaskCompleted),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("CloseReason: {other:?} is not one of 'error', 'job_shutdown', 'participant_disconnected', 'user_initiated', 'task_completed'"))),
+            }
+    }
+
+    pub fn close_reason_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::CloseReason) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::voice::events::CloseReason::Error => "error",
+                ::lk_agents_abi::voice::events::CloseReason::JobShutdown => "job_shutdown",
+                ::lk_agents_abi::voice::events::CloseReason::ParticipantDisconnected => "participant_disconnected",
+                ::lk_agents_abi::voice::events::CloseReason::UserInitiated => "user_initiated",
+                ::lk_agents_abi::voice::events::CloseReason::TaskCompleted => "task_completed",
+            };
+            Ok(crate::host::construct(CLOSE_REASON.import(py, "livekit.agents._generated.events", "CloseReason")?.as_any(), (value,), None)?)
     }
 }
 
@@ -2167,7 +2269,7 @@ pub mod session_wire {
     pub fn close_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::CloseWire) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::events::CloseWire { reason, error } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
+            kwargs.set_item("reason", crate::generated::records::events::close_reason_to_py(py, reason)?)?;
             kwargs.set_item("error", match error { None => py.None().into_bound(py), Some(x) => crate::generated::records::session_wire::session_error_wire_to_py(py, x)? })?;
             crate::host::construct(CLOSE_WIRE.import(py, "livekit.agents._generated.session_wire", "CloseWire")?.as_any(), (), Some(&kwargs))
     }
