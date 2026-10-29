@@ -81,6 +81,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         }
     }
     root.push_str("    Ok(())\n}\n");
+    root.push_str(&native_to_host(decls)?);
     out.push(Out { path: "mod.rs".into(), text: root });
     for family in &sorted {
         let classes: Vec<&Class> = decls.classes.iter().filter(|c| c.family == *family).collect();
@@ -125,6 +126,60 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     Ok(out)
 }
 
+/// The native traits a proxy call passes to the host, each with the declared classes implementing
+/// it.
+fn native_arguments(decls: &Declarations) -> std::collections::BTreeMap<&str, Vec<&Class>> {
+    fn native(ty: &Ty) -> Option<&str> {
+        match ty {
+            Ty::Native { rust, .. } => Some(rust),
+            Ty::Optional(t) => native(t),
+            _ => None,
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    let params = decls.proxies.iter().flat_map(|p| &p.methods).flat_map(|m| &m.params);
+    for rust in params.filter_map(|q| native(&q.ty)) {
+        out.entry(rust).or_insert_with(|| {
+            decls.classes.iter().filter(|c| c.native.iter().any(|t| t == rust)).collect()
+        });
+    }
+    out
+}
+
+/// `NativeToHost` for each native trait a proxy call passes: the implementation crosses as the
+/// declared class it is.
+fn native_to_host(decls: &Declarations) -> Result<String, String> {
+    let arguments = native_arguments(decls);
+    if arguments.is_empty() {
+        return Ok(String::new());
+    }
+    let mut s = String::from(
+        "\n/// A native implementation a proxy call passes, handed to the host as its declared class.\npub(crate) trait NativeToHost {\n    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>>;\n}\n",
+    );
+    for (rust, classes) in arguments {
+        if classes.is_empty() {
+            return Err(format!(
+                "`{rust}` is passed to the host, but no declared class implements it"
+            ));
+        }
+        // Each class in turn; the last refusal names the trait.
+        let mut body = format!(
+            "Err(::pyo3::exceptions::PyTypeError::new_err(\"this `{rust}` is no declared class\"))"
+        );
+        for (i, c) in classes.iter().enumerate().rev() {
+            let rest = if i + 1 == classes.len() { "_" } else { "native" };
+            body = format!(
+                "match native.downcast::<<crate::Selected as Implementations>::{}>() {{\n            Ok(native) => Ok(Py::new(py, {}::{}(native))?.into_bound(py).into_any()),\n            Err({rest}) => {body},\n        }}",
+                c.rust_name, c.family, c.name
+            );
+        }
+        s.push_str(&format!(
+            "\nimpl NativeToHost for dyn {rust} {{\n    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {{\n        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;\n        {body}\n    }}\n}}\n"
+        ));
+    }
+    Ok(s)
+}
+
 fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     let name = &c.name;
     let mut s = format!("// Declared in {}.\n", c.source);
@@ -149,7 +204,8 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     // Associated class factories can construct a wrapper from another generated family.
     let visibility = if decls.classes.iter().any(|owner| {
         owner.family != c.family && owner.instances.iter().any(|(_, target)| target == name)
-    }) {
+    }) || native_arguments(decls).values().flatten().any(|w| w.name == c.name)
+    {
         "pub(crate) "
     } else {
         ""
@@ -166,11 +222,6 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         s.push_str(&format!(
             "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\n::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
         ));
-        if c.form != Form::MutableClass {
-            s.push_str(&format!(
-                "\n// A `{tr}` this class implements is handed to the host as an instance of it.\n::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::HostNativeClass {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        write: |py, native| {{\n            let native = native.downcast::<{name}Impl>().ok()?;\n            Some(::pyo3::Py::new(py, {name}(native)).map(::pyo3::Py::into_any))\n        }},\n    }}\n}}\n"
-            ));
-        }
     }
     Ok(s)
 }

@@ -332,3 +332,28 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     Ok(())
 }
+
+/// A native implementation a proxy call passes, handed to the host as its declared class.
+pub(crate) trait NativeToHost {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>>;
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::AsgiReceive>() {
+            Ok(native) => Ok(Py::new(py, worker::_core_AsgiReceive(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::endpoint_host::AsgiReceiver` is no declared class")),
+        }
+    }
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::AsgiSend>() {
+            Ok(native) => Ok(Py::new(py, worker::_core_AsgiSend(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::endpoint_host::AsgiSender` is no declared class")),
+        }
+    }
+}

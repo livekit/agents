@@ -90,17 +90,6 @@ impl EndpointStream {
     }
 }
 
-// A `::lk_agents_abi::worker::endpoint_host::ExchangeStream` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(),
-        write: |py, native| {
-            let native = native.downcast::<EndpointStreamImpl>().ok()?;
-            Some(::pyo3::Py::new(py, EndpointStream(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
 type EndpointServerImpl = <crate::Selected as super::Implementations>::EndpointServer;
 
@@ -160,22 +149,11 @@ impl EndpointServer {
     }
 }
 
-// A `::lk_agents_abi::worker::endpoint_host::EndpointService` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::EndpointService>(),
-        write: |py, native| {
-            let native = native.downcast::<EndpointServerImpl>().ok()?;
-            Some(::pyo3::Py::new(py, EndpointServer(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
 type _core_AsgiReceiveImpl = <crate::Selected as super::Implementations>::AsgiReceive;
 
 #[pyclass(frozen, name = "_core_AsgiReceive", module = "livekit.agents._core")]
-pub struct _core_AsgiReceive(::std::sync::Arc<_core_AsgiReceiveImpl>);
+pub struct _core_AsgiReceive(pub(crate) ::std::sync::Arc<_core_AsgiReceiveImpl>);
 
 #[pymethods]
 impl _core_AsgiReceive {
@@ -202,22 +180,11 @@ impl _core_AsgiReceive {
     }
 }
 
-// A `::lk_agents_abi::worker::endpoint_host::AsgiReceiver` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(),
-        write: |py, native| {
-            let native = native.downcast::<_core_AsgiReceiveImpl>().ok()?;
-            Some(::pyo3::Py::new(py, _core_AsgiReceive(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
 type _core_AsgiSendImpl = <crate::Selected as super::Implementations>::AsgiSend;
 
 #[pyclass(frozen, name = "_core_AsgiSend", module = "livekit.agents._core")]
-pub struct _core_AsgiSend(::std::sync::Arc<_core_AsgiSendImpl>);
+pub struct _core_AsgiSend(pub(crate) ::std::sync::Arc<_core_AsgiSendImpl>);
 
 #[pymethods]
 impl _core_AsgiSend {
@@ -242,17 +209,6 @@ impl _core_AsgiSend {
             let this = obj.cast::<_core_AsgiSend>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::worker::endpoint_host::AsgiSender` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(),
-        write: |py, native| {
-            let native = native.downcast::<_core_AsgiSendImpl>().ok()?;
-            Some(::pyo3::Py::new(py, _core_AsgiSend(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -590,17 +546,6 @@ impl ProcSupervisor {
             let this = obj.cast::<ProcSupervisor>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::SupervisedProcess> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::worker::ipc_host::SupervisedProcess` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::SupervisedProcess>(),
-        write: |py, native| {
-            let native = native.downcast::<ProcSupervisorImpl>().ok()?;
-            Some(::pyo3::Py::new(py, ProcSupervisor(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -958,17 +903,6 @@ impl JobRun {
     }
 }
 
-// A `::lk_agents_abi::worker::ipc_host::JobExecution` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(),
-        write: |py, native| {
-            let native = native.downcast::<JobRunImpl>().ok()?;
-            Some(::pyo3::Py::new(py, JobRun(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerConfigImpl = <crate::Selected as super::Implementations>::ServerConfig;
 
@@ -1068,17 +1002,6 @@ impl ServerConfig {
             let this = obj.cast::<ServerConfig>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::worker::server_host::ServerConfiguration` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration>(),
-        write: |py, native| {
-            let native = native.downcast::<ServerConfigImpl>().ok()?;
-            Some(::pyo3::Py::new(py, ServerConfig(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -1339,7 +1262,7 @@ impl ::lk_agents_abi::worker::endpoint_host::AsgiApplication for AsgiApplication
         let receive_arg = receive;
         let send_arg = send;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AsgiApplication._core_call", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [crate::generated::records::worker_endpoint::asgi_scope_to_py(py, scope_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_arg, py)?, { let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = receive_arg; ::lk_agents_abi::python::native_to_host::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(py, native)? }, { let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = send_arg; ::lk_agents_abi::python::native_to_host::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(py, native)? }];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [crate::generated::records::worker_endpoint::asgi_scope_to_py(py, scope_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_arg, py)?, <dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver as super::NativeToHost>::to_host(py, receive_arg)?, <dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender as super::NativeToHost>::to_host(py, send_arg)?];
                 Ok((host.bind(py).getattr("_core_call")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

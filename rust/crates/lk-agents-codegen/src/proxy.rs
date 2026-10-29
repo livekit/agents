@@ -373,9 +373,9 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
             "match {v} {{ None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }}"
         ),
         // A native implementation, handed over as the declared class it is registered as.
-        Ty::Native { rust, .. } => format!(
-            "{{ let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = {v}; ::lk_agents_abi::python::native_to_host::<dyn {rust}>(py, native)? }}"
-        ),
+        Ty::Native { rust, .. } => {
+            format!("<dyn {rust} as super::NativeToHost>::to_host(py, {v})?")
+        }
         Ty::Unit
         | Ty::This
         | Ty::Proxy { .. }

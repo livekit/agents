@@ -104,17 +104,6 @@ impl InferenceVad {
     }
 }
 
-// A `::lk_agents_abi::Vad` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Vad>(),
-        write: |py, native| {
-            let native = native.downcast::<InferenceVadImpl>().ok()?;
-            Some(::pyo3::Py::new(py, InferenceVad(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 type InferenceVadStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>;
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.

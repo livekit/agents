@@ -77,17 +77,6 @@ impl DataStreamAudioOutput {
     }
 }
 
-// A `::lk_agents_abi::voice::io::AudioOutput` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::AudioOutput>(),
-        write: |py, native| {
-            let native = native.downcast::<DataStreamAudioOutputImpl>().ok()?;
-            Some(::pyo3::Py::new(py, DataStreamAudioOutput(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 type DataStreamAudioReceiverImpl = <crate::Selected as super::Implementations>::DataStreamAudioReceiver;
 
@@ -170,17 +159,6 @@ impl DataStreamAudioReceiver {
             let this = obj.cast::<DataStreamAudioReceiver>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::voice::avatar::AvatarAudioReceiver` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>(),
-        write: |py, native| {
-            let native = native.downcast::<DataStreamAudioReceiverImpl>().ok()?;
-            Some(::pyo3::Py::new(py, DataStreamAudioReceiver(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -612,17 +590,6 @@ impl ConsoleIo {
             let this = obj.cast::<ConsoleIo>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::console::ConsolePort> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::voice::console::ConsolePort` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::console::ConsolePort>(),
-        write: |py, native| {
-            let native = native.downcast::<ConsoleIoImpl>().ok()?;
-            Some(::pyo3::Py::new(py, ConsoleIo(native)).map(::pyo3::Py::into_any))
         },
     }
 }

@@ -84,17 +84,6 @@ impl FallbackLlm {
     }
 }
 
-// A `::lk_agents_abi::Llm` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
-        write: |py, native| {
-            let native = native.downcast::<FallbackLlmImpl>().ok()?;
-            Some(::pyo3::Py::new(py, FallbackLlm(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 /// One stream of `::lk_agents_abi::LlmChunk` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "FallbackLlmChunks", module = "livekit.agents._core")]
 pub struct FallbackLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::LlmChunk>);
@@ -208,17 +197,6 @@ impl FallbackTts {
             let this = obj.cast::<FallbackTts>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Tts> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::Tts` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
-        write: |py, native| {
-            let native = native.downcast::<FallbackTtsImpl>().ok()?;
-            Some(::pyo3::Py::new(py, FallbackTts(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -344,17 +322,6 @@ impl InferenceLlm {
             let this = obj.cast::<InferenceLlm>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Llm> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::Llm` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
-        write: |py, native| {
-            let native = native.downcast::<InferenceLlmImpl>().ok()?;
-            Some(::pyo3::Py::new(py, InferenceLlm(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -798,17 +765,6 @@ impl NativeRealtimeModel {
     }
 }
 
-// A `::lk_agents_abi::Realtime` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        write: |py, native| {
-            let native = native.downcast::<NativeRealtimeModelImpl>().ok()?;
-            Some(::pyo3::Py::new(py, NativeRealtimeModel(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
 type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
 
@@ -863,17 +819,6 @@ impl RealtimeFallbackModel {
             let this = obj.cast::<RealtimeFallbackModel>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::Realtime` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        write: |py, native| {
-            let native = native.downcast::<RealtimeFallbackModelImpl>().ok()?;
-            Some(::pyo3::Py::new(py, RealtimeFallbackModel(native)).map(::pyo3::Py::into_any))
         },
     }
 }

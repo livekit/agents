@@ -616,6 +616,44 @@ fn a_native_only_tap_is_registered_by_its_declared_class_and_other_traits_are_re
     );
 }
 
+// Catches: a native implementation a proxy call passes found through a runtime registry instead
+// of a generated downcast to the declared class implementing its trait.
+#[test]
+fn a_native_argument_crosses_as_the_declared_class_implementing_it() {
+    let decls = read(
+        r#"
+        use crate::errors::HostError;
+        #[crate::host(native(refused = "expected the native tap"))]
+        pub trait Tap: std::any::Any + Send + Sync {}
+        #[crate::host(class(name = "Recorder", native = Tap))]
+        pub trait Recorder: Sized {
+            #[host(new)] fn new() -> Self;
+        }
+        #[crate::host(proxy(host = "livekit.agents.Sinks"))]
+        pub trait Sinks: Send + Sync {
+            #[host(await)] fn attach(&self, tap: std::sync::Arc<dyn Tap>) -> crate::BoxFuture<'_, Result<(), HostError>>;
+        }
+    "#,
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        root.contains("impl NativeToHost for dyn ::lk_agents_abi::llm::class::Tap {")
+            && root.contains("native.downcast::<<crate::Selected as Implementations>::Recorder>()")
+            && root.contains("Py::new(py, llm::Recorder(native))"),
+        "{root}"
+    );
+    assert!(llm.contains("pub struct Recorder(pub(crate) "), "{llm}");
+    assert!(
+        llm.contains(
+            "<dyn ::lk_agents_abi::llm::class::Tap as super::NativeToHost>::to_host(py, tap_arg)?"
+        ),
+        "{llm}"
+    );
+}
+
 // Catches: an ordered map or set refused as undeclared (TextSession state), a map's keys or a
 // set's items crossing by anything but their declared kind, or a host proxy handed back to the
 // host from an emitted record.

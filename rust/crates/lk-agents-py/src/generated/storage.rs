@@ -339,14 +339,3 @@ impl _core_VoiceStore {
         },
     }
 }
-
-// A `::lk_agents_abi::storage::voice::VoiceStorage` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(),
-        write: |py, native| {
-            let native = native.downcast::<_core_VoiceStoreImpl>().ok()?;
-            Some(::pyo3::Py::new(py, _core_VoiceStore(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}

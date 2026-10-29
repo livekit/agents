@@ -614,36 +614,6 @@ pub struct HostNative {
 
 inventory::collect!(HostNative);
 
-/// The reverse of [`HostNative`]: a native implementation handed to the host as the declared
-/// class registered for its trait. `write` answers `None` for another class's implementation.
-pub struct HostNativeClass {
-    pub trait_id: fn() -> std::any::TypeId,
-    pub write: fn(
-        Python<'_>,
-        std::sync::Arc<dyn std::any::Any + Send + Sync>,
-    ) -> Option<PyResult<Py<PyAny>>>,
-}
-
-inventory::collect!(HostNativeClass);
-
-pub fn native_to_host<'py, T: ?Sized + 'static>(
-    py: Python<'py>,
-    value: std::sync::Arc<dyn std::any::Any + Send + Sync>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let id = std::any::TypeId::of::<T>();
-    for n in inventory::iter::<HostNativeClass> {
-        if (n.trait_id)() == id
-            && let Some(object) = (n.write)(py, value.clone())
-        {
-            return object.map(|object| object.into_bound(py));
-        }
-    }
-    Err(pyo3::exceptions::PyTypeError::new_err(format!(
-        "no declared class hands `{}` to the host",
-        std::any::type_name::<T>()
-    )))
-}
-
 pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::Arc<T>> {
     let id = std::any::TypeId::of::<T>();
     for n in inventory::iter::<HostNative> {

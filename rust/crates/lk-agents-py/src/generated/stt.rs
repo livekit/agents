@@ -112,17 +112,6 @@ impl FallbackStt {
     }
 }
 
-// A `::lk_agents_abi::Stt` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Stt>(),
-        write: |py, native| {
-            let native = native.downcast::<FallbackSttImpl>().ok()?;
-            Some(::pyo3::Py::new(py, FallbackStt(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 type FallbackRecognizeStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>;
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
@@ -260,17 +249,6 @@ impl InferenceStt {
     }
 }
 
-// A `::lk_agents_abi::Stt` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Stt>(),
-        write: |py, native| {
-            let native = native.downcast::<InferenceSttImpl>().ok()?;
-            Some(::pyo3::Py::new(py, InferenceStt(native)).map(::pyo3::Py::into_any))
-        },
-    }
-}
-
 type InferenceSttStreamImpl = dyn ::lk_agents_abi::stt::inference::InferenceSttAudio;
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
@@ -373,17 +351,6 @@ impl SttStreamAdapter {
             let this = obj.cast::<SttStreamAdapter>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Stt> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// A `::lk_agents_abi::Stt` this class implements is handed to the host as an instance of it.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Stt>(),
-        write: |py, native| {
-            let native = native.downcast::<SttStreamAdapterImpl>().ok()?;
-            Some(::pyo3::Py::new(py, SttStreamAdapter(native)).map(::pyo3::Py::into_any))
         },
     }
 }
