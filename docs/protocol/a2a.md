@@ -205,11 +205,15 @@ A text answered together with the one that followed it:
 
 ## Tokens
 
-Two credentials reach a thread endpoint. The project credential, any
-token the project's key signed that carries no thread grant, is unscoped.
-A thread grant, minted by the application's backend for a browser or a
-device the way a room token is ([browser thread access](../clients.md#from-the-browser)), scopes
-everything to one scope, the subject the threads belong to:
+Two credentials reach an endpoint. The project credential is a token the
+project's key signed carrying the `agentEndpoint` call grant
+(`Credentials.project_token()`). It invokes the endpoint and reads its card,
+but grants no thread access: a message or a task method under it alone is
+refused 403. A token the project signed with neither grant, such as a room
+join token, is refused 403. A thread grant, minted by the application's
+backend for a browser or a device the way a room token is
+([browser thread access](../clients.md#from-the-browser)), scopes everything
+to one scope, the subject the threads belong to:
 
 ```json
 {"agentThread": {"scope": "user:42",
@@ -219,9 +223,11 @@ everything to one scope, the subject the threads belong to:
 `threadIds` in place of `scope` scopes the token to listed threads; a
 grant with neither is refused unless `all` is true. A thread belongs to the project, not to one
 agent: any agent of the project continues it, and the grant names no
-endpoint. Which endpoints a token may call is the `agentEndpoint` grant's;
-a token with only `agentThread` reaches the project's endpoints for the threads
-it covers.
+endpoint. A token with only `agentThread` may call every endpoint of the
+project: its card, and messages and task methods on the threads the grant
+covers, as its flags allow. An `agentEndpoint` grant naming an agent or a
+deployment limits where the project credential is admitted; it does not
+narrow a token that also carries `agentThread`.
 
 The `agentThread` claim is a JSON object. `scope` is a string, `threadIds`
 is an array of string IDs, and `all` is a boolean (default false) extending
