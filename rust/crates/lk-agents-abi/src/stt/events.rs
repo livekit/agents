@@ -70,7 +70,11 @@ pub struct SpeechData {
     /// or by multi-language detection services where `language` holds the dominant language and
     /// `source_languages` holds all detected languages sorted by prevalence.
     /// may contain multiple entries when a single utterance spans multiple source languages.
-    #[python(ty = "list[LanguageCode] | None", import = ".language:LanguageCode", default = "None")]
+    #[python(
+        ty = "list[LanguageCode] | None",
+        import = ".language:LanguageCode",
+        default = "None"
+    )]
     pub source_languages: Option<Vec<LanguageCode>>,
     /// the original transcription segments in the source language(s), when translation is active.
     /// each entry corresponds to the same-indexed entry in `source_languages`.
@@ -80,7 +84,11 @@ pub struct SpeechData {
     /// `source_texts` on the source side: `language` holds the dominant (first) target language
     /// and `target_languages` carries the fine-grained per-run breakdown.
     /// populated when translation is active; None otherwise.
-    #[python(ty = "list[LanguageCode] | None", import = ".language:LanguageCode", default = "None")]
+    #[python(
+        ty = "list[LanguageCode] | None",
+        import = ".language:LanguageCode",
+        default = "None"
+    )]
     pub target_languages: Option<Vec<LanguageCode>>,
     /// the translated transcription segments in the target language(s).
     /// each entry corresponds to the same-indexed entry in `target_languages`.

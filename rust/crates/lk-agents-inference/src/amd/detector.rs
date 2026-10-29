@@ -1,7 +1,6 @@
 //! The provider half of `AMD`: model selection. The classifier machine and the room wait live in
 //! `lk_agents_voice::amd`.
 
-
 use lk_agents_abi::voice::amd::AmdCategory;
 
 pub use lk_agents_abi::voice::amd::{
@@ -49,7 +48,9 @@ pub fn category_is_machine(category: &str) -> Result<bool, String> {
 
 /// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
 pub fn auto_select_models(livekit_url: &str, api_key: &str, api_secret: &str) -> bool {
-    lk_agents_net::strings::is_cloud_url(livekit_url) && !api_key.is_empty() && !api_secret.is_empty()
+    lk_agents_net::strings::is_cloud_url(livekit_url)
+        && !api_key.is_empty()
+        && !api_secret.is_empty()
 }
 
 #[cfg(test)]
@@ -61,7 +62,10 @@ mod tests {
     #[test]
     fn model_compatibility_matches_prefixes_but_not_pinned_snapshots() {
         assert!(is_evaluated_model("openai/gpt-4.1-mini", EVALUATED_LLM_MODELS), "exact");
-        assert!(is_evaluated_model("OpenAI/GPT-4.1-Mini", EVALUATED_LLM_MODELS), "case-insensitive");
+        assert!(
+            is_evaluated_model("OpenAI/GPT-4.1-Mini", EVALUATED_LLM_MODELS),
+            "case-insensitive"
+        );
         assert!(is_evaluated_model("gpt-4.1-mini", EVALUATED_LLM_MODELS), "unprefixed substring");
         assert!(is_evaluated_model("", EVALUATED_LLM_MODELS), "no model reported -- never warn");
 
@@ -73,7 +77,10 @@ mod tests {
 
         assert!(is_evaluated_model(DEFAULT_LLM_MODEL, EVALUATED_LLM_MODELS), "our own default");
         assert!(is_evaluated_model(DEFAULT_STT_MODEL, EVALUATED_STT_MODELS));
-        assert!(!is_evaluated_model(DEFAULT_STT_MODEL, EVALUATED_LLM_MODELS), "the two lists differ");
+        assert!(
+            !is_evaluated_model(DEFAULT_STT_MODEL, EVALUATED_LLM_MODELS),
+            "the two lists differ"
+        );
     }
 
     // Catches: auto-selecting the gateway for a self-hosted deployment, or a `contains` cloud check.

@@ -1,8 +1,8 @@
 //! A record position anchored at an official, opaque stream offset. Upstream pages are immutable
 //! prefixes, but their size can change, so resuming replays and counts records across pages.
+use crate::StorageError;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use crate::StorageError;
 
 pub(super) const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_RECORDS: usize = 1_000_000;

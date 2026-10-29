@@ -9,9 +9,7 @@ fn cpp_sources(dir: &Path, exts: &[&str]) -> Vec<PathBuf> {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| {
-            p.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.contains(&e))
-        })
+        .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.contains(&e)))
         .collect();
     // Sorted, so the archive's member order (and hash) is independent of the filesystem.
     out.sort();

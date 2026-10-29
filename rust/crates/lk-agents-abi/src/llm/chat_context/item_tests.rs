@@ -19,7 +19,6 @@ fn raw_text_content_joins_parts_with_a_newline() {
     assert_eq!(assistant(vec![text("")]).raw_text_content().as_deref(), Some(""));
 }
 
-
 // Catches: the #4845 bug class -- the instruction test written as `role == System`.
 #[test]
 fn is_instruction_covers_developer_as_well_as_system() {

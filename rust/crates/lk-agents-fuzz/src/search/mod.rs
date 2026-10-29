@@ -52,11 +52,13 @@ mod tests {
         let mut closed = 0;
         for seed in 0..12u64 {
             let outcome = explore_at(listening(), seed, 200, Dials::conversation());
-            let names = |name: &str| outcome.case.inputs.iter().filter(|i| i.name() == name).count();
+            let names =
+                |name: &str| outcome.case.inputs.iter().filter(|i| i.name() == name).count();
             // A final with words: Deepgram's empty finals over noise close no turn.
-            let worded = outcome.case.inputs.iter().any(|i| {
-                matches!(i, Input::SttFinal { text, .. } if !text.0.trim().is_empty())
-            });
+            let worded =
+                outcome.case.inputs.iter().any(
+                    |i| matches!(i, Input::SttFinal { text, .. } if !text.0.trim().is_empty()),
+                );
             if names("VadEnd") == 0 || !worded {
                 continue;
             }

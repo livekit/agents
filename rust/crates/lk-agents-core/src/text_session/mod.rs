@@ -176,7 +176,9 @@ impl TextSession {
                 if state.session_id != input.session_id {
                     return Err(RoutingError::InvalidState("session identity changed".into()));
                 }
-                let frame = state.frames.get(&state.active_frame_id)
+                let frame = state
+                    .frames
+                    .get(&state.active_frame_id)
                     .ok_or_else(|| RoutingError::InvalidState("missing active frame".into()))?;
                 let pending = frame.parent.is_some()
                     || !frame.pending_calls.is_empty()
@@ -194,9 +196,7 @@ impl TextSession {
                 state
             }
             None => {
-                let root = FrameId {
-                    value: format!("{}/frame_0", input.session_id),
-                };
+                let root = FrameId { value: format!("{}/frame_0", input.session_id) };
                 let frame = SessionFrame {
                     id: root.clone(),
                     agent_name: config.root_agent.clone(),
@@ -265,17 +265,13 @@ impl TextSession {
         let mut effects = Vec::new();
         // A late host receipt still transfers ownership of its prepared-arguments resource.
         // Invocation identity suffices for runtime cleanup, even after this request settled.
-        if let Event::Run {
-            invocation_id,
-            event: agent_run::Event::ToolPrepared { prepared, .. },
-        } = &event
+        if let Event::Run { invocation_id, event: agent_run::Event::ToolPrepared { prepared, .. } } =
+            &event
             && !self.is_current(invocation_id)
         {
             effects.push(Effect::Run {
                 invocation_id: invocation_id.clone(),
-                effect: agent_run::Effect::ToolArgumentsRelease {
-                    prepared: *prepared,
-                },
+                effect: agent_run::Effect::ToolArgumentsRelease { prepared: *prepared },
             });
             return effects;
         }
@@ -285,64 +281,39 @@ impl TextSession {
         match event {
             Event::Start(message) if !self.started => {
                 self.started = true;
-                let frame = self
-                    .state
-                    .frames
-                    .get_mut(&self.state.active_frame_id)
-                    .unwrap();
+                let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
                 history::delivered(frame, message.clone());
                 // An answered read-back is now ordinary history. AgentRun alone decides whether
                 // a repeated validated call consumes it; a model argument cannot grant approval.
-                frame
-                    .pending_calls
-                    .retain(|p| p.status != ChildCallStatus::Approval);
+                frame.pending_calls.retain(|p| p.status != ChildCallStatus::Approval);
                 self.invoke(Some(message), now, &mut effects);
             }
-            Event::Run {
-                invocation_id,
-                event,
-            } if self.is_current(&invocation_id) => {
+            Event::Run { invocation_id, event } if self.is_current(&invocation_id) => {
                 self.run_event(event, now, &mut effects);
             }
-            Event::OutputValidated {
-                invocation_id,
-                validation,
-                verdict,
-                output,
-            } if self.is_current(&invocation_id) => {
+            Event::OutputValidated { invocation_id, validation, verdict, output }
+                if self.is_current(&invocation_id) =>
+            {
                 if matches!(verdict, OutputVerdict::Accepted { .. })
                     && let Some(output) = output
                 {
-                    self.invocation
-                        .as_mut()
-                        .unwrap()
-                        .outputs
-                        .insert(validation, output);
+                    self.invocation.as_mut().unwrap().outputs.insert(validation, output);
                 }
                 self.run_event(
-                    agent_run::Event::OutputValidated {
-                        validation,
-                        verdict,
-                    },
+                    agent_run::Event::OutputValidated { validation, verdict },
                     now,
                     &mut effects,
                 );
             }
-            Event::DialogueDelivered {
-                invocation_id,
-                message,
-            } if self.is_current(&invocation_id) => {
-                let frame = self
-                    .state
-                    .frames
-                    .get_mut(&self.state.active_frame_id)
-                    .unwrap();
+            Event::DialogueDelivered { invocation_id, message }
+                if self.is_current(&invocation_id) =>
+            {
+                let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
                 history::delivered(frame, message);
             }
-            Event::InvocationReleased {
-                invocation_id,
-                delivered,
-            } if self.is_current(&invocation_id) => {
+            Event::InvocationReleased { invocation_id, delivered }
+                if self.is_current(&invocation_id) =>
+            {
                 self.receipts(&delivered);
                 match self.invocation.as_mut().unwrap().release.take() {
                     Some(InvocationRelease::Settled(result, output, approvals)) => {
@@ -356,32 +327,20 @@ impl TextSession {
                     None => {}
                 }
             }
-            Event::Reconcile {
-                frame_id,
-                result,
-                output,
-            } if !self.started && frame_id == self.state.active_frame_id => {
+            Event::Reconcile { frame_id, result, output }
+                if !self.started && frame_id == self.state.active_frame_id =>
+            {
                 self.started = true;
                 self.settled(result, output, Vec::new(), now, &mut effects);
             }
             Event::Cancel => {
-                if self
-                    .invocation
-                    .as_ref()
-                    .is_some_and(|i| i.release.is_some())
-                {
+                if self.invocation.as_ref().is_some_and(|i| i.release.is_some()) {
                     self.invocation = None;
-                    self.finish(
-                        Err(TextSessionError::Run(RunError::Cancelled)),
-                        &mut effects,
-                    );
+                    self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
                 } else if self.invocation.is_some() {
                     self.run_event(agent_run::Event::Cancel, now, &mut effects);
                 } else {
-                    self.finish(
-                        Err(TextSessionError::Run(RunError::Cancelled)),
-                        &mut effects,
-                    );
+                    self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
                 }
             }
             Event::Wake => self.run_event(agent_run::Event::Wake, now, &mut effects),
@@ -391,9 +350,7 @@ impl TextSession {
     }
 
     fn is_current(&self, invocation_id: &str) -> bool {
-        self.invocation
-            .as_ref()
-            .is_some_and(|i| i.id == invocation_id)
+        self.invocation.as_ref().is_some_and(|i| i.id == invocation_id)
     }
 
     fn invoke(&mut self, message: Option<ChatMessage>, now: Ts, effects: &mut Vec<Effect>) {
@@ -402,15 +359,13 @@ impl TextSession {
         let agent = &self.config.agents[&frame.agent_name];
         let resume = message.is_none();
         let mut message = message.unwrap_or_else(|| {
-            ChatMessage::text(
-                String::new(),
-                lk_agents_abi::Role::User,
-                "",
-                std::time::UNIX_EPOCH,
-            )
+            ChatMessage::text(String::new(), lk_agents_abi::Role::User, "", std::time::UNIX_EPOCH)
         });
         agent_run::execution::bind(
-            &mut message, &frame.history, Some(&self.state.execution_id), &invocation_id,
+            &mut message,
+            &frame.history,
+            Some(&self.state.execution_id),
+            &invocation_id,
         );
         let input = RunInput {
             invocation_id: invocation_id.clone(),
@@ -440,9 +395,9 @@ impl TextSession {
             }
             Err(error) => {
                 self.finish(
-                    Err(TextSessionError::Routing(RoutingError::InvalidState(
-                        format!("{error:?}"),
-                    ))),
+                    Err(TextSessionError::Routing(RoutingError::InvalidState(format!(
+                        "{error:?}"
+                    )))),
                     effects,
                 );
                 return;
@@ -477,11 +432,7 @@ impl TextSession {
         let Some(invocation) = self.invocation.as_mut() else {
             return;
         };
-        if let agent_run::Event::ToolPrepared {
-            call,
-            prepared,
-            identity,
-        } = &event
+        if let agent_run::Event::ToolPrepared { call, prepared, identity } = &event
             && let Some(child) = invocation.children.get_mut(call)
             && child.identity.is_none()
         {
@@ -493,9 +444,7 @@ impl TextSession {
                 _ => {
                     effects.push(Effect::Run {
                         invocation_id: invocation.id.clone(),
-                        effect: agent_run::Effect::ToolArgumentsRelease {
-                            prepared: *prepared,
-                        },
+                        effect: agent_run::Effect::ToolArgumentsRelease { prepared: *prepared },
                     });
                     event = agent_run::Event::ToolPrepareFailed {
                         call: *call,
@@ -535,11 +484,7 @@ impl TextSession {
                         event,
                     });
                 }
-                agent_run::Effect::ToolPrepare {
-                    call,
-                    ref function_call,
-                    ..
-                } => {
+                agent_run::Effect::ToolPrepare { call, ref function_call, .. } => {
                     if self.config.agents[&frame.agent_name]
                         .agent_tools
                         .contains_key(&function_call.name)
@@ -554,17 +499,11 @@ impl TextSession {
                             },
                         );
                     }
-                    effects.push(Effect::Run {
-                        invocation_id,
-                        effect,
-                    });
+                    effects.push(Effect::Run { invocation_id, effect });
                 }
-                agent_run::Effect::ToolExecute {
-                    call,
-                    prepared,
-                    function_call,
-                    ..
-                } if invocation.children.contains_key(&call) => {
+                agent_run::Effect::ToolExecute { call, prepared, function_call, .. }
+                    if invocation.children.contains_key(&call) =>
+                {
                     let child = invocation.children.get_mut(&call).unwrap();
                     child.function_call = function_call;
                     child.executing = true;
@@ -594,12 +533,12 @@ impl TextSession {
                     Ok(result) => {
                         let invocation = self.invocation.as_ref().unwrap();
                         let output = match &result.outcome {
-                            RunOutcome::Completed {
-                                output: Output::Validated(id),
-                            } => invocation.outputs.get(id).cloned(),
-                            RunOutcome::Completed {
-                                output: Output::Text(text),
-                            } => Some(Value::String(text.clone())),
+                            RunOutcome::Completed { output: Output::Validated(id) } => {
+                                invocation.outputs.get(id).cloned()
+                            }
+                            RunOutcome::Completed { output: Output::Text(text) } => {
+                                Some(Value::String(text.clone()))
+                            }
                             _ => None,
                         };
                         let approvals = self.approvals(invocation, &result);
@@ -612,10 +551,7 @@ impl TextSession {
                             Some(InvocationRelease::Settled(result, output, approvals));
                     }
                 },
-                other => effects.push(Effect::Run {
-                    invocation_id,
-                    effect: other,
-                }),
+                other => effects.push(Effect::Run { invocation_id, effect: other }),
             }
         }
         self.park(now, effects);
@@ -677,23 +613,14 @@ impl TextSession {
         if invocation.release.is_some() {
             return;
         }
-        let calls: Vec<_> = invocation
-            .children
-            .iter()
-            .filter(|(_, c)| c.executing)
-            .map(|(id, _)| *id)
-            .collect();
+        let calls: Vec<_> =
+            invocation.children.iter().filter(|(_, c)| c.executing).map(|(id, _)| *id).collect();
         let (history, usage) = match invocation.run.delegation_checkpoint(&calls, now) {
             agent_run::DelegationCheckpoint::Waiting => return,
             agent_run::DelegationCheckpoint::ConflictingOutcome => {
                 for id in &calls {
-                    self.invocation
-                        .as_mut()
-                        .unwrap()
-                        .children
-                        .get_mut(id)
-                        .unwrap()
-                        .executing = false;
+                    self.invocation.as_mut().unwrap().children.get_mut(id).unwrap().executing =
+                        false;
                 }
                 for call in calls {
                     self.run_event(

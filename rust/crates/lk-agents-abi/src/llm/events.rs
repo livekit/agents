@@ -107,11 +107,17 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ChoiceDelta {
         const OWNER: &str = "ChoiceDeltaFromPy";
         let obj = &*obj;
         Ok(ChoiceDelta {
-            role: attr_with(obj, OWNER, "role", |v| Ok(v.extract::<String>().ok().and_then(|s| s.parse().ok())))?,
+            role: attr_with(obj, OWNER, "role", |v| {
+                Ok(v.extract::<String>().ok().and_then(|s| s.parse().ok()))
+            })?,
             content: attr(obj, OWNER, "content")?,
             tool_calls: attr(obj, OWNER, "tool_calls")?,
             extra: attr_with(obj, OWNER, "extra", |v| {
-                if v.is_none() { Ok(None) } else { extra_from_py(v.cast::<pyo3::types::PyDict>()?).map(Some) }
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    extra_from_py(v.cast::<pyo3::types::PyDict>()?).map(Some)
+                }
             })?,
         })
     }
@@ -200,7 +206,11 @@ mod tests {
         chunk.delta = Some(ChoiceDelta { content: Some("hi".into()), ..Default::default() });
         assert!(chunk.has_response());
         chunk.delta = Some(ChoiceDelta {
-            tool_calls: vec![FunctionToolCall { name: "lookup".into(), call_id: "1".into(), ..Default::default() }],
+            tool_calls: vec![FunctionToolCall {
+                name: "lookup".into(),
+                call_id: "1".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         });
         assert!(chunk.has_response());

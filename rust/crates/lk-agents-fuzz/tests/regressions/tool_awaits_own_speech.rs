@@ -32,7 +32,8 @@ fn a_tool_awaiting_its_own_speech_is_refused() {
         }
         run
     });
-    let ended = run.record.host_view().tools_run().iter().all(|t| !t.ended_announcements().is_empty());
+    let ended =
+        run.record.host_view().tools_run().iter().all(|t| !t.ended_announcements().is_empty());
     assert!(ended, "the tool's wait on its own speech was refused and the tool returned");
     let speeches = run.record.host_view().speeches();
     assert!(speeches[0].is_done(), "the speech no longer waits on a tool waiting on it");

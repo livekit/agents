@@ -289,7 +289,8 @@ impl VadMachine {
         self.pub_timestamp += window_duration;
 
         let resampling_ratio = f64::from(self.input_sample_rate) / f64::from(MODEL_SAMPLE_RATE);
-        let to_copy = VAD_WINDOW_SAMPLES as f64 * resampling_ratio + self.input_copy_remaining_fract;
+        let to_copy =
+            VAD_WINDOW_SAMPLES as f64 * resampling_ratio + self.input_copy_remaining_fract;
         let to_copy_int = to_copy as usize;
         // The fractional carry keeps the event timeline from drifting at non-integer ratios
         // (44.1 kHz).
@@ -359,7 +360,8 @@ impl VadMachine {
                 self.reset_write_cursor();
             }
 
-            if self.pub_speaking && self.silence_threshold_duration >= self.opts.min_silence_duration
+            if self.pub_speaking
+                && self.silence_threshold_duration >= self.opts.min_silence_duration
             {
                 self.pub_speaking = false;
                 self.pub_silence_duration = self.silence_threshold_duration;
@@ -448,8 +450,11 @@ mod tests {
             let mut next = self.m.push(frame)?;
             while let Some(predict) = next {
                 let probability = self.probabilities.pop_front().unwrap_or(0.0);
-                let result =
-                    VadResult { window: predict.window, probability, inference_duration: self.duration };
+                let result = VadResult {
+                    window: predict.window,
+                    probability,
+                    inference_duration: self.duration,
+                };
                 let (outputs, following) = self.m.predicted(result);
                 out.extend(outputs);
                 next = following;
@@ -459,7 +464,11 @@ mod tests {
     }
 
     fn scripted(opts: VadOptions, probabilities: &[f32], duration: f64) -> Scripted {
-        Scripted { m: VadMachine::new(opts), probabilities: probabilities.iter().copied().collect(), duration }
+        Scripted {
+            m: VadMachine::new(opts),
+            probabilities: probabilities.iter().copied().collect(),
+            duration,
+        }
     }
 
     fn timed_machine(probabilities: &[f32], duration: f64) -> Scripted {
@@ -578,8 +587,11 @@ mod tests {
         let current = m.push(window()).unwrap().expect("the flushed stream scores again");
         let late = VadResult { window: stale.window, probability: 1.0, inference_duration: 0.0 };
         assert_eq!(m.predicted(late), (Vec::new(), None), "a stale result changes nothing");
-        let (out, next) =
-            m.predicted(VadResult { window: current.window, probability: 0.0, inference_duration: 0.0 });
+        let (out, next) = m.predicted(VadResult {
+            window: current.window,
+            probability: 0.0,
+            inference_duration: 0.0,
+        });
         assert_eq!(out[0].event.samples_index, VAD_WINDOW_SAMPLES as u64, "the counters restarted");
         assert_eq!(next, None);
     }
@@ -591,8 +603,11 @@ mod tests {
         let mut m = VadMachine::new(VadOptions::default());
         let first = m.push(filled_window(1)).unwrap().unwrap();
         assert_eq!(m.push(filled_window(2)).unwrap(), None, "one window in flight");
-        let (_, second) =
-            m.predicted(VadResult { window: first.window, probability: 0.0, inference_duration: 0.0 });
+        let (_, second) = m.predicted(VadResult {
+            window: first.window,
+            probability: 0.0,
+            inference_duration: 0.0,
+        });
         let second = second.expect("the queued window follows the result");
         assert!(first.samples.iter().all(|s| *s == 0x0101));
         assert!(second.samples.iter().all(|s| *s == 0x0202));
@@ -610,7 +625,11 @@ mod tests {
         for opts in bad {
             assert_eq!(opts.validate(), Err(InvalidVadOptions::Duration));
         }
-        let inverted = VadOptions { activation_threshold: 0.3, deactivation_threshold: 0.4, ..VadOptions::default() };
+        let inverted = VadOptions {
+            activation_threshold: 0.3,
+            deactivation_threshold: 0.4,
+            ..VadOptions::default()
+        };
         assert_eq!(inverted.validate(), Err(InvalidVadOptions::Threshold));
         let above = VadOptions { activation_threshold: 1.5, ..VadOptions::default() };
         assert_eq!(above.validate(), Err(InvalidVadOptions::Threshold));
@@ -664,7 +683,11 @@ mod tests {
     // Catches: the speech buffer keeping its first size, or a grown buffer staying "full".
     #[test]
     fn a_buffer_updated_mid_stream_is_resized_and_may_fill_again() {
-        let none = VadOptions { max_buffered_speech: 0.0, prefix_padding_duration: 0.0, ..VadOptions::default() };
+        let none = VadOptions {
+            max_buffered_speech: 0.0,
+            prefix_padding_duration: 0.0,
+            ..VadOptions::default()
+        };
         let mut m = scripted(none, &[0.9; 4], 0.0);
         m.push(window()).unwrap();
         assert!(m.m.speech_buffer_max_reached, "a zero-length buffer is full at once");
@@ -673,7 +696,10 @@ mod tests {
         assert_eq!(m.m.speech_buffer.len(), 16_000);
         assert!(!m.m.speech_buffer_max_reached);
         m.push(window()).unwrap();
-        assert_eq!(m.m.speech_buffer_index, VAD_WINDOW_SAMPLES, "the grown buffer took the next window");
+        assert_eq!(
+            m.m.speech_buffer_index, VAD_WINDOW_SAMPLES,
+            "the grown buffer took the next window"
+        );
     }
 
     // Catches: a mismatched sample rate silently accepted or dropped.

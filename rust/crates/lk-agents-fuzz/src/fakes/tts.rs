@@ -233,7 +233,8 @@ impl Tts for FakeTts {
             // Each stream speaks at a pace the recorded voice had: its milliseconds a word, over the
             // characters a word of the agent's lines takes.
             let mut pace = fastrand::Rng::with_seed(u64::from(slot.nth) ^ 0x7061_6365);
-            let ms_per_word = lk_agents_test_support::corpus::draw(&mut pace, &["tts", TTS_MODEL, "ms_per_word"]);
+            let ms_per_word =
+                lk_agents_test_support::corpus::draw(&mut pace, &["tts", TTS_MODEL, "ms_per_word"]);
             synthesis.state.lock().unwrap().samples_per_char =
                 ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
             let first_audio = self.latency.as_ref().map(|rng| {

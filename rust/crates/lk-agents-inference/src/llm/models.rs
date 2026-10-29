@@ -83,14 +83,12 @@ pub fn unsupported_params(
     {
         // OpenAI accepts temperature/top_p on gpt-5.1+ only at effort "none", the model's
         // lowest; a model missing from MIN_REASONING_EFFORT keeps them stripped.
-        let effort_none = (!drops_effort && reasoning_effort == Some("none"))
-            || reasoning == Some("none");
+        let effort_none =
+            (!drops_effort && reasoning_effort == Some("none")) || reasoning == Some("none");
         let keeps_sampling = std::ptr::eq(*unsupported, REASONING_UNSUPPORTED_PARAMS)
             && min_reasoning_effort(name) == Some("none")
             && effort_none;
-        out.extend(
-            unsupported.iter().filter(|p| !(keeps_sampling && SAMPLING_PARAMS.contains(p))),
-        );
+        out.extend(unsupported.iter().filter(|p| !(keeps_sampling && SAMPLING_PARAMS.contains(p))));
     }
     out
 }
@@ -215,12 +213,28 @@ mod tests {
     fn an_effort_dropped_for_tools_does_not_keep_sampling_params() {
         assert_eq!(
             unsupported_params("openai/gpt-5.2", true, Some("none"), None),
-            ["reasoning_effort", "temperature", "top_p", "presence_penalty", "frequency_penalty",
-                "logit_bias", "logprobs", "top_logprobs", "n"]
+            [
+                "reasoning_effort",
+                "temperature",
+                "top_p",
+                "presence_penalty",
+                "frequency_penalty",
+                "logit_bias",
+                "logprobs",
+                "top_logprobs",
+                "n"
+            ]
         );
         assert_eq!(
             unsupported_params("openai/gpt-5.2", false, Some("none"), None),
-            ["presence_penalty", "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "n"]
+            [
+                "presence_penalty",
+                "frequency_penalty",
+                "logit_bias",
+                "logprobs",
+                "top_logprobs",
+                "n"
+            ]
         );
     }
 

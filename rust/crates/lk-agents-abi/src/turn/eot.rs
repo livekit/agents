@@ -92,4 +92,3 @@ pub struct PredictionEvent {
     pub inference_duration: Option<f64>,
     pub backchannel_probability: Option<f64>,
 }
-

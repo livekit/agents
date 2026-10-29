@@ -258,7 +258,6 @@ mod tests {
         assert!(matches!(b.resolve_inbound(id), InboundFrame::Unknown));
     }
 
-
     #[test]
     fn the_scope_restores_the_previous_frame_and_nests() {
         let t = FrameTable::new();
@@ -292,6 +291,4 @@ mod tests {
             "a panic inside a frame scope must not pin the frame"
         );
     }
-
-
 }

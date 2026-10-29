@@ -117,11 +117,7 @@ impl<E: Env> lk_agents_abi::telemetry::observation::EventRetention for EventRete
     }
 
     fn accepts(&self, kind: String, redaction: bool) -> bool {
-        super::projection::event_allowed(
-            &kind,
-            self.capture_content,
-            redaction,
-        )
+        super::projection::event_allowed(&kind, self.capture_content, redaction)
     }
 
     fn admit(&mut self, retained_bytes: usize, now_ns: u64) -> (usize, bool) {

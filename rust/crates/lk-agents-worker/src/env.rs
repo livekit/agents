@@ -7,4 +7,3 @@ pub trait Env: lk_agents_net::env::Env {
     /// The process's worker I/O, on the runtime the worker's tasks and sockets run on.
     fn worker_io() -> Result<WorkerIo, String>;
 }
-

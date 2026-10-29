@@ -1,8 +1,8 @@
 //! The generated client keeps application metadata distinct from framework wire keys.
 
-use lk_agents_core::a2a::client::{message_from_wire, message_to_wire};
 use lk_agents_abi::a2a::client::{MessageInput, MessageMetadata};
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;
+use lk_agents_core::a2a::client::{message_from_wire, message_to_wire};
 use serde_json::json;
 
 #[test]

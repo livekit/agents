@@ -293,16 +293,14 @@ impl World {
                             timeline.at(at, Src::Delivery, event);
                         }
                     }
-                    let release =
-                        Event::InvocationReleased {
+                    let release = Event::InvocationReleased {
                         invocation_id: invocation_id.clone(),
                         delivered: Default::default(),
                     };
                     timeline.at(at + self.rng.u64(0..50), Src::Delivery, release);
                 }
                 Effect::InvocationParked { invocation_id, .. } => {
-                    let release =
-                        Event::InvocationReleased {
+                    let release = Event::InvocationReleased {
                         invocation_id: invocation_id.clone(),
                         delivered: Default::default(),
                     };

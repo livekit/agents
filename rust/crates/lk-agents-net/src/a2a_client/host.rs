@@ -1,12 +1,12 @@
 //! Generated host classes forward here; protocol records are converted once at the boundary.
 
-use lk_agents_core::a2a::caller_history::{CallerHistory, HistorySharing};
-use lk_agents_core::a2a::client::ClientError;
-use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::a2a::client::{
     self as port, AgentClientError, Artifact, MessageInput, MessageMetadata, TaskUpdate,
 };
 use lk_agents_abi::{ApiConnectOptions, ChatItem, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_core::a2a::caller_history::{CallerHistory, HistorySharing};
+use lk_agents_core::a2a::client::ClientError;
+use lk_agents_core::a2a::rpc::TaskRef;
 
 use super::{AgentClient, Reply};
 use crate::env::Env;

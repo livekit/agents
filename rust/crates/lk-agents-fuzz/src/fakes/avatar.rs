@@ -22,13 +22,13 @@ use std::{
 };
 
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
+use lk_agents_abi::voice::avatar::AvatarRunner as _;
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::{
     AudioFrame, Clock, Ts,
     errors::{ApiError, ProviderError},
 };
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
-use lk_agents_abi::voice::avatar::AvatarRunner as _;
 use lk_agents_runtime::avatar::runner::{AvatarIo, AvatarRunner, Event};
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{

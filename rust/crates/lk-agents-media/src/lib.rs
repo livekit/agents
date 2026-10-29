@@ -20,9 +20,9 @@ pub mod mime;
 pub mod mixer;
 pub mod recorder;
 pub mod resample;
+pub mod source;
 #[cfg(feature = "resample")]
 pub mod soxr;
-pub mod source;
 pub mod stream_buffer;
 pub mod wav;
 pub mod workers;

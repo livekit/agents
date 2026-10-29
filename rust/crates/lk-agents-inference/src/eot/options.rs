@@ -51,7 +51,8 @@ mod tests {
     #[test]
     fn explicit_cloud_requires_credentials_but_auto_degrades() {
         assert!(select(Some("v1"), false, false, "url", "", "secret", true).is_err());
-        let (model, cloud, warnings) = select(None, true, false, "url", "", "secret", true).unwrap();
+        let (model, cloud, warnings) =
+            select(None, true, false, "url", "", "secret", true).unwrap();
         assert!(!cloud);
         assert_eq!(model, TurnDetectorModel::V1Mini);
         assert_eq!(warnings.len(), 1);

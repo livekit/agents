@@ -56,7 +56,6 @@ fn plans_are_positional_so_duplicate_ids_keep_their_own_items() {
     assert_eq!(merge_plan(&facts(&c), &facts(&theirs), &MergeOptions::default()), [(3, 0)]);
 }
 
-
 // Catches: `<` instead of `<=`, appending when nothing precedes the stamp, or the reverse
 // linear scan "optimised" into a binary search (visible on an out-of-order list).
 #[test]
@@ -74,8 +73,6 @@ fn find_insertion_index_scans_from_the_end_and_puts_a_tie_after() {
     assert_eq!(unordered.find_insertion_index(t(20)), 3);
 }
 
-
-
 // Catches: computing every index up front, which reverses a batch.
 #[test]
 fn insert_all_places_each_item_against_the_list_as_it_grows() {
@@ -83,7 +80,6 @@ fn insert_all_places_each_item_against_the_list_as_it_grows() {
     c.insert_all(vec![out("o1", "f", 20), out("o2", "f", 20), out("o3", "f", 20)]);
     assert_eq!(ids(&c), ["a", "o1", "o2", "o3"]);
 }
-
 
 // Catches: keeping a window that starts on a function call or its output.
 #[test]
@@ -119,7 +115,6 @@ fn truncate_does_not_duplicate_an_instruction_still_inside_the_window() {
     assert_eq!(truncated(&c, 2), ["sys", "m1"]);
 }
 
-
 // Catches: collapsing `NOT_GIVEN` and `[]` into one "no tools" case, or applying the
 // tool-name filter to items that have no name.
 #[test]
@@ -130,12 +125,16 @@ fn copy_distinguishes_an_absent_tool_list_from_an_empty_one() {
         config_update("u", 3),
         call("c", "lookup", 4),
     ]);
-    let with = |tools: Option<Vec<String>>| ids(&base.copy(&CopyOptions { tools, ..Default::default() })).iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let with = |tools: Option<Vec<String>>| {
+        ids(&base.copy(&CopyOptions { tools, ..Default::default() }))
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    };
     assert_eq!(with(None), ["m", "h", "u", "c"]);
     assert_eq!(with(Some(vec![])), ["m", "h", "u"]);
     assert_eq!(with(Some(vec!["lookup".into()])), ["m", "h", "u", "c"]);
 }
-
 
 // Catches: reading `exclude_empty_message` as "empty text".
 #[test]
@@ -166,7 +165,11 @@ fn merge_orders_by_created_at_rather_than_appending() {
 #[test]
 fn merge_keeps_the_items_copy_can_drop() {
     let child = ctx(vec![handoff("h", 1), empty_msg("e", 2), config_update("u", 3)]);
-    let opts = MergeOptions { exclude_function_call: true, exclude_instructions: true, exclude_config_update: true };
+    let opts = MergeOptions {
+        exclude_function_call: true,
+        exclude_instructions: true,
+        exclude_config_update: true,
+    };
     assert_eq!(ids(&merged(&ChatContext::default(), &child, &opts)), ["h", "e"]);
 }
 
@@ -181,7 +184,6 @@ fn push_appends_and_insert_sorts() {
     c.insert(ChatMessage::text("mid", Role::User, "3", t(20)));
     assert_eq!(ids(&c), ["late", "early", "mid"]);
 }
-
 
 // Catches: computing the window start with anything but a subtraction.
 #[test]
@@ -236,7 +238,11 @@ fn merge_drops_each_excluded_kind_on_its_own() {
         msg("u", Role::User, "hi", 5),
     ]);
     let kept = |opts: MergeOptions| {
-        merged(&ChatContext::default(), &child, &opts).items.iter().map(|i| i.id().to_owned()).collect::<Vec<_>>()
+        merged(&ChatContext::default(), &child, &opts)
+            .items
+            .iter()
+            .map(|i| i.id().to_owned())
+            .collect::<Vec<_>>()
     };
 
     assert_eq!(kept(MergeOptions::default()), ["c", "o", "sys", "cfg", "u"]);
@@ -292,8 +298,7 @@ fn media_content_survives_a_copy_and_compares_by_side_table_id() {
     });
 
     let a = ctx(vec![
-        ChatMessage::new("m", Role::User, vec![text("look"), image(1), audio.clone()], t(1))
-            .into(),
+        ChatMessage::new("m", Role::User, vec![text("look"), image(1), audio.clone()], t(1)).into(),
     ]);
     let copied = a.copy(&CopyOptions::default());
     assert_eq!(copied.items[0].as_message().unwrap().content.len(), 3);

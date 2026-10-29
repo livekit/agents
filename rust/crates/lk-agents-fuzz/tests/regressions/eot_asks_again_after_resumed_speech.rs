@@ -24,10 +24,19 @@ fn the_pause_after_resumed_speech_asks_again() {
         // A pause mid-sentence: asked, and answered "likely".
         silence.clone(),
         Input::Advance { ms: Millis(10) },
-        Input::EotAnswer { prediction: Ref::new(0), probability: Confidence(90), backchannel: None },
+        Input::EotAnswer {
+            prediction: Ref::new(0),
+            probability: Confidence(90),
+            backchannel: None,
+        },
         Input::Advance { ms: Millis(10) },
         // The user goes on.
-        Input::VadInference { vad, probability: Confidence(90), speaking: true, duration: Millis(32) },
+        Input::VadInference {
+            vad,
+            probability: Confidence(90),
+            speaking: true,
+            duration: Millis(32),
+        },
         Input::Advance { ms: Millis(800) },
         // The real end: asked again, answered "unlikely".
         silence,

@@ -960,7 +960,6 @@ impl Server {
         let item = Some(item.to_owned());
         self.pending.insert((t, self.seq), Pending { resp, body, reason: None, item });
     }
-
 }
 
 fn later(t: Ts, ms: u64) -> Ts {

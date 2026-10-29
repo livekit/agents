@@ -256,5 +256,4 @@ mod tests {
         assert_eq!(LanguageCode::new("cmn-Hans-CN").language_name(), Some("chinese"));
         assert_eq!(LanguageCode::new("multi").language_name(), None);
     }
-
 }

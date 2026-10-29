@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::EotInferenceMetrics;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::turn::eot::PredictionEvent;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::tokenize::language::{ThresholdError, ThresholdOptions};
+use lk_agents_abi::turn::eot::PredictionEvent;
 use tokio::sync::mpsc;
 
 use crate::eot::{EotTransport, EotWarning, PredictionSink, TransportPrediction};

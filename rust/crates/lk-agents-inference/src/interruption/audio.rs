@@ -8,7 +8,9 @@ pub use lk_agents_abi::AudioFrame;
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AudioError {
     /// The caller is on the wrong side of the 16 kHz gate.
-    #[error("frame is {frame}Hz, the window is {window}Hz: the interruption leg is fed converted audio")]
+    #[error(
+        "frame is {frame}Hz, the window is {window}Hz: the interruption leg is fed converted audio"
+    )]
     UnexpectedFormat { frame: u32, window: u32 },
     /// `ValueError: frame samples (...) are greater than the buffer size (...)`.
     #[error("frame samples ({samples}) are greater than the buffer size ({buffer_size})")]

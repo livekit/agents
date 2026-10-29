@@ -5,8 +5,10 @@ use lk_agents_fuzz::record::Recording;
 use lk_agents_voice::trace::{InterruptCause, InterruptStep, Step};
 
 fn realtime(inputs: &[Input]) -> Recording {
-    let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
+    let setup = Setup {
+        realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+        ..Setup::default()
+    };
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
         for input in inputs {

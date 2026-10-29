@@ -1,10 +1,10 @@
 //! In-memory threads use the ordinary SQLite thread engine without file persistence.
 
 use livekit_protocol::agent::agent_thread::CreateRequest;
+use lk_agents_storage::StorageError;
 use lk_agents_storage::engine::LeaseTiming;
 use lk_agents_storage::sqlite::SqliteStorage;
 use lk_agents_storage::{CommitOptions, RunOptions, Storage};
-use lk_agents_storage::StorageError;
 use serde_json::json;
 
 #[tokio::test]
@@ -26,10 +26,7 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
     reopened.close().await;
 
     let other = SqliteStorage::in_memory(LeaseTiming::default()).await.unwrap();
-    assert!(matches!(
-        other.get_thread(&info.thread_id).await,
-        Err(StorageError::NotFound(_))
-    ));
+    assert!(matches!(other.get_thread(&info.thread_id).await, Err(StorageError::NotFound(_))));
     let streams = storage.response_streams();
     let stream = streams.create(None).await.unwrap();
     streams.append(&stream.stream_id, b"hello").await.unwrap();
@@ -39,10 +36,7 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
     assert_eq!(reader.next().await.unwrap(), None);
 
     storage.delete_thread(&info.thread_id).await.unwrap();
-    assert!(matches!(
-        storage.open(&info.thread_id, "late").await,
-        Err(StorageError::NotFound(_))
-    ));
+    assert!(matches!(storage.open(&info.thread_id, "late").await, Err(StorageError::NotFound(_))));
     storage.close().await;
     other.close().await;
 }

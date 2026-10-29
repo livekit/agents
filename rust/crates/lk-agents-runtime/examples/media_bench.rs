@@ -260,7 +260,9 @@ mod bench {
                             Ok::<_, String>(samples)
                         }));
                     }
-                    Err(lk_agents_inference::codecs::DecoderError::WorkerAdmission(_)) => refused += 1,
+                    Err(lk_agents_inference::codecs::DecoderError::WorkerAdmission(_)) => {
+                        refused += 1
+                    }
                     Err(error) => return Err(error.to_string().into()),
                 }
                 open_cpu.push((thread_cpu() - open_cpu_start) * 1000.);

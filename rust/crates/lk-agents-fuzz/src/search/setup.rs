@@ -4,8 +4,8 @@ use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
     drive::{
-        AmdAnswer, AmdSetup, ConnSetup, KeytermDetectionSetup, NodeSetup, PreConnect, RealtimeSetup,
-        RoomLegs, RoomSetup, Setup, TtsAlignment,
+        AmdAnswer, AmdSetup, ConnSetup, KeytermDetectionSetup, NodeSetup, PreConnect,
+        RealtimeSetup, RoomLegs, RoomSetup, Setup, TtsAlignment,
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
@@ -40,10 +40,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         instructions: AGENT_TURNS[rng.usize(0..AGENT_TURNS.len())].to_owned(),
         max_unrecoverable_errors: rng.u32(0..4),
         hook_bound_ms: rng.bool().then(|| ms(rng)),
-        realtime: rng.bool().then(|| RealtimeSetup {
-            turn_detection: rng.bool(),
-            ..RealtimeSetup::default()
-        }),
+        realtime: rng
+            .bool()
+            .then(|| RealtimeSetup { turn_detection: rng.bool(), ..RealtimeSetup::default() }),
         // Three ways: no navigator, one the host started, one navigating from the start.
         ivr: match rng.usize(0..3) {
             0 => None,

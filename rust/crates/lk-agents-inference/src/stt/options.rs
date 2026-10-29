@@ -220,7 +220,11 @@ mod tests {
             ("diarize", json!(1), true),
             ("diarization", json!("speaker"), true),
         ] {
-            assert_eq!(diarization_enabled(Some(&map(&[(key, value.clone())]))), want, "{key}={value}");
+            assert_eq!(
+                diarization_enabled(Some(&map(&[(key, value.clone())]))),
+                want,
+                "{key}={value}"
+            );
         }
         assert!(!diarization_enabled(None));
         assert!(!diarization_enabled(Some(&Map::new())));
@@ -350,7 +354,10 @@ mod tests {
         assert_eq!(resolve_vad_for_model(Some("deepgram/nova-3"), false), VadResolution::None);
         assert_eq!(resolve_vad_for_model(None, false), VadResolution::None);
         // linden-1 detects turns server-side.
-        assert_eq!(resolve_vad_for_model(Some("speechmatics/linden-1"), false), VadResolution::None);
+        assert_eq!(
+            resolve_vad_for_model(Some("speechmatics/linden-1"), false),
+            VadResolution::None
+        );
         assert_eq!(
             resolve_vad_for_model(Some("speechmatics/linden-1"), true),
             VadResolution::DropAndWarn

@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 
+use lk_agents_abi::ChatItem;
 use lk_agents_abi::agent::assertions::{EventExpectation, ObservedEvent, RunEvents as _};
 use lk_agents_abi::llm::chat_context::{ChatContent, Role};
-use lk_agents_abi::ChatItem;
 use serde_json::json;
 
 use super::RunEvents;
@@ -13,7 +13,16 @@ fn event(item: ChatItem) -> ObservedEvent {
 
 fn message(role: Role, text: &str) -> ObservedEvent {
     let content = vec![ChatContent::Text(text.into())];
-    event(ChatItem::message("m".into(), role, content, SystemTime::UNIX_EPOCH, false, None, None, None))
+    event(ChatItem::message(
+        "m".into(),
+        role,
+        content,
+        SystemTime::UNIX_EPOCH,
+        false,
+        None,
+        None,
+        None,
+    ))
 }
 
 fn call(name: &str, arguments: &str) -> ObservedEvent {
@@ -23,7 +32,15 @@ fn call(name: &str, arguments: &str) -> ObservedEvent {
 
 fn output(text: &str, is_error: bool) -> ObservedEvent {
     let time = SystemTime::UNIX_EPOCH;
-    event(ChatItem::function_call_output("o".into(), "c1".into(), text.into(), is_error, time, None, true))
+    event(ChatItem::function_call_output(
+        "o".into(),
+        "c1".into(),
+        text.into(),
+        is_error,
+        time,
+        None,
+        true,
+    ))
 }
 
 fn expect_call(name: &str, arguments: serde_json::Value) -> EventExpectation {
@@ -55,9 +72,13 @@ fn the_documented_sequence_walks_every_event_and_checks_supplied_arguments_only(
 #[test]
 fn a_mismatch_names_the_key_and_marks_the_event_in_its_context() {
     let events = booking();
-    let failure = events.at(1, Some(expect_call("check_availability", json!({"room_type": "queen"}))));
+    let failure =
+        events.at(1, Some(expect_call("check_availability", json!({"room_type": "queen"}))));
     let message = failure.unwrap_err().0;
-    assert!(message.starts_with(r#"For key 'room_type', expected "queen", got "king""#), "{message}");
+    assert!(
+        message.starts_with(r#"For key 'room_type', expected "queen", got "king""#),
+        "{message}"
+    );
     assert!(message.contains(">>> [1] FunctionCallEvent(name='check_availability'"), "{message}");
     assert!(message.contains("    [0] ChatMessageEvent(role='user'"), "{message}");
 }
@@ -66,7 +87,10 @@ fn a_mismatch_names_the_key_and_marks_the_event_in_its_context() {
 fn malformed_stored_arguments_fail_the_assertion_instead_of_raising_a_json_error() {
     let events = RunEvents::new(vec![call("lookup", "{not json")]);
     let message = events.at(0, Some(expect_call("lookup", json!({"id": 1})))).unwrap_err().0;
-    assert!(message.starts_with("The call's arguments are not a JSON object: '{not json'"), "{message}");
+    assert!(
+        message.starts_with("The call's arguments are not a JSON object: '{not json'"),
+        "{message}"
+    );
     assert!(message.contains(">>> [0] FunctionCallEvent"), "{message}");
 }
 
@@ -75,7 +99,9 @@ fn ranges_skips_and_the_end_of_events_report_their_own_failures() {
     let mut events = booking();
     let failed = EventExpectation::FunctionCallOutput { output: None, is_error: Some(true) };
     let message = events.contains(0, 4, failed).unwrap_err().0;
-    assert!(message.starts_with("No FunctionCallOutputEvent satisfying criteria found in range [0:4]"));
+    assert!(
+        message.starts_with("No FunctionCallOutputEvent satisfying criteria found in range [0:4]")
+    );
     assert_eq!(events.contains(2, 99, EventExpectation::Message { role: None }).unwrap(), 3);
 
     // A non-matching conditional skip leaves the position; a matching one advances it.

@@ -185,7 +185,10 @@ impl ApiError {
 
     /// An `APITimeoutError` for the wait `phase` bounded.
     pub fn timed_out(phase: TimeoutPhase) -> Self {
-        Self { phase: Some(phase), ..Self::timeout(Some(format!("Request timed out ({} timeout).", phase.as_str()))) }
+        Self {
+            phase: Some(phase),
+            ..Self::timeout(Some(format!("Request timed out ({} timeout).", phase.as_str())))
+        }
     }
 
     pub fn with_retryable(mut self, retryable: bool) -> Self {

@@ -59,7 +59,6 @@ mod tests {
         assert_eq!(ApiErrorKind::from_matches(TaxonomyMatches::default(), Some(429)), None);
     }
 
-
     // Catches: retrying outside the taxonomy, assuming retryable when unset, or never retrying
     // when the classes cannot be resolved.
     #[test]

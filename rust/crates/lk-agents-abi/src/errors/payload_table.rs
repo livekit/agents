@@ -73,7 +73,7 @@ impl<T: Send + 'static> PayloadTable<T> {
         &self.registry
     }
 
-/// One entry per call.
+    /// One entry per call.
     pub fn insert(&self, payload: T) -> u64 {
         self.drain_if_pending();
         let id = self.store.next_id.fetch_add(1, Ordering::Relaxed);

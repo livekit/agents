@@ -15,8 +15,8 @@ use std::sync::Arc;
 pub use inventory;
 
 use crate::eot::LocalEotModel;
-use crate::vad::VadModelFactory;
 use crate::vad::VadModel;
+use crate::vad::VadModelFactory;
 
 /// One native provider of the local models.
 pub struct LocalModels {

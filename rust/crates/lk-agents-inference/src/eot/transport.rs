@@ -4,15 +4,15 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::tokenize::language::ThresholdError;
 use lk_agents_abi::EotInferenceMetrics;
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::Metadata;
+use lk_agents_abi::tokenize::language::ThresholdError;
 
 use lk_agents_abi::AudioFrame;
 
-use crate::eot::{EotRequestId, EotWarning};
 use crate::eot::session::TransportPrediction;
+use crate::eot::{EotRequestId, EotWarning};
 
 /// Every method is `&self` and synchronous: they are called from the receive path.
 pub trait PredictionSink: Send + Sync {

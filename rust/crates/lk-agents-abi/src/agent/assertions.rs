@@ -19,11 +19,21 @@ pub struct ObservedEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventExpectation {
     /// `role` is the `ChatRole` literal.
-    Message { role: Option<String> },
+    Message {
+        role: Option<String>,
+    },
     /// `arguments` holds the keys the call must carry with equal values; others may be present.
-    FunctionCall { name: Option<String>, arguments: Option<Value> },
-    FunctionCallOutput { output: Option<String>, is_error: Option<bool> },
-    AgentHandoff { new_agent_type: Option<String> },
+    FunctionCall {
+        name: Option<String>,
+        arguments: Option<Value>,
+    },
+    FunctionCallOutput {
+        output: Option<String>,
+        is_error: Option<bool>,
+    },
+    AgentHandoff {
+        new_agent_type: Option<String>,
+    },
 }
 
 /// A failed expectation: what was expected and the events around it.
@@ -41,11 +51,13 @@ pub trait RunEvents: Send + Sized + 'static {
 
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[host(call)]
-    fn at(&self, index: i64, expected: Option<EventExpectation>) -> Result<usize, AssertionFailure>;
+    fn at(&self, index: i64, expected: Option<EventExpectation>)
+    -> Result<usize, AssertionFailure>;
 
     /// Advances to the next event of `expected`'s kind, or the next event when `None`.
     #[host(call)]
-    fn next_event(&mut self, expected: Option<EventExpectation>) -> Result<usize, AssertionFailure>;
+    fn next_event(&mut self, expected: Option<EventExpectation>)
+    -> Result<usize, AssertionFailure>;
 
     /// Advances past the next event only if it meets `expected`.
     #[host(call)]

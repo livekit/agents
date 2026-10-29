@@ -4,9 +4,9 @@
 use std::time::Duration;
 
 use super::*;
-use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use AvatarSessionEffect as Fx;
 use AvatarSessionEvent as Ev;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 
 const AVATAR: ResourceId = ResourceId(3);
 
@@ -39,7 +39,12 @@ fn create(request: u64, attempt: u32) -> Fx {
 }
 
 fn terminate(request: u64, s: &ProviderSession) -> Fx {
-    Fx::AvatarSessionTerminate { request: AvatarRequestId(request), attempt: 0, avatar: AVATAR, session: s.clone() }
+    Fx::AvatarSessionTerminate {
+        request: AvatarRequestId(request),
+        attempt: 0,
+        avatar: AVATAR,
+        session: s.clone(),
+    }
 }
 
 fn created(request: u64, attempt: u32, s: &ProviderSession) -> Ev {
@@ -63,7 +68,11 @@ fn reset() -> AttemptFailure {
 /// A lifecycle whose first create (request 1, attempt 0) is in flight.
 fn creating() -> AvatarSessionLifecycle {
     let mut avatar = AvatarSessionLifecycle::new(AVATAR, policy());
-    assert_eq!(avatar.handle(Ev::Create, at(0)), vec![create(1, 0)], "reserved and launched at once");
+    assert_eq!(
+        avatar.handle(Ev::Create, at(0)),
+        vec![create(1, 0)],
+        "reserved and launched at once"
+    );
     avatar
 }
 
@@ -79,16 +88,24 @@ fn a_second_caller_is_refused_and_the_first_creation_is_untouched() {
     assert_eq!(avatar.handle(Ev::Adopted, at(3)), vec![]);
     assert_eq!(avatar.handle(closed(1, 0), at(4)), vec![]);
     assert!(avatar.is_settled());
-    assert_eq!(avatar.handle(Ev::Create, at(5)), vec![Fx::CreateRefused], "one instance is one avatar");
+    assert_eq!(
+        avatar.handle(Ev::Create, at(5)),
+        vec![Fx::CreateRefused],
+        "one instance is one avatar"
+    );
 }
 
 // Catches: a failed creation keeping its reservation, so the instance can never start.
 #[test]
 fn a_failed_creation_releases_its_reservation() {
     let mut avatar = creating();
-    let rejected = AttemptFailure::Rejected { status: 400, message: "bad image".into(), request_id: None };
-    let effects = avatar.handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: rejected }, at(1));
-    assert!(matches!(effects.as_slice(), [Fx::CreateFinished(Err(CreateFailure::Api(e)))] if e.status_code == Some(400)));
+    let rejected =
+        AttemptFailure::Rejected { status: 400, message: "bad image".into(), request_id: None };
+    let effects = avatar
+        .handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: rejected }, at(1));
+    assert!(
+        matches!(effects.as_slice(), [Fx::CreateFinished(Err(CreateFailure::Api(e)))] if e.status_code == Some(400))
+    );
     assert_eq!(avatar.handle(Ev::Create, at(2)), vec![create(2, 0)]);
 }
 
@@ -97,16 +114,27 @@ fn a_failed_creation_releases_its_reservation() {
 #[test]
 fn retries_keep_the_operation_and_any_attempts_answer_settles_it() {
     let mut avatar = creating();
-    let effects = avatar.handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: reset() }, at(0));
-    assert!(matches!(effects.as_slice(), [Fx::AttemptFailed { request: AvatarRequestId(1), attempt: 0, .. }]));
-    assert_eq!(avatar.handle(Ev::Wake, at(100)), vec![create(1, 1)], "same operation, next attempt");
+    let effects = avatar
+        .handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: reset() }, at(0));
+    assert!(matches!(
+        effects.as_slice(),
+        [Fx::AttemptFailed { request: AvatarRequestId(1), attempt: 0, .. }]
+    ));
+    assert_eq!(
+        avatar.handle(Ev::Wake, at(100)),
+        vec![create(1, 1)],
+        "same operation, next attempt"
+    );
     // Attempt 0's answer was already queued when it failed: the gateway replays one result per
     // operation, so it is the operation's answer and attempt 1 is stopped.
     let s = session("a");
     let effects = avatar.handle(created(1, 0, &s), at(101));
     assert_eq!(
         effects,
-        vec![Fx::AvatarRequestCancel { request: AvatarRequestId(1), attempt: 1 }, Fx::CreateFinished(Ok(s.clone()))]
+        vec![
+            Fx::AvatarRequestCancel { request: AvatarRequestId(1), attempt: 1 },
+            Fx::CreateFinished(Ok(s.clone()))
+        ]
     );
     avatar.handle(Ev::Adopted, at(102));
     assert_eq!(avatar.handle(created(1, 1, &s), at(103)), vec![], "the replay is the held session");
@@ -131,7 +159,11 @@ fn a_late_success_after_the_caller_left_is_retired() {
     avatar.handle(closed(1, 0), at(951));
     avatar.handle(closed(2, 0), at(952));
     assert!(avatar.is_settled());
-    assert_eq!(avatar.handle(Ev::Create, at(953)), vec![create(3, 0)], "nothing was adopted: it may start again");
+    assert_eq!(
+        avatar.handle(Ev::Create, at(953)),
+        vec![create(3, 0)],
+        "nothing was adopted: it may start again"
+    );
 }
 
 // Catches: a caller cancelled during backoff still getting a retry launched.
@@ -152,7 +184,10 @@ fn a_refused_delivery_keeps_cleanup_with_the_sender() {
     let s = session("a");
     avatar.handle(created(1, 0, &s), at(1));
     let effects = avatar.handle(Ev::DeliveryRefused, at(2));
-    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Refused }, terminate(2, &s)]);
+    assert_eq!(
+        effects,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Refused }, terminate(2, &s)]
+    );
 }
 
 // Catches: close during creation leaving the caller waiting, or the session created after it
@@ -161,11 +196,17 @@ fn a_refused_delivery_keeps_cleanup_with_the_sender() {
 fn close_during_creation_settles_the_caller_and_retires_the_result() {
     let mut avatar = creating();
     written(&mut avatar, 1, 0, 0);
-    assert_eq!(avatar.handle(Ev::Close, at(1)), vec![Fx::CreateFinished(Err(CreateFailure::Closed))]);
+    assert_eq!(
+        avatar.handle(Ev::Close, at(1)),
+        vec![Fx::CreateFinished(Err(CreateFailure::Closed))]
+    );
     assert!(!avatar.is_settled(), "the running attempt still owes its answer");
     let s = session("a");
     let effects = avatar.handle(created(1, 0, &s), at(2));
-    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]);
+    assert_eq!(
+        effects,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]
+    );
     assert_eq!(avatar.handle(Ev::Create, at(3)), vec![Fx::CreateRefused]);
 }
 
@@ -182,13 +223,19 @@ fn a_missed_cleanup_deadline_is_reported_once() {
     );
     let due = at(0).saturating_add(HOST_TEARDOWN_TIMEOUT);
     assert_eq!(avatar.wake_at(), Some(due));
-    assert_eq!(avatar.handle(Ev::Wake, due), vec![Fx::CleanupIncomplete { request: AvatarRequestId(1), attempt: 0 }]);
+    assert_eq!(
+        avatar.handle(Ev::Wake, due),
+        vec![Fx::CleanupIncomplete { request: AvatarRequestId(1), attempt: 0 }]
+    );
     assert!(avatar.is_settled());
     assert_eq!(avatar.wake_at(), None);
     // A session the stopped attempt reports anyway is still terminated.
     let s = session("very-late");
     let effects = avatar.handle(created(1, 0, &s), at(9_000));
-    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]);
+    assert_eq!(
+        effects,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]
+    );
 }
 
 // Catches: a failed terminate forgetting the session (it bills on), or a repeat close not
@@ -202,12 +249,16 @@ fn close_terminates_the_held_session_and_a_failure_keeps_it_held() {
     avatar.handle(closed(1, 0), at(1));
     assert_eq!(avatar.handle(Ev::Close, at(2)), vec![terminate(2, &s)]);
     let rejected = AttemptFailure::Rejected { status: 403, message: "no".into(), request_id: None };
-    let effects = avatar.handle(Ev::Failed { request: AvatarRequestId(2), attempt: 0, failure: rejected }, at(3));
+    let effects = avatar
+        .handle(Ev::Failed { request: AvatarRequestId(2), attempt: 0, failure: rejected }, at(3));
     assert!(matches!(effects.as_slice(), [Fx::TerminateFailed { session, .. }] if *session == s));
     avatar.handle(closed(2, 0), at(4));
     assert!(avatar.is_settled());
     assert_eq!(avatar.handle(Ev::Close, at(5)), vec![terminate(3, &s)]);
-    assert_eq!(avatar.handle(Ev::Terminated { request: AvatarRequestId(3), attempt: 0 }, at(6)), vec![Fx::SessionTerminated(s)]);
+    assert_eq!(
+        avatar.handle(Ev::Terminated { request: AvatarRequestId(3), attempt: 0 }, at(6)),
+        vec![Fx::SessionTerminated(s)]
+    );
 }
 
 // Catches: a terminate request sent without the identity it needs, or an unterminable session
@@ -227,35 +278,61 @@ fn a_session_without_terminate_identity_is_released_with_a_report() {
 // gateway still makes the session and nobody ends it (DST avatar_sessions_are_never_leaked, seed 0).
 #[test]
 fn a_received_create_cut_by_its_timeout_after_close_is_asked_again_and_retired() {
-    let read = RequestPolicy { read_timeout: Some(Duration::from_secs(2)), max_retry: 0, ..policy() };
+    let read =
+        RequestPolicy { read_timeout: Some(Duration::from_secs(2)), max_retry: 0, ..policy() };
     let mut avatar = AvatarSessionLifecycle::new(AVATAR, read);
     avatar.handle(Ev::Create, at(0));
     written(&mut avatar, 1, 0, 10);
-    assert_eq!(avatar.handle(Ev::Close, at(20)), vec![Fx::CreateFinished(Err(CreateFailure::Closed))]);
+    assert_eq!(
+        avatar.handle(Ev::Close, at(20)),
+        vec![Fx::CreateFinished(Err(CreateFailure::Closed))]
+    );
     let effects = avatar.handle(Ev::Wake, avatar.wake_at().unwrap());
     assert!(
-        matches!(effects.as_slice(), [Fx::AvatarRequestCancel { attempt: 0, .. }, Fx::AttemptFailed { attempt: 0, .. }]),
+        matches!(
+            effects.as_slice(),
+            [Fx::AvatarRequestCancel { attempt: 0, .. }, Fx::AttemptFailed { attempt: 0, .. }]
+        ),
         "the timed-out attempt is stopped and the operation retried: {effects:?}"
     );
-    assert_eq!(avatar.handle(Ev::Wake, avatar.wake_at().unwrap()), vec![create(1, 1)], "same operation identity");
+    assert_eq!(
+        avatar.handle(Ev::Wake, avatar.wake_at().unwrap()),
+        vec![create(1, 1)],
+        "same operation identity"
+    );
     let s = session("a");
     let effects = avatar.handle(created(1, 1, &s), at(3_000));
-    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]);
+    assert_eq!(
+        effects,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]
+    );
 }
 
 // Catches: a create whose last attempt lost its answer after the gateway received it failing its
 // caller and forgetting the operation, so the session the gateway made bills on.
 #[test]
 fn a_create_failed_after_it_was_received_is_retired_once_its_caller_has_the_error() {
-    let mut avatar = AvatarSessionLifecycle::new(AVATAR, RequestPolicy { max_retry: 0, ..policy() });
+    let mut avatar =
+        AvatarSessionLifecycle::new(AVATAR, RequestPolicy { max_retry: 0, ..policy() });
     avatar.handle(Ev::Create, at(0));
     written(&mut avatar, 1, 0, 10);
-    let effects = avatar.handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: reset() }, at(500));
-    assert!(matches!(effects.as_slice(), [Fx::CreateFinished(Err(CreateFailure::Api(_)))]), "{effects:?}");
-    assert_eq!(avatar.handle(Ev::Wake, avatar.wake_at().unwrap()), vec![create(1, 1)], "asked again under its identity");
+    let effects = avatar
+        .handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: reset() }, at(500));
+    assert!(
+        matches!(effects.as_slice(), [Fx::CreateFinished(Err(CreateFailure::Api(_)))]),
+        "{effects:?}"
+    );
+    assert_eq!(
+        avatar.handle(Ev::Wake, avatar.wake_at().unwrap()),
+        vec![create(1, 1)],
+        "asked again under its identity"
+    );
     let s = session("a");
     let effects = avatar.handle(created(1, 1, &s), at(2_000));
-    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]);
+    assert_eq!(
+        effects,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]
+    );
 }
 
 // Catches: a retirement that cannot learn the operation's outcome waited on forever, or ended
@@ -275,11 +352,15 @@ fn a_retirement_unanswered_by_its_deadline_is_reported_once() {
             effects.push(effect);
         }
     }
-    let reports: Vec<_> = effects.iter().filter(|e| matches!(e, Fx::RetirementIncomplete { .. })).collect();
+    let reports: Vec<_> =
+        effects.iter().filter(|e| matches!(e, Fx::RetirementIncomplete { .. })).collect();
     assert_eq!(reports, vec![&Fx::RetirementIncomplete { request: AvatarRequestId(1) }]);
     let s = session("very-late");
     let effects = avatar.handle(created(1, 0, &s), deadline.saturating_add(Duration::from_secs(1)));
-    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]);
+    assert_eq!(
+        effects,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]
+    );
 }
 
 // Catches: a retirement replay that the gateway leaves silent waited on until the retirement
@@ -321,6 +402,10 @@ fn a_silent_retirement_replay_without_caller_limits_is_asked_again_within_the_wi
     }
     assert_eq!(replays.len(), 2, "a silent replay is abandoned and asked again: {replays:?}");
     let s = session("a");
-    let answered = avatar.handle(created(1, replays[1], &s), avatar.wake_at().unwrap().min(deadline));
-    assert_eq!(answered, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]);
+    let answered =
+        avatar.handle(created(1, replays[1], &s), avatar.wake_at().unwrap().min(deadline));
+    assert_eq!(
+        answered,
+        vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]
+    );
 }

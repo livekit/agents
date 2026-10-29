@@ -19,10 +19,19 @@ fn a_prediction_is_judged_by_the_detectors_threshold() {
         Input::VadStart { vad, speech_ms: Millis(300) },
         Input::Advance { ms: Millis(1_500) },
         // 224 ms of silence: the detector is asked, its request registered a step later.
-        Input::VadInference { vad, probability: Confidence(5), speaking: false, duration: Millis(224) },
+        Input::VadInference {
+            vad,
+            probability: Confidence(5),
+            speaking: false,
+            duration: Millis(224),
+        },
         Input::Advance { ms: Millis(10) },
         // Under the detector's 0.5, over the stock table's 0.36.
-        Input::EotAnswer { prediction: Ref::new(0), probability: Confidence(45), backchannel: None },
+        Input::EotAnswer {
+            prediction: Ref::new(0),
+            probability: Confidence(45),
+            backchannel: None,
+        },
         Input::VadEnd { vad, silence_ms: Millis(250) },
         Input::SttStart { stt: Ref::new(0) },
         Input::SttFinal {
@@ -49,6 +58,7 @@ fn a_prediction_is_judged_by_the_detectors_threshold() {
         .collect();
     assert_eq!(thresholds, [EOT_THRESHOLD], "judged once, by the detector's threshold");
     // 0.45 < 0.5: the countdown runs `max_delay`, so no turn ends within the second after.
-    let ended = journal.iter().any(|(_, step)| matches!(step, Step::Turn(TurnStep::EndOfTurn { .. })));
+    let ended =
+        journal.iter().any(|(_, step)| matches!(step, Step::Turn(TurnStep::EndOfTurn { .. })));
     assert!(!ended, "an unlikely end of turn waited min_delay, as the stock table would have it");
 }

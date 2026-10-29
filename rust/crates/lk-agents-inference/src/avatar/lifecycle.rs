@@ -77,13 +77,33 @@ pub enum AvatarSessionEvent {
     Adopted,
     /// The delivered session found no caller to receive it.
     DeliveryRefused,
-    Connected { request: AvatarRequestId, attempt: u32 },
-    RequestWritten { request: AvatarRequestId, attempt: u32 },
-    Created { request: AvatarRequestId, attempt: u32, session: ProviderSession },
-    Terminated { request: AvatarRequestId, attempt: u32 },
-    Failed { request: AvatarRequestId, attempt: u32, failure: AttemptFailure },
+    Connected {
+        request: AvatarRequestId,
+        attempt: u32,
+    },
+    RequestWritten {
+        request: AvatarRequestId,
+        attempt: u32,
+    },
+    Created {
+        request: AvatarRequestId,
+        attempt: u32,
+        session: ProviderSession,
+    },
+    Terminated {
+        request: AvatarRequestId,
+        attempt: u32,
+    },
+    Failed {
+        request: AvatarRequestId,
+        attempt: u32,
+        failure: AttemptFailure,
+    },
     /// The attempt's transport resources are released.
-    AttemptClosed { request: AvatarRequestId, attempt: u32 },
+    AttemptClosed {
+        request: AvatarRequestId,
+        attempt: u32,
+    },
 }
 
 /// Why a create caller got no session.
@@ -113,25 +133,52 @@ pub enum AvatarSessionEffect {
     /// The caller is refused: a creation is in flight, a session was adopted or the instance
     /// is closed.
     CreateRefused,
-    AvatarSessionCreate { request: AvatarRequestId, attempt: u32, avatar: ResourceId },
-    AvatarSessionTerminate { request: AvatarRequestId, attempt: u32, avatar: ResourceId, session: ProviderSession },
-    AvatarRequestCancel { request: AvatarRequestId, attempt: u32 },
+    AvatarSessionCreate {
+        request: AvatarRequestId,
+        attempt: u32,
+        avatar: ResourceId,
+    },
+    AvatarSessionTerminate {
+        request: AvatarRequestId,
+        attempt: u32,
+        avatar: ResourceId,
+        session: ProviderSession,
+    },
+    AvatarRequestCancel {
+        request: AvatarRequestId,
+        attempt: u32,
+    },
     /// A failed attempt that will be retried.
-    AttemptFailed { request: AvatarRequestId, attempt: u32, error: ApiError },
+    AttemptFailed {
+        request: AvatarRequestId,
+        attempt: u32,
+        error: ApiError,
+    },
     /// The create caller's single outcome. A caller that stopped waiting has none.
     CreateFinished(Result<ProviderSession, CreateFailure>),
-    Retiring { session: ProviderSession, reason: Retirement },
+    Retiring {
+        session: ProviderSession,
+        reason: Retirement,
+    },
     /// A session that cannot be terminated (no provider id or token) is released to its idle
     /// timeout.
     Unterminable(ProviderSession),
     SessionTerminated(ProviderSession),
     /// The instance still holds `session`; the next close retries.
-    TerminateFailed { session: ProviderSession, error: ApiError },
+    TerminateFailed {
+        session: ProviderSession,
+        error: ApiError,
+    },
     /// An attempt missed its cleanup deadline; the runtime still owns it (decision 14).
-    CleanupIncomplete { request: AvatarRequestId, attempt: u32 },
+    CleanupIncomplete {
+        request: AvatarRequestId,
+        attempt: u32,
+    },
     /// A retiring create was still unanswered at its deadline: a session it may have made bills
     /// until the provider's idle timeout; a later answer is still terminated (decision 14).
-    RetirementIncomplete { request: AvatarRequestId },
+    RetirementIncomplete {
+        request: AvatarRequestId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +257,9 @@ impl AvatarSessionLifecycle {
             AvatarSessionEvent::Wake => {
                 let ids: Vec<AvatarRequestId> = self.requests.keys().copied().collect();
                 for id in ids {
-                    self.step(id, now, &mut effects, |attempts, steps| attempts.wake(now, EXPECTING, steps));
+                    self.step(id, now, &mut effects, |attempts, steps| {
+                        attempts.wake(now, EXPECTING, steps)
+                    });
                 }
             }
             AvatarSessionEvent::Create => self.create(now, &mut effects),
@@ -262,10 +311,14 @@ impl AvatarSessionLifecycle {
                 self.forget_settled(request);
             }
             AvatarSessionEvent::Failed { request, attempt, failure } => {
-                self.step(request, now, &mut effects, |attempts, steps| attempts.failed(attempt, failure, now, steps));
+                self.step(request, now, &mut effects, |attempts, steps| {
+                    attempts.failed(attempt, failure, now, steps)
+                });
             }
             AvatarSessionEvent::AttemptClosed { request, attempt } => {
-                self.step(request, now, &mut effects, |attempts, steps| attempts.closed(attempt, now, steps));
+                self.step(request, now, &mut effects, |attempts, steps| {
+                    attempts.closed(attempt, now, steps)
+                });
             }
         }
         effects
@@ -297,7 +350,12 @@ impl AvatarSessionLifecycle {
 
     /// `request` keeps asking under its identity until the gateway answers it, or stops now when
     /// the gateway cannot have received it.
-    fn retire(&mut self, request: AvatarRequestId, now: Ts, effects: &mut Vec<AvatarSessionEffect>) {
+    fn retire(
+        &mut self,
+        request: AvatarRequestId,
+        now: Ts,
+        effects: &mut Vec<AvatarSessionEffect>,
+    ) {
         let Some(r) = self.requests.get_mut(&request) else { return };
         let mut steps = Vec::new();
         r.attempts.retire(now, now.saturating_add(RETIREMENT_TIMEOUT), &mut steps);
@@ -334,7 +392,13 @@ impl AvatarSessionLifecycle {
     /// Whether this answer decides `request`. Any attempt of an undecided request answers it: the
     /// operation's identity makes every attempt's answer the same, so a still-running attempt is
     /// stopped.
-    fn answered(&mut self, request: AvatarRequestId, attempt: u32, now: Ts, effects: &mut Vec<AvatarSessionEffect>) -> bool {
+    fn answered(
+        &mut self,
+        request: AvatarRequestId,
+        attempt: u32,
+        now: Ts,
+        effects: &mut Vec<AvatarSessionEffect>,
+    ) -> bool {
         let Some(r) = self.requests.get_mut(&request) else { return false };
         if r.attempts.is_decided() {
             return false;
@@ -349,7 +413,11 @@ impl AvatarSessionLifecycle {
 
     /// Whether `session` is already held, delivered or being terminated.
     fn knows(&self, session: &ProviderSession) -> bool {
-        self.delivering.iter().chain(&self.held).chain(self.terminating.values()).any(|s| s.same_as(session))
+        self.delivering
+            .iter()
+            .chain(&self.held)
+            .chain(self.terminating.values())
+            .any(|s| s.same_as(session))
     }
 
     /// Terminates `session`; `reason` journals a session no caller holds.
@@ -395,12 +463,22 @@ impl AvatarSessionLifecycle {
         self.forget_settled(request);
     }
 
-    fn apply(&mut self, request: AvatarRequestId, steps: Vec<AttemptStep>, now: Ts, effects: &mut Vec<AvatarSessionEffect>) {
+    fn apply(
+        &mut self,
+        request: AvatarRequestId,
+        steps: Vec<AttemptStep>,
+        now: Ts,
+        effects: &mut Vec<AvatarSessionEffect>,
+    ) {
         let Some(kind) = self.requests.get(&request).map(|r| r.kind) else { return };
         for step in steps {
             match step {
                 AttemptStep::Launch(attempt) => effects.push(match kind {
-                    Kind::Create => AvatarSessionEffect::AvatarSessionCreate { request, attempt, avatar: self.avatar },
+                    Kind::Create => AvatarSessionEffect::AvatarSessionCreate {
+                        request,
+                        attempt,
+                        avatar: self.avatar,
+                    },
                     Kind::Terminate => AvatarSessionEffect::AvatarSessionTerminate {
                         request,
                         attempt,
@@ -408,20 +486,26 @@ impl AvatarSessionLifecycle {
                         session: self.terminating[&request].clone(),
                     },
                 }),
-                AttemptStep::Stop(attempt) => effects.push(AvatarSessionEffect::AvatarRequestCancel { request, attempt }),
+                AttemptStep::Stop(attempt) => {
+                    effects.push(AvatarSessionEffect::AvatarRequestCancel { request, attempt })
+                }
                 AttemptStep::Retry { attempt, error } => {
                     effects.push(AvatarSessionEffect::AttemptFailed { request, attempt, error });
                 }
                 AttemptStep::CleanupIncomplete(attempt) => {
                     effects.push(AvatarSessionEffect::CleanupIncomplete { request, attempt });
                 }
-                AttemptStep::Unresolved => effects.push(AvatarSessionEffect::RetirementIncomplete { request }),
+                AttemptStep::Unresolved => {
+                    effects.push(AvatarSessionEffect::RetirementIncomplete { request })
+                }
                 AttemptStep::GiveUp(error) => match kind {
                     Kind::Create => {
                         if let Some(creating) = self.creating.take_if(|c| c.request == request)
                             && creating.caller
                         {
-                            effects.push(AvatarSessionEffect::CreateFinished(Err(CreateFailure::Api(error))));
+                            effects.push(AvatarSessionEffect::CreateFinished(Err(
+                                CreateFailure::Api(error),
+                            )));
                         }
                         // The caller has its error; what the gateway may have made is retired.
                         self.retire(request, now, effects);

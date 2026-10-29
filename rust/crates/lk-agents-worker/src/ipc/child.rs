@@ -104,7 +104,8 @@ impl<E: Env> WorkerIpcClient for ChildChannel<E> {
             }))
             .map_err(|error| WorkerError::Failed(format!("failed to initialize: {error}")))?;
         // The host's preloads are ready before readiness.
-        let initialized = initialize.initialize(hello.http_proxy.clone()).map_err(WorkerError::Host);
+        let initialized =
+            initialize.initialize(hello.http_proxy.clone()).map_err(WorkerError::Host);
         let error = initialized.as_ref().err().map(|error| match error {
             WorkerError::Host(error) => error.message.clone(),
             error => error.to_string(),

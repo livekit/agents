@@ -10,11 +10,7 @@ const _: () = ();
 
 // `_BaseModelUsage`. Python-only: a zero-eliding `__repr__`, and the base the gate records.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "_BaseModelUsage",
-    repr = "model_usage_repr"
-)]
+#[python(pydantic, name = "_BaseModelUsage", repr = "model_usage_repr")]
 pub struct BaseModelUsage {}
 
 // `usage.py:27`. LLM and realtime-model usage both fold in here.
@@ -221,10 +217,7 @@ impl ModelUsage {
 
 // `usage.py:129`. A `@dataclass` in the reference, not a pydantic model: it has no `model_dump`.
 #[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
-#[python(
-    dataclass,
-    name = "AgentSessionUsage"
-)]
+#[python(dataclass, name = "AgentSessionUsage")]
 #[serde(default)]
 pub struct AgentSessionUsage {
     pub model_usage: Vec<ModelUsage>,
@@ -240,11 +233,13 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage {
         if obj.is_none() {
             return Ok(AgentSessionUsage::default());
         }
-        let model_usage = obj.try_iter()?.map(|item| item?.extract::<ModelUsage>()).collect::<pyo3::PyResult<_>>()?;
+        let model_usage = obj
+            .try_iter()?
+            .map(|item| item?.extract::<ModelUsage>())
+            .collect::<pyo3::PyResult<_>>()?;
         Ok(AgentSessionUsage { model_usage })
     }
 }
-
 
 #[cfg(test)]
 mod serde_tests {

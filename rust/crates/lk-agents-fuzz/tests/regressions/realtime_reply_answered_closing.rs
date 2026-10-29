@@ -63,7 +63,11 @@ fn a_server_reply_opened_while_closing_frees_the_server() {
         Input::Advance { ms: Millis(100) },
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::SecondGeneration },
         Input::Advance { ms: Millis(100) },
-        Input::CommitUserTurn { transcript_timeout: Millis(5_000), stt_flush: Millis(120), skip_reply: false },
+        Input::CommitUserTurn {
+            transcript_timeout: Millis(5_000),
+            stt_flush: Millis(120),
+            skip_reply: false,
+        },
         Input::Advance { ms: Millis(2_000) },
     ];
     let run = simulate(async {

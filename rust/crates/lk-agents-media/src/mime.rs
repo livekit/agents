@@ -71,7 +71,9 @@ mod tests {
     // frame of every session, and a refusal breaks every plugin at once.
     #[test]
     fn pcm_and_raw_are_passed_through_whatever_their_parameters_or_case() {
-        for mime in ["audio/pcm", "audio/raw", "AUDIO/PCM", " audio/pcm;rate=24000 ", "audio/raw;bits=16"] {
+        for mime in
+            ["audio/pcm", "audio/raw", "AUDIO/PCM", " audio/pcm;rate=24000 ", "audio/raw;bits=16"]
+        {
             assert_eq!(decode_plan(mime), Ok(DecodePlan::Passthrough), "{mime}");
         }
     }
@@ -87,7 +89,10 @@ mod tests {
             "the parameter survives normalisation; the table strips it on lookup"
         );
         let err = decode_plan("audio/x-not-a-real-container").unwrap_err();
-        assert_eq!(err.0, "audio/x-not-a-real-container", "the provider's own spelling is reported");
+        assert_eq!(
+            err.0, "audio/x-not-a-real-container",
+            "the provider's own spelling is reported"
+        );
         assert!(decode_plan("").is_err(), "an empty declaration is not PCM");
     }
 

@@ -3,5 +3,5 @@
 
 pub mod connect;
 pub mod identity;
-pub mod retry;
 pub mod provider;
+pub mod retry;

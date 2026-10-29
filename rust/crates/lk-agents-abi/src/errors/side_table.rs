@@ -79,7 +79,10 @@ macro_rules! side_table_ref {
                 self.0.id()
             }
 
-            pub fn belongs_to(&self, registry: &::std::sync::Arc<dyn $crate::errors::RefRegistry>) -> bool {
+            pub fn belongs_to(
+                &self,
+                registry: &::std::sync::Arc<dyn $crate::errors::RefRegistry>,
+            ) -> bool {
                 self.0.belongs_to(registry)
             }
         }

@@ -203,7 +203,8 @@ fn append_item(
     state.input_items += 1;
     let options = transcript_options();
     let Some(projected) =
-        lk_agents_core::llm::chat_dict::item_to_dict(item, &options, &Default::default()).map_err(upload_error)?
+        lk_agents_core::llm::chat_dict::item_to_dict(item, &options, &Default::default())
+            .map_err(upload_error)?
     else {
         return Ok(());
     };

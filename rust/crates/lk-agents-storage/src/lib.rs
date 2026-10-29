@@ -22,9 +22,9 @@ pub mod schema;
 pub mod sql;
 pub mod sqlite;
 pub mod streams;
-pub mod voice;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod voice;
 
 use std::sync::Arc;
 

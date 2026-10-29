@@ -1,10 +1,10 @@
 use lk_agents_abi::a2a_protocol as a2a;
 use std::time::Duration;
 
+use lk_agents_abi::a2a::metadata::{CHANNEL_KEY, KIND_KEY};
 use lk_agents_core::a2a::{
     DebounceSpec, Message, Policy, PolicySpec, channel_of, resolve_debounce, resolve_policy,
 };
-use lk_agents_abi::a2a::metadata::{CHANNEL_KEY, KIND_KEY};
 use serde_json::json;
 
 #[test]

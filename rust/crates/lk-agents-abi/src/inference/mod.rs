@@ -597,15 +597,11 @@ pub trait InferenceModels {
 
     /// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
     #[host(function)]
-    fn stt_fallback_capabilities(
-        entries: Vec<crate::SttCapabilities>,
-    ) -> crate::SttCapabilities;
+    fn stt_fallback_capabilities(entries: Vec<crate::SttCapabilities>) -> crate::SttCapabilities;
 
     /// `tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
     #[host(function)]
-    fn tts_fallback_capabilities(
-        entries: Vec<crate::TtsCapabilities>,
-    ) -> crate::TtsCapabilities;
+    fn tts_fallback_capabilities(entries: Vec<crate::TtsCapabilities>) -> crate::TtsCapabilities;
 
     /// The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
     /// `ValueError` naming the capability and both values), the rest are ANDed.

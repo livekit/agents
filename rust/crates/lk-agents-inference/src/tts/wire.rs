@@ -91,10 +91,7 @@ pub fn session_create(opts: &TtsOptions) -> Value {
             .collect();
         params.insert("fallback".into(), json!({"models": models}));
     }
-    params.insert(
-        "connection".into(),
-        crate::extra::connection(&opts.conn_options),
-    );
+    params.insert("connection".into(), crate::extra::connection(&opts.conn_options));
     Value::Object(params)
 }
 

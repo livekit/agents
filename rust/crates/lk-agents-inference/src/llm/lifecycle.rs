@@ -28,32 +28,61 @@ pub enum LlmRequestEvent {
     /// The consumer started or stopped waiting for the next chunk.
     DemandStarted,
     DemandEnded,
-    Connected { attempt: u32 },
-    RequestWritten { attempt: u32 },
+    Connected {
+        attempt: u32,
+    },
+    RequestWritten {
+        attempt: u32,
+    },
     /// Response bytes that completed no event.
-    Progress { attempt: u32 },
+    Progress {
+        attempt: u32,
+    },
     /// One decoded completion chunk.
-    Chunk { attempt: u32, chunk: WireChunk },
+    Chunk {
+        attempt: u32,
+        chunk: WireChunk,
+    },
     /// The `[DONE]` sentinel, or the body's clean end.
-    Ended { attempt: u32 },
-    Failed { attempt: u32, failure: AttemptFailure },
+    Ended {
+        attempt: u32,
+    },
+    Failed {
+        attempt: u32,
+        failure: AttemptFailure,
+    },
     /// The attempt's transport resources are released.
-    AttemptClosed { attempt: u32 },
+    AttemptClosed {
+        attempt: u32,
+    },
     /// The consumer gave up on the request.
     Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LlmRequestEffect {
-    LlmRequestStart { request_id: LlmRequestId, attempt: u32, llm: ResourceId },
-    LlmRequestCancel { request_id: LlmRequestId, attempt: u32 },
+    LlmRequestStart {
+        request_id: LlmRequestId,
+        attempt: u32,
+        llm: ResourceId,
+    },
+    LlmRequestCancel {
+        request_id: LlmRequestId,
+        attempt: u32,
+    },
     Deliver(LlmChunk),
     /// A failed attempt that will be retried.
-    AttemptFailed { attempt: u32, error: ApiError },
+    AttemptFailed {
+        attempt: u32,
+        error: ApiError,
+    },
     /// The request's single outcome. Cancellation has none: the consumer asked for it.
     Finished(Result<(), ApiError>),
     /// An attempt missed its cleanup deadline; the runtime still owns it.
-    CleanupIncomplete { request_id: LlmRequestId, attempt: u32 },
+    CleanupIncomplete {
+        request_id: LlmRequestId,
+        attempt: u32,
+    },
 }
 
 /// One attempt's response assembly; a retry starts over.
@@ -90,7 +119,10 @@ impl LlmRequest {
             llm,
             think_tags,
             attempts,
-            assembly: Assembly { choices: ChoiceAccumulator::new(), filter: TagFilter::new(think_tags.0, think_tags.1) },
+            assembly: Assembly {
+                choices: ChoiceAccumulator::new(),
+                filter: TagFilter::new(think_tags.0, think_tags.1),
+            },
             demand: None,
         };
         let mut effects = Vec::new();
@@ -116,7 +148,9 @@ impl LlmRequest {
             LlmRequestEvent::DemandStarted => self.demand = Some(now),
             LlmRequestEvent::DemandEnded => self.demand = None,
             LlmRequestEvent::Cancel => self.attempts.cancel(now, &mut steps),
-            LlmRequestEvent::AttemptClosed { attempt } => self.attempts.closed(attempt, now, &mut steps),
+            LlmRequestEvent::AttemptClosed { attempt } => {
+                self.attempts.closed(attempt, now, &mut steps)
+            }
             LlmRequestEvent::Connected { attempt } => self.attempts.connected(attempt, now),
             LlmRequestEvent::RequestWritten { attempt } => self.attempts.written(attempt, now),
             LlmRequestEvent::Progress { attempt } => self.attempts.progress(attempt, now),
@@ -131,7 +165,9 @@ impl LlmRequest {
                     effects.push(LlmRequestEffect::Finished(Ok(())));
                 }
             }
-            LlmRequestEvent::Failed { attempt, failure } => self.attempts.failed(attempt, failure, now, &mut steps),
+            LlmRequestEvent::Failed { attempt, failure } => {
+                self.attempts.failed(attempt, failure, now, &mut steps)
+            }
         }
         self.apply(steps, &mut effects);
         effects
@@ -143,13 +179,22 @@ impl LlmRequest {
             effects.push(match step {
                 AttemptStep::Launch(attempt) => {
                     let (open, close) = self.think_tags;
-                    self.assembly = Assembly { choices: ChoiceAccumulator::new(), filter: TagFilter::new(open, close) };
+                    self.assembly = Assembly {
+                        choices: ChoiceAccumulator::new(),
+                        filter: TagFilter::new(open, close),
+                    };
                     LlmRequestEffect::LlmRequestStart { request_id, attempt, llm: self.llm }
                 }
-                AttemptStep::Stop(attempt) => LlmRequestEffect::LlmRequestCancel { request_id, attempt },
-                AttemptStep::Retry { attempt, error } => LlmRequestEffect::AttemptFailed { attempt, error },
+                AttemptStep::Stop(attempt) => {
+                    LlmRequestEffect::LlmRequestCancel { request_id, attempt }
+                }
+                AttemptStep::Retry { attempt, error } => {
+                    LlmRequestEffect::AttemptFailed { attempt, error }
+                }
                 AttemptStep::GiveUp(error) => LlmRequestEffect::Finished(Err(error)),
-                AttemptStep::CleanupIncomplete(attempt) => LlmRequestEffect::CleanupIncomplete { request_id, attempt },
+                AttemptStep::CleanupIncomplete(attempt) => {
+                    LlmRequestEffect::CleanupIncomplete { request_id, attempt }
+                }
                 // A generation is never retired: its consumer's cancel ends it.
                 AttemptStep::Unresolved => continue,
             });
@@ -159,7 +204,9 @@ impl LlmRequest {
     fn assemble(&mut self, chunk: &WireChunk, effects: &mut Vec<LlmRequestEffect>) {
         let assembly = &mut self.assembly;
         for choice in &chunk.choices {
-            if let Some(parsed) = assembly.choices.parse_choice(&chunk.id, choice, &mut assembly.filter) {
+            if let Some(parsed) =
+                assembly.choices.parse_choice(&chunk.id, choice, &mut assembly.filter)
+            {
                 if parsed.has_response() {
                     self.attempts.delivered();
                 }

@@ -25,7 +25,6 @@ fn retryability_follows_the_4xx_rule() {
     }
 }
 
-
 // Catches: 499 back in the transient set, `ApiError::status` minting `Status` for it, or the
 // caller's `retryable=True` winning over `Cancelled`.
 #[test]
@@ -59,9 +58,6 @@ fn cancelled_is_a_status_error_and_an_api_error() {
     assert!(!ApiErrorKind::Status.is_a(ApiErrorKind::Cancelled), "a 500 is not a cancellation");
 }
 
-
-
-
 // Catches: dropping the `message != reason` arm ("Not Found (404 Not Found)").
 #[test]
 fn the_message_is_shown_only_when_it_adds_detail_beyond_the_reason() {
@@ -88,7 +84,6 @@ fn the_phrase_table_is_sorted_and_covers_the_transient_codes() {
     assert_eq!(http_reason(429), Some("Too Many Requests"));
     assert_eq!(http_reason(499), None, "499 is nginx's, not IANA's");
 }
-
 
 // Catches: a `kind == Connection` test that misses `APITimeoutError`.
 #[test]
@@ -120,4 +115,3 @@ fn from_http_is_always_a_status_error_and_carries_the_composed_message() {
     assert!(err.retryable);
     assert_eq!(ApiError::from_http("", 204, None).kind, ApiErrorKind::Status);
 }
-

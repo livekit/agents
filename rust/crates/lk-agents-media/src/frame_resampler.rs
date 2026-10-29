@@ -51,10 +51,23 @@ impl FrameResampler {
     /// For a stream whose format is declared rather than read off each frame, as the reference
     /// builds `rtc.AudioResampler` once: built now, even for a 1:1 ratio, and with exactly
     /// `input.num_channels` channels.
-    pub fn fixed(input: AudioFormat, output_rate: u32, quality: Quality) -> Result<Self, ResampleError> {
-        let resampler =
-            crate::new_resampler(input.sample_rate, output_rate, u32::from(input.num_channels), quality)?;
-        Ok(FrameResampler { output_rate, quality, mode: Mode::Fixed, stream: Some(Stream { resampler, input }) })
+    pub fn fixed(
+        input: AudioFormat,
+        output_rate: u32,
+        quality: Quality,
+    ) -> Result<Self, ResampleError> {
+        let resampler = crate::new_resampler(
+            input.sample_rate,
+            output_rate,
+            u32::from(input.num_channels),
+            quality,
+        )?;
+        Ok(FrameResampler {
+            output_rate,
+            quality,
+            mode: Mode::Fixed,
+            stream: Some(Stream { resampler, input }),
+        })
     }
 
     pub fn output_rate(&self) -> u32 {
@@ -122,7 +135,8 @@ impl FrameResampler {
 
     fn build(&self, input: AudioFormat) -> Result<Stream, ResampleError> {
         let channels = u32::from(input.num_channels.max(1));
-        let resampler = crate::new_resampler(input.sample_rate, self.output_rate, channels, self.quality)?;
+        let resampler =
+            crate::new_resampler(input.sample_rate, self.output_rate, channels, self.quality)?;
         Ok(Stream { resampler, input })
     }
 }
@@ -144,8 +158,9 @@ mod tests {
     // shapes, not on the last bit.
 
     fn ramp(rate: u32, channels: u16, samples_per_channel: usize) -> AudioFrame {
-        let pcm: Vec<i16> =
-            (0..samples_per_channel * usize::from(channels)).map(|i| ((i * 37) % 2000) as i16 - 1000).collect();
+        let pcm: Vec<i16> = (0..samples_per_channel * usize::from(channels))
+            .map(|i| ((i * 37) % 2000) as i16 - 1000)
+            .collect();
         AudioFrame::new(crate::pcm_bytes(&pcm), rate, channels, samples_per_channel as u32)
     }
 
@@ -219,13 +234,17 @@ mod tests {
     // and the fallback TTS as its entry's declared rate, whatever the frame claims.
     #[test]
     fn fixed_reads_every_frame_as_the_declared_format() {
-        let mut r = FrameResampler::fixed(AudioFormat::new(48_000, 1), 16_000, Quality::Medium).unwrap();
+        let mut r =
+            FrameResampler::fixed(AudioFormat::new(48_000, 1), 16_000, Quality::Medium).unwrap();
         let liar = ramp(24_000, 2, 2_400);
         let out = r.push(&liar).unwrap();
         let (want, _) = lengths(48_000, 16_000, 1, &[&liar]);
         assert_eq!(out.len(), 1);
         assert_eq!((out[0].sample_rate, out[0].num_channels), (16_000, 1));
-        assert_eq!((out[0].data.len() / 2, out[0].samples_per_channel as usize), (want[0], want[0]));
+        assert_eq!(
+            (out[0].data.len() / 2, out[0].samples_per_channel as usize),
+            (want[0], want[0])
+        );
         assert_eq!(r.input_format(), Some(AudioFormat::new(48_000, 1)));
     }
 
@@ -239,6 +258,9 @@ mod tests {
         out.extend(r.flush().unwrap());
         let total: usize = out.iter().map(|f| f.data.len() / 2).sum();
         assert!(total > 1_500, "resampled as one channel: {total} samples");
-        assert!(out.iter().all(|f| f.num_channels == 0 && f.samples_per_channel as usize * 2 == f.data.len()));
+        assert!(
+            out.iter()
+                .all(|f| f.num_channels == 0 && f.samples_per_channel as usize * 2 == f.data.len())
+        );
     }
 }

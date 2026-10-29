@@ -38,9 +38,5 @@ fn failures(schedule: u64) -> Vec<String> {
         run
     });
     let (failures, _) = check_all(&run.record);
-    failures
-        .into_iter()
-        .filter(|f| f.contract == "text_conservation")
-        .map(|f| f.detail)
-        .collect()
+    failures.into_iter().filter(|f| f.contract == "text_conservation").map(|f| f.detail).collect()
 }

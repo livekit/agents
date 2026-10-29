@@ -58,7 +58,9 @@ impl EventPrivacy {
 pub fn event_allowed(kind: &str, capture_content: bool, redaction: bool) -> bool {
     match EventPrivacy::for_kind(kind) {
         EventPrivacy::Safe => true,
-        EventPrivacy::Content => lk_agents_core::telemetry::policy::content_allowed(capture_content, redaction),
+        EventPrivacy::Content => {
+            lk_agents_core::telemetry::policy::content_allowed(capture_content, redaction)
+        }
         EventPrivacy::Refused => false,
     }
 }
@@ -73,8 +75,10 @@ pub struct ReportProjection {
 
 impl SessionReportProjection for ReportProjection {
     fn new(capture_content: bool, options: &RecordingOptions, project_redaction: bool) -> Self {
-        let content =
-            lk_agents_core::telemetry::policy::content_allowed(capture_content, options.redaction || project_redaction);
+        let content = lk_agents_core::telemetry::policy::content_allowed(
+            capture_content,
+            options.redaction || project_redaction,
+        );
         Self {
             content,
             transcript: content && options.transcript,

@@ -15,11 +15,11 @@ mod retry;
 pub mod transport;
 
 pub use audio::{AudioError, AudioFrame, AudioWindow};
-pub use detector::NativeInterruptionDetector;
 pub use core::{
     InputEvent, InputOutcome, InterruptionCore, InterruptionEffect, InterruptionEvent, OverlapEnd,
     OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,
 };
+pub use detector::NativeInterruptionDetector;
 pub use event::{
     CacheEntry, InterruptionDetectionError, OverlappingSpeechEvent, estimate_probability,
     interruption_metrics, overlapping_speech_from_cache_entry,

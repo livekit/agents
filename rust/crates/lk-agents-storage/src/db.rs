@@ -6,10 +6,10 @@
 use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use serde_json::{Map, Value};
 
-use crate::{StorageError, TaskWrite};
 use crate::run::TaskState;
 use crate::schema::*;
 use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, Table, first_cell};
+use crate::{StorageError, TaskWrite};
 
 /// The largest `tasks/list` page A2A allows.
 const MAX_TASK_PAGE: i64 = 100;
@@ -390,7 +390,9 @@ impl Decode for ReceiveDecode {
 
     fn decode(self, out: &BatchResult) -> Result<Receive, StorageError> {
         let crate::sql::StatementResult::Exec { rows_affected, .. } = out.at(self.inbox)? else {
-            return Err(StorageError::Unavailable("receive: the inbox insert answered rows".into()));
+            return Err(StorageError::Unavailable(
+                "receive: the inbox insert answered rows".into(),
+            ));
         };
         if *rows_affected == 0 {
             let task_id = first_cell(out.at(self.existing)?.rows())

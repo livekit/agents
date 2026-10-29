@@ -356,10 +356,7 @@ impl<E: Env> WorkerJobRun for JobRun<E> {
                 session_end_timeout,
                 session_end,
                 session_aclose_timeout,
-                observability_url: lk_agents_net::strings::observability_url(
-                    &url,
-                    env.as_deref(),
-                ),
+                observability_url: lk_agents_net::strings::observability_url(&url, env.as_deref()),
                 recording,
                 state: Mutex::new(State { redaction, ..State::default() }),
                 ended: watch::channel(false).0,

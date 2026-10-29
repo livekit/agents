@@ -63,13 +63,7 @@ fn total(base: usize, charges: Vec<usize>) -> usize {
 
 impl TelemetryPolicy for DestinationPolicy {
     fn new(allow_pii: bool, capture_content: bool, project_redaction: bool) -> Self {
-        Self {
-            redacted: !allow_pii
-                || !content_allowed(
-                    capture_content,
-                    project_redaction,
-                ),
-        }
+        Self { redacted: !allow_pii || !content_allowed(capture_content, project_redaction) }
     }
 
     fn redacted(&self) -> bool {

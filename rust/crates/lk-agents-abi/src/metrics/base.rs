@@ -19,11 +19,7 @@ pub struct Metadata {
 
 // `metrics/base.py:13`. Generated because the gate records `bases`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "_BaseMetrics",
-    repr = "metrics_repr"
-)]
+#[python(pydantic, name = "_BaseMetrics", repr = "metrics_repr")]
 pub struct BaseMetrics {}
 
 // `metrics/base.py:188`. The counters are per event, not cumulative: totals are the collector's.
@@ -312,12 +308,7 @@ impl EouMetrics {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    zero_defaults,
-    name = "CachedTokenDetails",
-    nested_in = "RealtimeModelMetrics"
-)]
+#[python(pydantic, zero_defaults, name = "CachedTokenDetails", nested_in = "RealtimeModelMetrics")]
 #[binding(emit, extract)]
 pub struct CachedTokenDetails {
     pub audio_tokens: u32,
@@ -327,12 +318,7 @@ pub struct CachedTokenDetails {
 
 // A cached total without a breakdown adds nothing to the per-modality cached counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    zero_defaults,
-    name = "InputTokenDetails",
-    nested_in = "RealtimeModelMetrics"
-)]
+#[python(pydantic, zero_defaults, name = "InputTokenDetails", nested_in = "RealtimeModelMetrics")]
 #[binding(emit, extract)]
 pub struct InputTokenDetails {
     pub audio_tokens: u32,
@@ -344,12 +330,7 @@ pub struct InputTokenDetails {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    zero_defaults,
-    name = "OutputTokenDetails",
-    nested_in = "RealtimeModelMetrics"
-)]
+#[python(pydantic, zero_defaults, name = "OutputTokenDetails", nested_in = "RealtimeModelMetrics")]
 #[binding(emit, extract)]
 pub struct OutputTokenDetails {
     pub text_tokens: u32,

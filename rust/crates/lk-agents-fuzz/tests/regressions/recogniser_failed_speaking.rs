@@ -15,7 +15,11 @@ fn heard_out(gone: Vec<Input>) {
         advance(),
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         advance(),
-        Input::LlmToolCall { chat: Ref::new(0), name: "lookup".into(), args: ToolArgs("{}".into()) },
+        Input::LlmToolCall {
+            chat: Ref::new(0),
+            name: "lookup".into(),
+            args: ToolArgs("{}".into()),
+        },
         Input::LlmEnd { chat: Ref::new(0) },
         advance(),
         Input::ToolAnswered {

@@ -21,7 +21,6 @@ pub mod resample;
 pub mod spawner;
 pub mod stream;
 pub mod strings;
-pub mod vocabulary;
 pub mod timer;
 pub mod video;
-
+pub mod vocabulary;

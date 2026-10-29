@@ -257,7 +257,6 @@ impl<S: Source, E> Timeline<S, E> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

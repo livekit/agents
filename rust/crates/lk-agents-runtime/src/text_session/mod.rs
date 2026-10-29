@@ -56,20 +56,14 @@ impl Driver {
         mut cancelled: oneshot::Receiver<()>,
     ) {
         let mut cancel_seen = false;
-        let mut effects: VecDeque<_> = self
-            .session
-            .handle(Event::Start(message), self.clock.now())
-            .into();
+        let mut effects: VecDeque<_> =
+            self.session.handle(Event::Start(message), self.clock.now()).into();
         loop {
             while let Some(effect) = effects.pop_front() {
                 self.execute(effect).await;
             }
             if let Some(release) = self.releases.pop_front() {
-                if self
-                    .work
-                    .get(&release.invocation_id)
-                    .is_some_and(|w| !w.idle())
-                {
+                if self.work.get(&release.invocation_id).is_some_and(|w| !w.idle()) {
                     self.releases.push_front(release);
                 } else {
                     effects.extend(self.release(release));
@@ -78,8 +72,7 @@ impl Driver {
             }
             // Retain work after a core cleanup deadline: its callbacks and provider requests
             // remain owned until their real settlement, including late prepared resources.
-            self.work
-                .retain(|id, work| self.pending.contains_key(id) || !work.idle());
+            self.work.retain(|id, work| self.pending.contains_key(id) || !work.idle());
             if self.finished && self.work.is_empty() {
                 return;
             }
@@ -149,33 +142,19 @@ impl Driver {
                     Execution::new(
                         ports,
                         self.runtime.clone(),
-                        Reporter {
-                            id: invocation_id,
-                            tx: self.events_tx.clone(),
-                        },
+                        Reporter { id: invocation_id, tx: self.events_tx.clone() },
                     ),
                 );
             }
-            Effect::Run {
-                invocation_id,
-                effect,
-            } => {
+            Effect::Run { invocation_id, effect } => {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
                 {
-                    let _ = self
-                        .updates
-                        .send(Ok(TextSessionUpdate::IncompleteCleanup(pending)))
-                        .await;
+                    let _ =
+                        self.updates.send(Ok(TextSessionUpdate::IncompleteCleanup(pending))).await;
                 }
             }
-            Effect::Emit {
-                sequence,
-                frame_id,
-                agent_name,
-                invocation_id,
-                event,
-            } => {
+            Effect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
                 let _ = self
                     .updates
                     .send(Ok(TextSessionUpdate::Stream {
@@ -187,40 +166,22 @@ impl Driver {
                     }))
                     .await;
             }
-            Effect::InvocationSettled {
-                invocation_id,
-                result,
-                ..
-            } => {
+            Effect::InvocationSettled { invocation_id, result, .. } => {
                 let usage = result.usage;
                 let output = match result.outcome {
-                    RunOutcome::Completed {
-                        output: Output::Validated(id),
-                    } => Some(id),
+                    RunOutcome::Completed { output: Output::Validated(id) } => Some(id),
                     _ => None,
                 };
                 self.pending.insert(invocation_id.clone(), output);
                 let _ = self
                     .updates
-                    .send(Ok(TextSessionUpdate::InvocationSettled {
-                        invocation_id,
-                        usage,
-                    }))
+                    .send(Ok(TextSessionUpdate::InvocationSettled { invocation_id, usage }))
                     .await;
             }
-            Effect::InvocationParked {
-                invocation_id,
-                usage,
-                ..
-            } => {
+            Effect::InvocationParked { invocation_id, usage, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
-                let _ = self
-                    .updates
-                    .send(Ok(TextSessionUpdate::Parked {
-                        invocation_id,
-                        usage,
-                    }))
-                    .await;
+                let _ =
+                    self.updates.send(Ok(TextSessionUpdate::Parked { invocation_id, usage })).await;
             }
             Effect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
             Effect::Finished(result) => {
@@ -250,9 +211,7 @@ impl Driver {
             return Vec::new();
         };
         self.output = output.and_then(|id| {
-            self.work
-                .get_mut(&release.invocation_id)
-                .and_then(|w| w.outputs.remove(&id))
+            self.work.get_mut(&release.invocation_id).and_then(|w| w.outputs.remove(&id))
         });
         self.session.handle(
             Event::InvocationReleased {

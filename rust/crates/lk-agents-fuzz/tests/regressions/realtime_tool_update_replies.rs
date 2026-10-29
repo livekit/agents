@@ -78,8 +78,11 @@ fn a_detached_realtime_tool_is_answered_on_the_socket() {
         )
     });
     assert!(asked, "the update's reply never went to the realtime server");
-    let failed = run.record.host_view().speeches().iter().any(|s| {
-        s.error().is_some_and(|e| e.contains("has no llm"))
-    });
+    let failed = run
+        .record
+        .host_view()
+        .speeches()
+        .iter()
+        .any(|s| s.error().is_some_and(|e| e.contains("has no llm")));
     assert!(!failed, "the update's reply failed as a pipeline reply");
 }

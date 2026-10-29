@@ -275,6 +275,4 @@ mod tests {
         assert_eq!(runs[1].channel, None);
         assert!(runs[1].interrupted());
     }
-
-
 }

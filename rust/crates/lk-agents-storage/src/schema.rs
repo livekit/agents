@@ -730,12 +730,12 @@ WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) OR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::Table;
-    use livekit_protocol::agent::ChatRole;
-    use livekit_protocol::agent::chat_context::chat_item;
     use crate::StorageError;
     use crate::sql::Bind;
     use crate::sql::Row;
+    use crate::sql::Table;
+    use livekit_protocol::agent::ChatRole;
+    use livekit_protocol::agent::chat_context::chat_item;
 
     #[test]
     fn a_row_decodes_and_a_bad_cell_names_its_column() {

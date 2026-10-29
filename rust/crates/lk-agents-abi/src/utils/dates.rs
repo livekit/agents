@@ -39,7 +39,9 @@ impl Date {
             return Err(DateError::MonthOutOfRange);
         }
         let day = u32::try_from(day).map_err(|_| DateError::DayOutOfRange)?;
-        NaiveDate::from_ymd_opt(year as i32, month as u32, day).map(Date).ok_or(DateError::DayOutOfRange)
+        NaiveDate::from_ymd_opt(year as i32, month as u32, day)
+            .map(Date)
+            .ok_or(DateError::DayOutOfRange)
     }
 
     pub fn year(self) -> i32 {
@@ -161,7 +163,8 @@ mod host {
 
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             let part = |name: &str| -> PyResult<i64> { obj.getattr(name)?.extract() };
-            Date::new(part("year")?, part("month")?, part("day")?).map_err(|e| PyValueError::new_err(e.to_string()))
+            Date::new(part("year")?, part("month")?, part("day")?)
+                .map_err(|e| PyValueError::new_err(e.to_string()))
         }
     }
 
@@ -171,7 +174,8 @@ mod host {
 
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             let part = |name: &str| -> PyResult<i64> { obj.getattr(name)?.extract() };
-            Time::new(part("hour")?, part("minute")?).map_err(|e| PyValueError::new_err(e.to_string()))
+            Time::new(part("hour")?, part("minute")?)
+                .map_err(|e| PyValueError::new_err(e.to_string()))
         }
     }
 }

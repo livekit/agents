@@ -85,7 +85,11 @@ pub trait ChoiceParser: Send + Sized + 'static {
 
     /// The chunk `choice` (one streamed choice of completion `id`) completes, if any.
     #[host(call)]
-    fn parse(&mut self, id: String, choice: serde_json::Value) -> Result<Option<LlmChunk>, InvalidPayload>;
+    fn parse(
+        &mut self,
+        id: String,
+        choice: serde_json::Value,
+    ) -> Result<Option<LlmChunk>, InvalidPayload>;
 }
 
 /// The completion wire rules `inference.LLMStream` applies around a plugin's own client.

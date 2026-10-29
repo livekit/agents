@@ -34,7 +34,8 @@ impl<'py> pyo3::IntoPyObject<'py> for &TimedString {
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
         use pyo3::types::{PyAnyMethods as _, PyDictMethods as _};
-        static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> = pyo3::sync::PyOnceLock::new();
+        static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
         let kwargs = pyo3::types::PyDict::new(py);
         kwargs.set_item("text", &self.text)?;
         for (key, v) in [
@@ -75,7 +76,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for TimedString {
         use pyo3::types::PyAnyMethods as _;
         const OWNER: &str = "TimedStringFromPy";
         let obj = &*obj;
-        let lenient = |key: &str| -> pyo3::PyResult<Option<f64>> { attr_or(obj, OWNER, key, |v| Ok(v.extract().ok()), || None) };
+        let lenient = |key: &str| -> pyo3::PyResult<Option<f64>> {
+            attr_or(obj, OWNER, key, |v| Ok(v.extract().ok()), || None)
+        };
         Ok(TimedString {
             text: attr_with(obj, OWNER, "__str__", |v| v.call0()?.extract())?,
             start_time: lenient("start_time")?,

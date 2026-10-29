@@ -10,9 +10,9 @@ use tokio::sync::mpsc;
 
 use lk_agents_abi::AudioFrame;
 
-use crate::eot::{DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning};
 use crate::eot::session::TransportPrediction;
 use crate::eot::transport::{EotTransport, PredictionSink};
+use crate::eot::{DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning};
 
 /// `_CLIENT_BUFFER_SECONDS` (`transports.py:70`). How much recent audio one prediction sees.
 pub const CLIENT_BUFFER_SECONDS: f64 = 1.2;

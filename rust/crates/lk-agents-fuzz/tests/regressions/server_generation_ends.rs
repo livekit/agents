@@ -7,8 +7,10 @@ use lk_agents_fuzz::input::{Input, Millis, Ref, RtEvent};
 // survey seed 179).
 #[test]
 fn a_server_generation_settles() {
-    let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }), ..Setup::default() };
+    let setup = Setup {
+        realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }),
+        ..Setup::default()
+    };
     let inputs = vec![
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::SecondGeneration },
         Input::Advance { ms: Millis(20) },

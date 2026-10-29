@@ -17,11 +17,7 @@ fn turn(utterance: u32, words: &str, skip_reply: bool) -> Vec<Input> {
         },
         Input::SttEnd { utterance: Ref::new(utterance) },
         Input::Advance { ms: Millis(20) },
-        Input::CommitUserTurn {
-            transcript_timeout: Millis(100),
-            stt_flush: Millis(0),
-            skip_reply,
-        },
+        Input::CommitUserTurn { transcript_timeout: Millis(100), stt_flush: Millis(0), skip_reply },
         Input::Advance { ms: Millis(1_000) },
     ]
 }
@@ -124,10 +120,6 @@ fn a_second_turn_waits_for_the_first_turns_hook() {
         run
     });
     assert_eq!(turn_hooks(&run).len(), 1, "the second turn's hook waits for the first's");
-    let replies = run
-        .record
-        .host_view()
-        .speeches()
-        .len();
+    let replies = run.record.host_view().speeches().len();
     assert_eq!(replies, 0, "no turn is answered while the first hook runs");
 }

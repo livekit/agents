@@ -1,11 +1,15 @@
 use super::*;
-use crate::errors::side_table::testkit::Table;
 use crate::errors::ApiErrorKind;
+use crate::errors::side_table::testkit::Table;
 
 fn host(retryable: bool, status_code: Option<i64>) -> ProviderError {
     let table = Table::holding([7]);
     ProviderError::Host {
-        error: HostError::captured("MyPluginRateLimit", "quota exceeded", CapturedError::new(7, &table.as_registry())),
+        error: HostError::captured(
+            "MyPluginRateLimit",
+            "quota exceeded",
+            CapturedError::new(7, &table.as_registry()),
+        ),
         api_kind: Some(ApiErrorKind::Status),
         retryable,
         status_code,
@@ -27,4 +31,3 @@ fn a_native_error_reports_its_own_retryability() {
     assert!(!ProviderError::Local(ApiError::status("bad key", 401, None, None)).retryable());
     assert!(ProviderError::Local(ApiError::timeout(None)).retryable());
 }
-

@@ -26,7 +26,7 @@ pub enum TransportError {
     Status {
         status: i64,
         message: String,
-    /// Response headers, lower-cased; a gateway 429 stamps the quota telemetry here.
+        /// Response headers, lower-cased; a gateway 429 stamps the quota telemetry here.
         headers: Vec<(String, String)>,
         body: Option<String>,
     },
@@ -85,8 +85,9 @@ pub async fn open_ws(
     create_frame: &serde_json::Value,
 ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
     let deadline = conn_options.connect_deadline(clock.now());
-    let (sender, receiver) =
-        within(clock, deadline, ws.connect(url, headers)).await.map_err(|e| connect_error(what, e))?;
+    let (sender, receiver) = within(clock, deadline, ws.connect(url, headers))
+        .await
+        .map_err(|e| connect_error(what, e))?;
     if let Err(err) = sender.send_text(create_frame.to_string()).await {
         sender.close().await;
         return Err(connect_error(what, err));

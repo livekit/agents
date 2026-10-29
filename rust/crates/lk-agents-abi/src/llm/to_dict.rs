@@ -389,8 +389,6 @@ mod tests {
         );
     }
 
-
-
     // Catches: `metrics` emitted in population order. All fifteen keys are set on purpose: a
     // partial set let a reorder survive.
     #[test]
@@ -470,8 +468,6 @@ mod tests {
         assert!(!text.contains("metrics"), "{text}");
     }
 
-
-
     // Catches: a hand-rolled `ImageContent`/`AudioContent` shape.
     #[test]
     fn media_content_matches_the_two_models_field_for_field() {
@@ -516,8 +512,4 @@ mod tests {
         // ...and the default flags never reach it.
         assert!(dump_with(items, ToDictOptions::default(), &bare).is_ok());
     }
-
-
-
-
 }

@@ -12,12 +12,19 @@ fn a_reply_asked_during_playout_reaches_its_model() {
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         Input::Advance { ms: Millis(100) },
-        Input::LlmText { chat: Ref::new(0), text: AgentText("A long first answer that keeps playing for a while.".into()) },
+        Input::LlmText {
+            chat: Ref::new(0),
+            text: AgentText("A long first answer that keeps playing for a while.".into()),
+        },
         Input::LlmEnd { chat: Ref::new(0) },
         Input::Advance { ms: Millis(100) },
         Input::PlayoutStarted { segment: Ref::new(0) },
         Input::Advance { ms: Millis(500) },
-        Input::GenerateReply { user_input: None, instructions: Some(AgentText("say something else".into())), allow: None },
+        Input::GenerateReply {
+            user_input: None,
+            instructions: Some(AgentText("say something else".into())),
+            allow: None,
+        },
         Input::Advance { ms: Millis(2_000) },
     ];
     let run = simulate(async {

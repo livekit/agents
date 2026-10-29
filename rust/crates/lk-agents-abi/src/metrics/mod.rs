@@ -11,8 +11,8 @@ pub mod testkit;
 
 pub use base::{
     AgentMetrics, AvatarMetrics, CachedTokenDetails, EotInferenceMetrics, EouMetrics,
-    InputTokenDetails, InterruptionMetrics, LlmMetrics, OutputTokenDetails,
-    RealtimeModelMetrics, SttMetrics, TtsMetrics, VadMetrics,
+    InputTokenDetails, InterruptionMetrics, LlmMetrics, OutputTokenDetails, RealtimeModelMetrics,
+    SttMetrics, TtsMetrics, VadMetrics,
 };
 /// Token counts stay integers: the exported data point type follows the first value seen.
 #[crate::host(record(module = "telemetry", emit, transparent))]

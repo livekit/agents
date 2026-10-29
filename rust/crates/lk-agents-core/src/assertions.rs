@@ -2,8 +2,8 @@
 //! the events of one tested invocation, what each assertion matches and the failure it reports.
 //! A failure names the expectation and lists the events with the one it concerns marked.
 
-use lk_agents_abi::agent::assertions::{AssertionFailure, EventExpectation, ObservedEvent};
 use lk_agents_abi::ChatItem;
+use lk_agents_abi::agent::assertions::{AssertionFailure, EventExpectation, ObservedEvent};
 use serde_json::Value;
 
 use crate::approval::python_repr;
@@ -20,11 +20,17 @@ impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
         RunEvents { events, position: 0 }
     }
 
-    fn at(&self, index: i64, expected: Option<EventExpectation>) -> Result<usize, AssertionFailure> {
+    fn at(
+        &self,
+        index: i64,
+        expected: Option<EventExpectation>,
+    ) -> Result<usize, AssertionFailure> {
         let len = self.events.len();
         let resolved = if index < 0 { index + len as i64 } else { index };
         let Some(index) = usize::try_from(resolved).ok().filter(|i| *i < len) else {
-            return Err(self.fail(&format!("nth({index}) out of range (total events: {len})"), None));
+            return Err(
+                self.fail(&format!("nth({index}) out of range (total events: {len})"), None)
+            );
         };
         match expected {
             Some(expected) => self.check(index, &expected),
@@ -32,7 +38,10 @@ impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
         }
     }
 
-    fn next_event(&mut self, expected: Option<EventExpectation>) -> Result<usize, AssertionFailure> {
+    fn next_event(
+        &mut self,
+        expected: Option<EventExpectation>,
+    ) -> Result<usize, AssertionFailure> {
         loop {
             let index = self.current()?;
             self.position += 1;
@@ -82,7 +91,10 @@ impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
         let stop = stop.min(self.events.len());
         (start..stop).find(|&i| self.check(i, &expected).is_ok()).ok_or_else(|| {
             let kind = kind_name(&expected);
-            self.fail(&format!("No {kind} satisfying criteria found in range [{start}:{stop}]"), None)
+            self.fail(
+                &format!("No {kind} satisfying criteria found in range [{start}:{stop}]"),
+                None,
+            )
         })
     }
 
@@ -120,7 +132,10 @@ impl RunEvents {
                 if let Some(role) = role
                     && role != message.role.as_str()
                 {
-                    return fail(format!("Expected role '{role}', got '{}'", message.role.as_str()));
+                    return fail(format!(
+                        "Expected role '{role}', got '{}'",
+                        message.role.as_str()
+                    ));
                 }
             }
             (EventExpectation::FunctionCall { name, arguments }, ChatItem::FunctionCall(call)) => {
@@ -131,7 +146,9 @@ impl RunEvents {
                 }
                 if let Some(expected) = arguments {
                     let Some(expected) = expected.as_object() else {
-                        return fail(format!("Expected arguments must be an object, got {expected}"));
+                        return fail(format!(
+                            "Expected arguments must be an object, got {expected}"
+                        ));
                     };
                     let actual = match serde_json::from_str::<Value>(&call.arguments) {
                         Ok(Value::Object(actual)) => actual,

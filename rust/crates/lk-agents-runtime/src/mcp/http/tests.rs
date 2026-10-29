@@ -109,7 +109,9 @@ async fn a_passive_mcp_stream_keeps_its_cursor_without_timing_out_between_messag
     assert!(tokio::time::timeout(READ_INACTIVITY * 2, stream.next()).await.is_err());
     drop(stream);
     client.receipt.update(|state| state.close());
-    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, client.receipt.closed()).await.unwrap();
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, client.receipt.closed())
+        .await
+        .unwrap();
     peer.close().await;
 }
 

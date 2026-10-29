@@ -10,13 +10,8 @@ use lk_agents_voice::events::SessionEvent;
 // preemptive generation's user message when it adopts it.
 #[test]
 fn an_adopted_preemptive_reply_has_its_latency() {
-    let setup = Setup {
-        stt: true,
-        vad: true,
-        preemptive: true,
-        turn: TurnMode::Stt,
-        ..Setup::default()
-    };
+    let setup =
+        Setup { stt: true, vad: true, preemptive: true, turn: TurnMode::Stt, ..Setup::default() };
     let words = || UserText("what's my balance".into());
     let inputs = [
         Input::Advance { ms: Millis(20) },

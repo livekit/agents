@@ -123,5 +123,4 @@ mod tests {
         m.set(Step::Done);
         m.set(Step::Scheduled);
     }
-
 }

@@ -9,8 +9,10 @@ use lk_agents_fuzz::record::Sink;
 // to `text_output` through `forward_generation`.
 #[test]
 fn a_realtime_reply_is_shown() {
-    let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
+    let setup = Setup {
+        realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+        ..Setup::default()
+    };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         Input::Advance { ms: Millis(20) },
