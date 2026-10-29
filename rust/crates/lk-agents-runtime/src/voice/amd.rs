@@ -4,9 +4,10 @@ use lk_agents_abi::voice::amd::{
 };
 use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
-    AudioFrame, FunctionToolCall, HostRef, Llm, SpawnerExt, SpeechEvent, StreamSink, Stt, SttSink,
-    SttSource, TimerSet, Ts,
+    AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamSink, Stt, SttSink, SttSource,
+    TimerSet, Ts,
 };
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{
     Command, IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
 };
@@ -36,6 +37,8 @@ pub struct AmdHandle {
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 
     listening: Arc<AtomicBool>,
+    /// The system's tasks; they end with it, and dropping the handle cancels none.
+    _tasks: Arc<TaskSet>,
 }
 
 impl AmdHandle {
@@ -45,7 +48,7 @@ impl AmdHandle {
 
     fn detached() -> Self {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        AmdHandle { tx, listening: Arc::default() }
+        AmdHandle { tx, listening: Arc::default(), _tasks: Arc::default() }
     }
 }
 
@@ -146,6 +149,8 @@ pub struct AmdSystem {
 
     /// The machine's [`Amd::listening`], for the host's `AMD.started`.
     listening: Arc<AtomicBool>,
+    /// Its run, the callee wait, the tap's opening and drain, and the classifications.
+    tasks: Arc<TaskSet>,
 }
 
 impl AmdSystem {
@@ -165,10 +170,11 @@ impl AmdSystem {
         let (room, participant) = (setup.room.clone(), setup.participant.clone());
         let system = AmdSystem::new(peer, setup, tx.clone());
         let listening = system.listening.clone();
+        let tasks = system.tasks.clone();
         let spawner = system.peer.spawner.clone();
         let time = system.peer.time.clone();
         let callee_tx = tx.clone();
-        spawner.spawn_unboxed(async move {
+        tasks.spawn(spawner.as_ref(), "amd callee", async move {
             tokio::select! {
                 biased;
                 () = callee_tx.closed() => {}
@@ -177,8 +183,8 @@ impl AmdSystem {
                 }
             }
         });
-        spawner.spawn_unboxed(system.run(rx, msg_rx));
-        AmdHandle { tx, listening }
+        tasks.spawn(spawner.as_ref(), "amd", system.run(rx, msg_rx));
+        AmdHandle { tx, listening, _tasks: tasks }
     }
 
     fn new(peer: PeerHandle, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
@@ -197,6 +203,7 @@ impl AmdSystem {
             stt: SttLeg::None,
             closed: false,
             listening: Arc::default(),
+            tasks: Arc::default(),
         };
         let _ = system.peer.send(Origin::Amd, Command::AmdSpan(None));
         if let Some(stt) = stt {
@@ -374,15 +381,11 @@ impl AmdSystem {
         let llm = Arc::clone(&self.llm);
         let time = self.peer.time.clone();
         let tx = self.tx.clone();
-        self.peer.spawner.clone().spawn_unboxed(classify(
-            time,
-            tx,
-            llm,
-            request,
-            n,
-            req.transcript,
-            cancelled,
-        ));
+        self.tasks.spawn(
+            self.peer.spawner.as_ref(),
+            "amd classification",
+            classify(time, tx, llm, request, n, req.transcript, cancelled),
+        );
     }
 
     /// `end_input()` / `close()`: the run in flight is cancelled and reports nothing.
@@ -423,7 +426,7 @@ impl AmdSystem {
         stt.prewarm();
         let tx = self.tx.clone();
         let time = self.peer.time.clone();
-        self.peer.spawner.clone().spawn_unboxed(async move {
+        self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
             let outcome = match stt.stream(None, None).await {
                 Ok(Some(pair)) => Ok(pair),
                 Err(e) => Err(e),
@@ -468,12 +471,12 @@ impl AmdSystem {
         let tap = self.peer.install_audio_tap(sink);
         self.stt = SttLeg::Installed { gate, tap };
         self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
-        spawn_tap_drain(self.peer.clone(), source, tap, self.tx.clone());
+        spawn_tap_drain(&self.tasks, self.peer.clone(), source, tap, self.tx.clone());
     }
 
     fn discard_tap(&self, source: SttSource) {
         let deadline = self.peer.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        self.peer.spawner.clone().spawn_unboxed(async move {
+        self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap close", async move {
             let _ = source.close(deadline).await;
         });
     }
@@ -543,6 +546,7 @@ async fn await_callee(
 
 /// The tap's drain onto the system's channel: source closed once, tap removed if still installed.
 fn spawn_tap_drain(
+    tasks: &Arc<TaskSet>,
     peer: PeerHandle,
     mut source: SttSource,
     tap: lk_agents_abi::resources::ResourceId,
@@ -551,7 +555,8 @@ fn spawn_tap_drain(
 ) {
     let mut closing = peer.closing.clone();
     let time = peer.time.clone();
-    peer.spawner.clone().spawn_unboxed(async move {
+    let spawner = peer.spawner.clone();
+    tasks.spawn(spawner.as_ref(), "amd tap drain", async move {
         let cause = loop {
             let next = tokio::select! {
                 biased;

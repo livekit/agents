@@ -10,7 +10,8 @@ pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
 use lk_agents_abi::voice::workflows::{InstructionsArg, SipParticipantRequest, TwilioDial};
-use lk_agents_abi::{AbortHandle, Clock, HostRef, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, HostRef, Spawner, SpawnerExt};
+use lk_agents_net::task::{TaskId, TaskSet};
 use serde_json::Value;
 
 use std::collections::BTreeMap;
@@ -39,7 +40,7 @@ struct Running {
     caller: Option<Arc<dyn RtcRoom>>,
     core: Transfer,
     hold: Option<HostRef>,
-    watcher: Option<AbortHandle>,
+    watcher: Option<TaskId>,
 }
 
 /// `_core.WarmTransfer`: the transfer's plan (its briefing instructions and tools, how it dials)
@@ -51,6 +52,8 @@ pub struct HostWarmTransfer {
 
     running: Mutex<Running>,
     done: tokio::sync::Notify,
+    /// The human-room watcher and the caller-room follower.
+    tasks: Arc<TaskSet>,
 }
 
 impl HostWarmTransfer {
@@ -60,6 +63,7 @@ impl HostWarmTransfer {
             clock,
             spawner,
             running: Mutex::new(Running::default()),
+            tasks: Arc::default(),
             done: tokio::sync::Notify::new(),
         }
     }
@@ -158,7 +162,7 @@ impl Drop for Restore {
         let effects = {
             let mut running = self.0.lock();
             if let Some(watcher) = running.watcher.take() {
-                watcher.abort();
+                self.0.tasks.cancel(watcher);
             }
             running.caller = None;
             running.core.cancel()
@@ -218,8 +222,11 @@ impl HostWarmTransfer {
         {
             let mut running = self.lock();
             running.core.human_connected();
-            running.watcher =
-                Some(self.spawner.spawn_unboxed(async move { this.watch_human(events).await }));
+            running.watcher = Some(self.tasks.spawn(
+                self.spawner.as_ref(),
+                "warm transfer human watcher",
+                async move { this.watch_human(events).await },
+            ));
         }
         host.start_human().await?;
         match &self.plan.origination {
@@ -259,7 +266,7 @@ impl HostWarmTransfer {
         let effects = {
             let mut running = self.lock();
             if let Some(watcher) = running.watcher.take() {
-                watcher.abort();
+                self.tasks.cancel(watcher);
             }
             running.core.abort_dial()
         };
@@ -322,7 +329,7 @@ impl HostWarmTransfer {
         }
         self.settle(Ok(HUMAN_AGENT_IDENTITY.to_owned()));
         let mut events = caller.events();
-        self.spawner.spawn_unboxed(async move {
+        self.tasks.spawn(self.spawner.as_ref(), "warm transfer caller follower", async move {
             loop {
                 let event = match events.next().await {
                     Ok(Some(event)) => event,
@@ -437,15 +444,16 @@ impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         let (host, dial) = (self.host.clone(), self.dial.clone());
         match self.call.take() {
+            // Detached: the dial's owner is being dropped, and the call must still be cancelled.
             Some(Call::Creating(task)) => {
-                self.spawner.spawn_unboxed(async move {
+                self.spawner.spawn_detached(async move {
                     if let Ok(Ok(sid)) = task.await {
                         twilio_cancel(host, dial, sid).await;
                     }
                 });
             }
             Some(Call::Created(sid)) => {
-                self.spawner.spawn_unboxed(twilio_cancel(host, dial, sid));
+                self.spawner.spawn_detached(twilio_cancel(host, dial, sid));
             }
             None => {}
         }
@@ -471,7 +479,8 @@ async fn twilio_originate(
     let create = |from: String, token: Option<String>| {
         let (reply, created) = tokio::sync::oneshot::channel();
         let (host, dial, twiml) = (host.clone(), dial.clone(), twiml.clone());
-        spawner.spawn_unboxed(async move {
+        // Detached: a creation the caller stops waiting for is cancelled by `CancelOnDrop`.
+        spawner.spawn_detached(async move {
             let _ = reply.send(twilio_create_call(host, dial, from, twiml, token).await);
         });
         created

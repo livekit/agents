@@ -6,6 +6,7 @@
 //! session's audio input and output legs. What the legs account for is
 //! [`ConsolePlayback`]'s; only the socket is here.
 
+use lk_agents_net::task::TaskSet;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::HostError;
@@ -13,7 +14,7 @@ use lk_agents_abi::voice::console::ConsolePort;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackTracker,
 };
-use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt};
+use lk_agents_abi::{AudioFrame, Clock, Spawner};
 use lk_agents_net::tcp::Connector;
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -46,6 +47,8 @@ pub struct ConsoleIo {
 struct Transport {
     io: Arc<ConsoleIo>,
     spawner: Arc<dyn Spawner>,
+    /// The socket writer, which ends once the outgoing queue closes.
+    tasks: Arc<TaskSet>,
 }
 
 impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
@@ -82,7 +85,7 @@ impl ConsoleIo {
 
 impl ConsolePort for ConsoleIo {
     fn as_transport(self: Arc<Self>, spawner: Arc<dyn Spawner>) -> Arc<dyn SessionTransport> {
-        Arc::new(Transport { io: self, spawner })
+        Arc::new(Transport { io: self, spawner, tasks: Arc::default() })
     }
     fn as_console(self: Arc<Self>) -> Arc<dyn ConsoleSink> {
         self
@@ -124,7 +127,7 @@ impl SessionTransport for Transport {
                 .await
                 .map_err(|e| HostError::new(format!("console: connecting to {addr}: {e}")))?;
             *self.io.reader.lock().await = Some((read, FrameDecoder::new()));
-            self.spawner.spawn_unboxed(async move {
+            self.tasks.spawn(self.spawner.as_ref(), "console writer", async move {
                 while let Some(bytes) = rx.recv().await {
                     if write.write_all(&bytes).await.is_err() {
                         return;

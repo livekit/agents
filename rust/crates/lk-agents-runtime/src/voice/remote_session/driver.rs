@@ -6,8 +6,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::Timebase;
 use tokio::sync::mpsc;
@@ -190,6 +190,8 @@ pub struct Hosting {
     closed: tokio::sync::watch::Sender<bool>,
     transport: Arc<dyn SessionTransport>,
     console: Option<Arc<dyn ConsoleSink>>,
+    /// The close, which a cancelled caller leaves to finish.
+    tasks: Arc<TaskSet>,
 }
 
 impl Hosting {
@@ -209,6 +211,7 @@ impl Hosting {
             closed: tokio::sync::watch::Sender::new(false),
             transport,
             console,
+            tasks: Arc::default(),
         }
     }
 
@@ -249,7 +252,7 @@ impl Hosting {
     pub async fn aclose(&self) {
         if !self.closing.swap(true, Ordering::AcqRel) {
             let (host, closed) = (Arc::clone(&self.host), self.closed.clone());
-            self.spawner.spawn_unboxed(async move {
+            self.tasks.spawn(self.spawner.as_ref(), "remote session close", async move {
                 let cancelled = host.aclose(SHUTDOWN_DRAIN).await;
                 if !cancelled.is_empty() {
                     log::warn!(target: LOG, request_types = cancelled.join(", ").as_str();

@@ -4,11 +4,12 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{
     AudioSource, LocalParticipant, RtcError, TrackPublication, TrackPublishOptions, TrackSource,
 };
-use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt};
+use lk_agents_abi::{AudioFrame, Clock, Spawner};
 use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
 use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{Mixer, StreamId};
 use lk_agents_net::env::{ProcessEnv, WorkerPool};
+use lk_agents_net::task::TaskSet;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -87,6 +88,8 @@ impl PlaybackHandle {
 pub struct BackgroundAudioPlayer {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
+    /// Pumps, stops and stream closes, which outlive a cancelled waiter.
+    tasks: Arc<TaskSet>,
     /// The media pool file sounds decode on.
     workers: WorkerPool,
     state: tokio::sync::Mutex<MixerState>,
@@ -157,6 +160,7 @@ impl BackgroundAudioPlayer {
         Self {
             clock,
             spawner,
+            tasks: Arc::default(),
             workers,
             state: tokio::sync::Mutex::new(MixerState {
                 mixer,
@@ -194,7 +198,7 @@ impl BackgroundAudioPlayer {
         // Publish the track and own the pump. If the caller cancels, close waits and releases the
         // track.
         let this = self.clone();
-        spawn_owned(self.spawner.as_ref(), async move {
+        spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
             let mut output = this.output.lock().await;
             if this.closed.load(Ordering::Acquire) {
                 return Err(RtcError::Closed("background audio"));
@@ -214,7 +218,7 @@ impl BackgroundAudioPlayer {
             let (stop, stop_rx) = tokio::sync::watch::channel(false);
             let engine = this.clone();
             let sink = source.clone();
-            let pump = spawn_owned(this.spawner.as_ref(), async move {
+            let pump = spawn_owned((&this.tasks, this.spawner.as_ref()), async move {
                 if let Err(err) = engine.pump(sink, stop_rx).await {
                     log::error!("background audio capture failed: {err}");
                 }
@@ -310,6 +314,7 @@ impl BackgroundAudioPlayer {
             playback: Playback::new(&sound.config),
             handle: handle.clone(),
             spawner: self.spawner.clone(),
+            tasks: self.tasks.clone(),
         });
         self.wake.notify_one();
         Ok(handle)
@@ -382,12 +387,17 @@ impl BackgroundAudioPlayer {
         self.closing.store(true, Ordering::Release);
         let mut reopen = Reopen(&self.closing, false);
         let this = self.clone();
-        let _ = spawn_owned(self.spawner.as_ref(), async move { this.stop_sounds().await }).await;
+        let _ =
+            spawn_owned(
+                (&self.tasks, self.spawner.as_ref()),
+                async move { this.stop_sounds().await },
+            )
+            .await;
         reopen.1 = true;
         self.closed.store(true, Ordering::Release);
         self.wake.notify_one();
         let this = self.clone();
-        let _ = spawn_owned(self.spawner.as_ref(), async move {
+        let _ = spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
             let mut output = this.output.lock().await;
             if let Some(output) = output.take() {
                 let _ = output.stop.send(true);
@@ -429,13 +439,13 @@ impl BackgroundAudioPlayer {
     }
 }
 
-/// The task owns its work even if its waiter is cancelled.
+/// The player's task set owns the work even if its waiter is cancelled.
 fn spawn_owned<T: Send + 'static>(
-    spawner: &dyn Spawner,
+    (tasks, spawner): (&Arc<TaskSet>, &dyn Spawner),
     future: impl Future<Output = T> + Send + 'static,
 ) -> tokio::sync::oneshot::Receiver<T> {
     let (done, completed) = tokio::sync::oneshot::channel();
-    spawner.spawn_unboxed(async move {
+    tasks.spawn(spawner, "background audio", async move {
         let _ = done.send(future.await);
     });
     completed
@@ -457,6 +467,7 @@ struct Source {
     playback: Playback,
     handle: Arc<PlaybackHandle>,
     spawner: Arc<dyn Spawner>,
+    tasks: Arc<TaskSet>,
 }
 
 enum Input {
@@ -595,7 +606,7 @@ impl Source {
         }
         let pending = self.pending.take();
         let input = std::mem::replace(&mut self.input, Input::Closed);
-        spawn_owned(self.spawner.as_ref(), async move {
+        spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
             if let Some(pending) = pending {
                 let _ = pending.await;
             }

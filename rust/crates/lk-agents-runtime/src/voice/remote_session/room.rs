@@ -1,11 +1,12 @@
 //! The room's `lk.agent.session` byte streams as a [`SessionTransport`] (`RoomSessionTransport`):
 //! one message per stream, read in the order the streams opened, written one stream at a time.
 
+use lk_agents_net::task::TaskSet;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner};
 use prost::Message as _;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -25,6 +26,8 @@ struct Inner {
     incoming: AsyncMutex<Option<Receiver<ByteStream>>>,
     /// One stream at a time: concurrent writers interleave on the same topic.
     sending: AsyncMutex<()>,
+    /// Sends that nobody awaits; each ends on its own.
+    tasks: Arc<TaskSet>,
 }
 
 #[derive(Default)]
@@ -42,6 +45,7 @@ impl RoomTransport {
             state: Mutex::default(),
             incoming: AsyncMutex::new(None),
             sending: AsyncMutex::new(()),
+            tasks: Arc::default(),
         }))
     }
 }
@@ -109,7 +113,7 @@ impl SessionTransport for RoomTransport {
 
     fn send_message_nowait(&self, msg: &proto::AgentSessionMessage) {
         let (this, msg) = (Arc::clone(&self.0), msg.clone());
-        self.0.spawner.spawn_unboxed(async move {
+        self.0.tasks.spawn(self.0.spawner.as_ref(), "remote session send", async move {
             let _ = this.send(&msg).await;
         });
     }
