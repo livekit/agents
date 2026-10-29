@@ -21,6 +21,7 @@ use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt,
     TOPIC_CHAT, Ts,
 };
+use futures_util::FutureExt as _;
 use lk_agents_net::monotone::Monotone;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
@@ -677,10 +678,18 @@ impl room_owner::RoomIo for RoomIo {
                 let stopped = owner.stopped.notified();
                 tokio::pin!(stopped);
                 stopped.as_mut().enable();
-                if owner.is_closing() { break; }
+                if owner.is_closing() {
+                    // What the room said before the stop still reaches the session: the room's
+                    // `Close` stops this loop at the instant it is queued here (seed 19655).
+                    while let Ok(event) = events.try_recv() && listener(event) {}
+                    while let Some(Ok(Some(event))) = rtc_events.next().now_or_never()
+                        && rtc_listener(event)
+                    {}
+                    break;
+                }
                 tokio::select! {
                     biased;
-                    () = &mut stopped => break,
+                    () = &mut stopped => continue,
                     event = events.recv() => { if event.is_none_or(|event| !listener(event)) { break; } },
                     event = rtc_events.next() => match event {
                         Ok(Some(event)) => { if !rtc_listener(event) { break; } },
