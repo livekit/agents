@@ -1,6 +1,10 @@
 use super::*;
 
-use crate::{JobDecision, JobRequest, RunningJobInfo};
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::server_host::{JobAnswer, ServerHost};
+use lk_agents_abi::worker::worker::ProcessStartOptions;
+
+use crate::{JobRequest, RunningJobInfo, WorkerRegistered};
 
 #[derive(Clone)]
 struct Host {
@@ -25,61 +29,58 @@ impl Host {
     }
 }
 
-#[async_trait]
-impl WorkerHost for Host {
-    async fn on_job_request(&self, _: JobRequest) -> JobDecision {
-        JobDecision::Unanswered
+impl ServerHost for Host {
+    fn job_request(&self, _: JobRequest) -> BoxFuture<'_, Result<JobAnswer, HostError>> {
+        async { Ok(JobAnswer::Unanswered) }.boxed()
     }
-    async fn launch_job(&self, _: RunningJobInfo) -> crate::HostResult<crate::JobId> {
-        Ok("job".into())
+    fn launch_job(&self, _: RunningJobInfo) -> BoxFuture<'_, Result<String, HostError>> {
+        async { Ok("job".into()) }.boxed()
     }
-    async fn terminate_job(&self, _: crate::JobId) -> crate::HostResult {
-        Ok(())
+    fn terminate_job(&self, _: String) -> BoxFuture<'_, Result<(), HostError>> {
+        async { Ok(()) }.boxed()
     }
-    async fn user_load(&self) -> Option<f32> {
-        Some(0.0)
+    fn load(&self) -> BoxFuture<'_, Result<f64, HostError>> {
+        async { Ok(0.0) }.boxed()
+    }
+    fn start(&self, _: ProcessStartOptions) -> BoxFuture<'_, Result<(), HostError>> {
+        let fail = self.fail_start;
+        async move { if fail { Err("pool warmup timed out".into()) } else { Ok(()) } }.boxed()
+    }
+    fn started(&self) -> BoxFuture<'_, Result<(), HostError>> {
+        self.started.notify_one();
+        async { Ok(()) }.boxed()
+    }
+    fn registered(&self, _: WorkerRegistered) -> BoxFuture<'_, Result<(), HostError>> {
+        async { Ok(()) }.boxed()
+    }
+    fn idle_processes(&self, _: u32) -> BoxFuture<'_, Result<(), HostError>> {
+        async { Ok(()) }.boxed()
+    }
+    fn worker_load(&self, _: f64) -> BoxFuture<'_, Result<(), HostError>> {
+        async { Ok(()) }.boxed()
+    }
+    fn join_jobs(&self) -> BoxFuture<'_, Result<(), HostError>> {
+        self.joining.notify_one();
+        std::future::pending().boxed()
+    }
+    fn close(&self) -> BoxFuture<'_, Result<(), HostError>> {
+        async {
+            self.closing.notify_one();
+            let _permit = self.release_close.acquire().await.unwrap();
+            if self.fail_close { Err("host close failed".into()) } else { Ok(()) }
+        }
+        .boxed()
+    }
+    fn active_jobs(&self) -> BoxFuture<'_, Result<usize, HostError>> {
+        async { Ok(0) }.boxed()
+    }
+    fn metrics(&self) -> BoxFuture<'_, Result<(String, String), HostError>> {
+        async { Err("no metrics".into()) }.boxed()
     }
 }
 
-#[async_trait]
-impl ServerHost for Host {
-    fn configured(&self, _: bool, _: bool, _: bool) -> Self {
-        self.clone()
-    }
-    async fn start(&self, _: ServerSettings, _: bool, _: bool) -> Result<(), String> {
-        if self.fail_start { Err("pool warmup timed out".into()) } else { Ok(()) }
-    }
-    async fn started(&self) -> Result<(), String> {
-        self.started.notify_one();
-        Ok(())
-    }
-    async fn registered(&self, _: WorkerRegistered) -> Result<(), String> {
-        Ok(())
-    }
-    async fn idle_processes(&self, _: u32) -> Result<(), String> {
-        Ok(())
-    }
-    async fn worker_load(&self, _: f32) -> Result<(), String> {
-        Ok(())
-    }
-    async fn close_websockets(&self) -> Result<(), String> {
-        Ok(())
-    }
-    async fn join_jobs(&self) -> Result<(), String> {
-        self.joining.notify_one();
-        std::future::pending().await
-    }
-    async fn close(&self) -> Result<(), String> {
-        self.closing.notify_one();
-        let _permit = self.release_close.acquire().await.unwrap();
-        if self.fail_close { Err("host close failed".into()) } else { Ok(()) }
-    }
-    async fn active_jobs(&self) -> usize {
-        0
-    }
-    async fn metrics(&self) -> Option<(String, String)> {
-        None
-    }
+fn hosted(host: &Host) -> HostedServer {
+    HostedServer::new(Arc::new(host.clone()))
 }
 
 fn options() -> ServerStart {
@@ -105,7 +106,7 @@ fn options() -> ServerStart {
 #[tokio::test]
 async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
     let host = Host::new();
-    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -135,7 +136,7 @@ async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
 async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(host, Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
     let mut start = options();
     start.unregistered = false;
     start.settings.ws_url = "ws://127.0.0.1:1".into();
@@ -157,7 +158,7 @@ async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
     let mut host = Host::new();
     host.fail_start = true;
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
     assert_eq!(runtime.run(options()).await, Err("pool warmup timed out".into()));
     assert_eq!(runtime.close().await, Ok(()));
     assert_eq!(runtime.close().await, Ok(()));
@@ -170,7 +171,7 @@ async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() 
     let mut host = Host::new();
     host.fail_close = true;
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -183,7 +184,7 @@ async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() 
 #[tokio::test]
 async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
     let host = Host::new();
-    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
     let mut start = options();
     start.settings.shutdown_process_timeout = 0.02;
     let run = runtime.run(start);
@@ -214,7 +215,7 @@ async fn server_startup_waits_for_sampling_capacity() {
     }
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(host.clone(), Some(workers.clone()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(workers.clone()));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -235,7 +236,7 @@ async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
     let held: Vec<_> = (0..4).map(|_| workers.try_admit().unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(host.clone(), Some(workers));
+    let runtime = ServerRuntime::new(hosted(&host), Some(workers));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -253,7 +254,7 @@ async fn server_setup_capacity_timeout_keeps_close_successful() {
     let held: Vec<_> = (0..4).map(|_| workers.try_admit().unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(host.clone(), Some(workers));
+    let runtime = ServerRuntime::new(hosted(&host), Some(workers));
     let mut start = options();
     start.settings.initialize_process_timeout = 0.01;
     assert_eq!(runtime.run(start).await, Err("server setup capacity wait timed out".into()));

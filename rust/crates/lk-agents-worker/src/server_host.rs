@@ -22,12 +22,11 @@ use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, Ser
 use crate::endpoint::host::{Endpoints, NativeStream};
 use crate::env::Env;
 use crate::io::WorkerIo;
-use crate::server::{self, ServerHost, ServerPhase, ServerSettings, ServerStart};
+use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
 use crate::transport::AgentEndpointKind;
 use crate::{
     AcceptArguments, EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId,
-    JobRequest, RunningJobInfo, TransportConfig, WorkerCommand, WorkerHost, WorkerRegistered,
-    protocol,
+    JobRequest, RunningJobInfo, TransportConfig, WorkerCommand, WorkerHost, protocol,
 };
 
 pub struct Configuration {
@@ -105,7 +104,7 @@ type Mounted = Arc<OnceLock<(Arc<Endpoints>, Arc<dyn AsgiApplication>)>>;
 /// The host server with what the runtime decides on its own.
 #[derive(Clone)]
 pub struct HostedServer {
-    host: Arc<dyn Host>,
+    pub(crate) proxy: Arc<dyn Host>,
     /// The user gave a `load_fnc` the worker may call (not on Cloud).
     user_load: bool,
     /// The server has a voice door, and that door an `on_request`.
@@ -114,8 +113,55 @@ pub struct HostedServer {
     mounted: Mounted,
 }
 
-fn to_string(error: HostError) -> String {
-    error.to_string()
+impl HostedServer {
+    pub(crate) fn new(proxy: Arc<dyn Host>) -> Self {
+        HostedServer {
+            proxy,
+            user_load: true,
+            has_rtc: false,
+            has_on_request: false,
+            mounted: Mounted::default(),
+        }
+    }
+
+    pub(crate) fn configured(&self, has_rtc: bool, has_on_request: bool, user_load: bool) -> Self {
+        Self { has_rtc, has_on_request, user_load, ..self.clone() }
+    }
+
+    pub(crate) async fn start(
+        &self,
+        start: ServerSettings,
+        devmode: bool,
+        has_rtc: bool,
+    ) -> Result<(), String> {
+        let options = ProcessStartOptions {
+            devmode,
+            job_processes: has_rtc,
+            env: start.child_env().into_iter().map(|(key, value)| (key.into(), value)).collect(),
+            job_executor_type: start.job_executor_type.clone(),
+            multiprocessing_context: start.multiprocessing_context.clone(),
+            pool: ProcessPoolOptions {
+                num_idle_processes: start
+                    .num_idle_processes
+                    .unwrap_or(EnvOption::Fixed(0))
+                    .get(devmode),
+                initialize_timeout: start.initialize_process_timeout,
+                close_timeout: start.shutdown_process_timeout,
+                session_end_timeout: start.session_end_timeout,
+                memory_warn_mb: start.job_memory_warn_mb,
+                memory_limit_mb: start.job_memory_limit_mb,
+                http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
+            },
+        };
+        self.proxy.start(options).await.map_err(|error| error.to_string())
+    }
+
+    /// Clients of an open WebSocket get a close frame and reconnect to another worker.
+    pub(crate) async fn close_websockets(&self) {
+        if let Some((endpoints, _)) = self.mounted.get() {
+            endpoints.close_websockets(1001, "worker draining".into()).await;
+        }
+    }
 }
 
 #[async_trait]
@@ -125,7 +171,7 @@ impl WorkerHost for HostedServer {
             return decision;
         }
         // A failed `request_fnc` rejects without terminating, so the server can redispatch.
-        match self.host.job_request(req).await {
+        match self.proxy.job_request(req).await {
             Err(error) => JobDecision::Failed(error),
             Ok(JobAnswer::Accept { name, identity, metadata, attributes }) => {
                 JobDecision::Accept(AcceptArguments { name, identity, metadata, attributes })
@@ -137,11 +183,11 @@ impl WorkerHost for HostedServer {
     }
 
     async fn launch_job(&self, info: RunningJobInfo) -> Result<JobId, HostError> {
-        self.host.launch_job(info).await
+        self.proxy.launch_job(info).await
     }
 
     async fn terminate_job(&self, id: JobId) -> Result<(), HostError> {
-        self.host.terminate_job(id).await
+        self.proxy.terminate_job(id).await
     }
 
     /// A raising `load_fnc` must not read as idle (that over-schedules); `None` falls back to the
@@ -150,7 +196,7 @@ impl WorkerHost for HostedServer {
         if !self.user_load {
             return None;
         }
-        self.host.load().await.ok().map(|load| load as f32)
+        self.proxy.load().await.ok().map(|load| load as f32)
     }
 
     async fn serve_endpoint(&self, request: EndpointRequest) {
@@ -178,77 +224,13 @@ impl WorkerHost for HostedServer {
 }
 
 #[async_trait]
-impl ServerHost for HostedServer {
-    fn configured(&self, has_rtc: bool, has_on_request: bool, user_load: bool) -> Self {
-        Self { has_rtc, has_on_request, user_load, ..self.clone() }
-    }
-
-    async fn start(
-        &self,
-        start: ServerSettings,
-        devmode: bool,
-        has_rtc: bool,
-    ) -> Result<(), String> {
-        let options = ProcessStartOptions {
-            devmode,
-            job_processes: has_rtc,
-            env: start.child_env().into_iter().map(|(key, value)| (key.into(), value)).collect(),
-            job_executor_type: start.job_executor_type.clone(),
-            multiprocessing_context: start.multiprocessing_context.clone(),
-            pool: ProcessPoolOptions {
-                num_idle_processes: start
-                    .num_idle_processes
-                    .unwrap_or(EnvOption::Fixed(0))
-                    .get(devmode),
-                initialize_timeout: start.initialize_process_timeout,
-                close_timeout: start.shutdown_process_timeout,
-                session_end_timeout: start.session_end_timeout,
-                memory_warn_mb: start.job_memory_warn_mb,
-                memory_limit_mb: start.job_memory_limit_mb,
-                http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
-            },
-        };
-        self.host.start(options).await.map_err(to_string)
-    }
-
-    async fn started(&self) -> Result<(), String> {
-        self.host.started().await.map_err(to_string)
-    }
-
-    async fn registered(&self, info: WorkerRegistered) -> Result<(), String> {
-        self.host.registered(info).await.map_err(to_string)
-    }
-
-    async fn idle_processes(&self, target: u32) -> Result<(), String> {
-        self.host.idle_processes(target).await.map_err(to_string)
-    }
-
-    async fn worker_load(&self, load: f32) -> Result<(), String> {
-        self.host.worker_load(f64::from(load)).await.map_err(to_string)
-    }
-
-    /// Clients of an open WebSocket get a close frame and reconnect to another worker.
-    async fn close_websockets(&self) -> Result<(), String> {
-        if let Some((endpoints, _)) = self.mounted.get() {
-            endpoints.close_websockets(1001, "worker draining".into()).await;
-        }
-        Ok(())
-    }
-
-    async fn join_jobs(&self) -> Result<(), String> {
-        self.host.join_jobs().await.map_err(to_string)
-    }
-
-    async fn close(&self) -> Result<(), String> {
-        self.host.close().await.map_err(to_string)
-    }
-
-    async fn active_jobs(&self) -> usize {
-        self.host.active_jobs().await.unwrap_or(0)
+impl HealthProbe for HostedServer {
+    async fn health(&self) -> usize {
+        self.proxy.active_jobs().await.unwrap_or(0)
     }
 
     async fn metrics(&self) -> Option<(String, String)> {
-        self.host.metrics().await.ok()
+        self.proxy.metrics().await.ok()
     }
 }
 
@@ -289,7 +271,7 @@ fn manifest_entry(route: EndpointRoute) -> Result<protocol::AgentEndpoint, Worke
 pub struct AgentRuntime<E> {
     settings: Arc<Mutex<ServerSettings>>,
     running: Arc<AtomicBool>,
-    runtime: server::ServerRuntime<HostedServer>,
+    runtime: server::ServerRuntime,
     mounted: Mounted,
     io: WorkerIo,
     env: PhantomData<fn() -> E>,
@@ -308,14 +290,8 @@ impl<E: Env> ServerRuntime for AgentRuntime<E> {
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
         let io = E::worker_io().map_err(WorkerError::Failed)?;
-        let mounted = Mounted::default();
-        let host = HostedServer {
-            host,
-            user_load: true,
-            has_rtc: false,
-            has_on_request: false,
-            mounted: mounted.clone(),
-        };
+        let host = HostedServer::new(host);
+        let mounted = host.mounted.clone();
         Ok(Self {
             settings: config.settings.clone(),
             running: config.running.clone(),

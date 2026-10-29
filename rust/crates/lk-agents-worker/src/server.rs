@@ -3,10 +3,8 @@
 //! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
 //! processes and the user's callbacks.
 
-use crate::{
-    Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification, WorkerRegistered,
-};
-use async_trait::async_trait;
+use crate::server_host::HostedServer;
+use crate::{Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
 use std::sync::Arc;
@@ -131,26 +129,6 @@ pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, String> {
 
 // --------------------------------------------------------------------- the listeners
 
-#[async_trait]
-pub trait ServerHost: WorkerHost + Clone + Send + Sync + 'static {
-    fn configured(&self, has_rtc: bool, has_on_request: bool, user_load: bool) -> Self;
-    async fn start(
-        &self,
-        settings: ServerSettings,
-        devmode: bool,
-        has_rtc: bool,
-    ) -> Result<(), String>;
-    async fn started(&self) -> Result<(), String>;
-    async fn registered(&self, info: WorkerRegistered) -> Result<(), String>;
-    async fn idle_processes(&self, target: u32) -> Result<(), String>;
-    async fn worker_load(&self, load: f32) -> Result<(), String>;
-    async fn close_websockets(&self) -> Result<(), String>;
-    async fn join_jobs(&self) -> Result<(), String>;
-    async fn close(&self) -> Result<(), String>;
-    async fn active_jobs(&self) -> usize;
-    async fn metrics(&self) -> Option<(String, String)>;
-}
-
 pub struct ServerStart {
     pub settings: ServerSettings,
     pub devmode: bool,
@@ -184,8 +162,8 @@ struct Control {
 type Outcome = watch::Sender<Option<Result<(), String>>>;
 
 #[derive(Clone)]
-pub struct ServerRuntime<H: ServerHost> {
-    host: H,
+pub struct ServerRuntime {
+    host: HostedServer,
     workers: Option<crate::io::WorkerIo>,
     control: watch::Sender<Control>,
     receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
@@ -195,8 +173,8 @@ pub struct ServerRuntime<H: ServerHost> {
     drain_outcome: Outcome,
 }
 
-impl<H: ServerHost> ServerRuntime<H> {
-    pub fn new(host: H, workers: Option<crate::io::WorkerIo>) -> Self {
+impl ServerRuntime {
+    pub fn new(host: HostedServer, workers: Option<crate::io::WorkerIo>) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
@@ -385,7 +363,7 @@ impl<H: ServerHost> ServerRuntime<H> {
             self.publish(&state, effects);
             if notify_started {
                 started_notification =
-                    Some((self.host.started().boxed(), readiness.expect("startup succeeded")));
+                    Some((self.host.proxy.started(), readiness.expect("startup succeeded")));
             }
         }
         while !matches!(state.phase(), ServerPhase::Closing | ServerPhase::Closed) {
@@ -410,7 +388,7 @@ impl<H: ServerHost> ServerRuntime<H> {
                     match result {
                         Ok(()) => { readiness.send_replace(true); }
                         Err(error) => {
-                            let effects = state.handle(ServerInput::Failed(error), origin.elapsed());
+                            let effects = state.handle(ServerInput::Failed(error.to_string()), origin.elapsed());
                             self.publish(&state, effects);
                         }
                     }
@@ -526,7 +504,7 @@ impl<H: ServerHost> ServerRuntime<H> {
         let server_type =
             if start.publisher { crate::ServerType::Publisher } else { crate::ServerType::Room };
         let status = Arc::new(ServerStatus::default());
-        let probe = Arc::new(HostHealth(host.clone()));
+        let probe = Arc::new(host.clone());
         if !settings.simulation {
             let (listener, port) = bind_listener(&settings.host, settings.port.get(start.devmode))
                 .await
@@ -583,7 +561,10 @@ impl<H: ServerHost> ServerRuntime<H> {
                                 snapshots.send_modify(|snapshot| {
                                     snapshot.worker_id = info.worker_id.clone()
                                 });
-                                host.registered(info).await?;
+                                host.proxy
+                                    .registered(info)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
                             }
                             WorkerNotification::Stopped(_) => break,
                             _ => {}
@@ -616,10 +597,16 @@ impl<H: ServerHost> ServerRuntime<H> {
                     let snapshot = worker.snapshot();
                     status.set_load(snapshot.worker_load);
                     if let Some(target) = snapshot.target_idle_processes {
-                        host.idle_processes(target).await?;
+                        host.proxy
+                            .idle_processes(target)
+                            .await
+                            .map_err(|error| error.to_string())?;
                     }
                 }
-                host.worker_load(status.load()).await?;
+                host.proxy
+                    .worker_load(f64::from(status.load()))
+                    .await
+                    .map_err(|error| error.to_string())?;
             }
         }));
         Ok(readiness)
@@ -633,10 +620,10 @@ impl<H: ServerHost> ServerRuntime<H> {
         let host = self.host.clone();
         async move {
             let drain = async {
-                host.close_websockets().await?;
+                host.close_websockets().await;
                 match worker {
                     Some(worker) => worker.drain(timeout).await,
-                    None => host.join_jobs().await,
+                    None => host.proxy.join_jobs().await.map_err(|error| error.to_string()),
                 }
             };
             match timeout {
@@ -696,12 +683,17 @@ struct Resources {
 }
 
 impl Resources {
-    fn close<H: ServerHost>(
+    fn close(
         self,
-        host: H,
+        host: HostedServer,
     ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), String>)>> {
         let closing = FuturesUnordered::new();
-        closing.push(async move { (ServerResource::Host, host.close().await) }.boxed());
+        closing.push(
+            async move {
+                (ServerResource::Host, host.proxy.close().await.map_err(|error| error.to_string()))
+            }
+            .boxed(),
+        );
         closing.push(
             async move {
                 let result = match self.setup {
@@ -759,18 +751,6 @@ impl Resources {
             );
         }
         closing
-    }
-}
-
-struct HostHealth<H>(H);
-
-#[async_trait]
-impl<H: ServerHost> HealthProbe for HostHealth<H> {
-    async fn health(&self) -> usize {
-        self.0.active_jobs().await
-    }
-    async fn metrics(&self) -> Option<(String, String)> {
-        self.0.metrics().await
     }
 }
 
