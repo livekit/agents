@@ -29,10 +29,6 @@ use crate::task::{OwnedTask, TaskOutcome};
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;
 
-// B-12 host-resource teardown (the reference INTERRUPTION_TIMEOUT): the caller waits at most
-// this long for close/cancel. Expiry reports incomplete cleanup; it does not abandon ownership.
-const CLIENT_TEARDOWN_TIMEOUT: std::time::Duration = HOST_TEARDOWN_TIMEOUT;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupObservation {
     /// The remote may have accepted a request whose task identity was not received locally.
@@ -296,7 +292,7 @@ impl AgentClient {
                             }
                         };
                         tokio::pin!(cleanup);
-                        if tokio::time::timeout(CLIENT_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
+                        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
                             work_inner.observe(CleanupObservation::Incomplete { requests: vec![id] });
                             cleanup.await;
                         }
@@ -435,7 +431,7 @@ impl AgentClient {
                 }
             }
         };
-        if tokio::time::timeout(CLIENT_TEARDOWN_TIMEOUT, wait).await.is_err() {
+        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, wait).await.is_err() {
             let requests = self
                 .inner
                 .operations
@@ -541,7 +537,7 @@ impl Inner {
     async fn cancel_owned(&self, task: &TaskRef) {
         let cancellation = self.cancel_remote(task, Some("caller-canceled"));
         tokio::pin!(cancellation);
-        let result = match tokio::time::timeout(CLIENT_TEARDOWN_TIMEOUT, &mut cancellation).await {
+        let result = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cancellation).await {
             Ok(result) => result,
             Err(_) => {
                 self.observe(CleanupObservation::CancellationIncomplete { task: task.clone() });
