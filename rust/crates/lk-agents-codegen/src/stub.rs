@@ -7,6 +7,7 @@
 use crate::ir::*;
 use crate::python::{self, Out};
 use crate::surface::Stub;
+use lk_agents_bindgen::summary;
 
 pub const PATH: &str = "_core_classes.pyi";
 
@@ -480,28 +481,4 @@ fn py_ty(cx: Cx, t: &RTy, arg: bool) -> Result<String, String> {
             }
         }
     })
-}
-
-fn summary(doc: &[String]) -> Vec<String> {
-    let end = doc.iter().position(|l| l.is_empty()).unwrap_or(doc.len());
-    doc[..end].iter().map(|l| unlink(l)).collect()
-}
-
-/// `` [`x`] `` -> `` `x` ``; a `[text](url)` link is kept.
-fn unlink(line: &str) -> String {
-    let mut out = String::new();
-    let mut rest = line;
-    while let Some(i) = rest.find("[`") {
-        let Some(j) = rest[i..].find("`]") else { break };
-        let after = &rest[i + j + 2..];
-        out.push_str(&rest[..i]);
-        if after.starts_with('(') || after.starts_with('[') {
-            out.push_str(&rest[i..i + j + 2]);
-        } else {
-            out.push_str(&rest[i + 1..i + j + 1]);
-        }
-        rest = after;
-    }
-    out.push_str(rest);
-    out
 }
