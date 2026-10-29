@@ -27,7 +27,7 @@ fn _extract_data_stream_audio_output_new_clear_buffer_timeout(obj: &Bound<'_, Py
 
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
 #[pyclass(frozen, name = "DataStreamAudioOutput", module = "livekit.agents._core")]
-pub struct DataStreamAudioOutput(pub(crate) ::std::sync::Arc<DataStreamAudioOutputImpl>);
+pub struct DataStreamAudioOutput(::std::sync::Arc<DataStreamAudioOutputImpl>);
 
 #[pymethods]
 impl DataStreamAudioOutput {
@@ -105,7 +105,7 @@ fn _extract_data_stream_audio_receiver_notify_playback_finished_playback_positio
 
 /// The worker's receiver keeps stream identity with each delivered frame and playback report.
 #[pyclass(frozen, name = "DataStreamAudioReceiver", module = "livekit.agents._core")]
-pub struct DataStreamAudioReceiver(pub(crate) ::std::sync::Arc<DataStreamAudioReceiverImpl>);
+pub struct DataStreamAudioReceiver(::std::sync::Arc<DataStreamAudioReceiverImpl>);
 
 #[pymethods]
 impl DataStreamAudioReceiver {
@@ -397,7 +397,7 @@ fn _extract_playout_ledger_add_pushed_samples_sample_rate(obj: &Bound<'_, PyAny>
 }
 
 #[pyclass(frozen, name = "PlayoutLedger", module = "livekit.agents._core")]
-pub struct PlayoutLedger(pub(crate) ::std::sync::Arc<PlayoutLedgerImpl>);
+pub struct PlayoutLedger(::std::sync::Arc<PlayoutLedgerImpl>);
 
 #[pymethods]
 impl PlayoutLedger {
@@ -443,7 +443,7 @@ type ConsoleIoImpl = <crate::Selected as super::Implementations>::ConsoleIo;
 
 /// `lk agent console`'s socket, opened when the session starts.
 #[pyclass(frozen, name = "ConsoleIo", module = "livekit.agents._core")]
-pub struct ConsoleIo(pub(crate) ::std::sync::Arc<ConsoleIoImpl>);
+pub struct ConsoleIo(::std::sync::Arc<ConsoleIoImpl>);
 
 #[pymethods]
 impl ConsoleIo {

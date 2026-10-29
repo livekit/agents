@@ -27,7 +27,7 @@ fn _extract_fallback_llm_new_retry_interval(obj: &Bound<'_, PyAny>) -> PyResult<
 
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
 #[pyclass(frozen, name = "FallbackLlm", module = "livekit.agents._core")]
-pub struct FallbackLlm(pub(crate) ::std::sync::Arc<FallbackLlmImpl>);
+pub struct FallbackLlm(::std::sync::Arc<FallbackLlmImpl>);
 
 #[pymethods]
 impl FallbackLlm {
@@ -125,7 +125,7 @@ fn _extract_fallback_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<::s
 
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[pyclass(frozen, name = "FallbackTts", module = "livekit.agents._core")]
-pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
+pub struct FallbackTts(::std::sync::Arc<FallbackTtsImpl>);
 
 #[pymethods]
 impl FallbackTts {
@@ -232,7 +232,7 @@ type TtsTokenLogImpl = <crate::Selected as super::Implementations>::TtsTokenLog;
 /// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
 #[pyclass(frozen, name = "TtsTokenLog", module = "livekit.agents._core")]
-pub struct TtsTokenLog(pub(crate) ::std::sync::Arc<TtsTokenLogImpl>);
+pub struct TtsTokenLog(::std::sync::Arc<TtsTokenLogImpl>);
 
 #[pymethods]
 impl TtsTokenLog {
@@ -275,7 +275,7 @@ type InferenceLlmImpl = <crate::Selected as super::Implementations>::InferenceLl
 /// The gateway LLM behind `inference.LLM`. Its options are shared by every view
 /// (`identified`); each view's requests carry its own job's identification.
 #[pyclass(frozen, name = "InferenceLlm", module = "livekit.agents._core")]
-pub struct InferenceLlm(pub(crate) ::std::sync::Arc<InferenceLlmImpl>);
+pub struct InferenceLlm(::std::sync::Arc<InferenceLlmImpl>);
 
 #[pymethods]
 impl InferenceLlm {
@@ -382,7 +382,7 @@ type LlmChoiceParserImpl = <crate::Selected as super::Implementations>::ChoicePa
 /// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
 /// the model's thinking tags: `inference.LLMStream` over a plugin's own client.
 #[pyclass(name = "LlmChoiceParser", module = "livekit.agents._core")]
-pub struct LlmChoiceParser(pub(crate) LlmChoiceParserImpl);
+pub struct LlmChoiceParser(LlmChoiceParserImpl);
 
 #[pymethods]
 impl LlmChoiceParser {
@@ -434,7 +434,7 @@ fn _extract_mcp_session_connect_http_sse_read_timeout(obj: &Bound<'_, PyAny>) ->
 
 /// An SDK session whose owner cancels and joins independently of request borrowers.
 #[pyclass(frozen, name = "McpSession", module = "livekit.agents._core")]
-pub struct McpSession(pub(crate) ::std::sync::Arc<McpSessionImpl>);
+pub struct McpSession(::std::sync::Arc<McpSessionImpl>);
 
 #[pymethods]
 impl McpSession {
@@ -730,7 +730,7 @@ pub fn flatten_delta_text(parts: ::std::vec::Vec<::std::string::String>) -> PyRe
 type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
 
 #[pyclass(frozen, name = "NativeRealtimeModel", module = "livekit.agents._core")]
-pub struct NativeRealtimeModel(pub(crate) ::std::sync::Arc<NativeRealtimeModelImpl>);
+pub struct NativeRealtimeModel(::std::sync::Arc<NativeRealtimeModelImpl>);
 
 #[pymethods]
 impl NativeRealtimeModel {
@@ -818,7 +818,7 @@ fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyRe
 
 /// The generated facade holds native resources; host provider objects use the shared bridge.
 #[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
-pub struct RealtimeFallbackModel(pub(crate) ::std::sync::Arc<RealtimeFallbackModelImpl>);
+pub struct RealtimeFallbackModel(::std::sync::Arc<RealtimeFallbackModelImpl>);
 
 #[pymethods]
 impl RealtimeFallbackModel {

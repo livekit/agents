@@ -146,8 +146,14 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         Form::MutableClass => ("", format!("{name}Impl")),
         _ => ("frozen, ", format!("::std::sync::Arc<{name}Impl>")),
     };
-    // Native host adapters recover the same implementation behind generated wrappers.
-    let visibility = "pub(crate) ";
+    // Associated class factories can construct a wrapper from another generated family.
+    let visibility = if decls.classes.iter().any(|owner| {
+        owner.family != c.family && owner.instances.iter().any(|(_, target)| target == name)
+    }) {
+        "pub(crate) "
+    } else {
+        ""
+    };
     let host_module = &c.host_module;
     let subclass = if c.subclass { "subclass, " } else { "" };
     s.push_str(&format!(

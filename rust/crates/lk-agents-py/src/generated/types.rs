@@ -51,7 +51,7 @@ fn _extract_provider_attempts_cancel_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<
 
 /// Host callbacks execute attempts authorized by the shared inference request machine.
 #[pyclass(name = "_core_ProviderAttempts", module = "livekit.agents._core")]
-pub struct _core_ProviderAttempts(pub(crate) _core_ProviderAttemptsImpl);
+pub struct _core_ProviderAttempts(_core_ProviderAttemptsImpl);
 
 #[pymethods]
 impl _core_ProviderAttempts {

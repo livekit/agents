@@ -145,7 +145,7 @@ type MarkupImpl = <crate::Selected as super::Implementations>::MarkupClass;
 ///
 /// Plugins opt in by overriding `_provider_key`.
 #[pyclass(frozen, name = "Markup", module = "livekit.agents._core")]
-pub struct Markup(pub(crate) ::std::sync::Arc<MarkupImpl>);
+pub struct Markup(::std::sync::Arc<MarkupImpl>);
 
 #[pymethods]
 impl Markup {
@@ -190,7 +190,7 @@ type TranscriptMarkupStripperImpl = <crate::Selected as super::Implementations>:
 
 /// Stateful, provider-agnostic markup stripper for one transcript segment.
 #[pyclass(name = "TranscriptMarkupStripper", module = "livekit.agents._core")]
-pub struct TranscriptMarkupStripper(pub(crate) TranscriptMarkupStripperImpl);
+pub struct TranscriptMarkupStripper(TranscriptMarkupStripperImpl);
 
 #[pymethods]
 impl TranscriptMarkupStripper {

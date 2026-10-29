@@ -16,7 +16,7 @@ type _core_JudgeRunnerImpl = <crate::Selected as super::Implementations>::JudgeR
 /// Runs judges on one model. A model the host implements is offered `tools`, the host's live
 /// judge tools (`judge_tool_schemas`).
 #[pyclass(frozen, name = "_core_JudgeRunner", module = "livekit.agents._core")]
-pub struct _core_JudgeRunner(pub(crate) ::std::sync::Arc<_core_JudgeRunnerImpl>);
+pub struct _core_JudgeRunner(::std::sync::Arc<_core_JudgeRunnerImpl>);
 
 #[pymethods]
 impl _core_JudgeRunner {

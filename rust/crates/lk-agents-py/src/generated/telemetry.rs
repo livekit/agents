@@ -43,7 +43,7 @@ fn _extract_telemetry_policy_record_bytes_link_count(obj: &Bound<'_, PyAny>) -> 
 
 /// The host supplies SDK fields and lengths; shared policy decides what may be retained/exported.
 #[pyclass(frozen, name = "_core_TelemetryPolicy", module = "livekit.agents._core")]
-pub struct _core_TelemetryPolicy(pub(crate) ::std::sync::Arc<_core_TelemetryPolicyImpl>);
+pub struct _core_TelemetryPolicy(::std::sync::Arc<_core_TelemetryPolicyImpl>);
 
 #[pymethods]
 impl _core_TelemetryPolicy {
@@ -224,7 +224,7 @@ type _core_MetricSeriesImpl = <crate::Selected as super::Implementations>::Metri
 /// The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
 /// and series before the host SDK creates a new one.
 #[pyclass(name = "_core_MetricSeries", module = "livekit.agents._core")]
-pub struct _core_MetricSeries(pub(crate) _core_MetricSeriesImpl);
+pub struct _core_MetricSeries(_core_MetricSeriesImpl);
 
 #[pymethods]
 impl _core_MetricSeries {
@@ -267,7 +267,7 @@ fn _extract_session_report_projection_event_record_timestamp(obj: &Bound<'_, PyA
 }
 
 #[pyclass(frozen, name = "_core_SessionReportProjection", module = "livekit.agents._core")]
-pub struct _core_SessionReportProjection(pub(crate) ::std::sync::Arc<_core_SessionReportProjectionImpl>);
+pub struct _core_SessionReportProjection(::std::sync::Arc<_core_SessionReportProjectionImpl>);
 
 #[pymethods]
 impl _core_SessionReportProjection {
@@ -359,7 +359,7 @@ fn _extract_loop_monitor_new_tick_interval(obj: &Bound<'_, PyAny>) -> PyResult<:
 /// A loop's watchdog: runtime owns thresholds, timing, admission and cleanup, while the host
 /// supplies asyncio scheduling, stack samples and OpenTelemetry emission.
 #[pyclass(frozen, name = "LoopMonitor", module = "livekit.agents._core")]
-pub struct LoopMonitor(pub(crate) ::std::sync::Arc<LoopMonitorImpl>);
+pub struct LoopMonitor(::std::sync::Arc<LoopMonitorImpl>);
 
 #[pymethods]
 impl LoopMonitor {
@@ -427,7 +427,7 @@ fn _extract_event_retention_expire_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u6
 /// Bounded retention of a session report's host event snapshots. The native policy retains only
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
 #[pyclass(name = "_core_EventRetention", module = "livekit.agents._core")]
-pub struct _core_EventRetention(pub(crate) _core_EventRetentionImpl);
+pub struct _core_EventRetention(_core_EventRetentionImpl);
 
 #[pymethods]
 impl _core_EventRetention {
@@ -504,7 +504,7 @@ fn _extract_session_report_upload_upload_start_time_millis(obj: &Bound<'_, PyAny
 
 /// Credentials for the session recording endpoint and host OTLP exporters.
 #[pyclass(frozen, name = "_core_SessionReportUpload", module = "livekit.agents._core")]
-pub struct _core_SessionReportUpload(pub(crate) ::std::sync::Arc<_core_SessionReportUploadImpl>);
+pub struct _core_SessionReportUpload(::std::sync::Arc<_core_SessionReportUploadImpl>);
 
 #[pymethods]
 impl _core_SessionReportUpload {
@@ -560,7 +560,7 @@ fn _extract_prepared_transcript_check_input_item_bytes(obj: &Bound<'_, PyAny>) -
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
 /// append it off their event loop; no whole-history extraction crosses a binding call.
 #[pyclass(frozen, name = "_core_PreparedTranscript", module = "livekit.agents._core")]
-pub struct _core_PreparedTranscript(pub(crate) ::std::sync::Arc<_core_PreparedTranscriptImpl>);
+pub struct _core_PreparedTranscript(::std::sync::Arc<_core_PreparedTranscriptImpl>);
 
 #[pymethods]
 impl _core_PreparedTranscript {

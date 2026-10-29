@@ -77,7 +77,7 @@ type BasicWordTokenizerImpl = <crate::Selected as super::Implementations>::WordT
 /// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
 /// stripped unless asked to keep it.
 #[pyclass(frozen, name = "BasicWordTokenizer", module = "livekit.agents._core")]
-pub struct BasicWordTokenizer(pub(crate) ::std::sync::Arc<BasicWordTokenizerImpl>);
+pub struct BasicWordTokenizer(::std::sync::Arc<BasicWordTokenizerImpl>);
 
 #[pymethods]
 impl BasicWordTokenizer {
@@ -130,7 +130,7 @@ fn _extract_sentence_tokenizer_new_stream_context_len(obj: &Bound<'_, PyAny>) ->
 /// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
 /// tested.
 #[pyclass(frozen, name = "BasicSentenceTokenizer", module = "livekit.agents._core")]
-pub struct BasicSentenceTokenizer(pub(crate) ::std::sync::Arc<BasicSentenceTokenizerImpl>);
+pub struct BasicSentenceTokenizer(::std::sync::Arc<BasicSentenceTokenizerImpl>);
 
 #[pymethods]
 impl BasicSentenceTokenizer {
@@ -185,7 +185,7 @@ fn _extract_buffered_tokens_new_max_token_len(obj: &Bound<'_, PyAny>) -> PyResul
 }
 
 #[pyclass(name = "TokenBuffer", module = "livekit.agents._core")]
-pub struct TokenBuffer(pub(crate) TokenBufferImpl);
+pub struct TokenBuffer(TokenBufferImpl);
 
 #[pymethods]
 impl TokenBuffer {
@@ -215,7 +215,7 @@ type SearchDocumentImpl = <crate::Selected as super::Implementations>::SearchDoc
 
 /// One tool as the search sees it; identity stays with the host.
 #[pyclass(frozen, name = "SearchDocument", module = "livekit.agents._core")]
-pub struct SearchDocument(pub(crate) ::std::sync::Arc<SearchDocumentImpl>);
+pub struct SearchDocument(::std::sync::Arc<SearchDocumentImpl>);
 
 #[pymethods]
 impl SearchDocument {
@@ -249,7 +249,7 @@ fn _extract_search_index_search_limit(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
 }
 
 #[pyclass(name = "BM25Index", module = "livekit.agents._core")]
-pub struct BM25Index(pub(crate) BM25IndexImpl);
+pub struct BM25Index(BM25IndexImpl);
 
 #[pymethods]
 impl BM25Index {

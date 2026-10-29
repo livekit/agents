@@ -34,7 +34,7 @@ fn _extract_audio_emitter_pushed_duration_idx(obj: &Bound<'_, PyAny>) -> PyResul
 }
 
 #[pyclass(frozen, subclass, name = "AudioEmitter", module = "livekit.agents.tts")]
-pub struct AudioEmitter(pub(crate) ::std::sync::Arc<AudioEmitterImpl>);
+pub struct AudioEmitter(::std::sync::Arc<AudioEmitterImpl>);
 
 #[pymethods]
 impl AudioEmitter {
@@ -170,7 +170,7 @@ fn _extract_audio_decoder_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::v
 /// Container bytes decoded on one admitted native worker: input is queued without waiting for
 /// the decoder, and decoded frames are awaited.
 #[pyclass(frozen, name = "AudioDecoder", module = "livekit.agents._core")]
-pub struct AudioDecoder(pub(crate) ::std::sync::Arc<AudioDecoderImpl>);
+pub struct AudioDecoder(::std::sync::Arc<AudioDecoderImpl>);
 
 #[pymethods]
 impl AudioDecoder {
@@ -233,7 +233,7 @@ fn _extract_stream_buffer_read_size(obj: &Bound<'_, PyAny>) -> PyResult<isize> {
 
 /// A byte pipe: normal EOF drains buffered bytes; close discards them immediately.
 #[pyclass(frozen, name = "StreamBuffer", module = "livekit.agents._core")]
-pub struct StreamBuffer(pub(crate) ::std::sync::Arc<StreamBufferImpl>);
+pub struct StreamBuffer(::std::sync::Arc<StreamBufferImpl>);
 
 #[pymethods]
 impl StreamBuffer {

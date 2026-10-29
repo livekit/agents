@@ -50,7 +50,7 @@ fn _extract_connection_pool_state_closed_id(obj: &Bound<'_, PyAny>) -> PyResult<
 }
 
 #[pyclass(name = "ConnectionPoolState", module = "livekit.agents._core")]
-pub struct ConnectionPoolState(pub(crate) ConnectionPoolStateImpl);
+pub struct ConnectionPoolState(ConnectionPoolStateImpl);
 
 #[pymethods]
 impl ConnectionPoolState {
@@ -178,7 +178,7 @@ fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64
 }
 
 #[pyclass(subclass, name = "ExpFilter", module = "livekit.agents.utils.exp_filter")]
-pub struct ExpFilter(pub(crate) ExpFilterImpl);
+pub struct ExpFilter(ExpFilterImpl);
 
 #[pymethods]
 impl ExpFilter {
@@ -226,7 +226,7 @@ fn _extract_moving_average_add_sample_sample(obj: &Bound<'_, PyAny>) -> PyResult
 }
 
 #[pyclass(subclass, name = "MovingAverage", module = "livekit.agents.utils.moving_average")]
-pub struct MovingAverage(pub(crate) MovingAverageImpl);
+pub struct MovingAverage(MovingAverageImpl);
 
 #[pymethods]
 impl MovingAverage {

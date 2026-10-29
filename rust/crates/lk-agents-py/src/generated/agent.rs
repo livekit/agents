@@ -36,7 +36,7 @@ fn _extract_run_events_failure_index(obj: &Bound<'_, PyAny>) -> PyResult<::std::
 /// The observed events of one invocation and the position `next_event` reads from. Each call
 /// returns the index of the event it matched.
 #[pyclass(name = "RunEvents", module = "livekit.agents._core")]
-pub struct RunEvents(pub(crate) RunEventsImpl);
+pub struct RunEvents(RunEventsImpl);
 
 #[pymethods]
 impl RunEvents {
@@ -118,7 +118,7 @@ fn _extract_agent_runner_progress_operation(obj: &Bound<'_, PyAny>) -> PyResult<
 /// Runs invocations of one agent definition: each `run` streams its updates, then its settled
 /// result; closing the stream cancels the invocation, whose work still settles.
 #[pyclass(frozen, name = "AgentRunner", module = "livekit.agents._core")]
-pub struct AgentRunner(pub(crate) ::std::sync::Arc<AgentRunnerImpl>);
+pub struct AgentRunner(::std::sync::Arc<AgentRunnerImpl>);
 
 #[pymethods]
 impl AgentRunner {

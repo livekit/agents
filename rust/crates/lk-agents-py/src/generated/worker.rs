@@ -30,7 +30,7 @@ fn _extract_endpoint_stream_stop_code(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
 }
 
 #[pyclass(frozen, name = "EndpointStream", module = "livekit.agents._core")]
-pub struct EndpointStream(pub(crate) ::std::sync::Arc<EndpointStreamImpl>);
+pub struct EndpointStream(::std::sync::Arc<EndpointStreamImpl>);
 
 #[pymethods]
 impl EndpointStream {
@@ -110,7 +110,7 @@ fn _extract_endpoint_server_close_websockets_code(obj: &Bound<'_, PyAny>) -> PyR
 
 /// The host's ASGI application bridge and its active WebSockets.
 #[pyclass(frozen, name = "EndpointServer", module = "livekit.agents._core")]
-pub struct EndpointServer(pub(crate) ::std::sync::Arc<EndpointServerImpl>);
+pub struct EndpointServer(::std::sync::Arc<EndpointServerImpl>);
 
 #[pymethods]
 impl EndpointServer {
@@ -175,7 +175,7 @@ impl EndpointServer {
 type _core_AsgiReceiveImpl = <crate::Selected as super::Implementations>::AsgiReceive;
 
 #[pyclass(frozen, name = "_core_AsgiReceive", module = "livekit.agents._core")]
-pub struct _core_AsgiReceive(pub(crate) ::std::sync::Arc<_core_AsgiReceiveImpl>);
+pub struct _core_AsgiReceive(::std::sync::Arc<_core_AsgiReceiveImpl>);
 
 #[pymethods]
 impl _core_AsgiReceive {
@@ -217,7 +217,7 @@ impl _core_AsgiReceive {
 type _core_AsgiSendImpl = <crate::Selected as super::Implementations>::AsgiSend;
 
 #[pyclass(frozen, name = "_core_AsgiSend", module = "livekit.agents._core")]
-pub struct _core_AsgiSend(pub(crate) ::std::sync::Arc<_core_AsgiSendImpl>);
+pub struct _core_AsgiSend(::std::sync::Arc<_core_AsgiSendImpl>);
 
 #[pymethods]
 impl _core_AsgiSend {
@@ -372,7 +372,7 @@ type ExitSignalsImpl = <crate::Selected as super::Implementations>::CliSignals;
 
 /// The process launcher's signal and final event-loop cleanup owner.
 #[pyclass(frozen, name = "ExitSignals", module = "livekit.agents._core")]
-pub struct ExitSignals(pub(crate) ::std::sync::Arc<ExitSignalsImpl>);
+pub struct ExitSignals(::std::sync::Arc<ExitSignalsImpl>);
 
 #[pymethods]
 impl ExitSignals {
@@ -470,7 +470,7 @@ fn _extract_worker_proc_supervisor__core_launched_process_owned(obj: &Bound<'_, 
 }
 
 #[pyclass(frozen, name = "ProcSupervisor", module = "livekit.agents._core")]
-pub struct ProcSupervisor(pub(crate) ::std::sync::Arc<ProcSupervisorImpl>);
+pub struct ProcSupervisor(::std::sync::Arc<ProcSupervisorImpl>);
 
 #[pymethods]
 impl ProcSupervisor {
@@ -613,7 +613,7 @@ fn _extract_worker_ipc_client_new_fd(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
 }
 
 #[pyclass(frozen, name = "IpcClient", module = "livekit.agents._core")]
-pub struct IpcClient(pub(crate) ::std::sync::Arc<IpcClientImpl>);
+pub struct IpcClient(::std::sync::Arc<IpcClientImpl>);
 
 #[pymethods]
 impl IpcClient {
@@ -684,7 +684,7 @@ fn _extract_worker_proc_pool_set_target_idle_processes_n(obj: &Bound<'_, PyAny>)
 }
 
 #[pyclass(frozen, name = "ProcPool", module = "livekit.agents._core")]
-pub struct ProcPool(pub(crate) ::std::sync::Arc<ProcPoolImpl>);
+pub struct ProcPool(::std::sync::Arc<ProcPoolImpl>);
 
 #[pymethods]
 impl ProcPool {
@@ -792,7 +792,7 @@ fn _extract_worker_job_run_participant_joined_kind(obj: &Bound<'_, PyAny>) -> Py
 /// order and bounds of the shutdown, the participant entrypoints, the room connected once, the
 /// application calls in flight and the recording's setup.
 #[pyclass(frozen, name = "JobRun", module = "livekit.agents._core")]
-pub struct JobRun(pub(crate) ::std::sync::Arc<JobRunImpl>);
+pub struct JobRun(::std::sync::Arc<JobRunImpl>);
 
 #[pymethods]
 impl JobRun {
@@ -973,7 +973,7 @@ impl JobRun {
 type ServerConfigImpl = <crate::Selected as super::Implementations>::ServerConfig;
 
 #[pyclass(frozen, name = "ServerConfig", module = "livekit.agents._core")]
-pub struct ServerConfig(pub(crate) ::std::sync::Arc<ServerConfigImpl>);
+pub struct ServerConfig(::std::sync::Arc<ServerConfigImpl>);
 
 #[pymethods]
 impl ServerConfig {
@@ -1095,7 +1095,7 @@ fn _extract_server_runtime_simulate_job_room_info(obj: &Bound<'_, PyAny>) -> PyR
 }
 
 #[pyclass(frozen, name = "ServerRuntime", module = "livekit.agents._core")]
-pub struct ServerRuntime(pub(crate) ::std::sync::Arc<ServerRuntimeImpl>);
+pub struct ServerRuntime(::std::sync::Arc<ServerRuntimeImpl>);
 
 #[pymethods]
 impl ServerRuntime {
