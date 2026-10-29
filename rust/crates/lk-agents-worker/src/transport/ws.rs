@@ -12,12 +12,12 @@ use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
 use super::{TransportError, TransportEvent};
 use crate::protocol::{self, WorkerMessage};
 
-pub struct WsTransport {
+pub struct WebSocketTransport {
     pub heartbeat: Duration,
 }
 
 #[async_trait]
-impl WorkerTransport for WsTransport {
+impl WorkerTransport for WebSocketTransport {
     async fn connect(
         &self,
         url: &str,
@@ -181,10 +181,11 @@ mod tests {
             .await
             .unwrap();
         });
-        let Connected { sink, mut stream, .. } = WsTransport { heartbeat: Duration::from_secs(30) }
-            .connect(&url, None, vec![])
-            .await
-            .unwrap();
+        let Connected { sink, mut stream, .. } =
+            WebSocketTransport { heartbeat: Duration::from_secs(30) }
+                .connect(&url, None, vec![])
+                .await
+                .unwrap();
         sink.send(WorkerMessage::default()).await.unwrap();
         let received = tokio::time::timeout(Duration::from_secs(5), async {
             assert!(matches!(stream.recv().await.unwrap(), TransportEvent::ServerMessage(m) if m.message.is_none()));
@@ -206,10 +207,11 @@ mod tests {
             let _ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
             let _ = hold.await;
         });
-        let Connected { sink, mut stream } = WsTransport { heartbeat: Duration::from_secs(1) }
-            .connect(&url, None, vec![])
-            .await
-            .unwrap();
+        let Connected { sink, mut stream } =
+            WebSocketTransport { heartbeat: Duration::from_secs(1) }
+                .connect(&url, None, vec![])
+                .await
+                .unwrap();
         for _ in 0..7 {
             assert!(tokio::time::timeout(Duration::from_millis(250), stream.recv()).await.is_err());
         }

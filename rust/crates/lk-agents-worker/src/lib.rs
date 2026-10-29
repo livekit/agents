@@ -43,7 +43,7 @@ pub use state::{Slot, WorkerState, WorkerStateEffect, WorkerStateInput, WorkerTi
 pub use transport::{
     AgentEndpointKind, Connected, EndpointReader, EndpointStream, EndpointWriter,
     HttpStreamResetCode, StreamPreamble, TransportConfig, TransportError, TransportEvent,
-    WorkerSink, WorkerStream, WorkerTransport, WsTransport, WtTransport, agent_url,
+    WebSocketTransport, WorkerSink, WorkerStream, WorkerTransport, WtTransport, agent_url,
 };
 pub use worker::{
     EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig, RuntimeError,

@@ -33,7 +33,7 @@ pub enum TransportConfig {
 impl TransportConfig {
     pub fn build(self) -> Box<dyn WorkerTransport> {
         match self {
-            Self::WebSocket { heartbeat } => Box::new(WsTransport { heartbeat }),
+            Self::WebSocket { heartbeat } => Box::new(WebSocketTransport { heartbeat }),
             Self::WebTransport { insecure } => Box::new(WtTransport { insecure }),
         }
     }
@@ -46,7 +46,7 @@ pub use webtransport::{
     AgentEndpointKind, EndpointControl, EndpointReader, EndpointStream, EndpointWriter,
     HttpStreamResetCode, StreamPreamble, WtTransport,
 };
-pub use ws::WsTransport;
+pub use ws::WebSocketTransport;
 
 #[async_trait]
 pub trait WorkerSink: Send + Sync {
