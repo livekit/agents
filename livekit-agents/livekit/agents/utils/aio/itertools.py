@@ -26,6 +26,7 @@ class _TeeSource(Generic[T]):
         self._request = asyncio.Event()
         self._response: asyncio.Future[T] | None = None
         self._task: asyncio.Task[None] | None = None
+        self._supervisor: asyncio.Task[None] | None = None
         self._started = False
         self._closing = False
         self._cleaning_up = False
@@ -44,6 +45,7 @@ class _TeeSource(Generic[T]):
             self._task.add_done_callback(
                 lambda task: task.exception() if not task.cancelled() else None
             )
+            self._supervisor = asyncio.create_task(self._supervise())
 
         # A cancelled peer relinquishes its wait, not the shared upstream read.
         # Keep the response for the next peer until its item has been delivered.
@@ -60,6 +62,21 @@ class _TeeSource(Generic[T]):
         self._response = None
         return item
 
+    async def _supervise(self) -> None:
+        """Stop retrying reads when loop shutdown cancels the producer's tasks."""
+        task = self._task
+        assert task is not None
+        try:
+            await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        except asyncio.CancelledError:
+            # Loop shutdown cancels both tasks. Mark the cancellation as final
+            # even if the producer has already handled it as a cancelled read.
+            # Do not cancel it again: its iterator may be awaiting cleanup.
+            self._closing = True
+            self._request.set()
+            await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+            raise
+
     async def _run(self) -> None:
         """Serve requested reads and clean up the iterator in one context."""
         self._started = True
@@ -67,6 +84,8 @@ class _TeeSource(Generic[T]):
             while not self._closing:
                 await self._request.wait()
                 self._request.clear()
+                if self._closing:
+                    break
                 response = self._response
                 assert response is not None
                 try:
@@ -105,6 +124,9 @@ class _TeeSource(Generic[T]):
         # Only cancel the producer once. A second close or a cancelled close
         # caller must not interrupt an upstream finally block already running.
         (result,) = await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        supervisor = self._supervisor
+        if supervisor is not None:
+            await asyncio.shield(asyncio.gather(supervisor, return_exceptions=True))
         if self._response is not None:
             if not self._response.done():
                 self._response.cancel()

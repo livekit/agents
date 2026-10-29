@@ -1,11 +1,106 @@
 import asyncio
 import contextvars
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
 from livekit.agents.utils.aio.itertools import Tee
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+
+
+def test_event_loop_shutdown_finishes_source_cleanup():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import asyncio
+                from livekit.agents.utils.aio.itertools import Tee
+
+                async def main():
+                    entered = asyncio.Event()
+
+                    async def source():
+                        try:
+                            entered.set()
+                            await asyncio.Event().wait()
+                            yield 1
+                        finally:
+                            await asyncio.sleep(0.01)
+                            print("source cleanup completed", flush=True)
+
+                    tee = Tee(source(), n=2)
+                    reader = asyncio.create_task(anext(tee[0]))
+                    await entered.wait()
+                    assert not reader.done()
+                    # Leave the second peer unstarted and let asyncio.run
+                    # cancel all pending tasks without an explicit Tee close.
+
+                asyncio.run(main())
+                print("event loop shutdown completed", flush=True)
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "source cleanup completed",
+        "event loop shutdown completed",
+    ]
+
+
+@pytest.mark.parametrize("producer_first", [True, False])
+async def test_shutdown_cancellation_order_preserves_async_cleanup(producer_first):
+    entered = asyncio.Event()
+    closing = asyncio.Event()
+    release = asyncio.Event()
+    cleanup_count = 0
+
+    async def source():
+        nonlocal cleanup_count
+        try:
+            entered.set()
+            await asyncio.Event().wait()
+            yield 1
+        finally:
+            closing.set()
+            await release.wait()
+            cleanup_count += 1
+
+    tee = Tee(source(), n=2)
+    reader = asyncio.create_task(anext(tee[0]))
+    await entered.wait()
+    producer = tee._source._task
+    supervisor = tee._source._supervisor
+    assert producer is not None and supervisor is not None
+    try:
+        if producer_first:
+            producer.cancel()
+            await closing.wait()
+            supervisor.cancel()
+        else:
+            supervisor.cancel()
+            await asyncio.sleep(0)
+            producer.cancel()
+            await closing.wait()
+        reader.cancel()
+        await asyncio.sleep(0)
+        assert not producer.done()
+        assert not supervisor.done()
+        release.set()
+        await asyncio.gather(reader, producer, supervisor, return_exceptions=True)
+        assert cleanup_count == 1
+    finally:
+        release.set()
+        await tee.aclose()
+        await asyncio.gather(reader, producer, supervisor, return_exceptions=True)
 
 
 async def test_upstream_cancellation_does_not_end_surviving_peers():
