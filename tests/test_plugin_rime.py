@@ -59,7 +59,7 @@ pytestmark = pytest.mark.unit
 
 HAS_REALTIME_SDK = find_spec("rimelabs_sdk") is not None
 if HAS_REALTIME_SDK:
-    from rimelabs_sdk import Rime, RimeInputError, realtime as r
+    from rimelabs_sdk import Rime, RimeInputError, RimeStreamError, realtime as r
     from websockets.asyncio.server import serve
 
     from livekit.plugins.rime.realtime import (
@@ -3065,6 +3065,8 @@ class Peer:
         self.history_release = asyncio.Event()
         self.history_release.set()
         self.fail_history_at = None
+        self.fail_history_scope = "event"
+        self.close_history_at = None
         self.block_history_at = None
         self.running = {}
         self.history_serial = 0
@@ -3155,14 +3157,20 @@ class Peer:
                     self.history_operations
                 ):
                     await self.history_release.wait()
+                if self.close_history_at == len(self.history_operations):
+                    await socket.close()
+                    continue
                 if self.fail_history_at == len(self.history_operations):
                     await self.emit(
                         "error",
                         error={
                             "code": "invalid_request",
                             "message": "History refused",
-                            "scope": "event",
-                            "owner": {"kind": "event", "event_id": event["event_id"]},
+                            "scope": self.fail_history_scope,
+                            "owner": {
+                                "kind": self.fail_history_scope,
+                                "event_id": event["event_id"],
+                            },
                         },
                     )
                     continue
@@ -3470,7 +3478,7 @@ class TestRealtime:
                 await peer.end(response_id)
                 await asyncio.wait_for(handle.wait_for_playout(), 5)
 
-    async def test_forced_tool_choice_emits_fatal_error(self):
+    async def test_forced_tool_choice_preserves_session(self):
         async with peer_model() as (_, model, _):
             session = model.session()
             errors = []
@@ -3478,7 +3486,159 @@ class TestRealtime:
             await session._update_session(instructions="test")
             with pytest.raises(PrismUnsupported):
                 session.update_options(tool_choice="required")
-            assert errors[-1].recoverable is False
+            assert errors == []
+            await session.update_instructions("still usable")
+
+    async def test_rejected_append_preserves_accepted_prefix_and_retries_only_missing_items(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(chat_ctx=messages("old"))
+            target = session.chat_ctx
+            target.add_message(role="user", content="accepted")
+            target.add_message(role="user", content="rejected")
+            peer.fail_history_at = len(peer.history_operations) + 2
+            errors = []
+            session.on("error", errors.append)
+            with pytest.raises(PrismError, match="invalid_request"):
+                await session.update_chat_ctx(target)
+            assert [i.text_content for i in session.chat_ctx.items] == ["old", "accepted"]
+            assert not any(not error.recoverable for error in errors)
+            await session.update_chat_ctx(target)
+            assert [i.text for i in await model.get_history()] == ["old", "accepted", "rejected"]
+            assert len(peer.history_operations) == 4
+
+    @pytest.mark.parametrize("refused_at", [1, 2])
+    async def test_rejected_imported_result_can_complete_its_accepted_call(self, refused_at):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="test")
+            target = llm.ChatContext(tool_history().items[2:4])
+            peer.fail_history_at = refused_at
+            with pytest.raises(PrismError):
+                await session.update_chat_ctx(target)
+            assert len(session.chat_ctx.items) == refused_at - 1
+            await session.update_chat_ctx(session.chat_ctx)
+            if refused_at == 2:
+                with pytest.raises(llm.RealtimeError, match="tool results"):
+                    await session.generate_reply()
+            else:
+                pending = session.generate_reply()
+                response = await peer.start(await peer.next())
+                await peer.end(response)
+                await pending
+            await session.update_chat_ctx(target)
+            assert len(await model.get_history()) == 2
+            assert len(peer.history_operations) == 3
+            pending = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await pending
+
+    async def test_rejected_last_result_preserves_earlier_reply_requirement(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="test")
+            parent = await peer.start()
+            for index in range(2):
+                await peer.emit(
+                    "response.function_call_arguments.done",
+                    response_id=parent,
+                    item_id=f"tool-{index}",
+                    call_id=f"call-{index}",
+                    name="lookup",
+                    arguments="{}",
+                )
+            await peer.end(parent)
+            await wait_until(lambda: len(session.chat_ctx.items) == 2)
+            target = session.chat_ctx
+            for index in range(2):
+                target.items.append(
+                    llm.FunctionCallOutput(
+                        call_id=f"call-{index}",
+                        output="42",
+                        is_error=False,
+                        reply_required=index == 0,
+                    )
+                )
+            peer.fail_history_at = 2
+            with pytest.raises(PrismError):
+                await session.update_chat_ctx(target)
+            await session.update_chat_ctx(target)
+            pending = session.generate_reply()
+            request = await peer.next()
+            assert request["response"]["metadata"]["prism_parent_response_id"] == parent
+            response = await peer.start(request)
+            await peer.end(response)
+            await pending
+            assert len(peer.history_operations) == 3
+
+    @pytest.mark.parametrize("failure", ["session", "disconnect"])
+    async def test_partial_append_with_uncertain_or_session_failure_remains_fatal(self, failure):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="test")
+            if failure == "session":
+                peer.fail_history_at = 2
+                peer.fail_history_scope = "session"
+            else:
+                peer.close_history_at = 2
+            errors = []
+            session.on("error", errors.append)
+            with pytest.raises((llm.RealtimeError, RimeStreamError)):
+                await session.update_chat_ctx(messages("accepted", "unknown"))
+            await wait_until(lambda: any(not error.recoverable for error in errors))
+            with pytest.raises((llm.RealtimeError, RimeStreamError)):
+                await session.update_instructions("must not continue")
+
+    async def test_agent_session_recovers_rejected_tool_result_without_reexecuting_tools(self):
+        ran = []
+
+        @function_tool
+        async def lookup() -> str:
+            """Look up a value."""
+            ran.append(True)
+            return "42"
+
+        async with peer_model() as (peer, model, _):
+            async with AgentSession(llm=model) as session:
+                agent = Agent(instructions="test", tools=[lookup])
+                await session.start(agent)
+                realtime = model._session
+                errors = []
+                realtime.on("error", errors.append)
+                handle = session.generate_reply()
+                parent = await peer.start(await peer.next())
+                for index in range(2):
+                    await peer.emit(
+                        "response.function_call_arguments.done",
+                        response_id=parent,
+                        item_id=f"tool-{index}",
+                        call_id=f"call-{index}",
+                        name="lookup",
+                        arguments="{}",
+                    )
+                peer.fail_history_at = 2
+                await peer.end(parent)
+                await wait_until(lambda: len(peer.history_operations) == 2)
+                await asyncio.wait_for(handle.wait_for_playout(), 3)
+                assert not any(not error.recoverable for error in errors)
+                assert len(ran) == 2
+                assert (
+                    sum(isinstance(i, llm.FunctionCallOutput) for i in realtime.chat_ctx.items) == 1
+                )
+                await realtime.update_chat_ctx(realtime.chat_ctx)
+                with pytest.raises(llm.RealtimeError, match="tool results"):
+                    await realtime.generate_reply()
+                assert peer.requests.empty()
+                await agent.update_chat_ctx(agent.chat_ctx.copy())
+                reply = session.generate_reply()
+                continuation = await peer.next()
+                assert continuation["response"]["metadata"]["prism_parent_response_id"] == parent
+                response = await peer.start(continuation)
+                await peer.end(response)
+                await asyncio.wait_for(reply.wait_for_playout(), 3)
+                assert len(ran) == 2
+                assert len(peer.history_operations) == 3
 
     async def test_injected_client_stays_open(self):
         async with peer_model() as (peer, model, client):

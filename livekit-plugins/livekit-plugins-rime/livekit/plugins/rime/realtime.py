@@ -402,7 +402,7 @@ class RealtimeSession(llm.RealtimeSession):
         if not is_given(tool_choice):
             return
         if tool_choice not in (None, "auto", "none"):
-            raise self._unsupported("Prism supports only tool_choice='auto' or 'none'")
+            raise PrismUnsupported("Prism supports only tool_choice='auto' or 'none'")
         self._tool_choice = "none" if tool_choice == "none" else "auto"
 
     async def get_history(self) -> tuple[r.HistoryItem, ...]:
@@ -592,6 +592,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._require()
         assert self._history is not None
         await self._history.wait_for_updates()
+        self._history.check_reply()
         try:
             if not disable_tools:
                 return await self._request_reply(instruction, parent, report, metadata)
@@ -646,6 +647,8 @@ class RealtimeSession(llm.RealtimeSession):
         metadata: dict[str, str] | None,
     ) -> llm.GenerationCreatedEvent:
         sdk = self._require()
+        assert self._history is not None
+        self._history.check_reply()
         ref: r.ResponseRef | None = None
         try:
             if instruction is not None:

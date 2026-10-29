@@ -234,7 +234,7 @@ limit and during handoff when LiveKit requests a final reply without tools.
 When Prism supplies a settings revision, each response keeps the tool policy of
 that revision, even if it arrives after a later settings update.
 Required or named tool choices remain unsupported. The plugin does not advertise
-native per-response tool selection.
+native per-response tool selection. Rejecting these choices leaves the session open.
 
 Use `agent.update_instructions()` and `agent.update_tools()` for agent settings.
 Updates wait for Prism acknowledgments. Handoff uses the normal LiveKit sequence;
@@ -267,9 +267,17 @@ records stay local. Importing history does not execute tools or start a reply.
 Append and deletion preserve retained turns. Replacing or reordering history
 rebuilds completed items with new server IDs. A rebuild requires no active reply
 or pending tool call. Prism has no atomic history replacement: replies can see
-intermediate context between operations. A failure after partial application
-ends the session. Standard fallback replays the current agent context, which can
-already contain the requested edit even when Prism rejected it.
+intermediate context between operations. An explicit event-scoped refusal during
+an append preserves acknowledged items and reports the original provider error.
+Keep the requested context to retry or correct the unaccepted items. Preserve
+newer conversation items and accepted item IDs when retrying. The plugin does not retry
+automatically or execute tools again. Replies requested through the plugin are
+blocked until rejected tool results have been submitted. Server-initiated speech
+replies are still controlled by Prism.
+
+An unknown request outcome, session failure, or partially applied deletion or
+replacement still ends the session. Standard fallback replays the current agent
+context, which can already contain the requested edit even when Prism rejected it.
 `await model.get_history()` returns completed server items. Running replies may
 be absent from that snapshot.
 `PrismGenerationCreatedEvent.instruction_item_id` names a saved instruction from
