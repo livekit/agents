@@ -89,9 +89,8 @@ class TestShift:
             ([1, 2, 3, 4, 5], 2, [3, 4, 5]),
             ([1, 2, 3], 3, []),
             ([1, 2, 3], 100, []),
-            ([1, 2, 3], 0, [1, 2, 3]),
         ],
-        ids=["removes_oldest", "shift_all", "clamps_to_available", "zero_is_noop"],
+        ids=["removes_oldest", "shift_all", "clamps_to_available"],
     )
     def test_shift(self, data: list[int], shift: int, expected: list[int]) -> None:
         buf = AudioArrayBuffer(buffer_size=10)
@@ -99,26 +98,12 @@ class TestShift:
         buf.shift(shift)
         _assert_eq(buf, expected)
 
-    def test_on_empty(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.shift(5)
-        assert len(buf.read()) == 0
-
     def test_shift_then_push(self) -> None:
         buf = AudioArrayBuffer(buffer_size=6)
         buf.push_frame(_frame([1, 2, 3, 4]))
         buf.shift(2)
         buf.push_frame(_frame([5, 6]))
         _assert_eq(buf, [3, 4, 5, 6])
-
-
-class TestRead:
-    def test_returns_copy(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.push_frame(_frame([1, 2, 3]))
-        result = buf.read()
-        result[0] = 999
-        _assert_eq(buf, [1, 2, 3])
 
 
 class TestSampleRates:

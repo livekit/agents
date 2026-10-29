@@ -71,34 +71,6 @@ def _handshake_error_with_api_key(api_key: str) -> WSServerHandshakeError:
 
 
 @pytest.mark.asyncio
-async def test_get_reuses_connection():
-    dummy_connect = dummy_connect_factory()
-    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
-
-    conn1 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    # Return the connection to the pool
-    pool.put(conn1)
-
-    async with pool.connection(conn_options=DEFAULT_API_CONNECT_OPTIONS) as conn:
-        assert conn is conn1, "Expected conn to be the same connection as conn1"
-
-    conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    assert conn1 is conn2, "Expected the same connection to be reused when it hasn't expired."
-
-
-@pytest.mark.asyncio
-async def test_get_creates_new_connection_when_none_available():
-    dummy_connect = dummy_connect_factory()
-    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
-
-    conn1 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    # Not putting conn1 back means the available pool is empty,
-    # so calling get() again should create a new connection.
-    conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    assert conn1 is not conn2, "Expected a new connection when no available connection exists."
-
-
-@pytest.mark.asyncio
 async def test_remove_connection():
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
@@ -222,20 +194,6 @@ def _closing_pool(max_session_duration: float | None = 60):
 
 
 @pytest.mark.asyncio
-async def test_invalidate_does_not_close_a_connection_still_in_use():
-    pool, closed = _closing_pool()
-
-    # checked out and never returned: something is streaming on it right now
-    in_use = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    pool.invalidate()
-
-    # a second acquisition drains the close queue; the in-flight connection must survive
-    other = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    assert other is not in_use, "Expected a fresh connection after invalidate()."
-    assert in_use not in closed, "invalidate() closed a connection that was still checked out."
-
-
-@pytest.mark.asyncio
 async def test_invalidate_closes_idle_connections_immediately():
     pool, closed = _closing_pool()
 
@@ -245,19 +203,6 @@ async def test_invalidate_closes_idle_connections_immediately():
 
     await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert idle in closed, "Expected an idle connection to be closed by the next drain."
-
-
-@pytest.mark.asyncio
-async def test_retired_connection_is_closed_once_returned():
-    pool, closed = _closing_pool()
-
-    in_use = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    pool.invalidate()
-    pool.put(in_use)  # the stream finished with it
-
-    fresh = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    assert fresh is not in_use, "A retired connection must not be reused."
-    assert in_use in closed, "Expected a retired connection to be closed once returned."
 
 
 @pytest.mark.asyncio

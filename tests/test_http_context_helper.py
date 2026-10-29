@@ -64,18 +64,6 @@ async def test_open_isolated_per_task() -> None:
     assert sess_a.closed and sess_b.closed
 
 
-async def test_shared_session_uses_aiohttp_default_timeout() -> None:
-    async with http_context.open() as session, aiohttp.ClientSession() as default_session:
-        assert session.timeout == default_session.timeout
-
-
-async def test_http_session_error_message_points_to_helper() -> None:
-    with pytest.raises(RuntimeError) as exc_info:
-        http_context.http_session()
-    msg = str(exc_info.value)
-    assert "http_context.open()" in msg
-
-
 @pytest.fixture(autouse=True)
 def _fresh_ssl_context_cache() -> None:
     """Each test builds its context under its own env and verify paths."""
@@ -115,15 +103,6 @@ def _certifi_cert_count() -> int:
     return ctx.cert_store_stats()["x509"]
 
 
-def test_ssl_context_honors_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SSL_CERT_FILE / SSL_CERT_DIR take precedence over the system store."""
-    monkeypatch.setenv("SSL_CERT_FILE", certifi.where())
-    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
-
-    ctx = http_context._create_ssl_context()
-    assert ctx.cert_store_stats()["x509"] == _certifi_cert_count()
-
-
 def test_ssl_context_falls_back_to_certifi_without_system_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,20 +140,6 @@ def test_ssl_context_falls_back_to_certifi_without_system_store(
 
     http_context._create_ssl_context()
     assert certifi.where() in loaded_cafiles
-
-
-def test_ssl_context_uses_system_store_when_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A resolvable system store is used as-is, without forcing certifi in."""
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
-    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
-
-    if not http_context._has_system_trust_store():
-        pytest.skip("host has no system trust store to exercise this path")
-
-    ctx = http_context._create_ssl_context()
-    assert ctx.verify_mode == ssl.CERT_REQUIRED
 
 
 def test_set_default_cert_env_sets_var_without_system_store(

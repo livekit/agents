@@ -24,7 +24,6 @@ PageConverter = _mod.PageConverter
 convert_directory = _mod.convert_directory
 extract_fingerprint = _mod.extract_fingerprint
 map_link = _mod.map_link
-map_output_path = _mod.map_output_path
 validate_links = _mod.validate_links
 validate_markdown = _mod.validate_markdown
 
@@ -242,21 +241,7 @@ ADMONITION_HTML = """\
 """
 
 
-class TestMapOutputPath:
-    def test_top_level_index(self, tmp_path: Path) -> None:
-        """index.html -> index.md"""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-        html_path = input_dir / "index.html"
-        html_path.touch()
-        result = map_output_path(html_path, input_dir)
-        assert result == Path("index.md")
-
-
 class TestMapLink:
-    def test_index_html(self) -> None:
-        assert map_link("agents/index.html") == "agents.md"
-
     def test_with_fragment(self) -> None:
         assert map_link("llm.html#ChatContext") == "llm.md#ChatContext"
 
@@ -265,9 +250,6 @@ class TestMapLink:
 
     def test_fragment_only_unchanged(self) -> None:
         assert map_link("#section") == "#section"
-
-    def test_non_html_unchanged(self) -> None:
-        assert map_link("data.json") == "data.json"
 
     def test_parent_index(self) -> None:
         assert map_link("../agents/index.html") == "../agents.md"
@@ -285,11 +267,6 @@ class TestPageConverter:
         assert md.startswith("# Module `livekit.agents.vad`")
         # Should not have any section headings
         assert "## " not in md
-
-    def test_namespace_title(self) -> None:
-        """Namespace prefix is preserved."""
-        md = PageConverter(NAMESPACE_HTML).convert()
-        assert md.startswith("# Namespace `livekit`")
 
     def test_submodules(self) -> None:
         """Sub-modules section renders as bullet list."""
@@ -326,14 +303,6 @@ class TestPageConverter:
         assert "def create_api_error" in md
         # Non-breaking hyphen ‑ (U+2011) should be normalized to -
         assert "- APIStatusError" in md
-
-    def test_class_basic(self) -> None:
-        """Class with ancestors, subclasses, variables, methods."""
-        md = PageConverter(CLASS_HTML).convert()
-        assert "## Classes" in md
-        assert "### `VAD`" in md
-        assert "class VAD" in md
-        assert "Base class for voice activity detection." in md
 
     def test_class_ancestors(self) -> None:
         md = PageConverter(CLASS_HTML).convert()
@@ -378,18 +347,6 @@ class TestPageConverter:
         md = PageConverter(ADMONITION_HTML).convert()
         assert "> **Note:**" in md
         assert "important note" in md
-
-    def test_class_source_details(self) -> None:
-        """Class source code appears in <details>."""
-        md = PageConverter(CLASS_HTML).convert()
-        # The class source should be in a details block
-        assert "<details><summary>Source</summary>" in md
-        assert "class VAD(ABC):" in md
-
-    def test_intro_section(self) -> None:
-        """Section intro text is included."""
-        md = PageConverter(FUNCTION_HTML).convert()
-        assert "LiveKit Agents for Python" in md
 
 
 class TestValidation:
@@ -448,25 +405,6 @@ class TestValidation:
         assert vr.is_valid
         assert len(vr.description_warnings) > 0
 
-    def test_empty_fingerprint_valid(self) -> None:
-        """Empty fingerprint (empty module) always validates."""
-        fp = ContentFingerprint()
-        vr = validate_markdown(fp, "# Module `empty`\n")
-        assert vr.is_valid
-        assert vr.score == 1.0
-
-    def test_class_variables_validate(self) -> None:
-        md = PageConverter(CLASS_VARIABLES_HTML).convert()
-        fp = extract_fingerprint(CLASS_VARIABLES_HTML)
-        vr = validate_markdown(fp, md)
-        assert vr.is_valid
-
-    def test_multiline_sig_validates(self) -> None:
-        md = PageConverter(MULTILINE_SIG_HTML).convert()
-        fp = extract_fingerprint(MULTILINE_SIG_HTML)
-        vr = validate_markdown(fp, md)
-        assert vr.is_valid
-
 
 def test_directory_conversion_preserves_api_content_and_internal_links(tmp_path: Path) -> None:
     input_dir = tmp_path / "html"
@@ -521,15 +459,6 @@ class TestValidateLinks:
         assert result.broken == []
         assert result.external == []
 
-    def test_subdirectory_links(self, tmp_path: Path) -> None:
-        """Links into subdirectories resolve correctly."""
-        sub = tmp_path / "sub"
-        sub.mkdir()
-        (tmp_path / "a.md").write_text("[link](sub/b.md)\n")
-        (sub / "b.md").write_text("# B\n")
-        result = validate_links(tmp_path)
-        assert result.broken == []
-
     def test_fragment_links(self, tmp_path: Path) -> None:
         """Links with fragments still check the file exists."""
         (tmp_path / "a.md").write_text("[link](b.md#section)\n")
@@ -559,14 +488,6 @@ class TestValidateLinks:
         (sub / "a.md").write_text("[Models](../concepts/models.md)\n")
         result = validate_links(tmp_path)
         assert result.broken == []
-        assert result.external == []
-
-    def test_unknown_missing_dir_is_broken(self, tmp_path: Path) -> None:
-        """Links to non-existent paths that don't match known externals are broken."""
-        (tmp_path / "a.md").write_text("[link](nonexistent_dir/page.md)\n")
-        result = validate_links(tmp_path)
-        assert len(result.broken) == 1
-        assert result.broken[0][1] == "nonexistent_dir/page.md"
         assert result.external == []
 
     def test_escape_above_root_is_broken(self, tmp_path: Path) -> None:

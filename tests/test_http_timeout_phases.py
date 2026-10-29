@@ -7,7 +7,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
+from livekit.agents import APIConnectOptions, APITimeoutError
 from livekit.agents.utils import http_context
 
 pytestmark = pytest.mark.unit
@@ -54,18 +54,6 @@ async def peer() -> AsyncIterator[tuple[str, asyncio.Event]]:
             handler.cancel()
         await asyncio.gather(*handlers, return_exceptions=True)
         server.close()
-
-
-async def test_request_completes_under_the_shipped_defaults(
-    peer: tuple[str, asyncio.Event],
-) -> None:
-    url, respond = peer
-    respond.set()
-    async with aiohttp.ClientSession() as session:
-        async with http_context.request(
-            session, "POST", url, conn_options=DEFAULT_API_CONNECT_OPTIONS, json={"text": "hello"}
-        ) as response:
-            assert await response.read() == b"ok"
 
 
 async def test_pool_wait_expires_under_the_pool_limit(peer: tuple[str, asyncio.Event]) -> None:

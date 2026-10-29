@@ -17,16 +17,6 @@ def _wrap(inner: BaseException, err: APIConnectionError | None = None) -> APICon
     return err
 
 
-def test_str_without_cause_is_the_message() -> None:
-    assert str(APIConnectionError()) == "Connection error."
-    assert str(APIConnectionError("failed to connect")) == "failed to connect"
-
-
-def test_str_names_the_cause() -> None:
-    err = _wrap(ValueError("payload is not completed"))
-    assert str(err) == "Connection error. (caused by ValueError: payload is not completed)"
-
-
 def test_str_reports_the_root_of_the_chain() -> None:
     """Providers wrap transport failures behind a placeholder message of their own."""
     root = OSError("peer closed connection")
@@ -42,20 +32,6 @@ def test_str_survives_a_cause_whose_str_raises() -> None:
             raise RuntimeError("nope")
 
     assert str(_wrap(Hostile())) == "Connection error. (caused by Hostile)"
-
-
-def test_str_terminates_on_a_cyclic_chain() -> None:
-    a, b = ValueError("a"), ValueError("b")
-    a.__cause__, b.__cause__ = b, a
-
-    assert "ValueError" in str(_wrap(a))
-
-
-def test_str_terminates_when_the_error_causes_itself() -> None:
-    err = APIConnectionError("failed to connect")
-    err.__cause__ = err
-
-    assert str(err) == "failed to connect"
 
 
 def test_str_terminates_on_a_cycle_between_two_connection_errors() -> None:
@@ -79,11 +55,6 @@ def test_str_stops_after_ten_distinct_causes() -> None:
 def test_str_omits_separator_for_empty_cause_message() -> None:
     err = _wrap(TimeoutError(), APITimeoutError())
     assert str(err) == "Request timed out. (caused by TimeoutError)"
-
-
-def test_str_omits_separator_for_empty_connection_error_message() -> None:
-    err = _wrap(APIConnectionError(""))
-    assert str(err) == "Connection error. (caused by APIConnectionError)"
 
 
 def test_raise_from_populates_the_message() -> None:

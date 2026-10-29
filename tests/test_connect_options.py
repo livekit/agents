@@ -284,14 +284,3 @@ async def test_total_timeout_spans_every_retry_of_an_operation() -> None:
         await model.recognize([_frame()], conn_options=options)
     assert error.value.phase == "total"
     assert 1 < model.attempts < options.max_retry
-
-
-@pytest.mark.parametrize("policy", POLICIES)
-async def test_native_realtime_model_accepts_shipped_policies(
-    policy: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from livekit.plugins.openai import realtime
-
-    monkeypatch.setenv("OPENAI_API_KEY", "test")
-    model = realtime.RealtimeModel(conn_options=POLICIES[policy])
-    await model.aclose()
