@@ -64,7 +64,8 @@ class FallbackRecognizeStream:
 
 class InferenceStt:
     """The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by
-    every view (`identified`); each view's connections carry its own job's identification.
+    every view (`identified`); each view's connections carry its own job's identification. As the
+    session's STT it implements the keyterm and conversation hooks.
     """
     def __init__(
         self,

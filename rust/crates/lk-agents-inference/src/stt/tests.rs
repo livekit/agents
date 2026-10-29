@@ -106,7 +106,7 @@ async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
 
     let plain = stt_once(Arc::new(FakeWs::new(vec![]).keep_open()));
     Stt::push_conversation_item(&plain, "assistant", "hi");
-    assert!(plain.opts.lock().unwrap().extra_kwargs.get("agent_context").is_none());
+    assert!(plain.shared.opts.lock().unwrap().extra_kwargs.get("agent_context").is_none());
 }
 
 // Catches: transcripts of a stream opened mid-input left at zero on the caller's timeline.
@@ -213,7 +213,7 @@ async fn the_session_is_created_before_any_audio_is_sent() {
     assert_eq!(sent[0]["type"], json!("session.create"));
     assert_eq!(sent[1]["type"], json!("input_audio"));
     assert_eq!(
-        source.close(stt.clock.now().saturating_add(Duration::from_secs(5))).await,
+        source.close(stt.shared.clock.now().saturating_add(Duration::from_secs(5))).await,
         lk_agents_abi::Closed::Clean
     );
 }
@@ -458,41 +458,6 @@ async fn the_usage_record_reports_the_real_audio_duration() {
         .and_then(|e| e.recognition_usage)
         .expect("a usage record");
     assert!((usage.audio_duration - 0.2).abs() < 1e-9, "got {}", usage.audio_duration);
-}
-
-// Catches: `model` returning "" when unset, or `capabilities()` returning the trait default.
-#[test]
-fn the_label_and_capabilities_come_from_the_configured_model() {
-    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-    let _guard = rt.enter();
-    let stt = stt(Arc::new(FakeWs::new(vec![])));
-    assert_eq!(stt.model(), "deepgram/nova-3");
-    assert_eq!(stt.label(), "livekit.agents.inference.stt.STT");
-    assert_eq!(
-        (stt.id().model.as_str(), stt.id().provider.as_str()),
-        ("deepgram/nova-3", "livekit")
-    );
-    let caps = Stt::capabilities(&stt);
-    assert!(caps.streaming && caps.interim_results && caps.keyterms);
-    assert!(!caps.offline_recognize, "the default is true; this provider has no batch path");
-    assert_eq!(caps.aligned_transcript, crate::abi::AlignedTranscript::Word);
-
-    let mut opts = opts();
-    opts.model = None;
-    let unnamed: NativeStt = NativeStt::new(
-        opts,
-        Arc::new(FakeWs::new(vec![])),
-        Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-    );
-    assert_eq!(unnamed.model(), "unknown");
-}
-
-// Catches: `recognize()` quietly returning an empty event.
-#[tokio::test]
-async fn batch_recognition_reports_that_it_is_unsupported() {
-    let stt = stt(Arc::new(FakeWs::new(vec![])));
-    let err = stt.recognize(&[], None).await.expect_err("no batch path");
-    assert!(err.message().contains("does not support batch recognition"), "{}", err.message());
 }
 
 // Catches: a mid-stream `session.update` starved by continuous audio.

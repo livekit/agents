@@ -161,7 +161,8 @@ fn _extract_inference_stt_stream_start_time_offset(obj: &Bound<'_, PyAny>) -> Py
 }
 
 /// The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by
-/// every view (`identified`); each view's connections carry its own job's identification.
+/// every view (`identified`); each view's connections carry its own job's identification. As the
+/// session's STT it implements the keyterm and conversation hooks.
 #[pyclass(frozen, name = "InferenceStt", module = "livekit.agents._core")]
 pub struct InferenceStt(::std::sync::Arc<InferenceSttImpl>);
 

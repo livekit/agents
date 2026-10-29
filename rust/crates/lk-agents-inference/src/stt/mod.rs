@@ -102,14 +102,6 @@ impl Clone for NativeStt {
     }
 }
 
-impl std::ops::Deref for NativeStt {
-    type Target = SttShared;
-
-    fn deref(&self) -> &SttShared {
-        &self.shared
-    }
-}
-
 /// What every session's view of one client shares: its options, connections and open streams.
 pub struct SttShared {
     opts: Mutex<SttOptions>,
@@ -195,19 +187,19 @@ impl NativeStt {
 
     /// The model's VAD as the host resolved it (`_resolve_vad_for_model`); later streams use it.
     pub fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
-        *self.vad.lock().unwrap() = vad;
+        *self.shared.vad.lock().unwrap() = vad;
     }
 
     /// The open streams; a dropped one is pruned on the way.
     fn live_streams(&self) -> Vec<Arc<StreamControl>> {
-        let mut live = self.live.lock().unwrap();
+        let mut live = self.shared.live.lock().unwrap();
         live.retain(|w| w.strong_count() > 0);
         live.iter().filter_map(Weak::upgrade).collect()
     }
 
     pub fn model(&self) -> String {
         // `"unknown"`, not "": a blank model name in metrics looks like a dropped field.
-        self.opts.lock().unwrap().model.clone().unwrap_or_else(|| "unknown".to_owned())
+        self.shared.opts.lock().unwrap().model.clone().unwrap_or_else(|| "unknown".to_owned())
     }
 
     /// `update_options` on the STT; the live streams get it as a mid-stream `session.update`.
@@ -217,7 +209,7 @@ impl NativeStt {
         language: Option<&str>,
         extra: Option<&serde_json::Map<String, serde_json::Value>>,
     ) {
-        let mut opts = self.opts.lock().unwrap();
+        let mut opts = self.shared.opts.lock().unwrap();
         if let Some(model) = model {
             let (name, parsed_language) = options::parse_model_string(model);
             opts.model = Some(name.to_owned());
@@ -243,12 +235,12 @@ impl NativeStt {
         }
         // Recompute every capability together; per-branch updates are how `__init__` and
         // `update_options` drifted apart.
-        *self.capabilities.lock().unwrap() =
+        *self.shared.capabilities.lock().unwrap() =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
         // A user `extra` re-merges the session keyterms, so the update does not drop them.
         let extra = extra.map(|extra| {
             let mut merged = extra.clone();
-            let terms = self.session_keyterms.lock().unwrap().clone();
+            let terms = self.shared.session_keyterms.lock().unwrap().clone();
             let model = opts.model.as_deref().map(|m| options::parse_model_string(m).0);
             if let Some(keyterms) =
                 options::keyterms_extra_for_model(model, Some(&opts.extra_kwargs), &terms)
@@ -265,68 +257,32 @@ impl NativeStt {
         }
     }
 
-    /// `_update_session_keyterms`: a warning once for a model without keyterm prompting, else the
-    /// keyterms reach every open stream (now if the user is silent, at end of speech if not).
-    pub fn update_keyterms(&self, keyterms: &[String]) {
-        if !self.capabilities.lock().unwrap().keyterms {
-            if !self.keyterms_unsupported_warned.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                log::warn!(
-                    target: "livekit.agents",
-                    stt = Stt::label(self).as_str();
-                    "keyterms are not supported by this STT, ignoring keyterms update"
-                );
-            }
-            return;
-        }
-        if let Some(extra) = self.update_session_keyterms(keyterms) {
-            for stream in self.live_streams() {
-                stream.apply_keyterms(extra.clone());
-            }
-        }
-    }
-
-    /// `_push_conversation_item`: an assistant turn's text, its tail, biases recognition as
-    /// `agent_context` on a model that carries it.
-    pub fn push_conversation_item(&self, role: &str, text: &str) {
-        if role != "assistant" || text.is_empty() || !self.capabilities.lock().unwrap().chat_context
-        {
-            return;
-        }
-        let tail: String = {
-            let chars: Vec<char> = text.chars().collect();
-            chars[chars.len().saturating_sub(MAX_AGENT_CONTEXT_CHARS)..].iter().collect()
-        };
-        let mut extra = serde_json::Map::new();
-        extra.insert("agent_context".into(), tail.into());
-        self.update_options(None, None, Some(&extra));
-    }
-
     /// The `extra` entry a keyterm change applies, or `None` when unsupported or unchanged.
     pub fn update_session_keyterms(
         &self,
         keyterms: &[String],
     ) -> Option<serde_json::Map<String, serde_json::Value>> {
         {
-            let existing = self.session_keyterms.lock().unwrap();
+            let existing = self.shared.session_keyterms.lock().unwrap();
             if *existing == keyterms {
                 return None;
             }
         }
-        let opts = self.opts.lock().unwrap();
+        let opts = self.shared.opts.lock().unwrap();
         let extra = options::keyterms_extra_for_model(
             opts.model.as_deref(),
             Some(&opts.extra_kwargs),
             keyterms,
         )?;
         drop(opts);
-        *self.session_keyterms.lock().unwrap() = keyterms.to_vec();
+        *self.shared.session_keyterms.lock().unwrap() = keyterms.to_vec();
         Some(extra)
     }
 
     /// `_sanitize_options`: a per-stream copy, so a later `update_options` on the STT cannot
     /// mutate a stream that is already running.
     fn sanitize(&self, language: Option<&str>) -> SttOptions {
-        let mut opts = self.opts.lock().unwrap().clone();
+        let mut opts = self.shared.opts.lock().unwrap().clone();
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
@@ -348,7 +304,7 @@ impl NativeStt {
         opts.conn_options
             .validate()
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-        let keyterms = self.session_keyterms.lock().unwrap().clone();
+        let keyterms = self.shared.session_keyterms.lock().unwrap().clone();
 
         let (audio_tx, audio_rx) = mpsc::channel::<SinkCmd>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
         let (event_tx, event_rx) =
@@ -367,14 +323,14 @@ impl NativeStt {
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra::default()),
         });
-        self.live.lock().unwrap().push(Arc::downgrade(&control));
+        self.shared.live.lock().unwrap().push(Arc::downgrade(&control));
 
         let pump = Pump {
-            ws: self.ws.clone(),
+            ws: self.shared.ws.clone(),
             identification: self.identity.for_connection(),
-            clock: self.clock.clone(),
+            clock: self.shared.clock.clone(),
             create_frame: wire::session_create(&opts, &keyterms),
-            vad: self.vad.lock().unwrap().clone(),
+            vad: self.shared.vad.lock().unwrap().clone(),
             offset: start_time_offset,
             opts,
             audio_rx,
@@ -385,9 +341,9 @@ impl NativeStt {
             failure: control.failure.clone(),
             stop: stop_rx,
             ended: ended_rx,
-            accepted: self.clock.now(),
+            accepted: self.shared.clock.now(),
         };
-        self.tasks.spawn(self.spawner.as_ref(), "stt stream", async move {
+        self.shared.tasks.spawn(self.shared.spawner.as_ref(), "stt stream", async move {
             pump.run().await;
             let _ = done.send(());
         });
@@ -400,7 +356,7 @@ impl NativeStt {
                 stop,
                 joined: done_rx,
                 failure: failure_rx,
-                clock: self.clock.clone(),
+                clock: self.shared.clock.clone(),
             },
         ))
     }
@@ -465,14 +421,6 @@ impl lk_agents_abi::stt::inference::InferenceStt for NativeStt {
         NativeStt::update_options(self, model.as_deref(), language.as_deref(), extra.as_ref());
     }
 
-    fn update_keyterms(&self, keyterms: Vec<String>) {
-        NativeStt::update_keyterms(self, &keyterms);
-    }
-
-    fn push_conversation_item(&self, role: &str, text: &str) {
-        NativeStt::push_conversation_item(self, role, text);
-    }
-
     fn stream(
         &self,
         language: Option<String>,
@@ -508,16 +456,50 @@ impl Stt for NativeStt {
         }
     }
 
+    /// `_update_session_keyterms`: a warning once for a model without keyterm prompting, else the
+    /// keyterms reach every open stream (now if the user is silent, at end of speech if not).
     fn update_keyterms(&self, keyterms: &[String]) {
-        NativeStt::update_keyterms(self, keyterms);
+        if !self.shared.capabilities.lock().unwrap().keyterms {
+            if !self
+                .shared
+                .keyterms_unsupported_warned
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                log::warn!(
+                    target: "livekit.agents",
+                    stt = Stt::label(self).as_str();
+                    "keyterms are not supported by this STT, ignoring keyterms update"
+                );
+            }
+            return;
+        }
+        if let Some(extra) = self.update_session_keyterms(keyterms) {
+            for stream in self.live_streams() {
+                stream.apply_keyterms(extra.clone());
+            }
+        }
     }
 
+    /// `_push_conversation_item`: an assistant turn's text, its tail, biases recognition as
+    /// `agent_context` on a model that carries it.
     fn push_conversation_item(&self, role: &str, text: &str) {
-        NativeStt::push_conversation_item(self, role, text);
+        if role != "assistant"
+            || text.is_empty()
+            || !self.shared.capabilities.lock().unwrap().chat_context
+        {
+            return;
+        }
+        let tail: String = {
+            let chars: Vec<char> = text.chars().collect();
+            chars[chars.len().saturating_sub(MAX_AGENT_CONTEXT_CHARS)..].iter().collect()
+        };
+        let mut extra = serde_json::Map::new();
+        extra.insert("agent_context".into(), tail.into());
+        self.update_options(None, None, Some(&extra));
     }
 
     fn capabilities(&self) -> SttCapabilities {
-        *self.capabilities.lock().unwrap()
+        *self.shared.capabilities.lock().unwrap()
     }
 
     /// "LiveKit Inference STT does not support batch recognition, use stream() instead".

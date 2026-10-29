@@ -12,9 +12,10 @@ use crate::vad::vad::Vad;
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 
 /// The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by
-/// every view (`identified`); each view's connections carry its own job's identification.
+/// every view (`identified`); each view's connections carry its own job's identification. As the
+/// session's STT it implements the keyterm and conversation hooks.
 #[crate::host(class(name = "InferenceStt", native = Stt))]
-pub trait InferenceStt: Send + Sync + Sized + 'static {
+pub trait InferenceStt: Stt + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -76,12 +77,16 @@ pub trait InferenceStt: Send + Sync + Sized + 'static {
     /// The session's keyterms: a warning once for a model without keyterm prompting, else every
     /// open stream applies them (now if the user is silent, at end of speech if not).
     #[host(call)]
-    fn update_keyterms(&self, keyterms: Vec<String>);
+    fn update_keyterms(&self, keyterms: Vec<String>) {
+        Stt::update_keyterms(self, &keyterms);
+    }
 
     /// An assistant turn's text, its tail, biases recognition as `agent_context` on a model that
     /// carries it.
     #[host(call)]
-    fn push_conversation_item(&self, role: &str, text: &str);
+    fn push_conversation_item(&self, role: &str, text: &str) {
+        Stt::push_conversation_item(self, role, text);
+    }
 
     /// Opens a stream; its pump opens the socket. `start_time_offset` shifts its timestamps onto
     /// the caller's input timeline.
