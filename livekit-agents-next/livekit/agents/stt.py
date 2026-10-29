@@ -112,11 +112,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
                     )
             stt = [adapted[id(recognizer)] for recognizer in stt]
         self._stt_instances = stt
-        self._opts = {
-            "attempt_timeout": attempt_timeout,
-            "max_retry_per_stt": max_retry_per_stt,
-            "retry_interval": retry_interval,
-        }
+        self._attempt_timeout = attempt_timeout
+        self._max_retry_per_stt = max_retry_per_stt
+        self._retry_interval = retry_interval
         # the chain's own merge, read before any chain is built
         merged = _core.stt_fallback_capabilities([t.capabilities for t in stt])
         super().__init__(capabilities=STTCapabilities(**merged))
@@ -128,8 +126,10 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
             self,
             lambda: _core.FallbackStt(
                 [_bindings.core_leg(t) for t in self._stt_instances],
+                attempt_timeout=self._attempt_timeout,
+                max_retry_per_stt=self._max_retry_per_stt,
+                retry_interval=self._retry_interval,
                 on_availability=self,
-                **self._opts,
             ),
         )
 
