@@ -287,14 +287,14 @@ fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy
         #[crate::host(export(defaults(format = "JPEG".to_owned())))]
         impl Unrelated {}
         #[crate::host(native)]
-        pub trait Clock: Send + Sync { fn now(&self) -> u64; }
-        pub struct SessionClock;
-        #[crate::host(object(name = "SessionClock", as_dyn(Clock = clock)))]
-        impl SessionClock { pub fn clock(&self) -> Arc<dyn Clock> { unimplemented!() } }
+        pub trait AudioInput: Send + Sync { fn label(&self) -> String; }
+        pub struct RoomAudioInput;
+        #[crate::host(object(name = "RoomAudioInput", as_dyn(AudioInput = as_audio_input)))]
+        impl RoomAudioInput { pub fn as_audio_input(&self) -> Arc<dyn AudioInput> { unimplemented!() } }
         #[crate::host(class(name = "Client"))]
         pub trait Client: Sized {
             #[host(new)] fn new() -> Self;
-            #[host(call)] fn bind_clock(&self, clock: Arc<dyn Clock>);
+            #[host(call)] fn set_audio_input(&self, input: Arc<dyn AudioInput>);
         }
     "#;
     let declarations =
@@ -302,29 +302,29 @@ fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy
     assert!(declarations.proxies.is_empty(), "native-only traits never generate a host proxy");
     let argument = &declarations.classes[0].methods[1].params[0].ty;
     assert!(matches!(argument, Ty::Native { classes, .. }
-        if classes == &["livekit.agents._core.SessionClock"]));
+        if classes == &["livekit.agents._core.RoomAudioInput"]));
     let converted =
-        crate::adapter::from_object("obj", argument, "\"Client.clock\"", "test").unwrap();
+        crate::adapter::from_object("obj", argument, "\"Client.input\"", "test").unwrap();
     assert!(
-        converted.contains("python::native::<dyn ::lk_agents_abi::llm::class::Clock>(&obj)"),
+        converted.contains("python::native::<dyn ::lk_agents_abi::llm::class::AudioInput>(&obj)"),
         "{converted}"
     );
     assert!(
         converted.contains(".ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err"),
         "unregistered objects must be refused: {converted}"
     );
-    assert!(converted.contains("expected native livekit.agents._core.SessionClock"), "{converted}");
+    assert!(converted.contains("expected native livekit.agents._core.RoomAudioInput"), "{converted}");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let code = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
-    assert!(code.contains("python::native::<dyn ::lk_agents_abi::llm::class::Clock>"), "{code}");
-    assert!(!code.contains("HostProxy") && !code.contains("ClockProxy"), "{code}");
+    assert!(code.contains("python::native::<dyn ::lk_agents_abi::llm::class::AudioInput>"), "{code}");
+    assert!(!code.contains("HostProxy") && !code.contains("AudioInputProxy"), "{code}");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let stub = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
-    assert!(stub.contains("def bind_clock(self, clock: SessionClock) -> None"), "{stub}");
-    assert!(stub.contains("import SessionClock"), "{stub}");
-    let boxed = declaration.replace("clock: Arc<dyn Clock>", "clock: Box<dyn Clock>");
-    assert!(read(&boxed).unwrap_err().contains("a native-only trait crosses as `Arc<dyn Clock>`"));
-    let unregistered = declaration.replace("as_dyn(Clock = clock)", "pid = false");
+    assert!(stub.contains("def set_audio_input(self, input: RoomAudioInput) -> None"), "{stub}");
+    assert!(stub.contains("import RoomAudioInput"), "{stub}");
+    let boxed = declaration.replace("input: Arc<dyn AudioInput>", "input: Box<dyn AudioInput>");
+    assert!(read(&boxed).unwrap_err().contains("a native-only trait crosses as `Arc<dyn AudioInput>`"));
+    let unregistered = declaration.replace("as_dyn(AudioInput = as_audio_input)", "pid = false");
     assert!(
         read(&unregistered)
             .unwrap_err()
