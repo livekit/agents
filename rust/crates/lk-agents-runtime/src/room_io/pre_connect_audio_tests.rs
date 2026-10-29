@@ -8,11 +8,10 @@ async fn failed_registration_does_not_remove_another_stream_owner() {
         crate::rtc::events::RoomEventBus::port,
     );
     let room = rtc.room("registration-owner");
-    let mut original = crate::rtc::room::Room::wrap(room.clone())
-        .byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM)
-        .unwrap();
+    let mut original =
+        crate::rtc::events::byte_streams(room.as_ref(), PRE_CONNECT_AUDIO_BUFFER_STREAM).unwrap();
     let handler = PreConnectAudioHandler::new(
-        crate::rtc::room::Room::wrap(room.clone()),
+        room.clone(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
@@ -41,7 +40,7 @@ async fn closed_preconnect_input_cannot_register_again() {
     );
     let room = rtc.room("closed-registration");
     let handler = PreConnectAudioHandler::new(
-        crate::rtc::room::Room::wrap(room.clone()),
+        room.clone(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
@@ -51,9 +50,7 @@ async fn closed_preconnect_input_cannot_register_again() {
     handler.aclose().await;
     assert!(!handler.register());
     assert!(
-        crate::rtc::room::Room::wrap(room.clone())
-            .byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM)
-            .is_ok()
+        crate::rtc::events::byte_streams(room.as_ref(), PRE_CONNECT_AUDIO_BUFFER_STREAM).is_ok()
     );
 }
 
@@ -79,7 +76,7 @@ async fn preconnect_overload_preserves_already_admitted_tracks() {
     );
     let room = rtc.room("track-capacity");
     let handler = PreConnectAudioHandler::new(
-        crate::rtc::room::Room::wrap(room.clone()),
+        room.clone(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
@@ -115,7 +112,7 @@ async fn preconnect_receive_deadline_discards_partial_pcm() {
     );
     let room = rtc.room("receive-deadline");
     let handler = PreConnectAudioHandler::new(
-        crate::rtc::room::Room::wrap(room.clone()),
+        room.clone(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock.clone(),
         Duration::from_secs(3),
@@ -143,7 +140,7 @@ async fn preconnect_duration_is_bounded_before_transfer() {
     );
     let room = rtc.room("duration");
     let handler = PreConnectAudioHandler::new(
-        crate::rtc::room::Room::wrap(room.clone()),
+        room.clone(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),

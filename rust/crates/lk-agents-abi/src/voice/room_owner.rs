@@ -149,21 +149,13 @@ pub trait RoomRuntime {
         identity: Option<String>,
         kinds: Option<Vec<i32>>,
         include_local: bool,
-    ) -> std::result::Result<Option<ParticipantIdentity>, RtcError> {
-        room.0
-            .rtc()
-            .ok_or(RtcError::NotConnected)?
-            .wait_for_participant(identity, kinds, include_local)
-            .await
-    }
+    ) -> std::result::Result<Option<ParticipantIdentity>, RtcError>;
 
     #[host(function)]
     async fn wait_for_agent(
         room: RoomSession,
         name: Option<String>,
-    ) -> std::result::Result<ParticipantIdentity, RtcError> {
-        room.0.rtc().ok_or(RtcError::NotConnected)?.wait_for_agent(name).await
-    }
+    ) -> std::result::Result<ParticipantIdentity, RtcError>;
 
     #[host(function)]
     async fn wait_for_participant_attribute(
@@ -171,13 +163,7 @@ pub trait RoomRuntime {
         identity: String,
         attribute: String,
         value: String,
-    ) -> std::result::Result<(), RtcError> {
-        room.0
-            .rtc()
-            .ok_or(RtcError::NotConnected)?
-            .wait_for_participant_attribute(identity, attribute, value)
-            .await
-    }
+    ) -> std::result::Result<(), RtcError>;
 
     #[host(function)]
     async fn wait_for_track_publication(
@@ -186,13 +172,7 @@ pub trait RoomRuntime {
         kinds: Option<Vec<i32>>,
         include_local: bool,
         subscribed: bool,
-    ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError> {
-        room.0
-            .rtc()
-            .ok_or(RtcError::NotConnected)?
-            .wait_for_track_publication(identity, kinds, include_local, subscribed)
-            .await
-    }
+    ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError>;
 }
 
 fn input_closed(outcome: Closed) -> Result<()> {

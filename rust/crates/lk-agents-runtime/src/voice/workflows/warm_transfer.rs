@@ -500,7 +500,8 @@ async fn twilio_originate(
         created = guard.created().await;
     }
     created?;
-    let answered = room.wait_for_track_publication(
+    let answered = crate::rtc::wait::track_publication(
+        room.as_ref(),
         Some(HUMAN_AGENT_IDENTITY.to_owned()),
         Some(vec![TRACK_KIND_AUDIO]),
         false,

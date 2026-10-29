@@ -1,3 +1,4 @@
+use crate::rtc::wait;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{
     SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
@@ -517,7 +518,7 @@ async fn await_callee(
         return Callee::Answered;
     };
     let audio = Some(vec![lk_agents_abi::voice::rtc::TRACK_KIND_AUDIO]);
-    let track = room.wait_for_track_publication(participant, audio, false, true);
+    let track = wait::track_publication(room.as_ref(), participant, audio, false, true);
     let publisher = match time.timeout(TRACK_PUBLICATION_TIMEOUT, track).await {
         Err(_) => return Callee::Missing("timed out waiting for participant audio track".into()),
         Ok(Err(e)) => return Callee::Missing(e.to_string()),
@@ -538,7 +539,7 @@ async fn await_callee(
     }
     let (attribute, active) = (SIP_CALL_STATUS_ATTR.to_owned(), SIP_CALL_STATUS_ACTIVE.to_owned());
     let identity = publisher.identity().as_str().to_owned();
-    match room.wait_for_participant_attribute(identity, attribute, active).await {
+    match wait::participant_attribute(room.as_ref(), identity, attribute, active).await {
         Ok(()) => Callee::Answered,
         Err(e) => Callee::Missing(e.to_string()),
     }

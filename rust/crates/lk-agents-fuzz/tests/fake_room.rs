@@ -2,7 +2,7 @@
 //! over the runtime's room event fan-out and stream admission it feeds, as the DST runs it.
 
 use lk_agents_abi::{AudioFrame, Clock, StreamSource, VirtualClock};
-use lk_agents_runtime::rtc::room::Room;
+use lk_agents_runtime::rtc::events::{byte_streams, text_streams};
 use lk_agents_test_support::rtc::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -618,10 +618,10 @@ async fn every_subscriber_sees_every_event() {
 #[tokio::test(start_paused = true)]
 async fn registering_a_topic_twice_is_refused_not_replaced() {
     let (_rtc, room, _s) = published().await;
-    let mut first = Room::wrap(room.clone()).text_streams("lk.chat").unwrap();
+    let mut first = text_streams(room.as_ref(), "lk.chat").unwrap();
 
     assert_eq!(
-        Room::wrap(room.clone()).text_streams("lk.chat").err().unwrap(),
+        text_streams(room.as_ref(), "lk.chat").err().unwrap(),
         RtcError::TopicInUse { topic: "lk.chat".into() }
     );
 
@@ -632,7 +632,7 @@ async fn registering_a_topic_twice_is_refused_not_replaced() {
 
     room.unregister_text_stream_handler("lk.chat").unwrap();
     room.unregister_text_stream_handler("lk.chat").unwrap(); // idempotent: aclose runs unconditionally
-    Room::wrap(room.clone()).text_streams("lk.chat").expect("the topic is free again");
+    text_streams(room.as_ref(), "lk.chat").expect("the topic is free again");
 }
 
 // Catches: a byte-stream double that drops the header. `_pre_connect_audio.py` reads
@@ -642,9 +642,9 @@ async fn registering_a_topic_twice_is_refused_not_replaced() {
 async fn byte_streams_carry_their_header() {
     let (_rtc, room, _s) = published().await;
     let topic = "lk.agent.pre-connect-audio-buffer";
-    let mut handler = Room::wrap(room.clone()).byte_streams(topic).unwrap();
+    let mut handler = byte_streams(room.as_ref(), topic).unwrap();
     assert_eq!(
-        Room::wrap(room.clone()).byte_streams(topic).err().unwrap(),
+        byte_streams(room.as_ref(), topic).err().unwrap(),
         RtcError::TopicInUse { topic: topic.into() }
     );
 
@@ -670,7 +670,7 @@ async fn byte_streams_carry_their_header() {
     assert_eq!(chunks, vec![vec![1u8, 2], vec![3u8]]);
 
     room.unregister_byte_stream_handler(topic).unwrap();
-    Room::wrap(room.clone()).byte_streams(topic).expect("the topic is free again");
+    byte_streams(room.as_ref(), topic).expect("the topic is free again");
 }
 
 // Catches: `stream_text` modelled as one call per delta. The reference opens **one** writer per

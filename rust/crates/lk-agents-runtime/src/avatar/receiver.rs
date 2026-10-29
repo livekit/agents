@@ -1,6 +1,7 @@
 //! The avatar worker's audio receiver (`DataStreamAudioReceiver`): executes the pure receive
 //! state's streams and reports, and implements its ABI class and host receiver directly.
 
+use crate::rtc::wait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
@@ -270,9 +271,7 @@ impl DataStreamAudioReceiver {
             .register_rpc_method(RPC_CLEAR_BUFFER.to_owned(), handler)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
 
-        let mut streams = inner
-            .room
-            .byte_streams(AUDIO_STREAM_TOPIC)
+        let mut streams = crate::rtc::events::byte_streams(inner.room.as_ref(), AUDIO_STREAM_TOPIC)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
         let pump = {
             let inner = Arc::clone(inner);
@@ -392,7 +391,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
             Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
         });
         Ok(DataStreamAudioReceiver::new(
-            crate::rtc::room::Room::wrap(room),
+            room,
             sender_identity,
             frame_size,
             rpc_max_retries,
@@ -490,9 +489,9 @@ pub async fn wait_avatar_join_room(
         }
     }
     let started = lk_agents_abi::unix_secs(clock.wall());
-    room.wait_for_participant(Some(identity.clone()), None, true).await?;
+    wait::participant(room.as_ref(), Some(identity.clone()), None, true).await?;
     let video = Some(vec![lk_agents_abi::voice::rtc::TRACK_KIND_VIDEO]);
-    room.wait_for_track_publication(Some(identity), video, true, false).await?;
+    wait::track_publication(room.as_ref(), Some(identity), video, true, false).await?;
     Ok((started, lk_agents_abi::unix_secs(clock.wall())))
 }
 

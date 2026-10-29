@@ -6,9 +6,11 @@ mod owner;
 pub mod pre_connect_audio;
 
 use self::output::transcription::SegmentIds;
+use crate::rtc::wait;
 use lk_agents_abi::voice::room_io::RoomIoConfig;
 use lk_agents_abi::voice::room_owner;
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
+use lk_agents_abi::voice::rtc::{ParticipantIdentity, RtcError, TrackSid};
 use lk_agents_abi::{Clock, Spawner};
 use lk_agents_net::env::ProcessEnv;
 use std::sync::Arc;
@@ -25,7 +27,7 @@ pub struct FixedRoom {
 
 impl room_owner::SessionRoom for FixedRoom {
     fn rtc(&self) -> Option<Arc<dyn RtcRoom>> {
-        Some(crate::rtc::room::Room::wrap(self.rtc.clone()))
+        Some(self.rtc.clone())
     }
     fn virtual_clock(&self) -> Option<Arc<lk_agents_abi::VirtualClock>> {
         self.time.virtual_clock()
@@ -39,7 +41,7 @@ impl room_owner::SessionRoom for FixedRoom {
         config: RoomIoConfig,
     ) -> Arc<dyn room_owner::RoomIo> {
         RoomIo::new(
-            crate::rtc::room::Room::wrap(self.rtc.clone()),
+            self.rtc.clone(),
             self.time.clock(),
             spawner,
             Arc::new(SegmentIds::default()),
@@ -58,10 +60,49 @@ impl room_owner::RoomRuntime for RoomFactory {
     async fn wait_avatar_join(
         room: room_owner::RoomSession,
         identity: String,
-    ) -> std::result::Result<(f64, f64), lk_agents_abi::voice::rtc::RtcError> {
+    ) -> std::result::Result<(f64, f64), RtcError> {
         let clock = room.0.clock();
-        let room = room.0.rtc().ok_or(lk_agents_abi::voice::rtc::RtcError::NotConnected)?;
+        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
         crate::avatar::receiver::wait_avatar_join_room(room, identity, clock).await
+    }
+
+    async fn wait_for_participant(
+        room: room_owner::RoomSession,
+        identity: Option<String>,
+        kinds: Option<Vec<i32>>,
+        include_local: bool,
+    ) -> std::result::Result<Option<ParticipantIdentity>, RtcError> {
+        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
+        wait::participant(room.as_ref(), identity, kinds, include_local).await
+    }
+
+    async fn wait_for_agent(
+        room: room_owner::RoomSession,
+        name: Option<String>,
+    ) -> std::result::Result<ParticipantIdentity, RtcError> {
+        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
+        wait::agent(room.as_ref(), name).await
+    }
+
+    async fn wait_for_participant_attribute(
+        room: room_owner::RoomSession,
+        identity: String,
+        attribute: String,
+        value: String,
+    ) -> std::result::Result<(), RtcError> {
+        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
+        wait::participant_attribute(room.as_ref(), identity, attribute, value).await
+    }
+
+    async fn wait_for_track_publication(
+        room: room_owner::RoomSession,
+        identity: Option<String>,
+        kinds: Option<Vec<i32>>,
+        include_local: bool,
+        subscribed: bool,
+    ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError> {
+        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
+        wait::track_publication(room.as_ref(), identity, kinds, include_local, subscribed).await
     }
 
     fn create_room_session(

@@ -69,7 +69,8 @@ impl PreConnectAudioHandler {
             }
             state.registering = true;
         }
-        let streams = self.room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM);
+        let streams =
+            crate::rtc::events::byte_streams(self.room.as_ref(), PRE_CONNECT_AUDIO_BUFFER_STREAM);
         let streams = match streams {
             Ok(streams) => streams,
             Err(_) => {

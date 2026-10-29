@@ -37,7 +37,6 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
             Ok((crate::generated::voice::RtcRoomProxy::from_host(&room)?, timeout))
         })
         .map_err(|error| Python::attach(|py| ProviderError::from_host(py, &error)))?;
-        let room = lk_agents_runtime::rtc::room::Room::wrap(room);
         let handle = (env.runtime)()
             .map_err(|error| ProviderError::from(lk_agents_abi::errors::ApiError::new(error)))?;
         let spawner = TokioSpawner::new(handle);

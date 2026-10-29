@@ -13,15 +13,6 @@ use super::{
 };
 use crate::{AudioFrame, StreamSource};
 
-/// A transfer's second room; the live session receives an already opened room.
-pub trait RtcHost: Send + Sync {
-    fn connect<'a>(
-        &'a self,
-        url: &'a str,
-        token: &'a str,
-    ) -> crate::BoxFuture<'a, Result<Arc<dyn RtcRoom>, RtcError>>;
-}
-
 /// A connected room.
 ///
 /// `connection_state` rather than `isconnected`: the reference's boolean cannot distinguish
@@ -62,7 +53,7 @@ pub trait RtcRoom: Send + Sync {
 
     /// Route every stream opened on `topic` into `streams`. Errors if the topic already has a
     /// handler -- the SDK's `ValueError`, which both callers treat as a warn-and-continue.
-    /// `dyn RtcRoom::byte_streams` is the reader's form.
+    /// `rtc::events::byte_streams` is the reader's form.
     #[host(call, name = "_core_register_byte_stream_handler")]
     fn register_byte_stream_handler(
         &self,
@@ -81,51 +72,6 @@ pub trait RtcRoom: Send + Sync {
     ) -> Result<(), RtcError>;
     #[host(call, name = "_core_unregister_text_stream_handler")]
     fn unregister_text_stream_handler(&self, topic: &str) -> Result<(), RtcError>;
-
-    /// The supplied performer owns stream admission; bare SDK proxies do not allocate queues.
-    fn byte_streams(
-        &self,
-        _topic: &str,
-    ) -> Result<super::ports::Receiver<super::ports::ByteStream>, RtcError> {
-        Err(RtcError::Unsupported("byte_streams"))
-    }
-    fn text_streams(
-        &self,
-        _topic: &str,
-    ) -> Result<super::ports::Receiver<super::ports::TextStream>, RtcError> {
-        Err(RtcError::Unsupported("text_streams"))
-    }
-    fn wait_for_participant<'a>(
-        &'a self,
-        _identity: Option<String>,
-        _kinds: Option<Vec<i32>>,
-        _include_local: bool,
-    ) -> crate::BoxFuture<'a, Result<Option<ParticipantIdentity>, RtcError>> {
-        Box::pin(async { Err(RtcError::Unsupported("wait_for_participant")) })
-    }
-    fn wait_for_agent<'a>(
-        &'a self,
-        _name: Option<String>,
-    ) -> crate::BoxFuture<'a, Result<ParticipantIdentity, RtcError>> {
-        Box::pin(async { Err(RtcError::Unsupported("wait_for_agent")) })
-    }
-    fn wait_for_participant_attribute<'a>(
-        &'a self,
-        _identity: String,
-        _attribute: String,
-        _value: String,
-    ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
-        Box::pin(async { Err(RtcError::Unsupported("wait_for_participant_attribute")) })
-    }
-    fn wait_for_track_publication<'a>(
-        &'a self,
-        _identity: Option<String>,
-        _kinds: Option<Vec<i32>>,
-        _include_local: bool,
-        _subscribed: bool,
-    ) -> crate::BoxFuture<'a, Result<(Option<ParticipantIdentity>, TrackSid), RtcError>> {
-        Box::pin(async { Err(RtcError::Unsupported("wait_for_track_publication")) })
-    }
 
     /// Native subscriptions use the runtime fan-out already taken with this room.
     fn events(&self) -> super::ports::Receiver<super::events::RoomEvent> {

@@ -4,12 +4,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::voice::rtc::capabilities::{RemoteParticipant, TrackPublication};
+use lk_agents_abi::voice::rtc::capabilities::{RemoteParticipant, RtcRoom, TrackPublication};
 use lk_agents_abi::voice::rtc::ports::{
     self, ByteStream, ByteStreamIngress, Receiver, TextStream, TextStreamIngress,
 };
 use lk_agents_abi::voice::rtc::{
-    ConnectionState, DisconnectReason, ParticipantIdentity, RoomEvent, RoomEventSink, StreamInfo,
+    ConnectionState, DisconnectReason, ParticipantIdentity, RoomEvent, RoomEventSink, RtcError,
+    StreamInfo,
 };
 use lk_agents_abi::{Closed, StreamSource, Ts};
 use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
@@ -283,6 +284,20 @@ impl TextStreamIngress for TextStreamSender {
         });
         true
     }
+}
+
+/// Route every byte stream opened on `topic` into a fresh admitted receiver.
+pub fn byte_streams(room: &dyn RtcRoom, topic: &str) -> Result<Receiver<ByteStream>, RtcError> {
+    let (sender, receiver) = ByteStreamSender::channel();
+    room.register_byte_stream_handler(topic, sender)?;
+    Ok(receiver)
+}
+
+/// Route every text stream opened on `topic` into a fresh admitted receiver.
+pub fn text_streams(room: &dyn RtcRoom, topic: &str) -> Result<Receiver<TextStream>, RtcError> {
+    let (sender, receiver) = TextStreamSender::channel();
+    room.register_text_stream_handler(topic, sender)?;
+    Ok(receiver)
 }
 
 impl RoomEventBus {

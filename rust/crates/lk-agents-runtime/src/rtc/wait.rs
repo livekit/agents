@@ -20,7 +20,7 @@ fn tracks(publications: Vec<Arc<dyn TrackPublication>>) -> Result<Vec<Track>> {
         .collect()
 }
 
-fn participant(value: &dyn RemoteParticipant, request: &WaitFor) -> Result<Participant> {
+fn observe(value: &dyn RemoteParticipant, request: &WaitFor) -> Result<Participant> {
     Ok(Participant {
         identity: value.identity().clone(),
         kind: value.kind(),
@@ -58,7 +58,7 @@ fn snapshot(room: &dyn RtcRoom, request: &WaitFor) -> Result<Snapshot> {
         remote: room
             .remote_participants()?
             .iter()
-            .map(|value| participant(value.as_ref(), request))
+            .map(|value| observe(value.as_ref(), request))
             .collect::<Result<_>>()?,
     })
 }
@@ -73,13 +73,13 @@ fn event(room: &dyn RtcRoom, value: RoomEvent, request: &WaitFor) -> Result<Opti
     };
     Ok(match value {
         RoomEvent::ParticipantActive { participant: value } => {
-            Some(Event::Active(participant(value.as_ref(), request)?))
+            Some(Event::Active(observe(value.as_ref(), request)?))
         }
         RoomEvent::ParticipantConnected { participant: value } => {
-            Some(Event::Connected(participant(value.as_ref(), request)?))
+            Some(Event::Connected(observe(value.as_ref(), request)?))
         }
         RoomEvent::ParticipantAttributesChanged { participant: value } => {
-            Some(Event::Attributes(participant(value.as_ref(), request)?))
+            Some(Event::Attributes(observe(value.as_ref(), request)?))
         }
         RoomEvent::ParticipantDisconnected { participant, .. } => {
             Some(Event::Disconnected(participant.identity().clone()))
@@ -104,7 +104,7 @@ fn event(room: &dyn RtcRoom, value: RoomEvent, request: &WaitFor) -> Result<Opti
     })
 }
 
-pub async fn perform(room: &dyn RtcRoom, request: WaitFor) -> Result<Ready> {
+async fn perform(room: &dyn RtcRoom, request: WaitFor) -> Result<Ready> {
     // Subscribe before reading SDK views so a transition during the snapshot remains observable.
     let mut events = room.events();
     let wait = RoomWait::new(request.clone());
@@ -119,4 +119,48 @@ pub async fn perform(room: &dyn RtcRoom, request: WaitFor) -> Result<Ready> {
         }
     }
     Err(wait.ended())
+}
+
+pub async fn participant(
+    room: &dyn RtcRoom,
+    identity: Option<String>,
+    kinds: Option<Vec<i32>>,
+    include_local: bool,
+) -> Result<Option<ParticipantIdentity>> {
+    match perform(room, WaitFor::Participant { identity, kinds, include_local }).await? {
+        Ready::Participant(identity) => Ok(identity),
+        _ => unreachable!("a participant wait resolves with a participant"),
+    }
+}
+
+pub async fn agent(room: &dyn RtcRoom, name: Option<String>) -> Result<ParticipantIdentity> {
+    match perform(room, WaitFor::Agent { name }).await? {
+        Ready::Agent(identity) => Ok(identity),
+        _ => unreachable!("an agent wait resolves with an agent"),
+    }
+}
+
+pub async fn participant_attribute(
+    room: &dyn RtcRoom,
+    identity: String,
+    attribute: String,
+    value: String,
+) -> Result<()> {
+    match perform(room, WaitFor::Attribute { identity, attribute, value }).await? {
+        Ready::Attribute => Ok(()),
+        _ => unreachable!("an attribute wait resolves with the attribute"),
+    }
+}
+
+pub async fn track_publication(
+    room: &dyn RtcRoom,
+    identity: Option<String>,
+    kinds: Option<Vec<i32>>,
+    include_local: bool,
+    subscribed: bool,
+) -> Result<(Option<ParticipantIdentity>, TrackSid)> {
+    match perform(room, WaitFor::Track { identity, kinds, include_local, subscribed }).await? {
+        Ready::Track(identity, sid) => Ok((identity, sid)),
+        _ => unreachable!("a track wait resolves with a track"),
+    }
 }

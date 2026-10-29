@@ -587,7 +587,7 @@ impl FakeAvatarWorker {
             })
         };
         let rx = Arc::new(DataStreamAudioReceiver::new(
-            lk_agents_runtime::rtc::room::Room::wrap(room.clone()),
+            room.clone(),
             Some(Self::AGENT.into()),
             std::num::NonZeroU32::new(20).unwrap(),
             1,

@@ -109,7 +109,7 @@ async fn track_replacement_releases_pending_preconnect_input() {
     let room = rtc.room("replace-pending-preconnect");
     let spawner = Arc::new(TokioSpawner::current());
     let handler = PreConnectAudioHandler::new(
-        crate::rtc::room::Room::wrap(room.clone()),
+        room.clone(),
         spawner.clone(),
         clock.clone(),
         Duration::from_secs(3),
@@ -174,7 +174,7 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
         let room = rtc.room("process");
         let spawner = Arc::new(TokioSpawner::current());
         let handler = PreConnectAudioHandler::new(
-            crate::rtc::room::Room::wrap(room.clone()),
+            room.clone(),
             spawner.clone(),
             clock.clone(),
             Duration::from_secs(3),

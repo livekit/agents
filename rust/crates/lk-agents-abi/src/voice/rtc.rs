@@ -15,8 +15,8 @@ pub mod events;
 pub mod playout;
 pub mod ports;
 pub use capabilities::{
-    AudioInputStream, AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcHost,
-    RtcRoom, TextStreamWriter, TrackPublication,
+    AudioInputStream, AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcRoom,
+    TextStreamWriter, TrackPublication,
 };
 pub use events::{RoomEvent, RoomEventBus, RoomEventSink};
 pub use ports::{ByteStream, ByteStreamSender, Receiver, RpcHandler, TextStream, TextStreamSender};

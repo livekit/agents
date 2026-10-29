@@ -109,7 +109,7 @@ impl Run {
         let avatar_sink = (setup.avatar && console.is_none()).then(|| {
             room.add_participant(AVATAR, ParticipantKind::Agent);
             Arc::new(lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
-                lk_agents_runtime::rtc::room::Room::wrap(room.clone()),
+                room.clone(),
                 AVATAR.into(),
                 Some(SAMPLE_RATE),
                 None,

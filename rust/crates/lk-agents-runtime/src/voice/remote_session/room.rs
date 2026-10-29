@@ -94,10 +94,9 @@ impl SessionTransport for RoomTransport {
                 }
                 state.registered = true;
             }
-            let streams = this
-                .room
-                .byte_streams(TOPIC_SESSION_MESSAGES)
-                .map_err(|e| HostError::new(e.to_string()))?;
+            let streams =
+                crate::rtc::events::byte_streams(this.room.as_ref(), TOPIC_SESSION_MESSAGES)
+                    .map_err(|e| HostError::new(e.to_string()))?;
             *this.incoming.lock().await = Some(streams);
             Ok(())
         })
@@ -236,7 +235,7 @@ mod tests {
         let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
         let room = rtc.room("call");
         let transport = RoomTransport::new(
-            crate::rtc::room::Room::wrap(room.clone()),
+            room.clone(),
             clock,
             Arc::new(lk_agents_net::task::TokioSpawner::current()),
         );
@@ -275,8 +274,7 @@ mod tests {
         tokio::task::yield_now().await;
         transport.close().await;
         assert!(waiting.await.unwrap().unwrap().is_none());
-        crate::rtc::room::Room::wrap(room.clone())
-            .byte_streams(TOPIC_SESSION_MESSAGES)
+        crate::rtc::events::byte_streams(room.as_ref(), TOPIC_SESSION_MESSAGES)
             .expect("the topic is free again");
     }
 }

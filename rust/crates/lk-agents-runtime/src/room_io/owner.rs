@@ -82,7 +82,6 @@ impl RoomIo {
         text_next_in_chain: Option<Arc<dyn TextOutput>>,
         pool: Option<lk_agents_media::workers::MediaWorkers>,
     ) -> Arc<Self> {
-        let room = crate::rtc::room::Room::wrap(room);
         let pre_connect = config.audio_input.as_ref().filter(|a| a.pre_connect_audio).map(|a| {
             PreConnectAudioHandler::new(
                 room.clone(),
@@ -436,7 +435,7 @@ impl RoomIo {
         if !self.begin_work() {
             return;
         }
-        let streams = self.room.text_streams(TOPIC_CHAT);
+        let streams = crate::rtc::events::text_streams(self.room.as_ref(), TOPIC_CHAT);
         let Ok(streams) = streams else {
             self.finish_starting();
             return;
