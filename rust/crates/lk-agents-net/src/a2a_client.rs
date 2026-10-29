@@ -264,17 +264,21 @@ impl AgentClient {
                         let cleanup = async {
                             if task_response {
                                 if let Err(error) = exchange.as_mut().await
-                                    && let Some(task) = known_task.borrow().clone() {
-                                        work_inner.observe(CleanupObservation::CancelUncertain {
-                                            task, error: error.to_string(),
-                                        });
+                                    && let Some(task) = known_task.borrow().clone()
+                                {
+                                    work_inner.observe(CleanupObservation::CancelUncertain {
+                                        task,
+                                        error: error.to_string(),
+                                    });
                                 }
                                 return;
                             }
                             // Keep the original send alive until its ack; resending a business
                             // request just to discover its task could duplicate a remote effect.
                             let task = loop {
-                                if let Some(task) = known_task.borrow_and_update().clone() { break Some(task); }
+                                if let Some(task) = known_task.borrow_and_update().clone() {
+                                    break Some(task);
+                                }
                                 tokio::select! {
                                     _ = known_task.changed() => {},
                                     _ = &mut exchange => break known_task.borrow().clone(),
@@ -282,19 +286,26 @@ impl AgentClient {
                             };
                             match task {
                                 Some(task) if !work_terminal.load(Ordering::Acquire) => {
-                                    if let Err(error) = work_inner.cancel_remote(&task, Some("caller-canceled")).await {
+                                    let reason = Some("caller-canceled");
+                                    let cancel = work_inner.cancel_remote(&task, reason);
+                                    if let Err(error) = cancel.await {
                                         work_inner.observe(CleanupObservation::CancelUncertain {
-                                            task, error: error.to_string(),
+                                            task,
+                                            error: error.to_string(),
                                         });
                                     }
                                 }
                                 Some(_) => {},
-                                None => work_inner.observe(CleanupObservation::UnacknowledgedRequest { request: id }),
+                                None => work_inner.observe(
+                                    CleanupObservation::UnacknowledgedRequest { request: id },
+                                ),
                             }
                         };
                         tokio::pin!(cleanup);
-                        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
-                            work_inner.observe(CleanupObservation::Incomplete { requests: vec![id] });
+                        let teardown = tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup);
+                        if teardown.await.is_err() {
+                            let requests = vec![id];
+                            work_inner.observe(CleanupObservation::Incomplete { requests });
                             cleanup.await;
                         }
                         Err(ClientError::Closed)
