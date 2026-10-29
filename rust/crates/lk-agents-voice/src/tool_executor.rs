@@ -847,10 +847,13 @@ impl Driver {
             out.machine().emit(SessionEvent::Diagnostic(diagnostic));
         }
         let Some(answer) = answer else { return };
-        let limit = self.activity.retries().tools;
+        // The step's tools as their host described them carry their own `retries=`.
+        let budget = self.activity.retries().tools;
+        let tools = &mut self.activity.tools;
+        let described = tools.steps.get(&(speech, step)).map(|s| s.tools.as_slice()).unwrap_or(&[]);
         let retried = end.executions.iter().map(|e| (e.call.name.as_str(), e.retry));
         let retries_exceeded =
-            self.activity.tools.retries.entry(speech).or_default().step(retried, |_| limit);
+            tools.retries.entry(speech).or_default().step(retried, described, budget);
         let decision = next_step(StepInputs {
             tool_output: &end.executions,
             interrupted_before_tools: end.interrupted_before_tools,

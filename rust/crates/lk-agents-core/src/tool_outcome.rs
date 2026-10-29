@@ -2,6 +2,7 @@
 //! whether it asks the model for a reply, and the text a verbatim result delivers. One table for
 //! direct runs, TextSession and voice; the host only classifies what the body returned or raised.
 
+use lk_agents_abi::agent::FunctionToolInfo;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::llm::tool_executor::{
     DELIVERED, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT, ToolOutcome, WAITING_PREFIX,
@@ -85,12 +86,18 @@ pub struct ToolRetries(BTreeMap<String, u32>);
 
 impl ToolRetries {
     /// One settled step's calls as `(tool, retried)`: the first tool, by name, whose retries
-    /// went over its `limit` (the tool's `retries=`, else the run's `Retries.tools`).
+    /// went over its limit: its own `retries=` among `tools`, else the run's `budget`
+    /// (`Retries.tools`).
     pub fn step<'a>(
         &mut self,
         calls: impl IntoIterator<Item = (&'a str, bool)>,
-        limit: impl Fn(&str) -> u32,
+        tools: &[FunctionToolInfo],
+        budget: u32,
     ) -> Option<RunError> {
+        let limit = |name: &str| {
+            let tool = tools.iter().find(|t| t.spec.name == name);
+            tool.and_then(|t| t.retries).unwrap_or(budget)
+        };
         let mut retried: BTreeMap<&str, bool> = BTreeMap::new();
         for (tool, retry) in calls {
             *retried.entry(tool).or_insert(true) &= retry;

@@ -775,13 +775,11 @@ impl AgentRun {
         let output_rejected = (recorded.iter().filter(is_final))
             .any(|r| matches!(r.settled.outcome, ToolOutcome::ToolError(_)));
         let tools = recorded.iter().filter(|r| !is_final(r));
-        let agent = &self.agent;
-        let limit = |name: &str| {
-            let tool = agent.tools.iter().find(|t| t.spec.name == name);
-            tool.and_then(|t| t.retries).unwrap_or(agent.retries.tools)
-        };
-        let mut exceeded =
-            self.tool_retries.step(tools.map(|r| (r.item.name.as_str(), r.settled.retry)), limit);
+        let mut exceeded = self.tool_retries.step(
+            tools.map(|r| (r.item.name.as_str(), r.settled.retry)),
+            &self.agent.tools,
+            self.agent.retries.tools,
+        );
         let accepted = acting.accepted.first_key_value().map(|(c, v)| (*c, *v));
         if output_rejected && accepted.is_none() {
             self.output_retries += 1;
