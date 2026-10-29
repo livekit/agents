@@ -444,6 +444,8 @@ pub enum Delivery {
     /// A VoiceTask tool's validated `Completed(value)`: the task ends with the value, and its
     /// agent says nothing more about it.
     Complete(lk_agents_abi::HostRef),
+    /// A VoiceTask tool's `Failed(reason)`: the task ends, its awaiter raising the reason.
+    Fail(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -655,11 +657,15 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
     output.reply_required = shape.reply_required;
     let mut call = call.clone();
     let end = ToolEnd::of(&outcome);
-    // A completion the host validated for a VoiceTask asks for no reply: the parent gets the floor.
-    if let (ToolOutcome::Completed { .. }, Some(value)) = (&outcome, &transition) {
+    // A transition the host accepted for a VoiceTask asks for no reply: the parent gets the floor.
+    let task_end = match (&outcome, &transition) {
+        (ToolOutcome::Completed { .. }, Some(value)) => Some(Delivery::Complete(value.clone())),
+        (ToolOutcome::Failed(reason), Some(_)) => Some(Delivery::Fail(reason.clone())),
+        _ => None,
+    };
+    if let Some(delivery) = task_end {
         output.reply_required = false;
-        let delivery = Some(Delivery::Complete(value.clone()));
-        return ToolExecution { call, output, end, raw_update: None, delivery };
+        return ToolExecution { call, output, end, raw_update: None, delivery: Some(delivery) };
     }
     let delivery = match outcome {
         ToolOutcome::Update { raw, .. } => {
@@ -725,7 +731,7 @@ pub struct StepDecision {
     max_steps_reached: bool,
     /// The second interruption read.
     pub(crate) interrupted: bool,
-    /// A call completed a VoiceTask: the step has no follow-up, whatever the outputs ask.
+    /// A call ended a VoiceTask: the step has no follow-up, whatever the outputs ask.
     completes: bool,
     previous_user_metrics: Option<MetricsReport>,
 }
@@ -822,7 +828,7 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         max_steps_reached,
         interrupted: inputs.interrupted,
         completes: (inputs.tool_output.iter())
-            .any(|o| matches!(o.delivery, Some(Delivery::Complete(_)))),
+            .any(|o| matches!(o.delivery, Some(Delivery::Complete(_) | Delivery::Fail(_)))),
         previous_user_metrics: inputs
             .forwarded_text_empty
             .then(|| inputs.user_metrics.clone())
@@ -879,11 +885,11 @@ fn interrupted(tool_output: &[ToolExecution]) -> StepDecision {
         }),
         commit,
         // A verbatim result was the person's as the call returned, as is a VoiceTask's validated
-        // completion; a question is not asked of a person who has moved on.
+        // end; a question is not asked of a person who has moved on.
         deliveries: tool_output
             .iter()
             .filter_map(|o| o.delivery.clone())
-            .filter(|d| matches!(d, Delivery::Say(_) | Delivery::Complete(_)))
+            .filter(|d| matches!(d, Delivery::Say(_) | Delivery::Complete(_) | Delivery::Fail(_)))
             .collect(),
         ..quiet(NextStep::Interrupted)
     }

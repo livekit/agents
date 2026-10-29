@@ -20,8 +20,8 @@ restores the parent, whose model can continue from the tool result. This is
 suspension and restoration of the same frontend activation: the parent's
 `on_exit` and `on_enter` hooks are not called for the task transition.
 
-The lifetime is the active `VoiceSession`. Completion, cancellation, and session
-closure end the task. Cleanup releases the floor and any
+The lifetime is the active `VoiceSession`. Completion, failure, cancellation,
+and session closure end the task. Cleanup releases the floor and any
 [override layers](voice-session.md#temporary-overrides) the task opened,
 including on failure. Audio configuration remains owned by `VoiceSession`;
 base changes the application makes during the interaction persist.
@@ -53,10 +53,37 @@ tools completes the live interaction. Ordinary tool values and conversational
 speech keep it active. The framework validates the completed value before
 returning it to the waiting caller and restoring that caller's live role.
 
+A task can also fail: returning `Failed(reason)` from one of its tools ends
+the interaction and restores the caller, whose `run()` raises
+`VoiceTaskFailed` with that reason as its message. `VoiceTaskFailed` is a
+`ToolError`, so a caller tool that does not catch it hands the reason to its
+own model as the tool's error, and that model words the next step. A caller
+that wants to recover catches it:
+
+```python
+@front_desk.tool
+async def change_receipt_email(ctx: RunContext[AirlineContext]) -> str:
+    try:
+        result = await VoiceTask(agent=email_collector).run()
+    except VoiceTaskFailed as failure:
+        return f"The receipt email was not changed: {failure.message}"
+    ...
+
+
+@email_collector.tool
+async def decline(ctx: RunContext[object], reason: str) -> Failed:
+    """The passenger does not want to give an email address."""
+    return Failed(reason)
+```
+
+Only the tools of the task's own agent end it this way; a `Failed` from the
+caller's tools has its ordinary meaning. Cancellation and session closure
+still cancel the caller's await (`asyncio.CancelledError`).
+
 ```python
 from pydantic import BaseModel, EmailStr
 
-from livekit.agents import Agent, Completed, VoiceTask, RunContext
+from livekit.agents import Agent, Completed, Failed, RunContext, VoiceTask, VoiceTaskFailed
 
 
 class EmailResult(BaseModel):

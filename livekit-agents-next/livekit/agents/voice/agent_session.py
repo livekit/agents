@@ -69,7 +69,15 @@ from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs, VoiceSessionArgs
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
-from ..llm import LLM, ChatContext, FunctionCall, RealtimeModel, StopResponse, function_tool
+from ..llm import (
+    LLM,
+    ChatContext,
+    FunctionCall,
+    RealtimeModel,
+    StopResponse,
+    ToolError,
+    function_tool,
+)
 from ..log import logger
 from ..metrics import AgentSessionUsage
 from ..stt import STT
@@ -1375,15 +1383,21 @@ _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
 }
 
 
+class VoiceTaskFailed(ToolError):
+    """``VoiceTask.run()``'s task failed: one of its agent's tools returned ``Failed(reason)``,
+    whose reason is ``message``. Uncaught in the awaiting tool, the reason is that tool's error
+    for its model."""
+
+
 class VoiceTask(Generic[Output_T]):
     """One bounded live interaction run by ``agent`` on the active ``VoiceSession``.
 
     Like ``TextSession``, a ``VoiceTask`` is not an ``Agent``: it runs one. Await ``run()``
     inside a tool of the agent holding the call: ``agent`` takes the floor (its ``on_enter``,
     or a first reply without one) and ``run()`` returns once one of its tools returns
-    ``Completed(value)``, validated against its ``output_type``. The waiting agent then gets the
-    floor back without its ``on_exit`` or ``on_enter``. Cancelling the await, or closing the
-    session, ends the task.
+    ``Completed(value)``, validated against its ``output_type``, or raises ``VoiceTaskFailed``
+    once one returns ``Failed(reason)``. The waiting agent then gets the floor back without its
+    ``on_exit`` or ``on_enter``. Cancelling the await, or closing the session, ends the task.
     """
 
     def __init__(self, *, agent: Agent[Any, Output_T]) -> None:

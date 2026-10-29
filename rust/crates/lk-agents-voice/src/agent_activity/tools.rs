@@ -460,7 +460,8 @@ impl Driver {
             Delivery::Say(text) => {
                 self.say_text(now, text, out);
             }
-            Delivery::Complete(value) => self.complete_voice_task(now, speech, value, out),
+            Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value), out),
+            Delivery::Fail(reason) => self.end_voice_task(now, speech, Err(reason), out),
             Delivery::Ask(ask) => {
                 let output = crate::run_result::RunOutput::Ask {
                     question: ask.question.clone(),

@@ -57,6 +57,7 @@ from .._generated.agent_run import (
 from .._generated.tool_report import (
     ToolOutcomeCancelled,
     ToolOutcomeCompleted,
+    ToolOutcomeFailed,
     ToolOutcomeInternal,
     ToolOutcomeInvalid,
     ToolOutcomeModelRetry,
@@ -248,7 +249,7 @@ class AgentCallbacks:
         """A call's body on a voice session: its own task, so the call's step is released by the
         body's first ``ctx.update()`` while the body runs on; its end then reaches the session as
         the call's final update. In a ``VoiceTask``'s frame, a ``Completed`` ends the task once
-        validated."""
+        validated, and a ``Failed`` ends it."""
         call = prepared.ctx.function_call
         body = asyncio.create_task(
             _call(
@@ -270,6 +271,9 @@ class AgentCallbacks:
             report = _ended(call, body)
             if binding.task and isinstance(report.outcome, ToolOutcomeCompleted):
                 return await self._validated_completion(prepared.ctx, body.result().value, report)
+            if binding.task and isinstance(report.outcome, ToolOutcomeFailed):
+                # the task's own Failed ends it (voice-tasks.md); the core reads the reason
+                return dataclasses.replace(report, transition=body.result())
             return report
 
         def _final(task: asyncio.Task[Any]) -> None:

@@ -3,6 +3,7 @@ from .agent import Agent, AgentRetries, ModelSettings
 from .agent_session import (
     VoiceSession,
     VoiceTask,
+    VoiceTaskFailed,
 )
 from .amd import AMD, AMDCategory, AMDPredictionEvent, DetectionOptions
 from .background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
@@ -24,6 +25,7 @@ from .speech_handle import SpeechHandle
 __all__ = [
     "VoiceSession",
     "VoiceTask",
+    "VoiceTaskFailed",
     "Agent",
     "AgentRetries",
     "ModelSettings",

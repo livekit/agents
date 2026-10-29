@@ -1,6 +1,6 @@
 //! `VoiceTask.run()`: from inside a tool of the agent holding the floor, a task's agent takes it.
 //! The parent waits in memory, its tool still running, and is put back without its `on_exit` or
-//! `on_enter` once the task completes, is cancelled, or the session closes.
+//! `on_enter` once the task completes, fails, is cancelled, or the session closes.
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
@@ -37,6 +37,8 @@ pub use lk_agents_abi::voice::session::VoiceTaskEnded;
 pub enum TaskEnd {
     /// A tool of the task's agent returned a validated `Completed(value)`.
     Completed,
+    /// A tool of the task's agent returned `Failed(reason)`.
+    Failed,
     /// Its awaiter went away, its awaiting speech ended, or the task that started it ended.
     Cancelled,
     Closing,
@@ -107,9 +109,9 @@ impl Driver {
         } else {
             None
         };
-        let (Some(awaiting), None) = (awaiting, refused) else {
+        let (Some(awaiting), None) = (awaiting, &refused) else {
             let why = refused.unwrap_or(VoiceTaskEnded::NotInTool);
-            out.trace(HandoffStep::TaskRefused { why });
+            out.trace(HandoffStep::TaskRefused { why: why.clone() });
             return out.answer(Some(call), Answer::VoiceTask(Err(why)));
         };
         let tasks = &mut self.activity.voice_tasks;
@@ -193,20 +195,21 @@ impl Driver {
         }
     }
 
-    /// A tool of `speech` completed a task with its validated value: the task whose agent made the
-    /// speech ends with it, the tasks it started first. A completion no task owns is a plain
-    /// output.
-    pub(crate) fn complete_voice_task(
+    /// A tool of `speech` completed a task with its validated value, or failed it with a reason:
+    /// the task whose agent made the speech ends with it, the tasks it started first. An end no
+    /// task owns is a plain output.
+    pub(crate) fn end_voice_task(
         &mut self,
         now: Ts,
         speech: SpeechId,
-        value: HostRef,
+        end: Result<HostRef, String>,
         out: &mut Out,
     ) {
         let Some(agent) = self.activity.speech_agent(speech) else { return };
         let tasks = &self.activity.voice_tasks.stack;
         if let Some(i) = tasks.iter().rposition(|t| t.agent == agent) {
-            self.end_voice_tasks(now, i, TaskEnd::Completed, Some((speech, value)), out);
+            let how = if end.is_ok() { TaskEnd::Completed } else { TaskEnd::Failed };
+            self.end_voice_tasks(now, i, how, Some((speech, end)), out);
         }
     }
 
@@ -227,26 +230,30 @@ impl Driver {
 
     /// Tasks `from..` end, innermost first: each one's speeches stop, its parent is installed
     /// again (no hooks), and its awaiter is answered. `how` is the last one's; a task ended with
-    /// it is cancelled, unless the session closes. `completed` is the speech that completed the
-    /// last one, which ends on its own, and the value.
+    /// it is cancelled, unless the session closes. `ended` is the speech that completed or failed
+    /// the last one, which ends on its own, and its value or reason.
     fn end_voice_tasks(
         &mut self,
         now: Ts,
         from: usize,
         how: TaskEnd,
-        completed: Option<(SpeechId, HostRef)>,
+        ended: Option<(SpeechId, Result<HostRef, String>)>,
         out: &mut Out,
     ) {
-        let (speech, mut value) = completed.map_or((None, None), |(s, v)| (Some(s), Some(v)));
+        let (speech, mut end) = ended.map_or((None, None), |(s, e)| (Some(s), Some(e)));
         while self.activity.voice_tasks.stack.len() > from {
             let task = self.activity.voice_tasks.stack.pop().expect("stack longer than from");
             let last = self.activity.voice_tasks.stack.len() == from;
             let how = match how {
-                TaskEnd::Completed if !last => TaskEnd::Cancelled,
+                TaskEnd::Completed | TaskEnd::Failed if !last => TaskEnd::Cancelled,
                 other => other,
             };
             let answer = match how {
-                TaskEnd::Completed => value.take().ok_or(VoiceTaskEnded::Cancelled),
+                TaskEnd::Completed | TaskEnd::Failed => match end.take() {
+                    Some(Ok(value)) => Ok(value),
+                    Some(Err(reason)) => Err(VoiceTaskEnded::Failed(reason)),
+                    None => Err(VoiceTaskEnded::Cancelled),
+                },
                 TaskEnd::Cancelled => Err(VoiceTaskEnded::Cancelled),
                 TaskEnd::Closing => Err(VoiceTaskEnded::Closing),
             };

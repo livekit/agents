@@ -397,7 +397,7 @@ impl Driver {
             // A task somebody awaits: refused as closing; a late cancel has no task left.
             Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
                 let why = crate::agent_activity::voice_task::VoiceTaskEnded::Closing;
-                out.trace(crate::trace::HandoffStep::TaskRefused { why });
+                out.trace(crate::trace::HandoffStep::TaskRefused { why: why.clone() });
                 out.answer(Some(run.call), Answer::VoiceTask(Err(why)));
                 return;
             }

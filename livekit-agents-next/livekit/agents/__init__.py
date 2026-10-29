@@ -95,6 +95,7 @@ from .voice import (
     UserStateChangedEvent,
     VoiceSession,
     VoiceTask,
+    VoiceTaskFailed,
     io,
     room_io,
 )
@@ -201,6 +202,7 @@ __all__ = [
     "SimulationVerdict",
     "VoiceSession",
     "VoiceTask",
+    "VoiceTaskFailed",
     "AMD",
     "AMDCategory",
     "AMDPredictionEvent",

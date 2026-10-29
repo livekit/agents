@@ -80,9 +80,9 @@ pub struct UnknownCloseReason(pub String);
 pub struct NotAnImage;
 
 /// Why `VoiceTask.run()` returned no value. A task ended under its awaiter cancels the await, as
-/// the close cancels a tool's body.
+/// the close cancels a tool's body; a task one of its tools failed raises its reason.
 #[crate::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, crate::Vocabulary)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, crate::Vocabulary)]
 pub enum VoiceTaskEnded {
     #[error(
         "VoiceTask.run() must be awaited inside a tool of the agent holding the floor of a live \
@@ -97,6 +97,10 @@ pub enum VoiceTaskEnded {
     #[error("the VoiceTask was cancelled before it completed")]
     #[host(kind = "asyncio.CancelledError")]
     Cancelled,
+    /// A tool of the task's agent returned `Failed(reason)` (voice-tasks.md).
+    #[error("{0}")]
+    #[host(kind = "livekit.agents.voice.agent_session.VoiceTaskFailed")]
+    Failed(String),
 }
 
 /// `wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing.
