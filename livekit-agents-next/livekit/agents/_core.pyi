@@ -114,7 +114,6 @@ from ._generated._core_classes import (
     default_aec_warmup as default_aec_warmup,
     default_input_modality as default_input_modality,
     dtmf_code as dtmf_code,
-    encode_image as encode_image,
     filter_emoji as filter_emoji,
     format_dtmf as format_dtmf,
     frame as frame,
@@ -136,8 +135,6 @@ from ._generated._core_classes import (
     resolve_recording_options as resolve_recording_options,
     rt_server_turn_detection as rt_server_turn_detection,
     rtc_wire_names as rtc_wire_names,
-    serialize_image_frame as serialize_image_frame,
-    serialize_image_url as serialize_image_url,
     session_messages_topic as session_messages_topic,
     session_state_option_fields as session_state_option_fields,
     speech_priorities as speech_priorities,
@@ -228,6 +225,10 @@ from ._generated._core_media import (
     AudioDecoder as AudioDecoder,
     AudioEmitter as AudioEmitter,
     StreamBuffer as StreamBuffer,
+    _core_install_frame_reader as _core_install_frame_reader,
+    encode_image as encode_image,
+    serialize_image_frame as serialize_image_frame,
+    serialize_image_url as serialize_image_url,
     split_sentences as split_sentences,
 )
 from ._generated._core_metrics import (

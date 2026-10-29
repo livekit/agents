@@ -1,109 +1,75 @@
-//! Image conversion and encoding run only on admitted native image workers.
+//! The declared image functions over this process's image worker and the host's frame reader.
 
-use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
-use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput, PreparedImage};
-use lk_agents_abi::utils::video::VideoFrame;
-use lk_agents_abi::{ImageContent, ImageSource};
-use lk_agents_media::images::MAX_IMAGE_BYTES;
-use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use std::sync::Arc;
 
-pub async fn prepare(
-    workers: &MediaWorkers,
+use lk_agents_abi::MediaRef;
+use lk_agents_abi::media::images::{FrameReader, ImageEncodeOptions, ImageError, ImageInput};
+
+use crate::process::{images, install_frame_reader, workers};
+
+pub struct ImageFunctions;
+
+impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
+    fn install_frame_reader(reader: Arc<dyn FrameReader>) {
+        install_frame_reader(reader);
+    }
+
+    async fn encode_image(
+        frame: MediaRef,
+        format: String,
+        quality: Option<u8>,
+        resize_width: Option<u32>,
+        resize_height: Option<u32>,
+        resize_strategy: Option<String>,
+    ) -> Result<Vec<u8>, ImageError> {
+        let options =
+            ImageEncodeOptions { format, quality, resize_width, resize_height, resize_strategy };
+        let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
+        prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))
+    }
+
+    async fn serialize_image_frame(
+        frame: MediaRef,
+        inference_width: Option<u32>,
+        inference_height: Option<u32>,
+    ) -> Result<(Vec<u8>, String), ImageError> {
+        let resize = inference_width.zip(inference_height).filter(|(w, h)| *w > 0 && *h > 0);
+        let options = ImageEncodeOptions {
+            format: "JPEG".into(),
+            quality: None,
+            resize_width: resize.map(|(w, _)| w),
+            resize_height: resize.map(|(_, h)| h),
+            resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
+        };
+        let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
+        let bytes = prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))?;
+        Ok((bytes, "image/jpeg".into()))
+    }
+
+    async fn serialize_image_url(
+        url: String,
+        mime_type: Option<String>,
+    ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError> {
+        prepare(ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await
+    }
+}
+
+async fn prepare(
     input: ImageInput,
     options: ImageEncodeOptions,
-) -> Result<PreparedImage, String> {
-    workers
-        .try_spawn(MediaWorkerClass::Image, move || {
-            lk_agents_media::images::prepare(input, options, host_frame)
-        })
-        .map_err(|e| e.to_string())?
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn host_frame(frame: lk_agents_abi::MediaRef) -> Result<VideoFrame, String> {
-    #[cfg(feature = "python")]
-    {
-        use pyo3::IntoPyObjectExt;
-        use pyo3::types::PyAnyMethods;
-        pyo3::Python::attach(|py| {
-            let object = frame.into_bound_py_any(py)?;
-            let width: u32 = object.getattr("width")?.extract()?;
-            let height: u32 = object.getattr("height")?.extract()?;
-            lk_agents_media::images::validate_dimensions(width, height)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
-            let frame = if object.getattr("type")?.extract::<i32>()? == 0 {
-                object
-            } else {
-                object.call_method1("convert", (0,))?
-            };
-            VideoFrame::from_host(&frame, Some(width as usize * height as usize * 4))
-        })
-        .map_err(|e: pyo3::PyErr| e.to_string())
-    }
-    #[cfg(not(feature = "python"))]
-    {
-        let _ = frame;
-        Err("host frame conversion requires a host runtime".into())
-    }
-}
-
-/// How a realtime model prepares its images: on the image worker it already runs on.
-pub struct NativeImages;
-
-impl ImageResolver for NativeImages {
-    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
-        let input = match &image.image {
-            ImageSource::Url(url) => {
-                if url.len() > MAX_IMAGE_BYTES {
-                    return Err("realtime image URL exceeds 16 MiB".into());
-                }
-                ImageInput::Url { url: url.clone(), mime_type: image.mime_type.clone() }
-            }
-            ImageSource::Frame(frame) => ImageInput::HostFrame(frame.clone()),
-        };
-        let resize = image
-            .inference_width
-            .zip(image.inference_height)
-            .filter(|(width, height)| *width > 0 && *height > 0);
-        let (data_bytes, mime_type, external_url, overridden_mime) =
-            lk_agents_media::images::prepare(
-                input,
-                ImageEncodeOptions {
-                    format: "JPEG".into(),
-                    resize_width: resize.map(|(width, _)| width),
-                    resize_height: resize.map(|(_, height)| height),
-                    resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
-                    ..Default::default()
-                },
-                host_frame,
-            )
-            .map_err(|cause| format!("image {}: {cause}", image.id))?;
-        if let Some(header) = overridden_mime {
-            log::warn!(target: "livekit.agents", declared_mime = image.mime_type.as_deref().unwrap_or_default(), header_mime = header.as_str(); "image MIME declaration overrides data URL header");
-        }
-        Ok(SerializedImage {
-            data_bytes,
-            mime_type,
-            external_url,
-            inference_detail: image.inference_detail,
-        })
-    }
-}
-
-lk_agents_abi::inventory::submit! {
-    lk_agents_abi::media::images::ImagePreparation {
-        prepare: |input, options| Box::pin(async move {
-            let workers = crate::process::workers().map_err(|e| e.to_string())?;
-            prepare(&workers, input, options).await
-        }),
-    }
+) -> Result<lk_agents_abi::media::images::PreparedImage, ImageError> {
+    let workers = workers().map_err(|e| ImageError(e.to_string()))?;
+    images().prepare(&workers, input, options).await.map_err(ImageError)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use lk_agents_abi::utils::video::VideoFrame;
+    use lk_agents_media::images::Images;
+
+    use super::*;
 
     #[cfg(unix)]
     fn thread_cpu() -> Duration {
@@ -122,7 +88,10 @@ mod tests {
             buffer_type: 0,
             data: vec![127; 1920 * 1080 * 4].into(),
         };
-        let mut encoding = Box::pin(lk_agents_abi::media::images::prepare(
+        let workers = workers().unwrap();
+        let images = Images::default();
+        let mut encoding = Box::pin(images.prepare(
+            &workers,
             ImageInput::Frame(frame),
             ImageEncodeOptions { format: "JPEG".into(), ..Default::default() },
         ));

@@ -32,7 +32,7 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
 #[tokio::test]
 async fn oversized_pixels_are_refused_before_buffer_conversion_or_encoding() {
     let workers = lk_agents_media::workers::MediaWorkers::new(Default::default()).unwrap();
-    let result = lk_agents_runtime::images::prepare(
+    let result = lk_agents_media::images::Images::default().prepare(
         &workers,
         ImageInput::Frame(VideoFrame {
             width: 4097,
@@ -57,7 +57,7 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
         inference_detail: Default::default(),
         mime_type: None,
     };
-    let prepared = lk_agents_runtime::images::NativeImages
+    let prepared = lk_agents_media::images::Images::default()
         .resolve(&image)
         .expect("the native constructor's resolver must accept a prepared inline image");
     assert_eq!(prepared.data_bytes.as_deref(), Some(&[1, 2, 3][..]));
@@ -73,7 +73,7 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
     assert!(
         lk_agents_runtime::inference::realtime::native::wire::to_wire_item(
             &item,
-            &lk_agents_runtime::images::NativeImages
+            &lk_agents_media::images::Images::default()
         )
         .is_err(),
         "this realtime protocol requires inline images"
@@ -81,5 +81,5 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
     let mut oversized = image;
     oversized.image =
         lk_agents_abi::ImageSource::Url("x".repeat(lk_agents_media::images::MAX_IMAGE_BYTES + 1));
-    assert!(lk_agents_runtime::images::NativeImages.resolve(&oversized).is_err());
+    assert!(lk_agents_media::images::Images::default().resolve(&oversized).is_err());
 }

@@ -7,7 +7,34 @@ from __future__ import annotations
 
 from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import Chan
+from livekit.agents.utils.images import _FrameReader
 from livekit.rtc import AudioFrame
+
+def _core_install_frame_reader(reader: _FrameReader) -> None:
+    """Hands the runtime the host's frame reader; images of host frames need it."""
+
+async def encode_image(
+    frame: object,
+    *,
+    format: str = "JPEG",
+    quality: int | None = None,
+    resize_width: int | None = None,
+    resize_height: int | None = None,
+    resize_strategy: str | None = None,
+) -> bytes: ...
+
+async def serialize_image_frame(
+    frame: object,
+    inference_width: int | None = None,
+    inference_height: int | None = None,
+) -> tuple[bytes, str]:
+    """A frame as JPEG bytes, resized to its inference size when it has one."""
+
+async def serialize_image_url(
+    url: str,
+    mime_type: str | None,
+) -> tuple[bytes | None, str | None, str | None, str | None]:
+    """A URL's inline bytes and MIME type, or the URL itself when it is external."""
 
 class AudioEmitter:
     def __init__(self, *, label: str, dst_ch: Chan) -> None: ...

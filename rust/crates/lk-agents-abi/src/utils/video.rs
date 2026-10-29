@@ -8,6 +8,7 @@ use lk_agents_host_derive::Host;
 use crate::AudioFrame;
 
 /// `rtc.VideoFrame(width, height, type, data)`.
+#[crate::host(handwritten(extract, emit, host = "rtc.VideoFrame"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoFrame {
     pub width: u32,

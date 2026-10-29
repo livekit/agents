@@ -10,6 +10,70 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/media/images.rs.
+type ImageFunctionsImpl = <crate::Selected as super::Implementations>::ImageFunctions;
+
+fn _extract_image_functions_encode_image_quality(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u8>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u8>(&obj, "quality")).map(Some) }
+}
+
+fn _extract_image_functions_encode_image_resize_width(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "resize_width")).map(Some) }
+}
+
+fn _extract_image_functions_encode_image_resize_height(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "resize_height")).map(Some) }
+}
+
+fn _extract_image_functions_serialize_image_frame_inference_width(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_width")).map(Some) }
+}
+
+fn _extract_image_functions_serialize_image_frame_inference_height(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_height")).map(Some) }
+}
+
+/// Hands the runtime the host's frame reader; images of host frames need it.
+#[pyfunction]
+#[pyo3(signature = (reader))]
+pub fn _core_install_frame_reader(reader: Bound<'_, PyAny>) -> PyResult<()> {
+    let reader = crate::generated::media::FrameReaderProxy::from_host(&reader)?;
+    <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::install_frame_reader(reader);
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (frame, *, format = "JPEG".to_owned(), quality = None, resize_width = None, resize_height = None, resize_strategy = None))]
+pub fn encode_image<'py>(py: Python<'py>, frame: ::lk_agents_abi::MediaRef, format: ::std::string::String, #[pyo3(from_py_with = _extract_image_functions_encode_image_quality)] quality: ::std::option::Option<u8>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_width)] resize_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_height)] resize_height: ::std::option::Option<u32>, resize_strategy: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    crate::host::future_into_py(py, async move {
+        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::encode_image(frame, format, quality, resize_width, resize_height, resize_strategy).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+    })
+}
+
+/// A frame as JPEG bytes, resized to its inference size when it has one.
+#[pyfunction]
+#[pyo3(signature = (frame, inference_width = None, inference_height = None))]
+pub fn serialize_image_frame<'py>(py: Python<'py>, frame: ::lk_agents_abi::MediaRef, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_width)] inference_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_height)] inference_height: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    crate::host::future_into_py(py, async move {
+        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_frame(frame, inference_width, inference_height).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+    })
+}
+
+/// A URL's inline bytes and MIME type, or the URL itself when it is external.
+#[pyfunction]
+#[pyo3(signature = (url, mime_type))]
+pub fn serialize_image_url<'py>(py: Python<'py>, url: ::std::string::String, mime_type: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    crate::host::future_into_py(py, async move {
+        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_url(url, mime_type).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+    })
+}
+
 // Declared in rust/crates/lk-agents-abi/src/media/emitter.rs.
 type AudioEmitterImpl = <crate::Selected as super::Implementations>::AudioEmitter;
 
@@ -290,6 +354,68 @@ fn _extract_media_tokenization_split_sentences_min_sentence_len(obj: &Bound<'_, 
 pub fn split_sentences<'py>(py: Python<'py>, text: ::std::string::String, #[pyo3(from_py_with = _extract_media_tokenization_split_sentences_min_sentence_len)] min_sentence_len: usize, retain_format: bool) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
     let out = py.detach(|| <MediaTokenizationImpl as ::lk_agents_abi::media::codecs::MediaTokenization>::split_sentences(&text, min_sentence_len, retain_format)).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/media/images.rs.
+
+/// [`::lk_agents_abi::media::images::FrameReader`] over a host `livekit.agents.utils.images._FrameReader`.
+#[derive(Clone)]
+pub struct FrameReaderProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl FrameReaderProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::images::FrameReader>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
+        Ok(FrameReaderProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::media::images::FrameReader>(|obj| FrameReaderProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
+    fn rgba(&self, frame: &::lk_agents_abi::MediaRef) -> ::std::result::Result<::lk_agents_abi::utils::video::VideoFrame, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let frame_arg = ::std::clone::Clone::clone(frame);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                Ok((host.bind(py).getattr("_core_rgba")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.extract::<::lk_agents_abi::utils::video::VideoFrame>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/media/emitter.rs.

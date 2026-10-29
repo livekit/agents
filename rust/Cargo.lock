@@ -1502,6 +1502,7 @@ dependencies = [
  "cc",
  "image",
  "lk-agents-abi",
+ "log",
  "soxr-sys",
  "thiserror 2.0.20",
 ]
@@ -1573,7 +1574,6 @@ dependencies = [
  "lk-agents-worker",
  "log",
  "prost",
- "pyo3",
  "reqwest 0.13.4",
  "rmcp",
  "serde",

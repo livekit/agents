@@ -13,6 +13,7 @@ side_table_ref!(HostRef);
 
 /// A key into the binding's side table for a host media object (`rtc.VideoFrame`,
 /// `list[rtc.AudioFrame]`).
+#[crate::host(handwritten(extract, emit, host = "object"))]
 #[derive(Clone)]
 pub struct MediaRef(std::sync::Arc<crate::errors::side_table::Entry>);
 side_table_ref!(MediaRef);

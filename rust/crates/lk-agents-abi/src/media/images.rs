@@ -1,7 +1,6 @@
-//! Awaitable image preparation; the runtime owns admission, conversion and encoding.
+//! Image preparation's records and its host contracts; media prepares, the runtime admits.
 
 use crate::MediaRef;
-use crate::utils::spawner::BoxFuture;
 use crate::utils::video::VideoFrame;
 
 pub enum ImageInput {
@@ -33,69 +32,50 @@ impl Default for ImageEncodeOptions {
 
 pub type PreparedImage = (Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
 
-pub struct ImagePreparation {
-    pub prepare:
-        fn(ImageInput, ImageEncodeOptions) -> BoxFuture<'static, Result<PreparedImage, String>>,
+/// Reads a host video frame as an RGBA [`VideoFrame`], converting it when it is in another
+/// buffer type (decision 94). The host hands one to the runtime as its process starts.
+#[crate::host(proxy(host = "livekit.agents.utils.images._FrameReader"))]
+pub trait FrameReader: Send + Sync {
+    #[host(call, name = "_core_rgba")]
+    fn rgba(&self, frame: &MediaRef) -> Result<VideoFrame, crate::errors::HostError>;
 }
 
-inventory::collect!(ImagePreparation);
+/// Frames as portable images, encoded on an admitted image worker.
+#[crate::host(functions)]
+pub trait ImageFunctions {
+    /// Hands the runtime the host's frame reader; images of host frames need it.
+    #[host(function, name = "_core_install_frame_reader", pid = false)]
+    fn install_frame_reader(reader: std::sync::Arc<dyn FrameReader>);
 
-pub async fn prepare(
-    input: ImageInput,
-    options: ImageEncodeOptions,
-) -> Result<PreparedImage, String> {
-    let mut providers = inventory::iter::<ImagePreparation>.into_iter();
-    let provider =
-        providers.next().ok_or("image preparation service unavailable: no runtime linked")?;
-    if providers.next().is_some() {
-        return Err("image preparation service unavailable: multiple runtimes linked".into());
-    }
-    (provider.prepare)(input, options).await
+    #[host(function)]
+    #[allow(clippy::too_many_arguments)]
+    async fn encode_image(
+        frame: MediaRef,
+        #[host(kw, default = "JPEG")] format: String,
+        #[host(default = None)] quality: Option<u8>,
+        #[host(default = None)] resize_width: Option<u32>,
+        #[host(default = None)] resize_height: Option<u32>,
+        #[host(default = None)] resize_strategy: Option<String>,
+    ) -> Result<Vec<u8>, ImageError>;
+
+    /// A frame as JPEG bytes, resized to its inference size when it has one.
+    #[host(function)]
+    async fn serialize_image_frame(
+        frame: MediaRef,
+        #[host(default = None)] inference_width: Option<u32>,
+        #[host(default = None)] inference_height: Option<u32>,
+    ) -> Result<(Vec<u8>, String), ImageError>;
+
+    /// A URL's inline bytes and MIME type, or the URL itself when it is external.
+    #[host(function)]
+    async fn serialize_image_url(
+        url: String,
+        mime_type: Option<String>,
+    ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError>;
 }
 
-#[crate::host(export(kw_only = "format", defaults(format = "JPEG".to_owned())))]
-#[allow(clippy::too_many_arguments)]
-pub async fn encode_image(
-    frame: MediaRef,
-    format: String,
-    quality: Option<u8>,
-    resize_width: Option<u32>,
-    resize_height: Option<u32>,
-    resize_strategy: Option<String>,
-) -> Result<Vec<u8>, String> {
-    let prepared = prepare(
-        ImageInput::HostFrame(frame),
-        ImageEncodeOptions { format, quality, resize_width, resize_height, resize_strategy },
-    )
-    .await?;
-    prepared.0.ok_or_else(|| "image encoder returned no bytes".into())
-}
-
-#[crate::host(export)]
-pub async fn serialize_image_frame(
-    frame: MediaRef,
-    inference_width: Option<u32>,
-    inference_height: Option<u32>,
-) -> Result<(Vec<u8>, String), String> {
-    let resize = inference_width.zip(inference_height).filter(|(w, h)| *w > 0 && *h > 0);
-    let prepared = prepare(
-        ImageInput::HostFrame(frame),
-        ImageEncodeOptions {
-            format: "JPEG".into(),
-            quality: None,
-            resize_width: resize.map(|(w, _)| w),
-            resize_height: resize.map(|(_, h)| h),
-            resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
-        },
-    )
-    .await?;
-    Ok((prepared.0.ok_or("image encoder returned no bytes")?, "image/jpeg".into()))
-}
-
-#[crate::host(export)]
-pub async fn serialize_image_url(
-    url: String,
-    #[host(required)] mime_type: Option<String>,
-) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), String> {
-    prepare(ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await
-}
+/// An image that could not be prepared.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ImageError(pub String);

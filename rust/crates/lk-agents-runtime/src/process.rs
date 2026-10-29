@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
+use lk_agents_abi::media::images::FrameReader;
 use lk_agents_media::workers::{MediaWorkerError, MediaWorkerLimits, MediaWorkers};
 use lk_agents_voice::tts::processing::SpeechText;
 
@@ -127,8 +128,14 @@ impl lk_agents_inference::env::Env for Process {
         workers().map_err(|error| error.to_string())
     }
 
+    #[cfg(feature = "media-images")]
     fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-        images()
+        Arc::new(images())
+    }
+
+    #[cfg(not(feature = "media-images"))]
+    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+        <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
     }
 
     fn strip_assistant_markup(text: &str) -> String {
@@ -142,14 +149,19 @@ impl lk_agents_worker::env::Env for Process {
     }
 }
 
-#[cfg(feature = "media-images")]
-fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    Arc::new(crate::images::NativeImages)
+/// The host's frame reader, handed over as the host starts (decision 94). It outlives a fork:
+/// the host object is the child's too.
+static FRAME_READER: Mutex<Option<Arc<dyn FrameReader>>> = Mutex::new(None);
+
+pub fn install_frame_reader(reader: Arc<dyn FrameReader>) {
+    *FRAME_READER.lock().unwrap_or_else(|p| p.into_inner()) = Some(reader);
 }
 
-#[cfg(not(feature = "media-images"))]
-fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
+/// Image preparation with the host's frame reader, once the host installed one.
+#[cfg(feature = "media-images")]
+pub fn images() -> lk_agents_media::images::Images {
+    let frames = FRAME_READER.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    lk_agents_media::images::Images::new(frames)
 }
 
 /// The voice core's speech text in the native synthesis clients and the judges' transcripts.

@@ -45,6 +45,7 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::voice::background_audio::HostBackgroundAudioPlayer;
     type PlayState = lk_agents_runtime::voice::background_audio::PlayState;
     type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
+    type ImageFunctions = lk_agents_runtime::images::ImageFunctions;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
     type Tagger = lk_agents_runtime::net::session_report::records::Tagger;

@@ -166,6 +166,7 @@
     "_core_create_room_session",
     "_core_evaluation_score",
     "_core_format_trace_parent",
+    "_core_install_frame_reader",
     "_core_judge_tool_schemas",
     "_core_loop_monitor_thresholds",
     "_core_mcp_timeout_check",

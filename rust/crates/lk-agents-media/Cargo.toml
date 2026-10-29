@@ -31,6 +31,7 @@ images = ["dep:image"]
 
 [dependencies]
 thiserror = { workspace = true }
+log.workspace = true
 
 # `soxr.rs`, merged in from `lk-agents-media` by PLAN.md F. The SAME library that backs
 # `rtc.AudioResampler`, so behaviour matches by construction rather than by testing -- a different

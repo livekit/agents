@@ -432,6 +432,8 @@ mod bench {
             resize_height: resize.then_some(1024),
             resize_strategy: resize.then(|| "center_aspect_fit".into()),
         };
+        let workers = lk_agents_runtime::process::workers()?;
+        let images = lk_agents_media::images::Images::default();
         let (stop, heartbeat, observations) = start_heartbeat().await;
         let mut encoded = 0;
         let mut waves = 0;
@@ -443,7 +445,8 @@ mod bench {
             for _ in 0..count {
                 let start = Instant::now();
                 let (prepared, cpu, maximum) =
-                    measure_polls(lk_agents_abi::media::images::prepare(
+                    measure_polls(images.prepare(
+                        &workers,
                         ImageInput::Frame(frame.clone()),
                         options.clone(),
                     ))
