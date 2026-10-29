@@ -4,10 +4,12 @@
 //! - `mod.rs`: the driver and builders the tests share.
 //! - `flow.rs`: model steps, tools, outputs and questions.
 //! - `approval.rs`: the approval gate across invocations.
+//! - `coordinated.rs`: a coordinator planning the requests and deciding each step.
 //! - `lifecycle.rs`: sibling calls, duplicates, cancellation, deadlines and arrival orders.
 
 mod approval;
 mod checkpoints;
+mod coordinated;
 mod flow;
 mod lifecycle;
 
@@ -87,7 +89,7 @@ impl Driver {
             agent,
             RunInput {
                 invocation_id: "run_1".into(),
-                message: user("msg_1", message),
+                opening: Opening::Message(user("msg_1", message)),
                 history,
                 answer_tool: None,
                 delegated: false,

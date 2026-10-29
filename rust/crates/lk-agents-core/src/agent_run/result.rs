@@ -18,4 +18,6 @@ ids! {
     RenderId,
     /// One managed-turn admission or delivery checkpoint.
     CheckpointId,
+    /// One settled model step a coordinator decides the continuation of.
+    StepId,
 }

@@ -10,7 +10,7 @@ use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::utils::clock::RealClock;
 use lk_agents_abi::utils::stream::StreamSource;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
-use lk_agents_core::RunInput;
+use lk_agents_core::{Opening, RunInput};
 use lk_agents_core::tool_outcome::Mode;
 use tokio::sync::mpsc;
 
@@ -59,7 +59,7 @@ impl AgentRunner for Runner {
         );
         let input = RunInput {
             invocation_id: request.invocation_id.clone(),
-            message,
+            opening: Opening::Message(message),
             history: request.history,
             answer_tool: request.answer_tool,
             delegated: request.delegated,
@@ -87,7 +87,7 @@ impl AgentRunner for Runner {
                     .history
                     .iter()
                     .cloned()
-                    .chain([ChatItem::Message(input.message.clone())])
+                    .chain(input.opening.message().cloned().map(ChatItem::Message))
                     .collect(),
                 function_call: None,
                 approval: None,

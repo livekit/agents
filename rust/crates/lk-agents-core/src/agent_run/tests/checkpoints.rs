@@ -5,7 +5,7 @@ use super::*;
 fn managed(tools: Vec<FunctionToolInfo>) -> Driver {
     let input = RunInput {
         invocation_id: "managed".into(),
-        message: user("message", "Find a room"),
+        opening: Opening::Message(user("message", "Find a room")),
         history: Vec::new(),
         answer_tool: None,
         delegated: false,

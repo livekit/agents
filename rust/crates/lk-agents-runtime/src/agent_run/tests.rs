@@ -328,7 +328,7 @@ fn setup(
     };
     let input = RunInput {
         invocation_id: "run_1".into(),
-        message: ChatMessage::text("m1", Role::User, "Monday?", std::time::UNIX_EPOCH),
+        opening: lk_agents_core::agent_run::Opening::Message(ChatMessage::text("m1", Role::User, "Monday?", std::time::UNIX_EPOCH)),
         history: vec![],
         answer_tool: None,
         delegated: false,

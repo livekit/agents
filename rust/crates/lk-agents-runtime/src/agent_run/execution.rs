@@ -100,6 +100,10 @@ impl Execution {
     }
     pub(crate) async fn execute(&mut self, effect: Effect) -> Option<RunUpdate> {
         match effect {
+            // A direct run opens on its message: it plans and decides its own steps.
+            Effect::PlanRequest { .. } | Effect::StepSettled { .. } => {
+                unreachable!("only a coordinated run asks its coordinator")
+            }
             Effect::HostCheckpoint { checkpoint, list_tools } => {
                 let host = self.ports.host.clone();
                 self.invoke(

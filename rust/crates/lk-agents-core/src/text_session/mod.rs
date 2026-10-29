@@ -23,7 +23,7 @@ use lk_agents_abi::agent::run::{
 use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
 use serde_json::Value;
 
-use crate::agent_run::{self, AgentRun, CallId, OutputVerdict, RunInput};
+use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
 use crate::approval;
 
 pub use lk_agents_abi::text_session::{
@@ -414,7 +414,7 @@ impl TextSession {
         );
         let input = RunInput {
             invocation_id: invocation_id.clone(),
-            message,
+            opening: Opening::Message(message),
             history: frame.history.clone(),
             answer_tool: frame.answer_tool.clone(),
             delegated: self.delegated,
@@ -427,7 +427,7 @@ impl TextSession {
             input.history.clone()
         } else {
             let mut history = input.history.clone();
-            history.push(ChatItem::Message(input.message.clone()));
+            history.extend(input.opening.message().cloned().map(ChatItem::Message));
             history
         };
         let mut run = match AgentRun::new(agent.definition.clone(), input) {

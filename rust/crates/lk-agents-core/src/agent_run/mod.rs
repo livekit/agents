@@ -7,15 +7,18 @@
 //! - `mod.rs`: the invocation's events, effects and step decisions.
 //! - [`result`]: the settled result, stream events and correlation ids.
 //! - [`model_step`]: one model request.
+//! - `coordinated`: an invocation whose coordinator plans its requests and decides its steps.
 //!
 //! One step's calls are [`crate::tool_calls`]'s, the machine VoiceSession composes too.
 
 mod checkpoint;
+mod coordinated;
 pub mod execution;
 mod model_step;
 pub mod result;
 mod text_session;
 
+pub use coordinated::{Opening, StepVerdict};
 pub use text_session::DelegationCheckpoint;
 
 #[cfg(test)]
@@ -42,7 +45,7 @@ use lk_agents_abi::agent::run::{
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use model_step::{ModelStep, Purpose};
-pub use result::{CallId, CheckpointId, RenderId, RequestId};
+pub use result::{CallId, CheckpointId, RenderId, RequestId, StepId};
 
 /// The feedback a rejected text output gives the model.
 const RETRY_PROMPT: &str = "Validation failed, fix the output and try again: ";
@@ -59,7 +62,7 @@ pub const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct RunInput {
     /// Prefixes every id the invocation mints.
     pub invocation_id: String,
-    pub message: ChatMessage,
+    pub opening: Opening,
     /// The conversation so far.
     pub history: Vec<ChatItem>,
     /// The previous invocation asked with `InputRequired(tool=)`: this message is that tool's.
@@ -147,6 +150,11 @@ pub enum Event {
         validation: ValidationId,
         verdict: OutputVerdict,
     },
+    /// The coordinator's verdict on the step it was told settled.
+    StepVerdict {
+        step: StepId,
+        verdict: StepVerdict,
+    },
     Cancel,
     /// The deadline from `wake_at()` is due.
     Wake,
@@ -174,6 +182,17 @@ pub enum Effect {
         llm: ResourceId,
         chat_ctx: ChatContext,
         tools: Vec<ToolSpec>,
+    },
+    /// Coordinated: plan and start the model request `request` (its chunks come back as
+    /// [`Event::LlmChunk`]). `pending` are the items recorded since the last plan, merged by id;
+    /// `message_id` names the step's assistant message; `tools` is what the step offers, which it
+    /// may not call when `tools_forbidden`.
+    PlanRequest {
+        request: RequestId,
+        message_id: String,
+        pending: Vec<ChatItem>,
+        tools: Vec<ToolSpec>,
+        tools_forbidden: bool,
     },
     LlmRequestCancel {
         request: RequestId,
@@ -212,6 +231,14 @@ pub enum Effect {
     },
     OutputValidateCancel {
         validation: ValidationId,
+    },
+    /// Coordinated: a step's calls settled, recorded as `items` (calls, then outputs, in model
+    /// order); `continues` when the run would request another step. Answered by
+    /// [`Event::StepVerdict`].
+    StepSettled {
+        step: StepId,
+        items: Vec<ChatItem>,
+        continues: bool,
     },
     Emit(StreamEvent),
     /// Diagnostic: malformed model arguments were repaired.
@@ -277,6 +304,10 @@ pub struct AgentRun {
     dynamic: Option<String>,
     approval_answers: BTreeSet<String>,
     checkpoints: bool,
+    /// Coordinated: the history up to here was handed to the coordinator's planner.
+    planned: usize,
+    /// Coordinated: the coordinator forbade calls on the next step.
+    tools_forbidden: bool,
     phase: Phase,
 }
 
@@ -290,6 +321,11 @@ enum Phase {
     ValidatingText {
         validation: ValidationId,
         text: String,
+    },
+    /// Coordinated: the step settled; the coordinator's verdict decides `next`.
+    Settling {
+        step: StepId,
+        next: Next,
     },
     /// Settling cancelled work after `error`.
     Aborting {
@@ -372,7 +408,9 @@ impl Owed {
 impl AgentRun {
     pub fn new(agent: AgentDefinition, mut input: RunInput) -> Result<AgentRun, AgentError> {
         agent::validate(&agent)?;
-        execution::bind(&mut input.message, &input.history, None, &input.invocation_id);
+        if let Opening::Message(message) = &mut input.opening {
+            execution::bind(message, &input.history, None, &input.invocation_id);
+        }
         Ok(AgentRun {
             agent,
             history: Vec::new(),
@@ -386,6 +424,8 @@ impl AgentRun {
             dynamic: None,
             approval_answers: BTreeSet::new(),
             checkpoints: false,
+            planned: 0,
+            tools_forbidden: false,
             phase: Phase::Idle,
         })
     }
@@ -507,6 +547,7 @@ impl AgentRun {
             Event::OutputValidated { validation, verdict } => {
                 self.validated(validation, verdict, now, &mut fx)
             }
+            Event::StepVerdict { step, verdict } => self.verdict(step, verdict, now, &mut fx),
         }
         fx
     }
@@ -534,7 +575,16 @@ impl AgentRun {
             return self.finish(Err(RunError::NoModel), fx);
         };
         self.history = std::mem::take(&mut self.input.history);
-        let answer = self.input.message.raw_text_content().unwrap_or_default();
+        let message = match &mut self.input.opening {
+            Opening::Message(message) => message.clone(),
+            Opening::Coordinated { approval_answers } => {
+                self.approval_answers = std::mem::take(approval_answers);
+                self.first_new = self.history.len();
+                self.planned = self.history.len();
+                return self.next_step(now, fx);
+            }
+        };
+        let answer = message.raw_text_content().unwrap_or_default();
         self.approval_answers = crate::request::answer_pending_input(&mut self.history, &answer);
         // A transport (the A2A door) may already have written the answer: the read-backs of the
         // execution this message continues were still waiting, so this invocation answers them.
@@ -548,7 +598,7 @@ impl AgentRun {
             }
         }
         self.first_new = self.history.len();
-        self.history.push(ChatItem::Message(self.input.message.clone()));
+        self.history.push(ChatItem::Message(message));
         // The answer is that tool's: it takes it as its first string parameter, no model turn.
         let handed = self.input.answer_tool.clone().and_then(|name| {
             let parameter =
@@ -577,8 +627,9 @@ impl AgentRun {
     }
 
     /// The next model step: dynamic instructions first when there are any.
+    /// Coordinated, the coordinator renders the instructions with the rest of the request.
     fn next_step(&mut self, now: Ts, fx: &mut Vec<Effect>) {
-        if self.agent.dynamic_instructions {
+        if self.agent.dynamic_instructions && !self.input.opening.coordinated() {
             let render = RenderId(self.mint());
             fx.push(Effect::InstructionsRender { render });
             self.phase = Phase::Rendering(render);
@@ -621,6 +672,22 @@ impl AgentRun {
                 tools.extend(agent::final_result_tool(&self.agent));
             }
             Purpose::Phrase(ask) => phrase = Some(format!("{ASK_IN_OWN_WORDS}{}", ask.question)),
+        }
+        if self.input.opening.coordinated() {
+            let request = RequestId(self.mint());
+            let message_id = self.item_id();
+            self.usage.requests += 1;
+            fx.push(Effect::PlanRequest {
+                request,
+                message_id: message_id.clone(),
+                pending: self.history[self.planned..].to_vec(),
+                tools,
+                tools_forbidden: std::mem::take(&mut self.tools_forbidden),
+            });
+            self.planned = self.history.len();
+            let step = ModelStep::new(request, purpose, message_id);
+            self.phase = Phase::Requesting(step, Acting::new(&self.approval_answers));
+            return;
         }
         let planned = plan_request(RequestSnapshot {
             history: &self.history,
@@ -883,22 +950,36 @@ impl AgentRun {
             items.push(ChatItem::FunctionCall(item));
             items.push(ChatItem::FunctionCallOutput(output));
         }
-        for item in items {
-            self.record(item);
-        }
-        if let Some(error) = exceeded {
-            return self.finish(Err(error), fx);
-        }
-        match terminal {
-            Some(Terminal::Output) => {
+        let next = match (exceeded, terminal) {
+            (Some(error), _) => Next::Fail(error),
+            (None, Some(Terminal::Output)) => {
                 let (_, validation) = accepted.expect("an accepted candidate is the terminal");
-                self.complete(Output::Validated(validation), fx)
+                Next::Output(validation)
             }
-            Some(Terminal::Ask(ask)) => self.ask_from_tool(ask, now, fx),
-            Some(Terminal::Stop) => self.complete(Output::Nothing, fx),
+            (None, Some(Terminal::Ask(ask))) => Next::Ask(ask),
+            (None, Some(Terminal::Stop)) => Next::Stop,
             // A step whose every output asks for no reply ends the turn there.
-            None if !replies => self.complete(Output::Nothing, fx),
-            None => self.next_step(now, fx),
+            (None, None) if !replies => Next::Stop,
+            (None, None) => Next::Continue,
+        };
+        if !self.input.opening.coordinated() {
+            self.history.extend(items);
+            return self.proceed(next, now, fx);
+        }
+        let step = StepId(self.mint());
+        let continues = matches!(next, Next::Continue);
+        fx.push(Effect::StepSettled { step, items: items.clone(), continues });
+        self.history.extend(items);
+        self.phase = Phase::Settling { step, next };
+    }
+
+    fn proceed(&mut self, next: Next, now: Ts, fx: &mut Vec<Effect>) {
+        match next {
+            Next::Fail(error) => self.finish(Err(error), fx),
+            Next::Output(validation) => self.complete(Output::Validated(validation), fx),
+            Next::Ask(ask) => self.ask_from_tool(ask, now, fx),
+            Next::Stop => self.complete(Output::Nothing, fx),
+            Next::Continue => self.next_step(now, fx),
         }
     }
 
@@ -917,7 +998,11 @@ impl AgentRun {
 
     /// A tool's question: worded by the facing agent in one request without tools, unless it is
     /// verbatim or another agent asked this run; then it is said as written.
+    /// Coordinated, the coordinator asks it.
     fn ask_from_tool(&mut self, ask: Ask, now: Ts, fx: &mut Vec<Effect>) {
+        if self.input.opening.coordinated() {
+            return self.settle_ask(ask, fx);
+        }
         if !ask.verbatim && !self.input.delegated {
             let dynamic = self.dynamic.clone();
             return self.request(Purpose::Phrase(ask), dynamic, now, fx);
@@ -953,6 +1038,14 @@ impl AgentRun {
         };
         let verbatim = self.verbatim_text();
         self.finish(Ok(self.result(RunOutcome::Completed { output }, verbatim)), fx)
+    }
+
+    /// Ends the invocation as cut by the person (a managed turn's verdict, a voice interruption).
+    fn complete_interrupted(&mut self, fx: &mut Vec<Effect>) {
+        let outcome = RunOutcome::Completed { output: Output::Nothing };
+        let mut result = self.result(outcome, self.verbatim_text());
+        result.interrupted = true;
+        self.finish_now(Ok(result), fx);
     }
 
     fn verbatim_text(&self) -> Option<String> {
@@ -1037,6 +1130,7 @@ impl AgentRun {
                 fx.push(Effect::OutputValidateCancel { validation });
                 owed.validations.insert(validation);
             }
+            Phase::Settling { .. } => {}
         }
         if owed.is_empty() {
             return self.finish(Err(error), fx);
@@ -1097,6 +1191,15 @@ impl AgentRun {
         fx.push(Effect::IncompleteCleanup { pending: owed.describe() });
         self.finish(Err(error), fx);
     }
+}
+
+/// What a settled step leads to.
+pub(super) enum Next {
+    Fail(RunError),
+    Output(ValidationId),
+    Ask(Ask),
+    Stop,
+    Continue,
 }
 
 /// What a step ends the invocation with.

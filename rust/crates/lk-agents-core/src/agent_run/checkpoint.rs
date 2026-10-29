@@ -1,8 +1,6 @@
 //! Managed-turn checkpoints gate model requests and accepted result delivery.
 
-use super::{
-    AgentRun, CheckpointId, Effect, Output, Phase, Purpose, RunError, RunOutcome, RunResult,
-};
+use super::{AgentRun, CheckpointId, Effect, Phase, Purpose, RunError, RunResult};
 use lk_agents_abi::Ts;
 
 pub(super) struct Pending {
@@ -70,14 +68,7 @@ impl AgentRun {
                 }
                 Next::Finish(result) => self.finish_now(Ok(result), effects),
             },
-            Ok(true) => {
-                let mut result = self.result(
-                    RunOutcome::Completed { output: Output::Nothing },
-                    self.verbatim_text(),
-                );
-                result.interrupted = true;
-                self.finish_now(Ok(result), effects);
-            }
+            Ok(true) => self.complete_interrupted(effects),
             Err(error) => self.finish_now(Err(RunError::Host(error)), effects),
         }
     }

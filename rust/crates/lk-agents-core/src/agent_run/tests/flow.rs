@@ -302,7 +302,7 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
 
     let mut input = Driver::new(text_agent(vec![]), "x", vec![]).run.input.clone();
     input.delegated = true;
-    input.message = user("m", "claim");
+    input.opening = Opening::Message(user("m", "claim"));
     let mut d = Driver::with_input(text_agent(vec![string_tool("photo", "x")]), input);
     d.reply("", &[("photo", json!({"x": "1"}))]);
     d.run_tools(ask);
@@ -331,7 +331,7 @@ fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
 
     let mut input = d.run.input.clone();
     input.history = first.all_messages.clone();
-    input.message = user("msg_2", "Gold plan");
+    input.opening = Opening::Message(user("msg_2", "Gold plan"));
     input.answer_tool = answer_tool.clone();
     let mut d = Driver::with_input(text_agent(tools()), input);
     assert_eq!(d.requests(), 0);

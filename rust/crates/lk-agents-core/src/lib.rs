@@ -28,6 +28,6 @@ pub mod tool_outcome;
 pub mod tool_search;
 
 pub use agent::AgentError;
-pub use agent_run::{AgentRun, Effect, Event, RunInput};
+pub use agent_run::{AgentRun, Effect, Event, Opening, RunInput};
 
 pub mod text;
