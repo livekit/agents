@@ -179,6 +179,28 @@ pub fn frame(response: JsonRpcResponse, cursor: Option<&str>) -> DoorFrame {
     DoorFrame { json, sse, is_error }
 }
 
+/// What a live observer is sent of one stream event.
+#[derive(Debug, Clone)]
+pub enum Delivery {
+    Send(DoorFrame),
+    /// It fell behind: an error frame, and it is detached. The response stays durable; it
+    /// resumes from its last event's cursor.
+    Detach(DoorFrame),
+}
+
+/// The delivery of `event` to an observer whose queue has `room` free slots; the last slot is
+/// kept for the detaching error.
+pub fn deliver(request_id: JsonRpcId, event: DoorFrame, room: usize) -> Delivery {
+    if room > 1 {
+        return Delivery::Send(event);
+    }
+    let error = crate::a2a::rpc::rpc_error(
+        a2a::error_code::INTERNAL_ERROR,
+        "slow subscriber detached; resume using the last event cursor",
+    );
+    Delivery::Detach(frame(crate::a2a::rpc::failure(request_id, error), None))
+}
+
 /// What one request's response stream says, decided from the turn: the task announced once, its
 /// progress and answer tokens while they belong to that task, then the answer artifact (closing
 /// the streamed one when the tokens already were the answer) and the final status.

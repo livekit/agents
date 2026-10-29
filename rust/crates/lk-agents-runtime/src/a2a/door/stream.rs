@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use lk_agents_abi::a2a::door::{DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnEvent;
 use lk_agents_core::a2a::TurnResult;
-use lk_agents_core::a2a::wire::{self, Cursor, Publication};
+use lk_agents_core::a2a::wire::{self, Cursor, Delivery, Publication};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::schema::TaskRow;
 use tokio::sync::{Mutex, mpsc};
@@ -56,16 +56,15 @@ impl Publisher {
             let frame = wire::success(self.request_id.clone(), event, Some(&cursor.encode()));
             let mut state = self.state.lock().await;
             let Some(sender) = state.1.as_ref() else { continue };
-            if sender.capacity() <= 1 {
-                let error = lk_agents_core::a2a::rpc::rpc_error(
-                    a2a::error_code::INTERNAL_ERROR,
-                    "slow subscriber detached; resume using the last event cursor",
-                );
-                let failure = lk_agents_core::a2a::rpc::failure(self.request_id.clone(), error);
-                let _ = sender.try_send(Ok(wire::frame(failure, None)));
-                state.1 = None;
-                log::warn!(target: "livekit.agents", taskId = task_id; "detached a slow A2A observer; the response remains durable");
-            } else if sender.try_send(Ok(frame)).is_err() {
+            let attached = match wire::deliver(self.request_id.clone(), frame, sender.capacity()) {
+                Delivery::Send(frame) => sender.try_send(Ok(frame)).is_ok(),
+                Delivery::Detach(failure) => {
+                    let _ = sender.try_send(Ok(failure));
+                    log::warn!(target: "livekit.agents", taskId = task_id; "detached a slow A2A observer; the response remains durable");
+                    false
+                }
+            };
+            if !attached {
                 state.1 = None;
             }
         }
