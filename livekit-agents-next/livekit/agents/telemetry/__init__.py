@@ -1,32 +1,26 @@
-from . import loop_monitor, metrics, trace_types, utils
+from . import (
+    loop_monitor as loop_monitor,
+    metrics as metrics,
+    trace_types as trace_types,
+    utils as utils,
+)
 from ._export import diagnostics
 from .traces import (
-    DescribesOptions,
     RedactingLogExporter,
     RedactingSpanExporter,
-    _setup_cloud_tracer,
-    _upload_session_report,
-    capture_content_enabled,
-    set_capture_content,
+    _upload_session_report as _upload_session_report,
+    capture_content_enabled as capture_content_enabled,
+    set_capture_content as set_capture_content,
     set_tracer_provider,
-    tracer,
+    tracer as tracer,
 )
 
+# the documented surface (docs/telemetry.md); the submodules are the framework's own
 __all__ = [
     "diagnostics",
-    "DescribesOptions",
     "RedactingSpanExporter",
     "RedactingLogExporter",
-    "tracer",
-    "metrics",
-    "trace_types",
-    "loop_monitor",
-    "set_capture_content",
-    "capture_content_enabled",
     "set_tracer_provider",
-    "utils",
-    "_setup_cloud_tracer",
-    "_upload_session_report",
 ]
 
 # Cleanup docs of unexported modules
