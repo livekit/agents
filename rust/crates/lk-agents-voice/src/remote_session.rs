@@ -616,7 +616,8 @@ pub fn encode_duration_secs(secs: f64) -> proto::Duration {
     proto::Duration { seconds: s as i64, nanos: n as i32 }
 }
 
-/// `encode_session_usage` (`_proto.py:113`).
+/// The session's model usage as the remote session protocol carries it: the
+/// `session_usage_updated` event and the `GetSessionUsage` reply.
 pub fn encode_session_usage(usage: &AgentSessionUsage) -> proto::AgentSessionUsage {
     use proto::model_usage::Usage;
     proto::AgentSessionUsage {
