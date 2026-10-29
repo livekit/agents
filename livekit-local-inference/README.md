@@ -54,6 +54,8 @@ Model parity and latency need separate checks against the genuine engine on each
 
 The native source workflow builds twice on macOS ARM64 and Linux ARM64/x64, then runs the installed facade and fake cohorts. It does not execute the vendor model or publish release wheels.
 
+The prepared engine controls the host architecture and wheel platform. A universal2 macOS interpreter builds an ARM64 host for the ARM64 engine; the wheel keeps its compiled minimum-OS check.
+
 ## Engine And Headers
 
 The artifact index pins the official `@livekit/local-inference` 0.2.7 packages and records the source commit from their published metadata. A prepared source directory records its own input hashes in `SOURCE_MANIFEST.json`.

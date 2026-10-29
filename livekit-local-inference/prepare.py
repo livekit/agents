@@ -115,6 +115,7 @@ def _copy_sources(output: Path) -> dict[str, str]:
         HERE / name
         for name in (
             "pyproject.toml",
+            "setup.py",
             "MANIFEST.in",
             "ruff.toml",
             "pyrightconfig.json",

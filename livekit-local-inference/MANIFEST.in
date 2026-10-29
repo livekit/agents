@@ -1,4 +1,5 @@
 include ruff.toml pyrightconfig.json engine-artifacts.json
+include setup.py
 include LICENSE MODEL_LICENSE
 include native/header-provenance.json
 recursive-include native *.cpp *.h NODE-LICENSE
