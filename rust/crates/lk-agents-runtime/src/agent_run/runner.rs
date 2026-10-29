@@ -2,7 +2,6 @@
 //! runtime and hands its updates out as a stream whose drop cancels it.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, RunUpdate};
 use lk_agents_abi::agent::{AgentDefinition, AgentHost, Invocation};
@@ -16,9 +15,6 @@ use lk_agents_core::tool_outcome::Mode;
 use tokio::sync::mpsc;
 
 use super::{AgentRunHandle, PROGRESS_QUEUE, Ports, Progress, ProgressRefused, start};
-
-/// How long cancelled work may take to settle before it is reported incomplete.
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Updates the consumer may lag behind by before the run waits for it.
 const UPDATE_QUEUE: usize = 16;
@@ -70,7 +66,7 @@ impl AgentRunner for Runner {
             mode: Mode::Text,
             llm: Some(LlmRef { id: ResourceId(0), provider: self.llm.id() }),
             wall: WallAnchor::of(&*self.clock),
-            cleanup_timeout: CLEANUP_TIMEOUT,
+            cleanup_timeout: lk_agents_core::agent_run::CLEANUP_TIMEOUT,
         };
         let ports = Ports {
             tools_host: request.tools_host,

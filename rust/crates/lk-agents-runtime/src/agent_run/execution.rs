@@ -430,14 +430,6 @@ impl Execution {
     }
 }
 
-/// Waits for the core's deadline; pending without one.
-async fn wait(clock: &dyn Clock, at: Option<Ts>) {
-    match at {
-        Some(at) => clock.wait_until(at).await,
-        None => std::future::pending().await,
-    }
-}
-
 /// One model request: chunks reported as they arrive, then its end or failure. A cancel closes
 /// the stream under the request's deadline and reports the request ended.
 async fn stream_request(

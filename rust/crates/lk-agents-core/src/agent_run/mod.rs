@@ -50,6 +50,10 @@ const RETRY_PROMPT: &str = "Validation failed, fix the output and try again: ";
 /// The feedback an empty response gives the model when a structured output is expected.
 const EMPTY_RESPONSE_PROMPT: &str = "Please return text or call a tool.";
 
+/// How long cancelled work may take to settle before it is reported incomplete, unless the
+/// caller supplies another bound.
+pub const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// What the caller supplies to one invocation.
 #[derive(Debug, Clone)]
 pub struct RunInput {

@@ -118,7 +118,7 @@ fn start(
             separate_contexts: request.separate_contexts,
             state: request.state.clone(),
             wall: WallAnchor::of(&*clock),
-            cleanup_timeout: CLEANUP_TIMEOUT,
+            cleanup_timeout: lk_agents_core::agent_run::CLEANUP_TIMEOUT,
             delegated: request.delegated,
         },
     )

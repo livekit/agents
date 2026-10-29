@@ -6,7 +6,6 @@ pub use runner::{Runner, Updates};
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
 
 use lk_agents_abi::agent::Invocation;
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunUpdate, ValidationId};
@@ -24,7 +23,6 @@ use tokio::sync::{mpsc, oneshot};
 use crate::agent_run::Ports;
 use crate::agent_run::execution::{Execution, Report, Reporter};
 
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const UPDATE_QUEUE: usize = 16;
 
 pub(super) struct Release {
