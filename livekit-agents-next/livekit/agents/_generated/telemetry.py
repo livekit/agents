@@ -6,7 +6,6 @@
 #     rust/crates/lk-agents-abi/src/telemetry/policy.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs
-#     rust/crates/lk-agents-abi/src/telemetry/report/records.rs
 
 from __future__ import annotations
 
@@ -99,6 +98,20 @@ class SpanUpdateAttrsWire:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class LogRecordWire:
+    """A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
+    of epoch nanos, where the log handler's records carry an `HrTime` pair.
+    """
+
+    logger: str
+    body: str
+    timestamp_nanos: int
+    severity_number: int
+    severity_text: str
+    attributes: dict[str, object]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class SessionReportSnapshot:
     """The serialized SDK snapshot. Native projection keeps its schema stable when content is denied."""
 
@@ -123,20 +136,6 @@ class ProjectedReportEvent:
     value: object
     content: bool
     retained_bytes: int
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class LogRecordWire:
-    """A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
-    of epoch nanos, where the log handler's records carry an `HrTime` pair.
-    """
-
-    logger: str
-    body: str
-    timestamp_nanos: int
-    severity_number: int
-    severity_text: str
-    attributes: dict[str, object]
 
 
 OtelValue: TypeAlias = int | float
