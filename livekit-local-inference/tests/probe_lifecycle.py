@@ -16,7 +16,8 @@ import numpy as np
 
 
 sys.path.insert(
-    0, os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent))
+    0,
+    os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent)),
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -169,10 +170,20 @@ def owner_dies(phase: str, directory: Path) -> dict[str, bool | str | int]:
     receipt = directory / (phase + "-owner.json")
     environment = dict(os.environ)
     environment.update(
-        {"LIVEKIT_BOUNDARY_NATIVE_HANG_LOG": str(marker), "LIVEKIT_NAPI_FAKE_MODE": phase}
+        {
+            "LIVEKIT_BOUNDARY_NATIVE_HANG_LOG": str(marker),
+            "LIVEKIT_NAPI_FAKE_MODE": phase,
+        }
     )
-    child = subprocess.Popen(  # noqa: S603 - fixed current interpreter and first-party lifecycle probe.
-        [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "owner", str(receipt)],
+    child = subprocess.Popen(  # Fixed current interpreter and first-party lifecycle probe.
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            str(Path(__file__).resolve()),
+            "owner",
+            str(receipt),
+        ],
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,

@@ -488,7 +488,9 @@ async def _teardown_faults() -> list[str]:
             else _BaseStreamingTurnDetectorStream
         )
         stream = stream_type(
-            detector=_BaseStreamingTurnDetector(opts=options), opts=options, transport=transport
+            detector=_BaseStreamingTurnDetector(opts=options),
+            opts=options,
+            transport=transport,
         )
         stream._task.cancel()
         expected = (

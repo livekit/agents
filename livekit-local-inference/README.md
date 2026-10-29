@@ -36,13 +36,19 @@ This host package does not establish Python 3.15 support for every Agents depend
 
 ## Ownership
 
-Each model has explicit `close()` ownership and supports a context manager. The broker bounds workers separately for EOT and VAD; a stream's VAD state stays with its worker generation, and lost state requires a fresh VAD instance.
+Call `start()` when opening an application lifetime and join `shutdown()` before it ends. Shutdown rejects late warmup and inference; startup reopens admission only after every previous worker has retired, and failed retirement must be retried.
 
-SDK shutdown must await native close and physical worker retirement. A native pipe watcher also retires its own child when the parent disappears, including when foreign code holds the GIL.
+Each model has explicit `close()` ownership and supports a context manager. VAD state stays with its worker generation; lost state requires a fresh VAD instance.
+
+EOT prewarming retains one worker. A second starts on parallel demand and pays its model load cost once; closing the last EOT model retires that second worker and preserves only an explicitly warmed primary.
+
+The backend declares `FORK_SAFE_PREWARM = False`, so the SDK skips automatic import-time model warmup. A job creates its own pool; a forked child closes copied IPC handles and rejects inherited model operations before taking their locks.
+
+SDK shutdown awaits physical worker retirement. A native pipe watcher also retires its own child when the parent disappears, including when foreign code holds the GIL.
 
 ## Tests
 
-The [working-fake probes](tests/README.md) exercise framing, deadlines, recurrent-state isolation, partial startup, close and parent loss without executing the vendor model. The C++ fake uses the host's actual Node-API callbacks and ownership boundary.
+The [working-fake probes](tests/README.md) exercise framing, deadlines, recurrent-state isolation, partial startup, restart, fork detachment, close and parent loss without executing the vendor model. The C++ fake uses the host's actual Node-API callbacks and ownership boundary.
 
 Model parity and latency need separate checks against the genuine engine on each platform. Fake success, a successful build and ABI symbol coverage do not establish model quality or a performance improvement.
 

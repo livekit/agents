@@ -16,7 +16,8 @@ import numpy as np
 
 
 sys.path.insert(
-    0, os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent))
+    0,
+    os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent)),
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -120,7 +121,12 @@ def drip(mode: str) -> dict[str, str | bool | float]:
     finally:
         owner.close()
         os.environ.pop("LIVEKIT_BOUNDARY_TRANSPORT", None)
-    return {"mode": mode, "one_absolute_deadline": True, "retired": True, "wall_s": elapsed}
+    return {
+        "mode": mode,
+        "one_absolute_deadline": True,
+        "retired": True,
+        "wall_s": elapsed,
+    }
 
 
 def malformed(directory: Path) -> dict[str, bool | int]:

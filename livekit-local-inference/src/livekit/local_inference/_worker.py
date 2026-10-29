@@ -172,18 +172,22 @@ class NativeBackend:
             _napi_host315.stop_parent_watch()
             raise
         self._kind = kind
+        self._ready = False
 
     def warm(self) -> None:
-        if self._kind == "EOT":
-            self._native.init_eot(self._host)
-        else:
-            self._native.init_vad(self._host)
+        if not self._ready:
+            if self._kind == "EOT":
+                self._native.init_eot(self._host)
+            else:
+                self._native.init_vad(self._host)
+            self._ready = True
 
     def create(self) -> int:
         self.warm()
         return self._native.create_vad(self._host) if self._kind == "VAD" else 0
 
     def predict(self, handle: int, pcm: memoryview) -> float:
+        self.warm()
         if self._kind == "EOT":
             return self._native.predict_eot(self._host, pcm)
         return self._native.predict_vad(self._host, handle, pcm)
@@ -308,7 +312,7 @@ if __name__ == "__main__":
     status = 0
     try:
         main()
-    except BaseException:
+    except BaseException:  # noqa: BLE001 -- Child exit owns opaque native finalization.
         traceback.print_exc()
         status = 1
     # The process owns the opaque addon's singleton lifetime. Do not enter its

@@ -11,7 +11,8 @@ import traceback
 
 
 sys.path.insert(
-    0, os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent))
+    0,
+    os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent)),
 )
 from livekit.local_inference._worker import Kind, serve
 
@@ -26,7 +27,7 @@ finally:
 
 class FakeBackend:
     def __init__(self, kind: Kind) -> None:
-        if "LIVEKIT_BOUNDARY_DUMMY_SECRET" in os.environ:
+        if "BILLY_BOUNDARY_DUMMY_SECRET" in os.environ:
             message = "parent application credential crossed the owned worker boundary"
             raise RuntimeError(message)
         self._owner = threading.get_ident()
@@ -141,7 +142,7 @@ if __name__ == "__main__":
                 else FakeBackend(kind)
             )
             serve(connection, kind, backend)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 -- Fake child must report failure and retire.
         traceback.print_exc()
         status = 1
     finally:

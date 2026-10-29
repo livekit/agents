@@ -26,3 +26,5 @@ The [C++ fake](../native/fake.cpp) can replace the Python fake backend through `
 The separate `probe_sdk_cleanup.py` runs checked native close subclasses through actual SDK cleanup methods. It requires the SDK cleanup patch, an installed source path and an output path; it does not open model weights or mutate installed engine metadata.
 
 None of these results establishes genuine model quality. Keep real-engine parity, SDK workflows, per-platform packaging and paired latency evidence separate.
+
+`probe_restart.py` checks explicit startup, closed admission and retry after failed retirement. `probe_fork.py` holds parent locks across a real fork, checks copied descriptors and reused descriptor numbers, and verifies that foreign lifecycle calls and finalizers leave the parent workers alone.

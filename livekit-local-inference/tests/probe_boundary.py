@@ -15,7 +15,8 @@ import numpy as np
 
 
 sys.path.insert(
-    0, os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent))
+    0,
+    os.environ.get("LIVEKIT_BOUNDARY_PACKAGE_ROOT", str(Path(__file__).resolve().parent)),
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     if sys.version_info[:3] != (3, 15, 2):
         message = "every boundary probe process must run3.15.2"
         raise RuntimeError(message)
-    os.environ["LIVEKIT_BOUNDARY_DUMMY_SECRET"] = str(time.monotonic_ns())
+    os.environ["BILLY_BOUNDARY_DUMMY_SECRET"] = str(time.monotonic_ns())
     try:
         result = {
             "scope": "first-party working fake at public facade/worker seam; no vendor execution",
@@ -164,5 +165,5 @@ if __name__ == "__main__":
             "pending_close": pending_close(),
         }
     finally:
-        os.environ.pop("LIVEKIT_BOUNDARY_DUMMY_SECRET", None)
+        os.environ.pop("BILLY_BOUNDARY_DUMMY_SECRET", None)
     print(json.dumps(result), flush=True)

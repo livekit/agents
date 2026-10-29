@@ -89,7 +89,11 @@ jobs:
               -pthread -shared -fPIC -I livekit-local-inference/native/include \
               livekit-local-inference/native/fake.cpp -o .fake-native/source-owned-fake.node
           fi
+          LIVEKIT_BOUNDARY_PACKAGE_ROOT=$( .host-venv/bin/python -I -c 'import sysconfig; print(sysconfig.get_path("purelib"))' )
+          export LIVEKIT_BOUNDARY_PACKAGE_ROOT
           .host-venv/bin/python -I -B livekit-local-inference/tests/probe_boundary.py
           .host-venv/bin/python -I -B livekit-local-inference/tests/probe_transport.py
           LIVEKIT_BOUNDARY_NATIVE_DIR="$PWD/.fake-native" \
             .host-venv/bin/python -I -B livekit-local-inference/tests/probe_lifecycle.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_restart.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_fork.py

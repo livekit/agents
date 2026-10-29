@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from typing import TYPE_CHECKING, Literal
+import weakref
 
 from ._worker import (
     HEADER,
@@ -34,6 +35,41 @@ from ._worker import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+
+
+# Fork never copies an FD transfer halfway through publication or closure.
+_fork_gate = threading.RLock()
+_pools: weakref.WeakSet[Pool] = weakref.WeakSet()
+_foreign_pools: list[Pool] = []
+
+
+class OwnedProcess(subprocess.Popen[bytes]):
+    """The normal Popen finalizer is valid only in the process that spawned it."""
+
+    _creator_pid: int = 0
+
+    def __init__(
+        self,
+        command: list[str],
+        *,
+        pass_fds: tuple[int, int],
+        env: dict[str, str],
+    ) -> None:
+        self._creator_pid = os.getpid()
+        # Fixed first-party argv and creator-owned POSIX descriptors.
+        super().__init__(
+            command,
+            pass_fds=pass_fds,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=None,
+            env=env,
+        )
+
+    def __del__(self, _getpid: Callable[[], int] = os.getpid) -> None:
+        if _getpid() == self._creator_pid:
+            super().__del__()
 
 
 class StateLostError(RuntimeError):
@@ -86,6 +122,23 @@ class _Lane:
         self._lifetime = threading.RLock()
         self._session: _Session | None = None
         self._observer = observer
+        self._owner = os.getpid()
+
+    def ensure_owner(self) -> None:
+        if os.getpid() != self._owner:
+            message = "native inference lane cannot be inherited across fork"
+            raise RuntimeError(message)
+
+    def detach_after_fork(self) -> None:
+        if os.getpid() == self._owner:
+            message = "fork detachment requires a foreign lane"
+            raise RuntimeError(message)
+        # Close child-local copies, never shutdown the shared socket endpoint.
+        # Historical descriptor numbers can already refer to unrelated files.
+        session = self._session
+        if session is not None:
+            session.connection.close()
+            session.lifeline.close()
 
     def _observe(
         self,
@@ -98,6 +151,7 @@ class _Lane:
     def start(
         self, deadline: float, expected_generation: int | None = None
     ) -> tuple[socket.socket, int]:
+        self.ensure_owner()
         with self._lifetime:
             current = self._session
             if expected_generation is not None and (
@@ -110,64 +164,80 @@ class _Lane:
             if current is not None and current.process.poll() is None:
                 return current.connection, self.generation
             self.retire()
-            parent, child = socket.socketpair()
-            read_descriptor, write_descriptor = os.pipe()
-            reader = io.FileIO(read_descriptor, "rb", closefd=True)
-            writer = io.FileIO(write_descriptor, "wb", closefd=True)
-            process: subprocess.Popen[bytes] | None = None
-            session: _Session | None = None
             try:
-                process = subprocess.Popen(  # noqa: S603 - immutable private argv names this interpreter and an owned first-party worker.
-                    [*self.command, str(child.fileno()), self.kind, str(reader.fileno())],
-                    pass_fds=(child.fileno(), reader.fileno()),
-                    start_new_session=True,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=None,
-                    env=self.environment,
-                )
-                session = _Session(
-                    process,
-                    parent,
-                    writer,
-                    (parent.fileno(), child.fileno(), reader.fileno(), writer.fileno()),
-                )
-                self._observe("spawned", session)
-                # One assignment transfers the complete process/socket/lifeline.
-                self._session = session
-                self.generation += 1
-                generation = self.generation
-                self._observe("published", session)
-                self._observe("closing_fds", session)
-                child.close()
-                reader.close()
-            except BaseException as error:
-                if process is not None:
-                    # A failure before publication still owns the returned Popen.
-                    self._session = (
-                        session
-                        if session is not None
-                        else _Session(
+                with _fork_gate:
+                    parent, child = socket.socketpair()
+                    read_descriptor, write_descriptor = os.pipe()
+                    reader = io.FileIO(read_descriptor, "rb", closefd=True)
+                    writer = io.FileIO(write_descriptor, "wb", closefd=True)
+                    process: subprocess.Popen[bytes] | None = None
+                    session: _Session | None = None
+                    try:
+                        process = OwnedProcess(
+                            [
+                                *self.command,
+                                str(child.fileno()),
+                                self.kind,
+                                str(reader.fileno()),
+                            ],
+                            pass_fds=(child.fileno(), reader.fileno()),
+                            env=self.environment,
+                        )
+                        session = _Session(
                             process,
                             parent,
                             writer,
-                            (parent.fileno(), child.fileno(), reader.fileno(), writer.fileno()),
+                            (
+                                parent.fileno(),
+                                child.fileno(),
+                                reader.fileno(),
+                                writer.fileno(),
+                            ),
                         )
-                    )
-                    self.retire_after_failure(error)
-                else:
-                    parent.close()
-                    writer.close()
+                        self._observe("spawned", session)
+                        # One assignment transfers the complete process/socket/lifeline.
+                        self._session = session
+                        self.generation += 1
+                        generation = self.generation
+                        self._observe("published", session)
+                        self._observe("closing_fds", session)
+                        child.close()
+                        reader.close()
+                    except BaseException:
+                        if process is not None:
+                            # A failure before publication still owns the returned Popen.
+                            self._session = (
+                                session
+                                if session is not None
+                                else _Session(
+                                    process,
+                                    parent,
+                                    writer,
+                                    (
+                                        parent.fileno(),
+                                        child.fileno(),
+                                        reader.fileno(),
+                                        writer.fileno(),
+                                    ),
+                                )
+                            )
+                        else:
+                            parent.close()
+                            writer.close()
+                        raise
+                    finally:
+                        child.close()
+                        reader.close()
+            except BaseException as error:
+                self.retire_after_failure(error)
                 raise
-            finally:
-                child.close()
-                reader.close()
         # A cold vendor initialization must not exclude concurrent retirement.
         try:
             _hello(parent, process.pid, deadline)
         except BaseException as error:
             self.retire_after_failure(error)
             raise
+        self.ensure_owner()
         with self._lifetime:
             if self._session is session and self.generation == generation:
                 return parent, generation
@@ -177,12 +247,13 @@ class _Lane:
     def retire_after_failure(self, error: BaseException) -> None:
         try:
             self.retire()
-        except BaseException as cleanup:
+        except BaseException as cleanup:  # noqa: BLE001 -- Keep both operation and retirement failures.
             message = "native inference operation and retirement failed"
             raise BaseExceptionGroup(message, [error, cleanup]) from None
 
     def retire(self) -> None:
         """Retain complete custody until public wait confirms the child reaped."""
+        self.ensure_owner()
         with self._lifetime:
             self.retiring = True
             session = self._session
@@ -206,12 +277,14 @@ class _Lane:
                     session.process.wait(timeout=2.0)
             # Reap the peer before closing a socket another thread may select.
             # Failed waits retain this session and keep admission quarantined.
-            session.connection.close()
-            session.lifeline.close()
-            self._session = None
+            with _fork_gate:
+                session.connection.close()
+                session.lifeline.close()
+                self._session = None
             self.retiring = False
 
     def pid(self) -> int | None:
+        self.ensure_owner()
         with self._lifetime:
             return self._session.process.pid if self._session is not None else None
 
@@ -263,7 +336,12 @@ class Pool:
         selected = (
             tuple(command)
             if command is not None
-            else (sys.executable, "-I", "-B", str(Path(__file__).with_name("_worker.py")))
+            else (
+                sys.executable,
+                "-I",
+                "-B",
+                str(Path(__file__).with_name("_worker.py")),
+            )
         )
         environment = {
             "PATH": os.defpath,
@@ -292,16 +370,32 @@ class Pool:
         self._closed = False
         self._owner = os.getpid()
         self._eot_users = 0
-        self._warm_holds: set[Kind] = set()
+        self._warm_holds: set[_Lane] = set()
+        with _fork_gate:
+            _pools.add(self)
 
     @property
     def settle_timeout(self) -> float:
         return self._timeout + 3.0
 
-    def _active(self) -> None:
-        if os.getpid() != self._owner:
+    def detach_after_fork(self) -> None:
+        if self.owns_current_process():
+            message = "fork detachment requires a foreign pool"
+            raise RuntimeError(message)
+        for lanes in self._lanes.values():
+            for lane in lanes:
+                lane.detach_after_fork()
+
+    def owns_current_process(self) -> bool:
+        return os.getpid() == self._owner
+
+    def ensure_owner(self) -> None:
+        if not self.owns_current_process():
             msg = "native inference pool cannot be inherited across fork"
             raise RuntimeError(msg)
+
+    def _active(self) -> None:
+        self.ensure_owner()
         if self._closed:
             msg = "native inference pool is closed"
             raise RuntimeError(msg)
@@ -313,6 +407,7 @@ class Pool:
         preferred: _Lane | None = None,
         owner: Owner | None = None,
     ) -> _Lane:
+        self.ensure_owner()
         with self._condition:
             while True:
                 self._active()
@@ -321,7 +416,8 @@ class Pool:
                     raise ValueError(message)
                 candidates = (preferred,) if preferred is not None else self._lanes[kind]
                 available = next(
-                    (lane for lane in candidates if not lane.busy and not lane.retiring), None
+                    (lane for lane in candidates if not lane.busy and not lane.retiring),
+                    None,
                 )
                 if available is not None:
                     available.busy = True
@@ -353,7 +449,10 @@ class Pool:
             context.owner if context is not None and operation != Operation.DROP else owner
         )
         lane = self._admit(
-            kind, deadline, context.lane if context is not None else preferred, request_owner
+            kind,
+            deadline,
+            context.lane if context is not None else preferred,
+            request_owner,
         )
         try:
             if context is not None and context.generation != lane.generation:
@@ -392,21 +491,29 @@ class Pool:
                 raise ValueError(message)
             raise TypeError(message)
         finally:
+            self.ensure_owner()
             with self._condition:
                 lane.busy = False
                 lane.active_owner = None
                 self._condition.notify_all()
 
     def warm(self, kind: Kind, *, retain: bool = True) -> None:
-        for lane in self._lanes[kind]:
-            self._exchange(kind, Operation.WARM, decode=decode_ack, preferred=lane, timeout=10.0)
+        self.ensure_owner()
+        lanes = self._lanes[kind][:1] if kind == "EOT" else self._lanes[kind]
         if retain:
+            self.ensure_owner()
             with self._condition:
                 self._active()
-                self._warm_holds.add(kind)
+                # Keep explicit prewarm intent through retry; ordinary model close
+                # cannot retire a lane while its public prewarm is in flight.
+                self._warm_holds.update(lanes)
+        for lane in lanes:
+            self._exchange(kind, Operation.WARM, decode=decode_ack, preferred=lane, timeout=10.0)
 
     def acquire_eot(self) -> Owner:
+        self.ensure_owner()
         owner = Owner()
+        self.ensure_owner()
         with self._condition:
             self._active()
             self._eot_users += 1
@@ -418,8 +525,10 @@ class Pool:
         return owner
 
     def release_eot(self, owner: Owner) -> None:
+        self.ensure_owner()
         with owner.release_lock:
             self.close_owner(owner)
+            self.ensure_owner()
             with self._condition:
                 if not owner.released:
                     self._eot_users -= 1
@@ -427,13 +536,14 @@ class Pool:
                 lanes = tuple(
                     lane
                     for lane in self._lanes["EOT"]
-                    if lane.retiring or (self._eot_users == 0 and "EOT" not in self._warm_holds)
+                    if lane.retiring or (self._eot_users == 0 and lane not in self._warm_holds)
                 )
                 for lane in lanes:
                     lane.retiring = True
             self._retire_lanes(lanes)
 
     def close_owner(self, owner: Owner, *, interrupt: bool = False) -> None:
+        self.ensure_owner()
         with self._condition:
             owner.closed = True
             lanes = (
@@ -453,12 +563,14 @@ class Pool:
             self._retire_lanes(lanes)
 
     def _retire_lanes(self, lanes: tuple[_Lane, ...]) -> None:
+        self.ensure_owner()
         errors: list[BaseException] = []
         for lane in lanes:
             try:
                 lane.retire()
-            except BaseException as error:
+            except BaseException as error:  # noqa: BLE001 -- Retire every lane even after interruption.
                 errors.append(error)
+        self.ensure_owner()
         with self._condition:
             for lane in lanes:
                 if lane.pid() is None:
@@ -469,6 +581,7 @@ class Pool:
             raise BaseExceptionGroup(message, errors)
 
     def create_vad(self) -> Context:
+        self.ensure_owner()
         with self._condition:
             self._active()
             lane = min(self._lanes["VAD"], key=lambda item: item.users)
@@ -478,15 +591,21 @@ class Pool:
             lane.users += 1
         try:
             token, _, generation = self._exchange(
-                "VAD", Operation.CREATE, decode=decode_context, preferred=lane, timeout=10.0
+                "VAD",
+                Operation.CREATE,
+                decode=decode_context,
+                preferred=lane,
+                timeout=10.0,
             )
             return Context(lane, generation, token)
         except BaseException:
+            self.ensure_owner()
             with self._condition:
                 lane.users -= 1
             raise
 
     def drop_vad(self, context: Context) -> None:
+        self.ensure_owner()
         with context.owner.release_lock:
             self.close_owner(context.owner)
             try:
@@ -497,12 +616,13 @@ class Pool:
                 ):
                     self._exchange("VAD", Operation.DROP, decode=decode_ack, context=context)
             finally:
+                self.ensure_owner()
                 with self._condition:
                     if not context.owner.released:
                         context.lane.users -= 1
                         context.owner.released = True
                     retire = context.lane.retiring or (
-                        context.lane.users == 0 and "VAD" not in self._warm_holds
+                        context.lane.users == 0 and context.lane not in self._warm_holds
                     )
                     if retire:
                         context.lane.retiring = True
@@ -513,7 +633,12 @@ class Pool:
         self._exchange("VAD", Operation.RESET, decode=decode_ack, context=context)
 
     def predict(
-        self, kind: Kind, pcm: bytes, context: Context | None = None, *, owner: Owner | None = None
+        self,
+        kind: Kind,
+        pcm: bytes,
+        context: Context | None = None,
+        *,
+        owner: Owner | None = None,
     ) -> float:
         probability, _, _ = self._exchange(
             kind,
@@ -527,6 +652,7 @@ class Pool:
 
     def pids(self) -> tuple[int, ...]:
         """Return this owner's process identities for lifecycle qualification."""
+        self.ensure_owner()
         return tuple(
             pid
             for lanes in self._lanes.values()
@@ -535,6 +661,7 @@ class Pool:
         )
 
     def close(self) -> None:
+        self.ensure_owner()
         with self._condition:
             self._closed = True
             lanes = tuple(lane for values in self._lanes.values() for lane in values)
@@ -543,6 +670,7 @@ class Pool:
             self._condition.notify_all()
         self._retire_lanes(lanes)
         deadline = time.monotonic() + 3.0
+        self.ensure_owner()
         with self._condition:
             while any(lane.busy for lanes in self._lanes.values() for lane in lanes):
                 remaining = deadline - time.monotonic()
@@ -550,3 +678,32 @@ class Pool:
                     msg = "native inference callers did not settle after worker retirement"
                     raise RuntimeError(msg)
                 self._condition.wait(remaining)
+
+
+def _before_fork() -> None:
+    _fork_gate.acquire()
+
+
+def _after_fork_parent() -> None:
+    _fork_gate.release()
+
+
+def _after_fork_child() -> None:
+    global _fork_gate, _pools
+    # No inherited Python lock, Popen wait/poll, or foreign signal is safe here.
+    try:
+        for pool in tuple(_pools):
+            pool.detach_after_fork()
+            _foreign_pools.append(pool)
+    except BaseException:  # noqa: BLE001 -- A failed fork detach must terminate this child.
+        # A failed detach cannot leave a running child with foreign lifelines.
+        os._exit(75)
+    _pools = weakref.WeakSet()
+    _fork_gate = threading.RLock()
+
+
+os.register_at_fork(
+    before=_before_fork,
+    after_in_parent=_after_fork_parent,
+    after_in_child=_after_fork_child,
+)

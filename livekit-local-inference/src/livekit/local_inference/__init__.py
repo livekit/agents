@@ -5,6 +5,7 @@ from __future__ import annotations
 from array import array
 import atexit
 from collections.abc import Buffer
+import os
 import sys
 import threading
 import time
@@ -25,22 +26,44 @@ if TYPE_CHECKING:
 __all__ = [
     "EOT",
     "EOT_MAX_SAMPLES",
+    "FORK_SAFE_PREWARM",
     "VAD",
     "VAD_WINDOW_SAMPLES",
     "init_eot",
     "init_vad",
     "shutdown",
+    "start",
 ]
 
 EOT_MAX_SAMPLES = 19_200
 VAD_WINDOW_SAMPLES = 512
+# Import-time forkserver/spawn preload has no owner to retire process workers.
+FORK_SAFE_PREWARM = False
+_module_pid = os.getpid()
 _owner_lock = threading.Lock()
 _owner: Pool | None = None
 _shutdown = False
 
 
+def _ensure_module_owner() -> None:
+    if os.getpid() != _module_pid:
+        message = "native inference owner cannot be inherited across fork"
+        raise RuntimeError(message)
+
+
+def _after_fork_child() -> None:
+    global _owner_lock, _module_pid
+    _owner_lock = threading.Lock()
+    if _owner is None:
+        _module_pid = os.getpid()
+
+
+os.register_at_fork(after_in_child=_after_fork_child)
+
+
 def _default_pool(*, factory: Callable[[], Pool] = Pool) -> Pool:
     global _owner
+    _ensure_module_owner()
     with _owner_lock:
         if _shutdown:
             msg = "native inference owner has shut down"
@@ -94,9 +117,21 @@ def init_vad() -> None:
     _default_pool().warm("VAD")
 
 
+def start() -> None:
+    """Open explicit inference admission after the previous owner fully retired."""
+    global _shutdown
+    _ensure_module_owner()
+    with _owner_lock:
+        if _shutdown and _owner is not None:
+            message = "native inference retirement failed; retry shutdown before start"
+            raise RuntimeError(message)
+        _shutdown = False
+
+
 def shutdown() -> None:
-    """Close admission and reap all workers, invalidating surviving contexts."""
+    """Close admission and reap all workers; explicit start permits a new lifetime."""
     global _owner, _shutdown
+    _ensure_module_owner()
     with _owner_lock:
         _shutdown = True
         if _owner is not None:
@@ -104,7 +139,17 @@ def shutdown() -> None:
             _owner = None
 
 
-atexit.register(shutdown)
+def _exit_shutdown() -> None:
+    if os.getpid() == _module_pid:
+        shutdown()
+
+
+atexit.register(_exit_shutdown)
+
+
+def _finalize(pool: Pool, release: Callable[[], None]) -> None:
+    if pool.owns_current_process():
+        release()
 
 
 def _close_model(
@@ -120,16 +165,16 @@ def _close_model(
         with condition:
             if not condition.wait_for(idle, timeout=pool.settle_timeout):
                 errors.append(TimeoutError("native inference calls did not settle before close"))
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 -- Finish physical cleanup before propagating interruption.
         errors.append(error)
     if errors:
         try:
             pool.close_owner(owner, interrupt=True)
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001 -- Preserve both interruption and cleanup failure.
             errors.append(error)
     try:
         release()
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 -- Finish physical cleanup before propagating interruption.
         errors.append(error)
     if len(errors) == 1:
         raise errors[0]
@@ -147,10 +192,12 @@ class EOT:
         self._active = 0
         self._closed = False
         self._lease = self._owner.acquire_eot()
-        self._finalizer = weakref.finalize(self, self._owner.release_eot, self._lease)
+        owner, lease = self._owner, self._lease
+        self._finalizer = weakref.finalize(self, _finalize, owner, lambda: owner.release_eot(lease))
 
     def predict(self, pcm: NDArray[np.int16]) -> float:
         """Predict from at most 1.2 seconds of mono, 16 kHz int16 samples."""
+        self._owner.ensure_owner()
         with self._condition:
             if self._closed:
                 msg = "EOT instance is closed"
@@ -159,12 +206,14 @@ class EOT:
         try:
             return self._owner.predict("EOT", _pcm(pcm, vad=False), owner=self._lease)
         finally:
+            self._owner.ensure_owner()
             with self._condition:
                 self._active -= 1
                 self._condition.notify_all()
 
     def close(self) -> None:
         """Reject queued calls, settle active work, and release this instance."""
+        self._owner.ensure_owner()
         with self._condition:
             self._closed = True
             self._condition.notify_all()
@@ -178,6 +227,7 @@ class EOT:
         self._finalizer.detach()
 
     def __enter__(self) -> Self:
+        self._owner.ensure_owner()
         return self
 
     def __exit__(
@@ -198,7 +248,8 @@ class VAD:
         self._busy = False
         self._closing = False
         self._context = self._owner.create_vad()
-        self._finalizer = weakref.finalize(self, self._owner.drop_vad, self._context)
+        owner, context = self._owner, self._context
+        self._finalizer = weakref.finalize(self, _finalize, owner, lambda: owner.drop_vad(context))
 
     def _active(self) -> None:
         if self._closing or not self._finalizer.alive:
@@ -206,7 +257,9 @@ class VAD:
             raise ValueError(msg)
 
     def _begin(self) -> None:
+        self._owner.ensure_owner()
         deadline = time.monotonic() + self._owner.settle_timeout
+        self._owner.ensure_owner()
         with self._condition:
             while True:
                 self._active()
@@ -220,6 +273,7 @@ class VAD:
                 self._condition.wait(remaining)
 
     def _settled(self) -> None:
+        self._owner.ensure_owner()
         with self._condition:
             self._busy = False
             self._condition.notify_all()
@@ -242,6 +296,7 @@ class VAD:
 
     def close(self) -> None:
         """Reject queued calls, settle this context, and retire uncertain work."""
+        self._owner.ensure_owner()
         with self._condition:
             self._closing = True
             self._condition.notify_all()
@@ -255,6 +310,7 @@ class VAD:
         self._finalizer.detach()
 
     def __enter__(self) -> Self:
+        self._owner.ensure_owner()
         return self
 
     def __exit__(

@@ -10,7 +10,15 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _fake_worker import native
-from livekit.local_inference._worker import FLOAT, HELLO, REPLY, UINT, Kind, Operation, Request
+from livekit.local_inference._worker import (
+    FLOAT,
+    HELLO,
+    REPLY,
+    UINT,
+    Kind,
+    Operation,
+    Request,
+)
 
 
 def run(connection: socket.socket, kind: Kind) -> None:
