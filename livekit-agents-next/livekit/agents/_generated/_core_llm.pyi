@@ -159,7 +159,11 @@ class FallbackTts:
         text: str,
         conn_options: APIConnectOptions | None = None,
     ) -> TtsStream: ...
-    async def stream(self, conn_options: APIConnectOptions | None = None) -> TtsStream: ...
+    async def stream(
+        self,
+        conn_options: APIConnectOptions | None = None,
+        expressive: bool = False,
+    ) -> TtsStream: ...
 
 class TtsTokenLog:
     """The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text

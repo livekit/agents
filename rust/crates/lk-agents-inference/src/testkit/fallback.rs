@@ -113,7 +113,10 @@ impl Tts for PolicyProvider {
             Ok(Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }) as TtsSource)
         })
     }
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
             self.record();
             Ok((

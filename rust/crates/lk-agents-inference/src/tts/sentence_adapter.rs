@@ -28,8 +28,6 @@ pub struct StreamAdapter {
     text_processor: TextProcessorFactory,
     /// Bounds the per-sentence inner closes done inside `next()`.
     clock: Arc<dyn Clock>,
-    /// `_expressive`, set by the framework before each synthesis and snapshotted at `stream()`.
-    expressive: AtomicBool,
     /// Each sentence's retries (`ChunkedStream`'s own loop in the reference): a sentence failing
     /// after earlier ones were heard is synthesized again, not the whole reply lost.
     budget: lk_agents_abi::ApiConnectOptions,
@@ -47,14 +45,7 @@ impl StreamAdapter {
             max_retry: 0,
             ..lk_agents_abi::ApiConnectOptions::default()
         };
-        StreamAdapter {
-            tts,
-            splitter,
-            text_processor,
-            clock,
-            expressive: AtomicBool::new(false),
-            budget,
-        }
+        StreamAdapter { tts, splitter, text_processor, clock, budget }
     }
 
     /// Each sentence retried within `budget`.
@@ -133,11 +124,6 @@ impl Tts for StreamAdapter {
         true
     }
 
-    fn set_expressive(&self, on: bool) {
-        self.expressive.store(on, Ordering::Release);
-        self.tts.set_expressive(on);
-    }
-
     /// `stream_adapter.py:58`.
     fn synthesize<'a>(
         &'a self,
@@ -145,19 +131,18 @@ impl Tts for StreamAdapter {
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move { self.tts.synthesize(text).await })
     }
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        expressive: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
             self.budget
                 .validate()
                 .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
             // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
             let (tx, rx) = mpsc::unbounded_channel();
-            // Snapshotted now, while the framework holds it fixed for this synthesis.
-            let lowering = self
-                .expressive
-                .load(Ordering::Acquire)
-                .then(|| (self.text_processor)(&self.tts.markup_provider()))
-                .flatten();
+            let lowering =
+                expressive.then(|| (self.text_processor)(&self.tts.markup_provider())).flatten();
             let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
             let source = AdapterSource {
                 tts: self.tts.clone(),

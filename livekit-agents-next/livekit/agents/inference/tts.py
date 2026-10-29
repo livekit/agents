@@ -264,10 +264,6 @@ class TTS(tts.TTS):
         """The client as a session of the current job holds it: its connections carry that job."""
         return self._native.identified(list(get_inference_headers().items()), self)
 
-    def _set_expressive(self, enabled: bool) -> None:
-        super()._set_expressive(enabled)
-        self._native.set_expressive(enabled)
-
     def update_options(
         self,
         *,
@@ -317,7 +313,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        native = await self._tts._core_native().stream(conn_options=self._conn_options)
+        native = await self._tts._core_native().stream(
+            conn_options=self._conn_options, expressive=self._expressive
+        )
         output_emitter.initialize(
             request_id=shortuuid("tts_"),
             sample_rate=self._tts.sample_rate,

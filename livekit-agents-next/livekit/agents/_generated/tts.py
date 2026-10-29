@@ -96,7 +96,6 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._markup = self.Markup(self)
-        self._expressive = False
 
     @property
     def label(self) -> str:
@@ -174,15 +173,6 @@ class TTS(
     def markup(self) -> Markup:
         """Access TTS markup capabilities (instructions for LLM, text stripping)."""
         return self._markup
-
-    def _set_expressive(self, enabled: bool) -> None:
-        """Mark whether expressive is active for this turn (set by the framework before each
-        synthesis); a TTS tokenizing its own input batches larger chunks when it is.
-
-        Args:
-            enabled: Whether markup is active for the synthesis about to open.
-        """
-        self._expressive = enabled
 
     @abstractmethod
     def synthesize(
@@ -267,9 +257,6 @@ class TTS(
     def _core_lowers_markup(self) -> bool:
         return False
 
-    def _core_set_expressive(self, enabled: bool) -> None:
-        self._set_expressive(enabled)
-
     def _core_conn_options(self) -> APIConnectOptions | None:
         return None
 
@@ -284,10 +271,12 @@ class TTS(
         return out
 
     async def _core_stream(
-        self, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, expressive: bool, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         out = self.stream(conn_options=conn)
         out._core_attempts.core = True
+        if expressive is not None:
+            out.expressive = expressive
         return out
 
 
@@ -432,6 +421,8 @@ class SynthesizeStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
+        # whether this synthesis carries expressive markup; the framework sets it at open
+        self._expressive = False
         self._segment_open = False
         self._num_segments = 0
 

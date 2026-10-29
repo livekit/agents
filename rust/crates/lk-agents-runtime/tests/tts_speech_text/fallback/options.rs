@@ -24,7 +24,7 @@ async fn fallback_tts_resolves_each_operation_for_streaming_and_sentence_backend
         let mut source = first.synthesize("first").await.unwrap();
         drain_tts(&mut source).await;
         source.close(NO_DEADLINE).await;
-        let (sink, mut source) = second.stream().await.unwrap();
+        let (sink, mut source) = second.stream(false).await.unwrap();
         sink.push("second.".into()).unwrap();
         sink.end_input();
         drain_tts(&mut source).await;

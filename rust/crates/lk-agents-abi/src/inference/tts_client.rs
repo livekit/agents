@@ -30,8 +30,6 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         #[host(default = None, shape_error(items, kind = "ValueError", message = "each fallback entry must be a dict"))]
         fallback: Option<Vec<TtsFallbackModel>>,
     ) -> Result<Self, crate::llm::inference::InvalidPayload>;
-    #[host(call)]
-    fn set_expressive(&self, expressive: bool);
     #[host(getter)]
     fn sample_rate(&self) -> u32;
     #[host(getter)]
@@ -58,5 +56,6 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         &self,
         #[host(kw, default = None)] headers: Option<Vec<(String, String)>>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, ProviderError>;
 }

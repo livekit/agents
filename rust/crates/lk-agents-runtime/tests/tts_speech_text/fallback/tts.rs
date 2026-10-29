@@ -9,7 +9,7 @@ async fn the_tts_that_emitted_audio_retains_its_failure_and_identity() {
 
     assert_eq!(fb.active().label(), "broken", "before any traffic the primary is active");
 
-    let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
+    let (sink, mut source) = within("stream", fb.stream(false)).await.expect("opened");
     sink.push("hello".into()).expect("push");
     sink.end_input();
 
@@ -26,7 +26,7 @@ async fn the_child_sink_is_released_when_the_stream_that_owns_it_ends() {
     let (good, pushed) = built("good", 24_000, 1, 1, 0, false);
     let fb = tts_chain(vec![good]);
 
-    let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
+    let (sink, mut source) = within("stream", fb.stream(false)).await.expect("opened");
     sink.push("hello".into()).expect("push");
     sink.end_input();
     drain_tts(&mut source).await;

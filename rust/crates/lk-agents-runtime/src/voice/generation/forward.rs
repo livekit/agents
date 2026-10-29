@@ -7,6 +7,7 @@ use super::playout::{
 };
 use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -20,7 +21,6 @@ use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind}
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
 use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::PlayoutStep;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
@@ -45,10 +45,6 @@ pub(super) async fn voice_leg(
     rx: mpsc::UnboundedReceiver<SegEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
     let mut gate = PlaybackGate { state: Default::default(), step: ctx.step };
-    // `tts_node` sets it just before `stream()` snapshots it, for this synthesis only.
-    if let Voice::Tts(tts) = &voice {
-        tts.set_expressive(ctx.request.expressive.is_some());
-    }
     let mut preparation = SynthesisPreparation::default();
     let mut effect = preparation.handle(PreparationEvent::Begin {
         has_tts: matches!(voice, Voice::Tts(_)),
@@ -86,6 +82,7 @@ pub(super) async fn voice_leg(
         nodes: &ctx.providers.output_nodes,
         voice,
         aligned_transcript: ctx.speech.use_tts_aligned_transcript == Some(true),
+        expressive: ctx.request.expressive.is_some(),
         gate: &mut gate,
         acc: &mut acc,
         rx,
@@ -149,6 +146,8 @@ struct Pump<'a> {
     voice: Voice,
     /// `use_tts_aligned_transcript` is `True` (not-given is off).
     aligned_transcript: bool,
+    /// The reply carries expressive markup; each synthesis is opened with it.
+    expressive: bool,
     gate: &'a mut PlaybackGate,
     acc: &'a mut TurnAccumulator,
     rx: mpsc::UnboundedReceiver<SegEvent>,
@@ -252,6 +251,7 @@ impl Pump<'_> {
                         self.handle,
                         self.acc,
                         tts.as_ref(),
+                        self.expressive,
                         *idx,
                         first,
                         rx,

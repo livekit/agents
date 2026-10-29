@@ -4,6 +4,7 @@ use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_te
 use super::llm::{Retried, SegEvent, report_metrics, retry};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
@@ -14,7 +15,6 @@ use lk_agents_voice::generation::tts::{
 };
 use lk_agents_voice::generation::tts::{AttemptFailure, RetryOutcome, SynthesisAttempt};
 use lk_agents_voice::generation::{GenEvent, TurnAccumulator};
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
@@ -39,6 +39,7 @@ pub(super) async fn perform_tts_inference(
     handle: &Arc<SpeechHandle>,
     acc: &mut TurnAccumulator,
     tts: &dyn Tts,
+    expressive: bool,
     segment: usize,
     first: Visible,
     rx: &mut mpsc::UnboundedReceiver<SegEvent>,
@@ -58,7 +59,7 @@ pub(super) async fn perform_tts_inference(
         if !state.input_done {
             state.input_done = take_text(rx, &mut state.opening, text_out, false).await;
         }
-        let (error, produced) = match tts.stream().await {
+        let (error, produced) = match tts.stream(expressive).await {
             Err(error) => (DriverError::Provider(error), false),
             Ok((sink, mut source)) => {
                 // A voice that does not stream retries its sentences itself: each retry is the

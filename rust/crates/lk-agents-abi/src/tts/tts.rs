@@ -237,15 +237,6 @@ pub trait Tts: Send + Sync {
         false
     }
 
-    /// Mark whether expressive is active for this turn (set by the framework before each
-    /// synthesis); a TTS tokenizing its own input batches larger chunks when it is.
-    ///
-    /// Args:
-    /// - enabled: Whether markup is active for the synthesis about to open.
-    #[python(hook = "_set_expressive", store = "_expressive", default = "False")]
-    #[host(notify, name = "_core_set_expressive")]
-    fn set_expressive(&self, _enabled: bool) {}
-
     // A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).
     #[python(conn)]
     #[host(bind)]
@@ -295,6 +286,9 @@ pub trait Tts: Send + Sync {
     // The duplex path. An `Err` is a failed attempt the engine's retry budget handles; nothing
     // downgrades silently. A provider without one answers [`no_duplex_path`] and is wrapped in
     // [`StreamAdapter`](crate::StreamAdapter) where it enters the engine.
+    //
+    // `_expressive`: whether this synthesis carries expressive markup, set on the stream (a TTS
+    // tokenizing its own input batches larger chunks when it does).
     #[python(
         hook,
         unsupported = "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter",
@@ -305,7 +299,10 @@ pub trait Tts: Send + Sync {
         )
     )]
     #[host(await, name = "_core_stream")]
-    fn stream(&self) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
+    fn stream(
+        &self,
+        #[python(attr)] _expressive: bool,
+    ) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
 }
 
 /// Non-retryable: wrap it in [`StreamAdapter`](crate::StreamAdapter) instead.

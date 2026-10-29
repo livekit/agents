@@ -185,7 +185,6 @@ async def test_markers_reach_the_plugin_through_the_stream_adapter(
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    google_tts._set_expressive(True)  # the pipeline does this just before stream()
     adapter = tts.StreamAdapter(
         tts=google_tts,
         sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True, xml_aware=True),
@@ -194,6 +193,7 @@ async def test_markers_reach_the_plugin_through_the_stream_adapter(
 
     try:
         async with adapter.stream() as stream:
+            stream._expressive = True  # the pipeline opens the synthesis with it
             # split mid-marker, the way tokens actually arrive from an LLM
             for chunk in ['<expr type="expression" label="Warm, ', 'Welcoming"/> Hey there.']:
                 stream.push_text(chunk)

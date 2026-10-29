@@ -1,7 +1,6 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
 //! segments, through the realtime audio node when the agent has one.
 
-use crate::voice::session::Tx;
 use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::voice::generation::playout::{
@@ -9,18 +8,19 @@ use crate::voice::generation::playout::{
 };
 use crate::voice::generation::tools::{ToolStep, run_tools};
 use crate::voice::session::SessionShared;
+use crate::voice::session::Tx;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::llm::realtime::Event;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
 use lk_agents_abi::voice::nodes::RealtimeAudioNode;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, llm::realtime as rt};
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
-use lk_agents_voice::agent_session::{DriverError};
+use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::realtime::{
     RealtimeControl, RealtimeEffect, RealtimeObservation, RealtimePlayout, unheard_messages,
 };
 use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::StepNext;
 use lk_agents_voice::trace::GenerationStep;
 use std::sync::Arc;
@@ -330,7 +330,7 @@ impl Generation<'_> {
         let mut attempt =
             lk_agents_voice::generation::Attempt::new(self.shared.conn.tts.unwrap_or_default());
         let (sink, source) = loop {
-            let error = match tts.stream().await {
+            let error = match tts.stream(self.ctx.request.expressive.is_some()).await {
                 Ok(pair) => break pair,
                 Err(error) => error,
             };

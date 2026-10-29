@@ -131,6 +131,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     }
     fn tts_node(
         &self,
+        _: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<(lk_agents_abi::TtsSink, lk_agents_abi::TtsSource), ProviderError>,

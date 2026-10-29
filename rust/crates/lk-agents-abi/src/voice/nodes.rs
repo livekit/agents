@@ -162,8 +162,12 @@ pub trait NodeFactory: Send + Sync {
         &'a self,
         req: &'a ChatRequest,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
-    /// `tts_node(text, model_settings)`: text pushed in, its frames out.
-    fn tts_node(&self) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
+    /// `tts_node(text, model_settings)`: text pushed in, its frames out. `expressive`: the
+    /// synthesis carries expressive markup.
+    fn tts_node(
+        &self,
+        expressive: bool,
+    ) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
     /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out.
     fn stt_node(&self) -> crate::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>>;
 }

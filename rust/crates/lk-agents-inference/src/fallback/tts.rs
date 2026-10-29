@@ -161,7 +161,7 @@ impl StreamSink<String> for LoggingSink {
 #[derive(Clone)]
 pub enum TtsReq {
     OneShot { text: Arc<str> },
-    Stream { log: Arc<TokenLog> },
+    Stream { log: Arc<TokenLog>, expressive: bool },
 }
 
 pub struct TtsBackend {
@@ -226,8 +226,8 @@ impl Backend for TtsBackend {
         let tts = self.provider(conn);
         match req {
             TtsReq::OneShot { text } => tts.synthesize(text).await,
-            TtsReq::Stream { log } => {
-                let (sink, source) = tts.stream().await?;
+            TtsReq::Stream { log, expressive } => {
+                let (sink, source) = tts.stream(*expressive).await?;
                 log.set_main(sink);
                 Ok(source)
             }
@@ -244,13 +244,13 @@ impl Backend for TtsBackend {
         let tts = self.provider(conn);
         let source = match req {
             TtsReq::OneShot { text } => tts.synthesize(text).await?,
-            TtsReq::Stream { log } => {
+            TtsReq::Stream { log, expressive } => {
                 let tokens = log.settled_tokens().await;
                 if tokens.is_empty() {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(Recovery::NotYet);
                 }
-                let (sink, source) = tts.stream().await?;
+                let (sink, source) = tts.stream(*expressive).await?;
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
                     send(&sink, t);
@@ -563,11 +563,14 @@ impl Tts for FallbackTts {
         })
     }
 
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        expressive: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
             let log = TokenLog::new();
             let source = self.spawn_pump(
-                TtsReq::Stream { log: Arc::clone(&log) },
+                TtsReq::Stream { log: Arc::clone(&log), expressive },
                 RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );

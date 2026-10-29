@@ -419,12 +419,12 @@ impl FallbackTts {
         })
     }
 
-    #[pyo3(signature = (conn_options = None))]
-    fn stream<'py>(&self, py: Python<'py>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (conn_options = None, expressive = false))]
+    fn stream<'py>(&self, py: Python<'py>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, expressive: bool) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options)
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options, expressive)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::TtsStream(::std::sync::Arc::new(out)), py))
         })

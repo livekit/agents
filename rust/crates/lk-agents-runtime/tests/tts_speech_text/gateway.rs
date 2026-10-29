@@ -48,7 +48,7 @@ async fn malformed_audio_is_a_failure_even_when_followed_by_done() {
 #[tokio::test]
 async fn done_before_the_final_flush_cannot_finish_a_synthesis() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let (sink, mut source) = tts(ws.clone()).stream().await.unwrap();
+    let (sink, mut source) = tts(ws.clone()).stream(false).await.unwrap();
     sink.push("Hello there, this is the first sentence.".to_owned()).unwrap();
     sink.flush().unwrap();
     until_sent(&ws, 2).await;
@@ -147,7 +147,7 @@ async fn frames_carry_the_instant_the_first_sentence_went_out() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts_on(ws.clone(), clock.clone());
-    let (sink, mut source) = tts.stream().await.unwrap();
+    let (sink, mut source) = tts.stream(false).await.unwrap();
     sink.push("Hello there, this is".to_owned()).unwrap();
     clock.advance(Duration::from_millis(300));
     let sent_at = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
@@ -176,7 +176,7 @@ async fn until_sent(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
 async fn the_first_sentence_goes_out_before_end_input() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts(ws.clone());
-    let (sink, _source) = tts.stream().await.unwrap();
+    let (sink, _source) = tts.stream(false).await.unwrap();
     for token in ["Hello there, this is", " the first sentence.", " And here comes", " the second"]
     {
         sink.push(token.to_owned()).unwrap();
@@ -206,7 +206,7 @@ async fn the_first_sentence_goes_out_before_end_input() {
 async fn sentences_are_batched_and_carry_exactly_one_trailing_space() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts(ws.clone());
-    let (sink, _source) = tts.stream().await.unwrap();
+    let (sink, _source) = tts.stream(false).await.unwrap();
     for sentence in ["One. ", "Two! ", "Three? "] {
         sink.push(sentence.to_owned()).unwrap();
     }
@@ -244,11 +244,9 @@ async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignme
         Arc::new(lk_agents_net::clock::RealClock::new()),
         super::speech(),
     );
-    tts.set_expressive(true);
-    let mut source = tts
-        .synthesize("say <expr type=\"prosody\" label=\"whisper\">this</expr> now")
-        .await
-        .unwrap();
+    let (sink, mut source) = Tts::stream(&tts, true).await.unwrap();
+    sink.push("say <expr type=\"prosody\" label=\"whisper\">this</expr> now".into()).unwrap();
+    sink.end_input();
     let mut words = Vec::new();
     while let Some(audio) = source.next().await.unwrap() {
         words.extend(audio.timed_transcript.into_iter().map(|t| t.text));
@@ -273,7 +271,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
     .collect();
-    let (_sink, _source) = client.stream_identified(Some(ident)).unwrap();
+    let (_sink, _source) = client.stream_identified(Some(ident), false).unwrap();
     until_sent(&ws, 1).await;
     let (_, headers) = ws.last_connect().expect("connected");
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
@@ -285,7 +283,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
 
     // Without identification (no job): no `X-LiveKit-*` header at all.
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let (_sink, _source) = tts(ws.clone()).stream().await.unwrap();
+    let (_sink, _source) = tts(ws.clone()).stream(false).await.unwrap();
     until_sent(&ws, 1).await;
     let (_, headers) = ws.last_connect().expect("connected");
     let livekit: Vec<_> = headers.iter().filter(|(k, _)| k.starts_with("X-LiveKit-")).collect();
@@ -348,7 +346,7 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
         .into_iter()
         .collect();
-    let (sink, mut source) = client.stream_identified(Some(ident)).unwrap();
+    let (sink, mut source) = client.stream_identified(Some(ident), false).unwrap();
     sink.push("hello world.".to_owned()).unwrap();
     sink.end_input();
     let mut words = Vec::new();
@@ -402,7 +400,7 @@ async fn close_settles_a_pump_while_its_audio_queue_is_full() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let client = tts_on(ws.clone(), clock.clone());
-    let (_sink, source) = client.stream().await.unwrap();
+    let (_sink, source) = client.stream(false).await.unwrap();
     for _ in 0..AUDIO_QUEUE_CAPACITY + 2 {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
     }
@@ -416,8 +414,9 @@ async fn close_settles_a_pump_while_its_audio_queue_is_full() {
     );
 }
 
+// Catches: expressive leaking from one synthesis to another on the same client (a shared flag).
 #[tokio::test]
-async fn identified_views_keep_their_expressive_configuration() {
+async fn each_synthesis_carries_its_own_expressive_option() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let mut options = opts();
     options.model = "inworld/inworld-tts-2".into();
@@ -428,21 +427,19 @@ async fn identified_views_keep_their_expressive_configuration() {
         Arc::new(lk_agents_net::clock::RealClock::new()),
         super::speech(),
     );
-    let expressive = client.identified(Headers::default(), None);
-    let plain = client.identified(Headers::default(), None);
-    expressive.set_expressive(true);
-    plain.set_expressive(false);
-    for (view, drops_cues) in [(expressive, true), (plain, false)] {
+    for expressive in [true, false] {
         ws.feed(text(
             json!({"type": "output_alignment", "words": [{"word": "[laughs]"}, {"word": "hello"}]}),
         ));
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
         ws.feed(text(json!({"type": "done"})));
-        let mut source = view.synthesize("hello").await.unwrap();
+        let (sink, mut source) = Tts::stream(&client, expressive).await.unwrap();
+        sink.push("hello".into()).unwrap();
+        sink.end_input();
         let frame = source.next().await.unwrap().unwrap();
         assert_eq!(
             frame.timed_transcript.iter().all(|token| !token.text.contains('[')),
-            drops_cues
+            expressive
         );
         while source.next().await.unwrap().is_some() {}
     }
@@ -471,7 +468,7 @@ async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
 async fn input_capacity_failure_at_eof_is_not_retryable() {
     let ws = Arc::new(FakeWs::new(Vec::new()).keep_open());
     let client = tts(ws);
-    let (sink, mut source) = client.stream().await.unwrap();
+    let (sink, mut source) = client.stream(false).await.unwrap();
     for _ in 0..TEXT_QUEUE_CAPACITY - 1 {
         sink.push("hello".to_owned()).unwrap();
         sink.flush().unwrap();

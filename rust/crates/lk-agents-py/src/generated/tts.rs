@@ -439,15 +439,6 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         ::std::clone::Clone::clone(&self.lowers_markup)
     }
 
-    fn set_expressive(&self, enabled: bool) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let enabled_arg = enabled;
-        ::lk_agents_runtime::host::notify(&self.notifier, "Tts._core_set_expressive", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(enabled_arg, py)?];
-                Ok((host.bind(py).getattr("_core_set_expressive")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
-    }
-
     fn with_conn_options(&self, conn: &::lk_agents_abi::ApiConnectOptions) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Tts>> {
         Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))
     }
@@ -505,12 +496,13 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         })
     }
 
-    fn stream(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>), ::lk_agents_abi::errors::ProviderError>> {
+    fn stream(&self, expressive: bool) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
+        let expressive_arg = expressive;
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "Tts._core_stream", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(expressive_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);

@@ -205,14 +205,17 @@ impl Tts for FakeTts {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.stream().await?;
+            let (sink, source) = self.stream(false).await?;
             sink.push(text.into())?;
             sink.end_input();
             Ok(source)
         })
     }
 
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
             if self.registry.voice_down() {
                 return Err(ProviderError::Local(ApiError::new("voice provider is down")));

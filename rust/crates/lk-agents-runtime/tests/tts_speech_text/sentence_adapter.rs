@@ -130,10 +130,8 @@ struct FakeTts {
 
     inner_closed: Arc<AtomicUsize>,
     fail_after: Option<usize>,
-    /// `markup._provider_key()`, and what `set_expressive` last said.
+    /// `markup._provider_key()`.
     markup: &'static str,
-
-    expressive: AtomicBool,
 }
 
 impl FakeTts {
@@ -144,7 +142,6 @@ impl FakeTts {
             inner_closed: Arc::new(AtomicUsize::new(0)),
             fail_after: None,
             markup: "",
-            expressive: AtomicBool::new(false),
         })
     }
     fn texts(&self) -> Vec<String> {
@@ -168,9 +165,6 @@ impl Tts for FakeTts {
     }
     fn markup_provider(&self) -> String {
         self.markup.to_owned()
-    }
-    fn set_expressive(&self, on: bool) {
-        self.expressive.store(on, Ordering::Relaxed);
     }
     fn synthesize<'a>(
         &'a self,
@@ -196,7 +190,10 @@ impl Tts for FakeTts {
             }) as TtsSource)
         })
     }
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move { Err(lk_agents_abi::tts::tts::no_duplex_path(&self.label())) })
     }
 }
@@ -244,7 +241,7 @@ async fn drain(mut source: TtsSource) -> Result<Vec<SynthesizedAudio>, ProviderE
 #[tokio::test]
 async fn only_the_last_frame_of_the_whole_stream_is_final() {
     let tts = FakeTts::new(2);
-    let (sink, source) = adapter(tts).stream().await.unwrap();
+    let (sink, source) = adapter(tts).stream(false).await.unwrap();
     sink.push("one. two. three.".into()).unwrap();
     sink.end_input();
 
@@ -268,7 +265,7 @@ fn tts_records(records: Vec<AgentMetrics>) -> Vec<(u32, bool, bool)> {
 #[tokio::test]
 async fn each_sentence_is_metered_as_its_own_call() {
     let tts = FakeTts::new(2);
-    let (sink, mut source) = adapter(tts).stream().await.unwrap();
+    let (sink, mut source) = adapter(tts).stream(false).await.unwrap();
     sink.push("one. three.".into()).unwrap();
     for _ in 0..3 {
         bounded("frame", source.next()).await.unwrap().expect("a frame");
@@ -280,7 +277,7 @@ async fn each_sentence_is_metered_as_its_own_call() {
 
     let mut failing = FakeTts::new(2);
     Arc::get_mut(&mut failing).unwrap().fail_after = Some(1);
-    let (sink, mut source) = adapter(failing).stream().await.unwrap();
+    let (sink, mut source) = adapter(failing).stream(false).await.unwrap();
     sink.push("one.".into()).unwrap();
     sink.end_input();
     assert!(drain_until_error(&mut source).await);
@@ -302,7 +299,7 @@ async fn drain_until_error(source: &mut TtsSource) -> bool {
 #[tokio::test]
 async fn a_frame_is_not_held_back_while_more_text_may_still_arrive() {
     let tts = FakeTts::new(4);
-    let (sink, mut source) = adapter(tts).stream().await.unwrap();
+    let (sink, mut source) = adapter(tts).stream(false).await.unwrap();
     sink.push("hello world.".into()).unwrap();
 
     // No `end_input`: the adapter cannot know this is the last sentence, so it must not hold.
@@ -321,7 +318,7 @@ async fn a_frame_is_not_held_back_while_more_text_may_still_arrive() {
 #[tokio::test]
 async fn end_input_flushes_the_partial_sentence_before_closing() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone()).stream().await.unwrap();
+    let (sink, source) = adapter(tts.clone()).stream(false).await.unwrap();
     sink.push("complete. trailing without a dot".into()).unwrap();
     sink.end_input();
 
@@ -334,7 +331,7 @@ async fn end_input_flushes_the_partial_sentence_before_closing() {
 async fn an_empty_push_never_reaches_the_splitter() {
     let tts = FakeTts::new(1);
     let obs = observed(tts.clone());
-    let (sink, source) = obs.adapter.stream().await.unwrap();
+    let (sink, source) = obs.adapter.stream(false).await.unwrap();
     sink.push("half".into()).unwrap();
     sink.push(String::new()).unwrap();
     sink.push(" a sentence.".into()).unwrap();
@@ -351,7 +348,7 @@ async fn an_empty_push_never_reaches_the_splitter() {
 async fn flush_forces_the_buffered_partial_out_mid_stream() {
     let tts = FakeTts::new(1);
     let obs = observed(tts.clone());
-    let (sink, source) = obs.adapter.stream().await.unwrap();
+    let (sink, source) = obs.adapter.stream(false).await.unwrap();
     sink.push("no delimiter here".into()).unwrap();
     sink.flush().unwrap();
     sink.push("second".into()).unwrap();
@@ -384,7 +381,7 @@ async fn the_adapter_claims_streaming_but_keeps_the_wrapped_providers_audio_form
 #[tokio::test]
 async fn a_whitespace_only_sentence_is_aligned_but_not_synthesized() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone()).stream().await.unwrap();
+    let (sink, source) = adapter(tts.clone()).stream(false).await.unwrap();
     sink.push("real text.".into()).unwrap();
     sink.push("   ".into()).unwrap(); // no delimiter: `end_input`'s flush emits it as-is
     sink.end_input();
@@ -401,7 +398,7 @@ async fn a_whitespace_only_sentence_is_aligned_but_not_synthesized() {
 #[tokio::test]
 async fn the_timed_transcript_rides_the_next_frame_and_carries_the_preceding_duration() {
     let tts = FakeTts::new(2); // 2 x 240 samples @ 24 kHz = 20 ms per sentence
-    let (sink, source) = adapter(tts).stream().await.unwrap();
+    let (sink, source) = adapter(tts).stream(false).await.unwrap();
     sink.push("one. two.".into()).unwrap();
     sink.end_input();
 
@@ -420,7 +417,7 @@ async fn the_timed_transcript_rides_the_next_frame_and_carries_the_preceding_dur
 #[tokio::test]
 async fn every_frame_carries_the_adapters_ids_not_the_inner_providers() {
     let tts = FakeTts::new(2);
-    let (sink, source) = adapter(tts).stream().await.unwrap();
+    let (sink, source) = adapter(tts).stream(false).await.unwrap();
     sink.push("one. two.".into()).unwrap();
     sink.end_input();
 
@@ -441,12 +438,12 @@ async fn each_stream_gets_its_own_splitter_state() {
     let tts = FakeTts::new(1);
     let ad = adapter(tts.clone());
 
-    let (sink_a, source_a) = ad.stream().await.unwrap();
+    let (sink_a, source_a) = ad.stream(false).await.unwrap();
     sink_a.push("leftover with no delimiter".into()).unwrap();
     drop(sink_a); // dropped, not ended: the source flushes what it can and stops
     drain(source_a).await.unwrap();
 
-    let (sink_b, source_b) = ad.stream().await.unwrap();
+    let (sink_b, source_b) = ad.stream(false).await.unwrap();
     sink_b.push("fresh.".into()).unwrap();
     sink_b.end_input();
     drain(source_b).await.unwrap();
@@ -458,7 +455,7 @@ async fn each_stream_gets_its_own_splitter_state() {
 #[tokio::test]
 async fn a_push_after_end_input_is_a_silent_no_op() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone()).stream().await.unwrap();
+    let (sink, source) = adapter(tts.clone()).stream(false).await.unwrap();
     sink.push("first.".into()).unwrap();
     sink.end_input();
     assert!(sink.push("too late.".into()).is_ok());
@@ -474,7 +471,7 @@ async fn a_push_after_end_input_is_a_silent_no_op() {
 async fn an_inner_failure_surfaces_as_a_final_error() {
     let mut tts = FakeTts::new(3);
     Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-    let (sink, mut source) = adapter(tts).stream().await.unwrap();
+    let (sink, mut source) = adapter(tts).stream(false).await.unwrap();
     sink.push("boom.".into()).unwrap();
     sink.end_input();
 
@@ -504,7 +501,7 @@ fn retrying_adapter(tts: Arc<FakeTts>) -> StreamAdapter {
 async fn a_sentence_failing_before_audio_is_synthesized_again_within_its_budget() {
     let mut tts = FakeTts::new(3);
     Arc::get_mut(&mut tts).unwrap().fail_after = Some(0);
-    let (sink, source) = retrying_adapter(tts.clone()).stream().await.unwrap();
+    let (sink, source) = retrying_adapter(tts.clone()).stream(false).await.unwrap();
     sink.push("first. second.".into()).unwrap();
     sink.end_input();
     let err = drain(source).await.expect_err("every attempt fails");
@@ -518,7 +515,7 @@ async fn a_sentence_failing_before_audio_is_synthesized_again_within_its_budget(
 async fn sentence_adapter_partial_failure_never_resynthesizes_delivered_audio() {
     let mut tts = FakeTts::new(3);
     Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-    let (sink, mut source) = retrying_adapter(tts.clone()).stream().await.unwrap();
+    let (sink, mut source) = retrying_adapter(tts.clone()).stream(false).await.unwrap();
     sink.push("first. second.".into()).unwrap();
     sink.end_input();
     let delivered = bounded("first frame", source.next()).await.unwrap();
@@ -534,7 +531,7 @@ async fn sentence_adapter_partial_failure_never_resynthesizes_delivered_audio() 
 async fn every_inner_stream_is_aclosed_including_on_teardown() {
     let tts = FakeTts::new(1);
     let closed = tts.inner_closed.clone();
-    let (sink, mut source) = adapter(tts).stream().await.unwrap();
+    let (sink, mut source) = adapter(tts).stream(false).await.unwrap();
     sink.push("one. two.".into()).unwrap();
     bounded("frame 1", source.next()).await.unwrap(); // the only frame of "one."
     bounded("frame 2", source.next()).await.unwrap(); // exhausts "one.", closes it, starts "two."
@@ -551,7 +548,7 @@ async fn every_inner_stream_is_aclosed_including_on_teardown() {
 #[tokio::test]
 async fn the_two_halves_drive_from_two_tasks_at_once() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone()).stream().await.unwrap();
+    let (sink, source) = adapter(tts.clone()).stream(false).await.unwrap();
     let sink: Arc<TtsSink> = Arc::new(sink);
     let feeder = {
         let sink = sink.clone();
@@ -579,7 +576,7 @@ fn a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_o
         tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let outcome = rt.block_on(async {
         let tts = FakeTts::new(1);
-        let (sink, source) = adapter(tts).stream().await.unwrap();
+        let (sink, source) = adapter(tts).stream(false).await.unwrap();
         sink.push("one sentence.".into()).unwrap();
         sink.end_input();
         let drained = tokio::spawn(drain(source));
@@ -603,7 +600,7 @@ fn a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_o
 
 // Catches: markup spoken aloud by a non-streaming TTS under expressive (the adapter is its
 // only lowering path), a sentence split inside a marker (the splitter not asked to be
-// xml-aware), the flag not reaching the wrapped TTS, and a turn with expressive off lowered.
+// xml-aware), and a synthesis with expressive off lowered.
 
 #[tokio::test]
 async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
@@ -625,9 +622,7 @@ async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
         );
         assert!(adapter.lowers_markup());
         assert_eq!(adapter.markup_provider(), "cartesia");
-        adapter.set_expressive(on);
-        assert_eq!(tts.expressive.load(Ordering::Relaxed), on, "forwarded to the wrapped TTS");
-        let (sink, source) = adapter.stream().await.unwrap();
+        let (sink, source) = adapter.stream(on).await.unwrap();
         sink.push(said.into()).unwrap();
         sink.end_input();
         let out = drain(source).await.unwrap();

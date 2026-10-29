@@ -53,9 +53,6 @@ impl InferenceTts for GatewayTts {
         ))
     }
 
-    fn set_expressive(&self, expressive: bool) {
-        self.set_expressive(expressive);
-    }
     fn sample_rate(&self) -> u32 {
         self.sample_rate()
     }
@@ -89,10 +86,11 @@ impl InferenceTts for GatewayTts {
         &self,
         headers: Option<Vec<(String, String)>>,
         conn_options: Option<ApiConnectOptions>,
+        expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
         let (sink, source) = self
             .configured(conn_options)
-            .stream_identified(headers.map(|pairs| pairs.into_iter().collect()))?;
+            .stream_identified(headers.map(|pairs| pairs.into_iter().collect()), expressive)?;
         Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source)))
     }
 }

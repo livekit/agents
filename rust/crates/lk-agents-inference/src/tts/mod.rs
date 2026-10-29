@@ -36,7 +36,6 @@ use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_net::connection_pool::ConnectionPool;
 use std::collections::HashMap;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -106,7 +105,6 @@ impl std::ops::Deref for GatewayTts {
 /// What every session's view of one client shares: its options and its pooled connections.
 pub struct TtsClient {
     opts: Arc<Mutex<TtsOptions>>,
-    expressive: AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     /// Prewarms and stream pumps: each ends on its own (a pump once its handles are gone).
@@ -182,7 +180,6 @@ impl GatewayTts {
     ) -> Self {
         let shared = TtsClient {
             opts: Arc::new(Mutex::new(opts)),
-            expressive: AtomicBool::new(false),
             ws,
             spawner,
             tasks: Arc::default(),
@@ -216,7 +213,6 @@ impl GatewayTts {
         let shared = Arc::get_mut(&mut view.shared).expect("a newly constructed view is unshared");
         shared.opts = self.opts.clone();
         shared.connections = self.connections.clone();
-        view.set_expressive(self.expressive.load(Ordering::SeqCst));
         view.conn_options = self.conn_options;
         view.reporter = reporter;
         view.identity.bind(headers);
@@ -265,22 +261,19 @@ impl GatewayTts {
 
     /// Headers are per stream, not a client field: each synthesis gets its own session id.
     /// `None`: the identity a session bound, else no job, the native headers.
+    /// `expressive`: this synthesis batches sentences for markup and drops bracket cues from the
+    /// alignment.
     pub fn stream_identified(
         &self,
         identification: Option<Headers>,
+        expressive: bool,
     ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
-        self.open(identification.as_ref())
+        self.open(identification.as_ref(), expressive)
     }
 }
 
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
 impl GatewayTts {
-    /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
-    /// bracket cues from the alignment.
-    pub fn set_expressive(&self, expressive: bool) {
-        self.expressive.store(expressive, Ordering::SeqCst);
-    }
-
     pub fn model(&self) -> String {
         self.opts.lock().unwrap().model.clone()
     }
@@ -325,13 +318,13 @@ impl GatewayTts {
     fn open(
         &self,
         identification: Option<&Headers>,
+        expressive: bool,
     ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
         let mut opts = self.opts.lock().unwrap().clone();
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
         let provider = opts.model.split('/').next().unwrap_or("").to_owned();
-        let expressive = self.expressive.load(Ordering::SeqCst);
         let identification = match identification {
             Some(headers) => Some(headers.clone()),
             None => self.identity.for_connection(),
@@ -441,10 +434,6 @@ impl Tts for GatewayTts {
         true
     }
 
-    fn set_expressive(&self, on: bool) {
-        GatewayTts::set_expressive(self, on);
-    }
-
     fn prewarm(&self) {
         self.prewarm_identified(None);
     }
@@ -455,16 +444,19 @@ impl Tts for GatewayTts {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.open(None)?;
+            let (sink, source) = self.open(None, false)?;
             sink.push(text.to_owned())?;
             sink.end_input();
             Ok(Box::new(source) as TtsSource)
         })
     }
 
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        expressive: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
-            self.open(None)
+            self.open(None, expressive)
                 .map(|(sink, source)| (Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
         })
     }

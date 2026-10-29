@@ -295,7 +295,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         _initialize(output_emitter, self._tts, stream=True)
-        native = await self._tts._native.stream(conn_options=self._conn_options)
+        native = await self._tts._native.stream(
+            conn_options=self._conn_options, expressive=self._expressive
+        )
         await _duplex(self, native, output_emitter, self.input, lambda text: text)
 
 
@@ -346,10 +348,6 @@ class StreamAdapter(TTS):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._provider_key()
 
-    def _set_expressive(self, enabled: bool) -> None:
-        super()._set_expressive(enabled)
-        self._wrapped_tts._set_expressive(enabled)
-
     def _core_lowers_markup(self) -> bool:
         # its sentences are lowered here, unlike a natively streaming plugin's input
         return True
@@ -383,8 +381,6 @@ class StreamAdapterWrapper(SynthesizeStream):
         # each sentence is retried by the core's adapter, not the whole stream
         super().__init__(tts=tts, conn_options=replace(conn_options, max_retry=0))
         self._sentence_conn_options = conn_options
-        # fixed for this synthesis: the framework sets it before stream()
-        self._expressive = tts._wrapped_tts._expressive
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         markup = self._tts._wrapped_tts.markup

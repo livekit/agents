@@ -10,11 +10,11 @@ use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
 use lk_agents_abi::voice::nodes::NodeFactory;
+use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamSource, Stt,
     SttSink, SttSource, TimedString, Ts, Tts, TtsSink, TtsSource,
 };
-use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 
 use crate::record::NodeUse;
 
@@ -267,10 +267,11 @@ impl NodeFactory for FakeNodes {
 
     fn tts_node(
         &self,
+        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
             self.used(NodeUse::Tts);
-            self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream().await
+            self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream(expressive).await
         })
     }
 

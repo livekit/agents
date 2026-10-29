@@ -316,6 +316,8 @@ pub(super) const SYNTHESIZE: &str = r#"
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
+        # whether this synthesis carries expressive markup; the framework sets it at open
+        self._expressive = False
         self._segment_open = False
         self._num_segments = 0
 {SYNTHESIS}

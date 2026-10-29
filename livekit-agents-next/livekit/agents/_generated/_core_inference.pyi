@@ -180,7 +180,6 @@ class InferenceTts:
         extra_kwargs: dict[str, object] | None = None,
         fallback: list[HostFallbackModel] | None = None,
     ) -> None: ...
-    def set_expressive(self, expressive: bool) -> None: ...
     @property
     def sample_rate(self) -> int: ...
     @property
@@ -204,4 +203,5 @@ class InferenceTts:
         *,
         headers: Sequence[tuple[str, str]] | None = None,
         conn_options: APIConnectOptions | None = None,
+        expressive: bool = False,
     ) -> TtsStream: ...

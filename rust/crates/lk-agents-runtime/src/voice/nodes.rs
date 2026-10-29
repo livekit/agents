@@ -13,7 +13,7 @@ use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::utils::stream::CallLedger;
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, IoError, TextOutput};
 use lk_agents_abi::voice::nodes::{
-    NodeChunk, NodeFactory, NodeFrame, SessionNodes, ProviderCalls, RealtimeAudioNode, TextNode,
+    NodeChunk, NodeFactory, NodeFrame, ProviderCalls, RealtimeAudioNode, SessionNodes, TextNode,
 };
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT,
@@ -84,10 +84,11 @@ impl NodeFactory for AgentNodes {
 
     fn tts_node(
         &self,
+        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move {
             let (sink, input) = channel();
-            let calls = Arc::new(NodeCalls::default());
+            let calls = Arc::new(NodeCalls { state: Mutex::default(), expressive });
             let out = self.host.tts(Box::new(input), calls.clone()).await?;
             let request_id = node_id("tts_node_");
             let map = move |audio: SynthesizedAudio| SynthesizedAudio {
@@ -484,7 +485,11 @@ impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> StreamSource<T> for Mapped<A
 /// The provider calls of the default nodes a `tts_node` runs, as the reference meters a TTS's
 /// streams and not the node's output.
 #[derive(Default)]
-pub struct NodeCalls(Mutex<NodeCallState>);
+pub struct NodeCalls {
+    state: Mutex<NodeCallState>,
+    /// The synthesis carries expressive markup; the default node opens its provider with it.
+    expressive: bool,
+}
 
 #[derive(Default)]
 enum NodeCallState {
@@ -499,7 +504,7 @@ enum NodeCallState {
 
 impl NodeCalls {
     fn record(&self, ledger: Option<CallLedger>) {
-        let mut state = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         match (ledger, &mut *state) {
             (_, NodeCallState::Streamed) => {}
             (None, _) => *state = NodeCallState::Streamed,
@@ -509,7 +514,7 @@ impl NodeCalls {
     }
 
     fn take(&self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
-        match &*self.0.lock().unwrap_or_else(|p| p.into_inner()) {
+        match &*self.state.lock().unwrap_or_else(|p| p.into_inner()) {
             NodeCallState::Unused => in_flight.then(Vec::new),
             NodeCallState::Streamed => None,
             NodeCallState::Metered(ledgers) => {
@@ -571,8 +576,9 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         );
         let calls = calls
             .and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok());
+        let expressive = calls.as_ref().is_some_and(|calls| calls.expressive);
         Ok(pumped(env, async move {
-            let opened = tts.stream().await;
+            let opened = tts.stream(expressive).await;
             if let (Ok((_, source)), Some(calls)) = (&opened, &calls) {
                 calls.record(source.call_ledger());
             }
@@ -850,26 +856,24 @@ impl Tts for Node<dyn Tts> {
         self.below.lowers_markup()
     }
 
-    /// Set on the TTS the node's default `tts_node` synthesises with.
-    fn set_expressive(&self, on: bool) {
-        self.below.set_expressive(on);
-    }
-
     /// One text, through the node all the same.
     fn synthesize<'a>(
         &'a self,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.stream().await?;
+            let (sink, source) = self.stream(false).await?;
             sink.push(text.to_owned()).map_err(final_error)?;
             sink.end_input();
             Ok(source)
         })
     }
 
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
-        Box::pin(async move { duplex(self.host.tts_node().await) })
+    fn stream(
+        &self,
+        expressive: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move { duplex(self.host.tts_node(expressive).await) })
     }
 }
 
@@ -930,7 +934,7 @@ mod tests {
     // call in flight when the node is cut not ended.
     #[test]
     fn a_tts_node_reports_the_calls_its_default_node_made() {
-        let calls = Arc::new(NodeCalls::default());
+        let calls = Arc::new(NodeCalls { state: Mutex::default(), expressive: false });
         let (_, input) = channel::<SynthesizedAudio>();
         let mut node = Mapped { source: Box::new(input), map: |a| a, calls: Some(calls.clone()) };
         assert!(node.take_call_metrics(false).is_none(), "no default node ran yet");
@@ -949,7 +953,7 @@ mod tests {
         assert_eq!(node.take_call_metrics(false).map(|r| r.len()), Some(2));
         assert_eq!(node.take_call_metrics(true).map(|r| r.len()), Some(0));
         assert!(cut.load(Ordering::Relaxed), "the call in flight is ended");
-        let streamed = Arc::new(NodeCalls::default());
+        let streamed = Arc::new(NodeCalls { state: Mutex::default(), expressive: false });
         streamed.record(None);
         let mut node =
             Mapped { source: Box::new(channel::<()>().1), map: |a| a, calls: Some(streamed) };
@@ -998,6 +1002,7 @@ mod tests {
 
         fn tts_node(
             &self,
+            _: bool,
         ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
             Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
         }

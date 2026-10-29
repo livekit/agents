@@ -102,6 +102,7 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     async fn stream(
         &self,
         #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
+        #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
 }
 
