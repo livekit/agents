@@ -849,8 +849,10 @@ impl Run {
         if self.closed {
             return lease.release(None).await;
         }
-        let ended =
-            EventWrite::run_ended(unix_now_ms(), &RunEnded { outcome, reason: Some(reason.into()) });
+        let ended = EventWrite::run_ended(
+            unix_now_ms(),
+            &RunEnded { outcome, reason: Some(reason.into()) },
+        );
         if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
             log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }
