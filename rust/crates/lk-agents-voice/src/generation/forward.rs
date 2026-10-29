@@ -232,9 +232,9 @@ impl Pump<'_> {
         let deltas = if aligned_path { None } else { text_out };
         // The segment's first delta; every other one is forwarded where it is consumed.
         capture(deltas, &first.text).await;
-        // With no audio output a forwarded delta starts the turn speaking. With no text leg either,
-        // the agent never speaks; the words are still committed.
-        if audio_out.is_none() && text_out.is_some() {
+        // With no audio output the first words start the turn speaking, text output or not (the
+        // reference's `first_text_fut`): a session with neither still speaks, then listens.
+        if audio_out.is_none() {
             first_text_started_speaking(shared, self.handle, self.acc);
         }
         let mut playback = SynthesisPlayout {

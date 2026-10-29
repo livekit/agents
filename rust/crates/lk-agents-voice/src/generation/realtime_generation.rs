@@ -669,7 +669,7 @@ impl Segment for Generation<'_> {
                     if let Some(leg) = &self.leg {
                         leg.capture(&delta).await;
                     }
-                    if self.speaks_text && self.text_out.is_some() && !delta.is_empty() {
+                    if self.speaks_text && !delta.is_empty() {
                         first_text_started_speaking(self.shared, self.handle, self.acc);
                     }
                 }
