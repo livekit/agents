@@ -429,6 +429,8 @@ struct GatedHost {
     decisions: Arc<tokio::sync::Semaphore>,
     launches: Arc<tokio::sync::Semaphore>,
     dropped: Arc<std::sync::atomic::AtomicUsize>,
+    /// Launches fail with a host error.
+    failing_launches: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct OperationGuard(Arc<std::sync::atomic::AtomicUsize>);
@@ -454,6 +456,9 @@ impl WorkerHost for GatedHost {
         let _guard = OperationGuard(self.dropped.clone());
         self.started.send("launch").unwrap();
         self.launches.acquire().await.unwrap().forget();
+        if self.failing_launches.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(HostError::new("launch failed"));
+        }
         Ok(info.job.id)
     }
     async fn terminate_job(&self, _: JobId) -> HostResult {
@@ -475,6 +480,7 @@ struct RuntimeRig {
     launches: Arc<tokio::sync::Semaphore>,
     dropped: Arc<std::sync::atomic::AtomicUsize>,
     closed: Arc<std::sync::atomic::AtomicUsize>,
+    failing_launches: Arc<std::sync::atomic::AtomicBool>,
 }
 fn runtime_rig() -> RuntimeRig {
     runtime_rig_with_retry(0)
@@ -489,6 +495,7 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
     let launches = Arc::new(tokio::sync::Semaphore::new(0));
     let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failing_launches = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (runtime, handle) = Worker::with_components(
         Arc::new(ChannelTransport {
             stall_writes: stall_writes.clone(),
@@ -503,6 +510,7 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
             decisions: decisions.clone(),
             launches: launches.clone(),
             dropped: dropped.clone(),
+            failing_launches: failing_launches.clone(),
         }),
         Arc::new(TestClock(tokio::time::Instant::now())),
         crate::test_support::blocking_io(),
@@ -518,6 +526,7 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
         dropped,
         closed,
         stall_writes,
+        failing_launches,
     }
 }
 fn offer(id: &str) -> ServerMessage {
@@ -877,4 +886,5 @@ fn default_load_calc_averages_five_samples() {
     assert_eq!(c.get(), 0.0);
 }
 
+mod contracts;
 mod generated_sequences;
