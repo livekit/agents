@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 #[tokio::test(start_paused = true)]
 async fn the_agent_state_is_written_to_the_room_as_it_changes() {
-    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("agent-state");
     let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
     let api = SessionApi::host_new(

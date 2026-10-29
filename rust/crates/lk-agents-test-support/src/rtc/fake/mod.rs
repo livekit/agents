@@ -1,13 +1,11 @@
 //! In-memory RTC for deterministic tests: records operations and models playout on an injected clock.
-use lk_agents_abi::BoxFuture;
-use lk_agents_voice::room_io::wait::{Ready, WaitFor};
+use lk_agents_abi::voice::rtc::{RoomEventBus, RoomEventSink};
 
-use super::events::RoomEventBus;
 use super::traits::{
     AudioSource, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
     TrackPublication,
 };
-use super::{ByteStream, ByteStreamSender, Receiver, RoomEvent, TextStream, TextStreamSender};
+use super::{ByteStreamSender, Receiver, RoomEvent, TextStreamSender};
 use super::{
     ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind, StreamInfo,
     StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
@@ -23,8 +21,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 mod audio_source;
-#[cfg(test)]
-mod tests;
 mod track;
 
 pub use audio_source::{FakeAudioSource, FrameSynth};
@@ -32,6 +28,8 @@ pub use track::{FakeTrackPublication, StreamRequests, subscribe_local};
 
 pub struct FakeRtc {
     clock: Arc<dyn Clock>,
+    /// The runtime's room event fan-out each room's SDK callbacks emit into.
+    bus: fn() -> RoomEventBus,
     /// `Some` only from [`with_virtual_clock`](FakeRtc::with_virtual_clock); `advance` needs it.
     virtual_clock: Option<Arc<VirtualClock>>,
     state: Mutex<HostState>,
@@ -46,14 +44,16 @@ struct HostState {
 
 impl FakeRtc {
     /// Share the session's clock, so playout and the core's timers run on one timeline.
-    pub fn new(clock: Arc<dyn Clock>) -> Arc<Self> {
-        Arc::new(FakeRtc { clock, virtual_clock: None, state: Mutex::new(HostState::default()) })
+    pub fn new(clock: Arc<dyn Clock>, bus: fn() -> RoomEventBus) -> Arc<Self> {
+        let state = Mutex::new(HostState::default());
+        Arc::new(FakeRtc { clock, bus, virtual_clock: None, state })
     }
 
-    pub fn with_virtual_clock() -> (Arc<Self>, Arc<VirtualClock>) {
+    pub fn with_virtual_clock(bus: fn() -> RoomEventBus) -> (Arc<Self>, Arc<VirtualClock>) {
         let clock = Arc::new(VirtualClock::new());
         let rtc = Arc::new(FakeRtc {
             clock: clock.clone(),
+            bus,
             virtual_clock: Some(clock.clone()),
             state: Mutex::new(HostState::default()),
         });
@@ -62,8 +62,12 @@ impl FakeRtc {
 
     /// A room with no RTC at all, for console/daemon sessions where the CLI owns the audio. The
     /// clock must be the wall clock the session's timers run on.
-    pub fn offline(name: &str, clock: Arc<dyn Clock>) -> (Arc<Self>, Arc<FakeRoom>) {
-        let rtc = Self::new(clock);
+    pub fn offline(
+        name: &str,
+        clock: Arc<dyn Clock>,
+        bus: fn() -> RoomEventBus,
+    ) -> (Arc<Self>, Arc<FakeRoom>) {
+        let rtc = Self::new(clock, bus);
         let room = rtc.room(name);
         (rtc, room)
     }
@@ -74,7 +78,7 @@ impl FakeRtc {
         if let Some(existing) = state.rooms.iter().find(|r| r.name == name) {
             return existing.clone();
         }
-        let room = FakeRoom::new(name, self.clock.clone());
+        let room = FakeRoom::new(name, self.clock.clone(), (self.bus)());
         state.rooms.push(room.clone());
         room
     }
@@ -124,7 +128,7 @@ impl RtcHost for FakeRtc {
                 return Err(err);
             }
             let name = format!("fake-room-{}", state.rooms.len() + 1);
-            let room = FakeRoom::new(&name, self.clock.clone());
+            let room = FakeRoom::new(&name, self.clock.clone(), (self.bus)());
             state.rooms.push(room.clone());
             state.connects.push(ConnectCall {
                 url: url.to_owned(),
@@ -146,8 +150,8 @@ pub struct ConnectCall {
 /// Connected from the moment it exists, as `ctx.connect()` leaves it.
 pub struct FakeRoom {
     name: String,
-    bus: Arc<RoomEventBus>,
-    bus_port: lk_agents_abi::voice::rtc::RoomEventBus,
+    bus: Arc<dyn RoomEventSink>,
+    bus_port: RoomEventBus,
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
@@ -180,15 +184,15 @@ impl Default for RoomState {
 }
 
 impl FakeRoom {
-    fn new(name: &str, clock: Arc<dyn Clock>) -> Arc<Self> {
-        let bus = Arc::new(RoomEventBus::new());
+    fn new(name: &str, clock: Arc<dyn Clock>, bus_port: RoomEventBus) -> Arc<Self> {
+        let bus = bus_port.0.clone();
         let auto_subscribe = Arc::new(AtomicBool::new(true));
         let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone(), auto_subscribe.clone()));
         Arc::new(FakeRoom {
             name: name.to_owned(),
             local_dyn: local.clone(),
             local,
-            bus_port: lk_agents_abi::voice::rtc::RoomEventBus(bus.clone()),
+            bus_port,
             bus,
             auto_subscribe,
             state: Mutex::new(RoomState::default()),
@@ -351,14 +355,6 @@ impl FakeRoom {
         self.bus.subscribe()
     }
 
-    pub fn text_streams(&self, topic: &str) -> Result<Receiver<TextStream>> {
-        (self as &dyn RtcRoom).text_streams(topic)
-    }
-
-    pub fn byte_streams(&self, topic: &str) -> Result<Receiver<ByteStream>> {
-        (self as &dyn RtcRoom).byte_streams(topic)
-    }
-
     /// Live event subscribers as of the last emit; how a test checks a `room.off(...)` took effect.
     pub fn event_subscriber_count(&self) -> usize {
         self.bus.subscriber_count()
@@ -410,7 +406,7 @@ impl RtcRoom for FakeRoom {
             .collect())
     }
 
-    fn event_bus(&self) -> &lk_agents_abi::voice::rtc::RoomEventBus {
+    fn event_bus(&self) -> &RoomEventBus {
         &self.bus_port
     }
 
@@ -441,85 +437,12 @@ impl RtcRoom for FakeRoom {
         self.state.lock().unwrap().text_handlers.remove(topic);
         Ok(())
     }
-    fn byte_streams(&self, topic: &str) -> Result<Receiver<ByteStream>> {
-        let (sender, receiver) = super::events::ByteStreamSender::channel();
-        self.register_byte_stream_handler(topic, sender)?;
-        Ok(receiver)
-    }
-    fn text_streams(&self, topic: &str) -> Result<Receiver<TextStream>> {
-        let (sender, receiver) = super::events::TextStreamSender::channel();
-        self.register_text_stream_handler(topic, sender)?;
-        Ok(receiver)
-    }
-    fn wait_for_participant<'a>(
-        &'a self,
-        identity: Option<String>,
-        kinds: Option<Vec<i32>>,
-        include_local: bool,
-    ) -> BoxFuture<'a, Result<Option<ParticipantIdentity>>> {
-        Box::pin(async move {
-            match super::wait::perform(
-                self,
-                WaitFor::Participant { identity, kinds, include_local },
-            )
-            .await?
-            {
-                Ready::Participant(identity) => Ok(identity),
-                _ => unreachable!(),
-            }
-        })
-    }
-    fn wait_for_agent<'a>(
-        &'a self,
-        name: Option<String>,
-    ) -> BoxFuture<'a, Result<ParticipantIdentity>> {
-        Box::pin(async move {
-            match super::wait::perform(self, WaitFor::Agent { name }).await? {
-                Ready::Agent(identity) => Ok(identity),
-                _ => unreachable!(),
-            }
-        })
-    }
-    fn wait_for_participant_attribute<'a>(
-        &'a self,
-        identity: String,
-        attribute: String,
-        value: String,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match super::wait::perform(self, WaitFor::Attribute { identity, attribute, value })
-                .await?
-            {
-                Ready::Attribute => Ok(()),
-                _ => unreachable!(),
-            }
-        })
-    }
-    fn wait_for_track_publication<'a>(
-        &'a self,
-        identity: Option<String>,
-        kinds: Option<Vec<i32>>,
-        include_local: bool,
-        subscribed: bool,
-    ) -> BoxFuture<'a, Result<(Option<ParticipantIdentity>, TrackSid)>> {
-        Box::pin(async move {
-            match super::wait::perform(
-                self,
-                WaitFor::Track { identity, kinds, include_local, subscribed },
-            )
-            .await?
-            {
-                Ready::Track(identity, sid) => Ok((identity, sid)),
-                _ => unreachable!(),
-            }
-        })
-    }
 }
 
 pub struct FakeLocalParticipant {
     identity: ParticipantIdentity,
     clock: Arc<dyn Clock>,
-    bus: Arc<RoomEventBus>,
+    bus: Arc<dyn RoomEventSink>,
     auto_subscribe: Arc<AtomicBool>,
     next_sid: AtomicU64,
     state: Mutex<LocalState>,
@@ -575,7 +498,11 @@ struct LocalState {
 }
 
 impl FakeLocalParticipant {
-    fn new(clock: Arc<dyn Clock>, bus: Arc<RoomEventBus>, auto_subscribe: Arc<AtomicBool>) -> Self {
+    fn new(
+        clock: Arc<dyn Clock>,
+        bus: Arc<dyn RoomEventSink>,
+        auto_subscribe: Arc<AtomicBool>,
+    ) -> Self {
         FakeLocalParticipant {
             identity: ParticipantIdentity("agent".to_owned()),
             clock,
@@ -980,7 +907,7 @@ pub struct FakeRemoteParticipant {
     identity: ParticipantIdentity,
     sid: String,
     kind: ParticipantKind,
-    bus: Arc<RoomEventBus>,
+    bus: Arc<dyn RoomEventSink>,
     auto_subscribe: Arc<AtomicBool>,
     me: Weak<FakeRemoteParticipant>,
     state: Mutex<RemoteState>,
@@ -997,7 +924,7 @@ impl FakeRemoteParticipant {
         identity: ParticipantIdentity,
         sid: String,
         kind: ParticipantKind,
-        bus: Arc<RoomEventBus>,
+        bus: Arc<dyn RoomEventSink>,
         auto_subscribe: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|me| FakeRemoteParticipant {

@@ -164,7 +164,7 @@ async fn saturated_transcription_refuses_the_whole_capture_and_closes_the_stalle
     use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
 
     for saturation in [Saturation::TextBytes, Saturation::Streams, Saturation::Batches] {
-        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
         let room = rtc.room("transcription-admission");
         let person = room.add_participant("person", ParticipantKind::Standard);
         person.publish_microphone("microphone");
@@ -224,7 +224,7 @@ async fn saturated_transcription_refuses_the_whole_capture_and_closes_the_stalle
 
 #[tokio::test(start_paused = true)]
 async fn queued_transcript_keeps_its_subject_and_track_through_replacement() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("transcription-subject");
     room.add_participant("first", ParticipantKind::Standard).publish_microphone("first-mic");
     room.add_participant("second", ParticipantKind::Standard).publish_microphone("second-mic");

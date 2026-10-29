@@ -24,7 +24,9 @@ impl FrameStream for Frames {
 }
 
 async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::rtc::FakeRoom>) {
-    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("background");
     let fixed = FixedRoom {
         rtc: room.clone(),

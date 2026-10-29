@@ -13,7 +13,8 @@ use lk_agents_voice::room_io::RoomIoConfig;
 // agent first spoke a frontend (or a caller waiting for the agent to be ready) saw no state.
 #[tokio::test]
 async fn a_state_taken_before_the_connect_is_written_on_it() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) =
+        FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("agent-state-on-connect");
     room.set_connection_state(ConnectionState::Disconnected);
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));

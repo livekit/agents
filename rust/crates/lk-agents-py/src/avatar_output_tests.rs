@@ -156,7 +156,8 @@ async fn scheduled_clear_race(block_interruption: bool) {
     let (frames_tx, frames) = mpsc::channel(8);
     let generator = Arc::new(Generator { pushed, frames_tx, frames: Mutex::new(frames) });
     let clock = Arc::new(VirtualClock::new());
-    let room = FakeRtc::new(clock.clone()).room("clear_overtakes_audio");
+    let room = FakeRtc::new(clock.clone(), lk_agents_runtime::rtc::events::RoomEventBus::port)
+        .room("clear_overtakes_audio");
     let overtook = Arc::new(AtomicBool::new(false));
     let saw_race = Arc::clone(&overtook);
     let runner = Arc::new(AvatarRunner::scheduled(

@@ -104,11 +104,11 @@ fn subscribed(
 
 #[tokio::test]
 async fn track_replacement_releases_pending_preconnect_input() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("replace-pending-preconnect");
     let spawner = Arc::new(TokioSpawner::current());
     let handler = PreConnectAudioHandler::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         spawner.clone(),
         clock.clone(),
         Duration::from_secs(3),
@@ -145,7 +145,7 @@ async fn track_replacement_releases_pending_preconnect_input() {
 
 #[tokio::test]
 async fn linking_an_arrived_participant_reads_their_existing_track() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("participant-arrival");
     let input = ParticipantAudioInput::new(
         room.clone(),
@@ -169,11 +169,11 @@ async fn linking_an_arrived_participant_reads_their_existing_track() {
 #[tokio::test]
 async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
     for fail in [false, true] {
-        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
         let room = rtc.room("process");
         let spawner = Arc::new(TokioSpawner::current());
         let handler = PreConnectAudioHandler::new(
-            room.clone(),
+            crate::rtc::room::Room::wrap(room.clone()),
             spawner.clone(),
             clock.clone(),
             Duration::from_secs(3),

@@ -557,7 +557,11 @@ impl FakeAvatarWorker {
         fps: u64,
         latency_ms: u64,
     ) -> Arc<FakeAvatarWorker> {
-        let room = lk_agents_test_support::rtc::FakeRtc::new(clock.clone()).room(name);
+        let room = lk_agents_test_support::rtc::FakeRtc::new(
+            clock.clone(),
+            lk_agents_runtime::rtc::events::RoomEventBus::port,
+        )
+        .room(name);
         room.add_participant(Self::AGENT, ParticipantKind::Agent);
         let (frames, log): (Arc<Frames>, Log) = Default::default();
         let period_ms = 1000 / fps;

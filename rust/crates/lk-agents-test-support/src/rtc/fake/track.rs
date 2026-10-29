@@ -1,13 +1,13 @@
 //! Track publications, local and remote, and the frame conversion a real `rtc.AudioStream` does.
 
 use super::super::RoomEvent;
-use super::super::events::RoomEventBus;
 use super::super::traits::TrackPublication;
 use super::super::{AudioStreamOptions, AudioTrackFeature, TrackSid, TrackSource, VideoFrameRef};
 use super::super::{Result, RtcError};
 use super::FakeRemoteParticipant;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::rtc::AudioInputStream;
+use lk_agents_abi::voice::rtc::RoomEventSink;
 use lk_agents_abi::{BoundedLossy, LossyTx, Pushed, StreamSource};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -18,7 +18,7 @@ pub struct FakeTrackPublication {
     pub(super) sid: TrackSid,
     pub(super) name: String,
     source: TrackSource,
-    bus: Arc<RoomEventBus>,
+    bus: Arc<dyn RoomEventSink>,
     owner: Option<Weak<FakeRemoteParticipant>>,
     subscribed: AtomicBool,
     subscription: Notify,
@@ -66,7 +66,7 @@ impl FakeTrackPublication {
     pub(super) fn new(
         sid: TrackSid,
         source: TrackSource,
-        bus: Arc<RoomEventBus>,
+        bus: Arc<dyn RoomEventSink>,
         owner: Option<Weak<FakeRemoteParticipant>>,
         subscribed: bool,
     ) -> Arc<Self> {

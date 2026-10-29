@@ -45,7 +45,7 @@ fn room_io(room: Arc<dyn RtcRoom>, clock: Arc<VirtualClock>, config: RoomIoConfi
 
 #[tokio::test(start_paused = true)]
 async fn publication_failure_settles_every_room_readiness_waiter() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("failed-ready");
     room.add_participant("person", ParticipantKind::Standard);
     room.local_participant().fail_with(RtcError::host("publication refused"));
@@ -69,7 +69,7 @@ async fn publication_failure_settles_every_room_readiness_waiter() {
 
 #[tokio::test(start_paused = true)]
 async fn closing_before_linking_settles_room_readiness() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("closed-ready");
     let io = room_io(room, clock, config());
     io.start();
@@ -86,7 +86,7 @@ async fn closing_before_linking_settles_room_readiness() {
 
 #[tokio::test]
 async fn repeated_room_start_keeps_one_event_subscription() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("one-start");
     let io = room_io(room.clone(), clock, config());
     io.start();
@@ -174,7 +174,7 @@ impl RtcRoom for StreamingRoom {
 
 #[tokio::test]
 async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("text-attachment");
     room.add_participant("person", ParticipantKind::Standard);
     let room =
@@ -225,7 +225,7 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
 
 #[tokio::test(start_paused = true)]
 async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_source() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("close-deadline");
     let native_room = room.clone();
     room.add_participant("person", ParticipantKind::Standard);
@@ -285,7 +285,7 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
 
 #[tokio::test(start_paused = true)]
 async fn room_disconnection_settles_readiness_before_a_participant_links() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("disconnected-ready");
     let io = room_io(room.clone(), clock, config());
     io.start();
@@ -303,7 +303,7 @@ async fn room_disconnection_settles_readiness_before_a_participant_links() {
 
 #[tokio::test]
 async fn room_relinks_input_after_the_linked_participant_is_replaced() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("relinked-input");
     let original = room.add_participant("first", ParticipantKind::Standard);
     original.publish_microphone("TR_first");
@@ -330,7 +330,7 @@ async fn room_relinks_input_after_the_linked_participant_is_replaced() {
 async fn selecting_the_same_participant_retires_buffered_input_from_the_old_attachment() {
     use lk_agents_abi::voice::io::AudioInput;
 
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("reselected-input");
     let person = room.add_participant("person", ParticipantKind::Standard);
     let microphone = person.publish_microphone("TR_mic");
@@ -357,7 +357,7 @@ async fn selecting_the_same_participant_retires_buffered_input_from_the_old_atta
 
 #[tokio::test(start_paused = true)]
 async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_identity() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("participant-lifetime");
     let old = room.add_participant("person", ParticipantKind::Standard);
     let old_publication = old.publish_microphone("microphone");
@@ -390,7 +390,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
 
 #[tokio::test]
 async fn saturated_room_events_are_reported_to_the_selection_caller() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("event-capacity");
     room.add_participant("first", ParticipantKind::Standard);
     room.add_participant("second", ParticipantKind::Standard);
@@ -408,7 +408,7 @@ async fn saturated_room_events_are_reported_to_the_selection_caller() {
 
 #[tokio::test(start_paused = true)]
 async fn a_rejoined_identity_gets_a_new_attachment_without_an_explicit_selection() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("automatic-rejoin");
     let old = room.add_participant("person", ParticipantKind::Standard);
     old.publish_microphone("old-track");

@@ -43,7 +43,9 @@ impl FrameStream for DelayedClose {
 
 #[tokio::test(start_paused = true)]
 async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is_cancelled() {
-    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
+        lk_agents_runtime::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("background-retirement-cancellation");
     let player = Arc::new(FakeBackgroundAudioPlayer::new(Arc::new(TokioSpawner::current())));
     let stream = Arc::new(DelayedClose {

@@ -47,7 +47,7 @@ struct RxFixture {
 }
 
 async fn receiver(name: &str) -> RxFixture {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room(name);
     std::mem::forget(rtc);
     room.add_participant("agent-1", ParticipantKind::Agent);
@@ -59,7 +59,7 @@ async fn receiver(name: &str) -> RxFixture {
         }) as Arc<dyn Fn() + Send + Sync>
     };
     let rx = DataStreamAudioReceiver::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         None,
         100,
         3,
@@ -194,10 +194,14 @@ async fn a_stream_without_its_format_fails_the_receiver() {
 // connection), or that ends at the participant without its video track.
 #[tokio::test]
 async fn the_join_wait_starts_at_the_connection_and_ends_at_the_avatar_video() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("join");
     room.set_connection_state(lk_agents_test_support::rtc::ConnectionState::Disconnected);
-    let wait = tokio::spawn(wait_avatar_join_room(room.clone(), "avatar".into(), clock.clone()));
+    let wait = tokio::spawn(wait_avatar_join_room(
+        crate::rtc::room::Room::wrap(room.clone()),
+        "avatar".into(),
+        clock.clone(),
+    ));
     clock.advance(Duration::from_secs(1));
     tokio::task::yield_now().await;
     let connected_at = lk_agents_abi::unix_secs(clock.wall());

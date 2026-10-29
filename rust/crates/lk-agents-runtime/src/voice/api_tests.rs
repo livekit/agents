@@ -42,7 +42,9 @@ fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
 
 /// A fake room on a virtual clock, and the same room as a session's.
 fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRoom) {
-    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room(name);
     // The `FakeRtc` is the room's owner; the room keeps it alive through its own `Arc`.
     std::mem::forget(rtc);

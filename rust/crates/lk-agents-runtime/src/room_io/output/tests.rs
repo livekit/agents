@@ -5,7 +5,7 @@ use lk_agents_abi::voice::rtc::RtcError;
 
 #[tokio::test]
 async fn publication_arriving_after_close_is_retired() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("late-publish");
     let local = room.local_participant();
     local.flow_publications(false);
@@ -29,7 +29,7 @@ async fn publication_arriving_after_close_is_retired() {
 
 #[tokio::test]
 async fn publication_failure_releases_capture_waiters() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("failed-publish");
     room.local_participant().fail_with(RtcError::host("publish failed"));
     let output = ParticipantAudioOutput::new(
@@ -50,7 +50,7 @@ async fn publication_failure_releases_capture_waiters() {
 }
 #[tokio::test]
 async fn paused_room_output_backpressures_capture() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("backpressure");
     let output = ParticipantAudioOutput::new(
         room,
@@ -80,7 +80,7 @@ async fn paused_room_output_backpressures_capture() {
 
 #[tokio::test]
 async fn concurrent_starts_share_one_publication() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("joined-start");
     let local = room.local_participant();
     let output = ParticipantAudioOutput::new(
@@ -104,7 +104,7 @@ async fn concurrent_starts_share_one_publication() {
 #[tokio::test]
 async fn close_finishes_a_captured_segment_as_interrupted() {
     use lk_agents_abi::voice::io::AudioOutputExt;
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let output = ParticipantAudioOutput::new(
         rtc.room("close-segment"),
         clock,
@@ -128,7 +128,7 @@ async fn close_finishes_a_captured_segment_as_interrupted() {
 
 #[tokio::test]
 async fn cancelled_start_keeps_ownership_of_the_created_track() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("cancel-start");
     let local = room.local_participant();
     local.flow_publications(false);
@@ -169,7 +169,7 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
 
     let mut outcomes = Vec::new();
     for mode in ["fresh", "queued", "heard", "blocked"] {
-        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
         let room = rtc.room(mode);
         let local = room.local_participant();
         let output = ParticipantAudioOutput::new(

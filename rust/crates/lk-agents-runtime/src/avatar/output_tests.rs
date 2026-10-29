@@ -33,7 +33,7 @@ struct Fixture {
 }
 
 fn fixture(name: &str, wait_remote_track: Option<i32>, wait_playback_start: bool) -> Fixture {
-    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room(name);
     let out = Arc::new(DataStreamAudioOutput::new(
         room.clone(),
@@ -377,7 +377,7 @@ async fn a_dropped_output_still_closes_its_streams_on_its_executor() {
 fn drop_cleanup_runs_after_the_callers_async_runtime_has_closed() {
     let host_loop = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let native = crate::process::handle().unwrap();
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("drop_after_host_loop");
     room.add_participant("avatar", ParticipantKind::Agent);
     let clock = Arc::new(lk_agents_abi::RealClock::new());

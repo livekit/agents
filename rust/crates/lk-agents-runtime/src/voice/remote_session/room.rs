@@ -229,10 +229,10 @@ mod tests {
     // the topic registered or a receive waiting.
     #[tokio::test]
     async fn the_room_carries_one_message_per_stream() {
-        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
         let room = rtc.room("call");
         let transport = RoomTransport::new(
-            room.clone() as Arc<dyn RtcRoom>,
+            crate::rtc::room::Room::wrap(room.clone()),
             clock,
             Arc::new(lk_agents_abi::TokioSpawner::current()),
         );
@@ -271,6 +271,8 @@ mod tests {
         tokio::task::yield_now().await;
         transport.close().await;
         assert!(waiting.await.unwrap().unwrap().is_none());
-        room.byte_streams(TOPIC_SESSION_MESSAGES).expect("the topic is free again");
+        crate::rtc::room::Room::wrap(room.clone())
+            .byte_streams(TOPIC_SESSION_MESSAGES)
+            .expect("the topic is free again");
     }
 }

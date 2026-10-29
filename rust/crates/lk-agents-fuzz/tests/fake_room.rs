@@ -1,9 +1,13 @@
-//! The fake's own tests: playout, stream conversion, room and participant lifecycle, events.
+//! FakeRoom's own tests: playout, stream conversion, room and participant lifecycle, events,
+//! over the runtime's room event fan-out and stream admission it feeds, as the DST runs it.
 
-use super::super::{
-    AudioStreamOptions, PlaybackInfo, TranscriptionSegment, VideoFrameRef, silence_frame,
-};
-use super::*;
+use lk_agents_abi::{AudioFrame, Clock, StreamSource, VirtualClock};
+use lk_agents_runtime::rtc::events::RoomEventBus;
+use lk_agents_runtime::rtc::room::Room;
+use lk_agents_test_support::rtc::*;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::time::timeout;
 
 /// Long enough that a future which is merely slow would still finish. Under
@@ -39,7 +43,7 @@ fn tags(frames: &[AudioFrame]) -> Vec<u8> {
 
 /// A room with the agent's track already published.
 async fn published() -> (Arc<FakeRtc>, Arc<FakeRoom>, Arc<FakeAudioSource>) {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("session");
     room.local().publish_audio_track(TrackPublishOptions::default()).await.unwrap();
     let source = room.local_participant().sources()[0].clone();
@@ -460,7 +464,7 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
 // double that returns immediately lets that regression through untouched.
 #[tokio::test(start_paused = true)]
 async fn wait_for_subscription_gates_the_first_frame() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("session");
     room.set_auto_subscribe(false);
     let (_source, publication) =
@@ -482,7 +486,7 @@ async fn wait_for_subscription_gates_the_first_frame() {
 // spurious repeat drops audio mid-turn.
 #[tokio::test(start_paused = true)]
 async fn track_subscribed_fires_only_on_the_rising_edge() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("session");
     room.set_auto_subscribe(false);
     let user = room.add_participant("user", ParticipantKind::Standard);
@@ -501,7 +505,7 @@ async fn track_subscribed_fires_only_on_the_rising_edge() {
 // the same sid, which a reader keyed on the sid alone refuses as the track it already reads.
 #[tokio::test(start_paused = true)]
 async fn an_unsubscribe_ends_the_stream_and_is_reported() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("session");
     let user = room.add_participant("user", ParticipantKind::Standard);
     let publication = user.publish_microphone("TR_mic");
@@ -545,7 +549,7 @@ async fn local_and_remote_publication_verbs_do_not_cross() {
 // handler in `room_io/`; a missing one makes that handler untestable, which is how it rots.
 #[tokio::test(start_paused = true)]
 async fn all_eight_room_events_can_be_produced() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("session");
     room.set_auto_subscribe(false);
     let mut events = room.events();
@@ -615,21 +619,21 @@ async fn every_subscriber_sees_every_event() {
 #[tokio::test(start_paused = true)]
 async fn registering_a_topic_twice_is_refused_not_replaced() {
     let (_rtc, room, _s) = published().await;
-    let mut first = room.text_streams("lk.chat").unwrap();
+    let mut first = Room::wrap(room.clone()).text_streams("lk.chat").unwrap();
 
     assert_eq!(
-        room.text_streams("lk.chat").err().unwrap(),
+        Room::wrap(room.clone()).text_streams("lk.chat").err().unwrap(),
         RtcError::TopicInUse { topic: "lk.chat".into() }
     );
 
     let info = StreamInfo { topic: "lk.chat".into(), ..StreamInfo::default() };
     room.send_text_stream("user", info, ["hello ", "world"]).unwrap();
     let mut stream = eventually(first.recv()).await.expect("delivered to the original handler");
-    assert_eq!(eventually(crate::rtc::read_text(&mut stream.chunks)).await.unwrap(), "hello world");
+    assert_eq!(eventually(read_text(&mut stream.chunks)).await.unwrap(), "hello world");
 
     room.unregister_text_stream_handler("lk.chat").unwrap();
     room.unregister_text_stream_handler("lk.chat").unwrap(); // idempotent: aclose runs unconditionally
-    room.text_streams("lk.chat").expect("the topic is free again");
+    Room::wrap(room.clone()).text_streams("lk.chat").expect("the topic is free again");
 }
 
 // Catches: a byte-stream double that drops the header. `_pre_connect_audio.py` reads
@@ -639,9 +643,9 @@ async fn registering_a_topic_twice_is_refused_not_replaced() {
 async fn byte_streams_carry_their_header() {
     let (_rtc, room, _s) = published().await;
     let topic = "lk.agent.pre-connect-audio-buffer";
-    let mut handler = room.byte_streams(topic).unwrap();
+    let mut handler = Room::wrap(room.clone()).byte_streams(topic).unwrap();
     assert_eq!(
-        room.byte_streams(topic).err().unwrap(),
+        Room::wrap(room.clone()).byte_streams(topic).err().unwrap(),
         RtcError::TopicInUse { topic: topic.into() }
     );
 
@@ -667,7 +671,7 @@ async fn byte_streams_carry_their_header() {
     assert_eq!(chunks, vec![vec![1u8, 2], vec![3u8]]);
 
     room.unregister_byte_stream_handler(topic).unwrap();
-    room.byte_streams(topic).expect("the topic is free again");
+    Room::wrap(room.clone()).byte_streams(topic).expect("the topic is free again");
 }
 
 // Catches: `stream_text` modelled as one call per delta. The reference opens **one** writer per
@@ -758,7 +762,7 @@ async fn set_attributes_merges_and_every_call_is_visible() {
 // would make the move a no-op and the whole workflow untestable.
 #[tokio::test(start_paused = true)]
 async fn connect_opens_a_second_independent_room() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let caller = rtc.room("caller");
     caller.add_participant("caller-1", ParticipantKind::Sip);
 
@@ -782,7 +786,7 @@ async fn connect_opens_a_second_independent_room() {
 // `warm_transfer` surfaces a dial failure as a `ToolError` and must stay usable afterwards.
 #[tokio::test(start_paused = true)]
 async fn a_failed_connect_is_reported_once_and_opens_nothing() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     rtc.fail_next_connect(RtcError::host("connection refused"));
 
     assert_eq!(rtc.connect("wss://x", "t").await.err(), Some(RtcError::host("connection refused")));
@@ -796,7 +800,7 @@ async fn a_failed_connect_is_reported_once_and_opens_nothing() {
 // in the other.
 #[tokio::test(start_paused = true)]
 async fn room_is_looked_up_by_name() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let a = rtc.room("session");
     a.add_participant("user", ParticipantKind::Standard);
     let b = rtc.room("session");
@@ -811,7 +815,8 @@ async fn room_is_looked_up_by_name() {
 #[test]
 #[should_panic(expected = "with_virtual_clock")]
 fn advance_refuses_a_clock_it_does_not_own() {
-    FakeRtc::new(Arc::new(VirtualClock::new())).advance(ms(10));
+    FakeRtc::new(Arc::new(VirtualClock::new()), lk_agents_runtime::rtc::events::RoomEventBus::port)
+        .advance(ms(10));
 }
 
 // ---- the input path ----------------------------------------------------------------------
@@ -861,7 +866,7 @@ fn synthetic_speech_is_non_silent_and_distinct_per_frame_and_undelivered_frames_
     assert!(a.data.iter().any(|&x| x != 0) && a.data != b.data, "speech is distinct per frame");
     assert!(quiet.data.iter().all(|&x| x == 0));
 
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let mic =
         rtc.room("s").add_participant("user", ParticipantKind::Standard).publish_microphone("TR");
     assert_eq!(mic.push_frames([synth.frame(false)]), 0, "nobody is reading");
@@ -874,7 +879,11 @@ fn synthetic_speech_is_non_silent_and_distinct_per_frame_and_undelivered_frames_
 #[tokio::test(start_paused = true)]
 async fn an_offline_room_is_connected_and_runs_on_the_callers_clock() {
     let clock = Arc::new(VirtualClock::new());
-    let (rtc, room) = FakeRtc::offline("console", clock.clone() as Arc<dyn Clock>);
+    let (rtc, room) = FakeRtc::offline(
+        "console",
+        clock.clone() as Arc<dyn Clock>,
+        lk_agents_runtime::rtc::events::RoomEventBus::port,
+    );
     assert_eq!(room.name().unwrap(), "console");
     assert!(room.connection_state().unwrap().is_connected());
     assert!(room.remote_participants().unwrap().is_empty());
@@ -936,7 +945,7 @@ async fn the_video_queue_is_short_and_drops_the_oldest() {
     let publication = user.publish_track("TR_cam", TrackSource::Camera);
     let mut stream = publication.video_stream();
 
-    let overflow = super::super::VIDEO_QUEUE_FRAMES as u64 + 1;
+    let overflow = VIDEO_QUEUE_FRAMES as u64 + 1;
     for id in 1..=overflow {
         publication.push_video_frame(video_frame(&registry, id));
     }
@@ -949,7 +958,7 @@ async fn the_video_queue_is_short_and_drops_the_oldest() {
 
 #[tokio::test(start_paused = true)]
 async fn rejoining_an_identity_preserves_the_retired_participant_lifetime() {
-    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let (rtc, _) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("rejoin");
     let mut events = room.events();
     let original = room.add_participant("caller", ParticipantKind::Standard);
@@ -996,4 +1005,15 @@ impl<T: Send + 'static> Receive<T> for Box<dyn StreamSource<T>> {
             Poll::Pending | Poll::Ready(Ok(None)) => Err(()),
         }
     }
+}
+
+/// A text stream's whole text.
+async fn read_text(chunks: &mut Receiver<String>) -> Result<String> {
+    let mut text = String::new();
+    while let Some(chunk) =
+        chunks.next().await.map_err(|error| RtcError::host(error.to_string()))?
+    {
+        text.push_str(&chunk);
+    }
+    Ok(text)
 }

@@ -112,9 +112,16 @@ impl RoomEventSink for RoomEventBus {
     }
 }
 
+impl RoomEventBus {
+    /// A new fan-out as the port a room's SDK callbacks emit into.
+    pub fn port() -> lk_agents_abi::voice::rtc::events::RoomEventBus {
+        lk_agents_abi::voice::rtc::events::RoomEventBus(Arc::new(Self::new()))
+    }
+}
+
 impl lk_agents_abi::voice::rtc::events::RtcRuntime for RoomEventBus {
     fn create_room_event_bus() -> lk_agents_abi::voice::rtc::events::RoomEventBus {
-        lk_agents_abi::voice::rtc::events::RoomEventBus(Arc::new(Self::new()))
+        Self::port()
     }
 }
 

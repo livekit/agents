@@ -26,8 +26,11 @@ impl Run {
         let (registry, records) = Registry::new(stamps.clone(), world.clone());
         // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
         // and the survey runs seeds side by side in one process.
-        let room = lk_agents_test_support::rtc::FakeRtc::new(time.clock())
-            .room(&format!("room-{schedule}"));
+        let room = lk_agents_test_support::rtc::FakeRtc::new(
+            time.clock(),
+            lk_agents_runtime::rtc::events::RoomEventBus::port,
+        )
+        .room(&format!("room-{schedule}"));
 
         // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
         // over: a port under `Manual` turn detection, say, is a session no host ever assembles.

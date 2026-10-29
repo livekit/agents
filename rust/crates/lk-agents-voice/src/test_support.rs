@@ -26,3 +26,22 @@ impl SessionRoom for FixedRoom {
         crate::room_io::detached::room_io()
     }
 }
+
+/// A room event fan-out nobody reads: these fixtures' rooms are linked to no room I/O.
+pub fn unread_room_events() -> lk_agents_abi::voice::rtc::RoomEventBus {
+    struct Unread;
+    impl lk_agents_abi::voice::rtc::RoomEventSink for Unread {
+        fn subscribe(
+            &self,
+        ) -> lk_agents_abi::voice::rtc::Receiver<lk_agents_abi::voice::rtc::RoomEvent> {
+            unreachable!("no room I/O subscribes in a media-off fixture")
+        }
+        fn emit(&self, _: lk_agents_abi::voice::rtc::RoomEvent) -> usize {
+            0
+        }
+        fn subscriber_count(&self) -> usize {
+            0
+        }
+    }
+    lk_agents_abi::voice::rtc::RoomEventBus(Arc::new(Unread))
+}

@@ -4,11 +4,15 @@ use lk_agents_abi::Ts;
 
 #[tokio::test]
 async fn failed_registration_does_not_remove_another_stream_owner() {
-    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("registration-owner");
-    let mut original = room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM).unwrap();
+    let mut original = crate::rtc::room::Room::wrap(room.clone())
+        .byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM)
+        .unwrap();
     let handler = PreConnectAudioHandler::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         Arc::new(lk_agents_abi::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
@@ -32,10 +36,12 @@ async fn failed_registration_does_not_remove_another_stream_owner() {
 
 #[tokio::test]
 async fn closed_preconnect_input_cannot_register_again() {
-    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("closed-registration");
     let handler = PreConnectAudioHandler::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         Arc::new(lk_agents_abi::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
@@ -44,7 +50,11 @@ async fn closed_preconnect_input_cannot_register_again() {
     );
     handler.aclose().await;
     assert!(!handler.register());
-    assert!(room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM).is_ok());
+    assert!(
+        crate::rtc::room::Room::wrap(room.clone())
+            .byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM)
+            .is_ok()
+    );
 }
 
 fn pcm_info(track: &str) -> lk_agents_abi::voice::rtc::StreamInfo {
@@ -64,10 +74,12 @@ fn pcm_info(track: &str) -> lk_agents_abi::voice::rtc::StreamInfo {
 
 #[tokio::test]
 async fn preconnect_overload_preserves_already_admitted_tracks() {
-    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("track-capacity");
     let handler = PreConnectAudioHandler::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         Arc::new(lk_agents_abi::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
@@ -98,10 +110,12 @@ async fn preconnect_overload_preserves_already_admitted_tracks() {
 
 #[tokio::test]
 async fn preconnect_receive_deadline_discards_partial_pcm() {
-    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("receive-deadline");
     let handler = PreConnectAudioHandler::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         Arc::new(lk_agents_abi::TokioSpawner::current()),
         clock.clone(),
         Duration::from_secs(3),
@@ -124,10 +138,12 @@ async fn preconnect_receive_deadline_discards_partial_pcm() {
 
 #[tokio::test]
 async fn preconnect_duration_is_bounded_before_transfer() {
-    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock(
+        crate::rtc::events::RoomEventBus::port,
+    );
     let room = rtc.room("duration");
     let handler = PreConnectAudioHandler::new(
-        room.clone(),
+        crate::rtc::room::Room::wrap(room.clone()),
         Arc::new(lk_agents_abi::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
