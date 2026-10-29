@@ -32,24 +32,12 @@ pub use lk_agents_runtime::{inference, process, worker};
 pub mod handles {
     pub use crate::turn::PyThread as Thread;
 
-    /// A session's speech, handed out as the in-place `_core.SpeechHandle` it is.
-    pub struct SpeechHandle(std::sync::Arc<lk_agents_runtime::voice::SpeechHandle>);
+    pub use crate::generated::voice::SpeechHandle;
 
+    /// A session's speech, handed out as its `_core.SpeechHandle`.
     impl From<std::sync::Arc<lk_agents_runtime::voice::SpeechHandle>> for SpeechHandle {
         fn from(speech: std::sync::Arc<lk_agents_runtime::voice::SpeechHandle>) -> Self {
             SpeechHandle(speech)
-        }
-    }
-
-    impl<'py> pyo3::IntoPyObject<'py> for SpeechHandle {
-        type Target = pyo3::PyAny;
-        type Output = pyo3::Bound<'py, pyo3::PyAny>;
-        type Error = pyo3::PyErr;
-
-        fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<Self::Output> {
-            <lk_agents_runtime::voice::SpeechHandle as lk_agents_abi::python::ArcClass>::wrap(
-                py, self.0,
-            )
         }
     }
 }
@@ -94,6 +82,7 @@ impl generated::Implementations for Selected {
 
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSession = lk_agents_runtime::voice::VoiceSession;
+    type SpeechHandle = lk_agents_runtime::voice::SpeechHandle;
     type AgentNodes = lk_agents_runtime::voice::nodes::AgentNodes;
     type NodeCalls = lk_agents_runtime::voice::nodes::NodeCalls;
     type TtsNodeFrames =

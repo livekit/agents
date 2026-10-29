@@ -115,7 +115,7 @@ pub use turn::events::EotPrediction;
 pub use types::connect::{
     ApiConnectOptions, ApiConnectOptionsError, DEFAULT_API_CONNECT_OPTIONS, FIRST_RETRY_INTERVAL,
 };
-pub use utils::host_ref::{CoreObject, HostRef, MediaRef, RefRegistry};
+pub use utils::host_ref::{HostRef, MediaRef, RefRegistry};
 pub use vad::events::{VadEvent, VadEventType};
 // `metrics::base::Metadata` is deliberately not at the root, beside the unrelated `MetricsMetadata`.
 pub use llm::to_dict::{

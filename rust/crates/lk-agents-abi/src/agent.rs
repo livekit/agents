@@ -37,7 +37,7 @@ pub struct Invocation {
     pub approval: Option<Approval>,
     /// The reply's speech (`_core.SpeechHandle`), for a callback a voice session runs.
     #[host(default = None)]
-    pub speech: Option<crate::CoreObject>,
+    pub speech: Option<std::sync::Arc<dyn crate::voice::speech_handle::Speech>>,
     /// The host execution context captured at the operation's entry (Python: a
     /// `contextvars.Context`); the adapter enters a copy of it for the callback.
     #[host(skip)]
@@ -360,6 +360,6 @@ pub trait HostInstructions: Send + Sync {
     #[host(await, name = "_core_render")]
     fn render<'a>(
         &'a self,
-        speech: &'a crate::CoreObject,
+        speech: std::sync::Arc<dyn crate::voice::speech_handle::Speech>,
     ) -> crate::BoxFuture<'a, Result<String, crate::errors::HostError>>;
 }

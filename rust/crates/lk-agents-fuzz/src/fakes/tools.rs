@@ -177,7 +177,11 @@ impl AgentHost for FakeTools {
         let handle = invocation
             .speech
             .as_ref()
-            .and_then(|speech| Arc::clone(&speech.0).downcast::<SpeechHandle>().ok())
+            .and_then(|speech| {
+                (Arc::clone(speech) as Arc<dyn std::any::Any + Send + Sync>)
+                    .downcast::<SpeechHandle>()
+                    .ok()
+            })
             .filter(|h| h.created().is_some())
             .expect("a tool runs in a created speech");
         let mut prepared = self.prepared.lock().unwrap();

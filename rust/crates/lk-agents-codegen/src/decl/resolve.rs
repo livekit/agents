@@ -1091,9 +1091,10 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_output(at, t)),
         Ty::Maybe(_) => Err(format!("{at}: omission is an input state, not an output value")),
-        // Handed back as the host object it was taken from (`check_handed_back`).
-        Ty::Proxy { declared: Some(_), boxed: false, .. } => Ok(()),
-        Ty::Proxy { .. } | Ty::Native { .. } => {
+        // Handed back as the host object it was taken from (`check_handed_back`); a native
+        // implementation as the declared class it is.
+        Ty::Proxy { declared: Some(_), boxed: false, .. } | Ty::Native { .. } => Ok(()),
+        Ty::Proxy { .. } => {
             Err(format!("{at}: a host proxy is not returned to the host"))
         }
         Ty::HostSource(_) | Ty::HostDuplex { .. } => {

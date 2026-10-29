@@ -33,7 +33,6 @@ pub const IN_PLACE_CRATES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/",
     "rust/crates/lk-agents-media/src/",
     "rust/crates/lk-agents-worker/src/",
-    "rust/crates/lk-agents-voice/src/",
     "rust/crates/lk-agents-inference/src/",
 ];
 

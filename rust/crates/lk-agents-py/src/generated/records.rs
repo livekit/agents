@@ -540,7 +540,7 @@ pub mod agent_run {
             kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("function_call", match function_call { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("approval", match approval { None => py.None().into_bound(py), Some(x) => crate::generated::records::tool_report::approval_to_py(py, x)? })?;
-            kwargs.set_item("speech", match speech { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("speech", match speech { None => py.None().into_bound(py), Some(x) => <dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, x)? })?;
             crate::host::construct(INVOCATION.import(py, "livekit.agents._generated.agent_run", "Invocation")?.as_any(), (), Some(&kwargs))
     }
 
@@ -1865,7 +1865,7 @@ pub mod session_wire {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("user_initiated", ::pyo3::IntoPyObjectExt::into_bound_py_any(user_initiated, py)?)?;
             kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
-            kwargs.set_item("speech_handle", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_handle, py)?)?;
+            kwargs.set_item("speech_handle", <dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, speech_handle)?)?;
             crate::host::construct(SPEECH_CREATED_WIRE.import(py, "livekit.agents._generated.session_wire", "SpeechCreatedWire")?.as_any(), (), Some(&kwargs))
     }
 
@@ -2050,7 +2050,7 @@ pub mod session_wire {
             kwargs.set_item("final_output", match final_output { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("question", match question { None => py.None().into_bound(py), Some(x) => crate::generated::records::session_wire::run_question_to_py(py, x)? })?;
             kwargs.set_item("run_error", match run_error { None => py.None().into_bound(py), Some(x) => crate::generated::records::agent_run::run_error_to_py(py, x)? })?;
-            kwargs.set_item("speech_handle", match speech_handle { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("speech_handle", match speech_handle { None => py.None().into_bound(py), Some(x) => <dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, x)? })?;
             crate::host::construct(RUN_SETTLED_WIRE.import(py, "livekit.agents._generated.session_wire", "RunSettledWire")?.as_any(), (), Some(&kwargs))
     }
 

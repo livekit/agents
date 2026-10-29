@@ -135,19 +135,23 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     Ok(out)
 }
 
-/// The native traits a proxy call passes to the host, each with the declared classes implementing
-/// it.
+/// The native traits handed to the host (a proxy call's argument, a record's field, a class
+/// method's result), each with the declared classes implementing it.
 fn native_arguments(decls: &Declarations) -> std::collections::BTreeMap<&str, Vec<&Class>> {
     fn native(ty: &Ty) -> Option<&str> {
         match ty {
             Ty::Native { rust, .. } => Some(rust),
-            Ty::Optional(t) => native(t),
+            Ty::Optional(t) | Ty::List(t) => native(t),
             _ => None,
         }
     }
     let mut out = std::collections::BTreeMap::new();
     let params = decls.proxies.iter().flat_map(|p| &p.methods).flat_map(|m| &m.params);
-    for rust in params.filter_map(|q| native(&q.ty)) {
+    let fields =
+        decls.records.iter().filter(|r| r.emit).flat_map(|r| crate::records::fields(&r.body));
+    let results = decls.classes.iter().flat_map(|c| &c.methods).map(|m| &m.ret.ok);
+    let handed = params.map(|q| &q.ty).chain(fields.map(|f| &f.ty)).chain(results);
+    for rust in handed.filter_map(native) {
         out.entry(rust).or_insert_with(|| {
             decls.classes.iter().filter(|c| c.native.iter().any(|t| t == rust)).collect()
         });

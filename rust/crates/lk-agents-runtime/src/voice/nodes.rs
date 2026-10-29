@@ -405,6 +405,8 @@ impl RealtimeAudioNode for AudioOutputNode {
 // ----------------------------------------------------------------------------- streams
 
 /// What the core hands a node as its input: the node reads what was pushed until the input ends.
+/// Unbounded because the producer bounds it: one segment's text, or one realtime generation's
+/// audio paced by the model; a node that stops reading drops the receiver and pushes are discarded.
 /// A node that stopped reading drops the rest, as a node that returned early ignores its input.
 struct ChannelSink<I>(Mutex<Option<mpsc::UnboundedSender<I>>>);
 
@@ -686,6 +688,7 @@ where
         }
         source.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
     };
+    // Detached: the returned output owns the pump; dropping it closes `tx`, which ends the pump.
     spawner.spawn_detached(pump);
     NodeOutput(tokio::sync::Mutex::new(rx))
 }

@@ -31,7 +31,6 @@ lk-agents-runtime = { path = "../lk-agents-runtime", features = [
     "media-images",
     "media-blingfire",
     "native-audio",
-    "voice-python",
 ] }
 
 # The avatar sink implements an async-trait ABI contract.

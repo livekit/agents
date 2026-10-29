@@ -26,17 +26,6 @@ pub struct StaleHostRef {
     pub id: u64,
 }
 
-/// The reverse of [`HostRef`]: a core object the host receives as a live handle.
-#[crate::host(handwritten(emit, host = "object"))]
-#[derive(Clone)]
-pub struct CoreObject(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
-
-impl std::fmt::Debug for CoreObject {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("CoreObject(..)")
-    }
-}
-
 #[cfg(feature = "python")]
 impl<'py> pyo3::IntoPyObject<'py> for HostRef {
     type Target = pyo3::PyAny;
@@ -144,46 +133,6 @@ fn resolve_owned(
         return Err(crate::python::HostException::to_py_err(&StaleHostRef { id }));
     }
     crate::python::resolve_key(py, id)
-}
-
-/// Submitted (`inventory`) beside the class, so [`CoreObject`]'s `IntoPyObject` needs no table of
-/// every crate's types.
-#[cfg(feature = "python")]
-pub struct CoreObjectClass {
-    pub to_host: for<'py> fn(
-        pyo3::Python<'py>,
-        &std::sync::Arc<dyn std::any::Any + Send + Sync>,
-    ) -> Option<pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>>>,
-}
-
-#[cfg(feature = "python")]
-inventory::collect!(CoreObjectClass);
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &CoreObject {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        for class in inventory::iter::<CoreObjectClass> {
-            if let Some(out) = (class.to_host)(py, &self.0) {
-                return out;
-            }
-        }
-        Err(pyo3::exceptions::PyTypeError::new_err("a core object with no host class"))
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for CoreObject {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        (&self).into_pyobject(py)
-    }
 }
 
 #[cfg(test)]

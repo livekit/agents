@@ -1641,7 +1641,6 @@ dependencies = [
  "log",
  "pbjson-types",
  "prost",
- "pyo3",
  "regex",
  "serde",
  "serde_json",

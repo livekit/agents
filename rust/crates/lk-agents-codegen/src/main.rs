@@ -88,7 +88,6 @@ const SOURCES: &[&str] = &[
 /// `#[host(export ..)]` / `#[host(object ..)]` files. Any core crate may appear.
 const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/voice/background_audio.rs",
-    "rust/crates/lk-agents-voice/src/speech_handle.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were

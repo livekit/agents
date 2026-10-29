@@ -54,9 +54,6 @@ media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images", "lk-agents-inference/images"]
 media-blingfire = ["lk-agents-media/blingfire"]
 native-audio = ["lk-agents-inference/native-audio", "lk-agents-voice/native-audio"]
-# The voice family's in-place `_core` expansions, until they are declared; only `lk-agents-py`
-# enables it (decision 67: the extension reaches the cores through the runtime).
-voice-python = ["lk-agents-voice/python"]
 # Test-only: what a deterministic simulation installs on a session (`VoiceSession::probe`) and
 # reads back from it. Enabled by the fuzzer.
 dst = []

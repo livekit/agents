@@ -437,23 +437,6 @@ pub trait ArcClass: Sized {
     fn wrap<'py>(py: Python<'py>, value: std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>>;
 }
 
-// --------------------------------------------------------------------- core objects as host classes
-
-pub use crate::utils::host_ref::CoreObjectClass;
-
-/// Submitted beside the class: `CoreObjectClass { to_host: core_object_to_host::<T> }`.
-pub fn core_object_to_host<'py, T>(
-    py: Python<'py>,
-    obj: &std::sync::Arc<dyn std::any::Any + Send + Sync>,
-) -> Option<PyResult<Bound<'py, PyAny>>>
-where
-    T: Clone + 'static,
-    T: for<'x> IntoPyObject<'x>,
-{
-    let v = obj.downcast_ref::<T>()?.clone();
-    Some(pyo3::IntoPyObjectExt::into_bound_py_any(v, py))
-}
-
 /// `None` for a member whose dict carries no tag (autoref dispatch:
 /// `(&EmitTagOf::<T>::new()).emit_tag()`).
 #[doc(hidden)]

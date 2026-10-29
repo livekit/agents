@@ -316,19 +316,6 @@ pub enum InstructionsArg {
     Fixed(String),
 }
 
-// A workflow's collected value reaches the host (`CoreObject`) as its class, over a clone.
-#[cfg(feature = "python")]
-const _: () = {
-    use crate::python::{CoreObjectClass, core_object_to_host};
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetEmailResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetAddressResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetPhoneNumberResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetNameResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetCardNumberResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetSecurityCodeResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetExpirationDateResult> } }
-};
-
 pub mod dtmf;
 
 pub mod prompts;

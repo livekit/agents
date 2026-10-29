@@ -141,6 +141,7 @@ pub trait Implementations: 'static {
     type TtsNodeFrames: ::lk_agents_abi::voice::nodes::TtsNodeFrames;
     type SttNodeEvents: ::lk_agents_abi::voice::nodes::SttNodeEvents;
     type DefaultNodes: ::lk_agents_abi::voice::nodes::DefaultNodes<Frames = Self::TtsNodeFrames, Events = Self::SttNodeEvents>;
+    type SpeechHandle: ::lk_agents_abi::voice::speech_handle::SpeechHandle;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
@@ -364,6 +365,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::SttNodeEvents>()?;
     m.add_function(wrap_pyfunction!(voice::tts_node, m)?)?;
     m.add_function(wrap_pyfunction!(voice::stt_node, m)?)?;
+    m.add_class::<voice::SpeechHandle>()?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_event_bus, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_subscribed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_unsubscribed, m)?)?;
@@ -438,6 +440,16 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::nodes::ProviderCalls {
         match native.downcast::<<crate::Selected as Implementations>::NodeCalls>() {
             Ok(native) => Ok(Py::new(py, voice::_core_NodeCalls(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::nodes::ProviderCalls` is no declared class")),
+        }
+    }
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::voice::speech_handle::Speech {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::SpeechHandle>() {
+            Ok(native) => Ok(Py::new(py, voice::SpeechHandle(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::speech_handle::Speech` is no declared class")),
         }
     }
 }

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
+    from livekit.agents._core import SpeechHandle
     from livekit.agents.types import APIConnectOptions
 
     from .._core import ChatItem
@@ -40,7 +41,7 @@ class Invocation:
     """The tool call, for a tool's preparation, read-back and body."""
     approval: Approval | None
     """The call's approval scope: the body runs on a granted read-back."""
-    speech: object | None = None
+    speech: SpeechHandle | None = None
     """The reply's speech (`_core.SpeechHandle`), for a callback a voice session runs."""
 
 

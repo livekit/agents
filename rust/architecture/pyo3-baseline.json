@@ -1,7 +1,6 @@
 [
   "pyo3-dependency:lk-agents-abi:pyo3",
   "pyo3-dependency:lk-agents-abi:pyo3-async-runtimes",
-  "pyo3-dependency:lk-agents-voice:pyo3",
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/host.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/provider.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/chat_context.rs",

@@ -497,11 +497,11 @@ impl HostInstructionsProxy {
 }
 
 impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
-    fn render<'a>(&'a self, speech: &::lk_agents_abi::CoreObject) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>> {
+    fn render<'a>(&'a self, speech: ::std::sync::Arc<dyn ::lk_agents_abi::voice::speech_handle::Speech>) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let speech_arg = ::std::clone::Clone::clone(speech);
+        let speech_arg = speech;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostInstructions._core_render", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(speech_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [<dyn ::lk_agents_abi::voice::speech_handle::Speech as super::NativeToHost>::to_host(py, speech_arg)?];
                 Ok((host.bind(py).getattr("_core_render")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

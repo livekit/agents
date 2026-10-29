@@ -521,10 +521,6 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
                                 ::pyo3::Bound::new(py, #rust_name { inner: ::std::clone::Clone::clone(self) })
                             }
                         }
-                        // A `CoreObject` holding this type crosses as this class, over a clone.
-                        ::lk_agents_abi::python::inventory::submit! {
-                            ::lk_agents_abi::python::CoreObjectClass { to_host: ::lk_agents_abi::python::core_object_to_host::<#core> }
-                        }
                     }
                 });
                 quote! {
@@ -534,15 +530,6 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
             });
             let shared = matches!(o.cell, Cell::Arc { .. }).then(|| {
                 quote! {
-                    // A `CoreObject` holding this type crosses as this class over the same `Arc`.
-                    ::lk_agents_abi::python::inventory::submit! {
-                        ::lk_agents_abi::python::CoreObjectClass {
-                            to_host: |py, obj| {
-                                let v = ::std::sync::Arc::clone(obj).downcast::<#core>().ok()?;
-                                ::std::option::Option::Some(::pyo3::Bound::new(py, #rust_name { inner: v }).map(::pyo3::Bound::into_any))
-                            },
-                        }
-                    }
                     impl ::lk_agents_abi::python::ArcClass for #core {
                         fn shared(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
                             use ::pyo3::types::PyAnyMethods as _;

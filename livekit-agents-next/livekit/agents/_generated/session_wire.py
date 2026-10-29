@@ -27,6 +27,8 @@ from .events import (
 )
 
 if TYPE_CHECKING:
+    from livekit.agents._core import SpeechHandle
+
     from .._core import ChatItem
     from .agent_run import RunError
     from .events import CloseReason
@@ -42,7 +44,7 @@ class SpeechCreatedWire:
     user_initiated: bool
     source: str
     """`SpeechKind::as_source_str`: `"say"` or `"generate_reply"`."""
-    speech_handle: object
+    speech_handle: SpeechHandle
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -182,7 +184,7 @@ class RunSettledWire:
     """What an `"input_required"` run asks the person."""
     run_error: RunError | None
     """Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent)."""
-    speech_handle: object | None
+    speech_handle: SpeechHandle | None
     """The last owned speech's `_core.SpeechHandle`; `None` when the run owned none."""
 
 

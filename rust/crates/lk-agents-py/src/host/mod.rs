@@ -129,33 +129,6 @@ pub(crate) fn start_in<F>(
 where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
 {
-    start_in_mode(py, event_loop, ctx, call, true)
-}
-
-/// A node's returned coroutine remains owned by its stream. Its input sink must be returned
-/// before the coroutine can consume that input.
-pub(crate) fn start_raw_in<F>(
-    py: Python<'_>,
-    event_loop: &Bound<'_, PyAny>,
-    ctx: &Bound<'_, PyAny>,
-    call: F,
-) -> PyResult<Started>
-where
-    F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
-{
-    start_in_mode(py, event_loop, ctx, call, false)
-}
-
-fn start_in_mode<F>(
-    py: Python<'_>,
-    event_loop: &Bound<'_, PyAny>,
-    ctx: &Bound<'_, PyAny>,
-    call: F,
-    await_result: bool,
-) -> PyResult<Started>
-where
-    F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
-{
     let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
     let state = Arc::new(Mutex::new(InFlightState::default()));
     let settled = Arc::new(AtomicBool::new(false));
@@ -191,7 +164,7 @@ where
             }
         };
         let inspect = py.import("inspect")?;
-        if !await_result || !inspect.call_method1("isawaitable", (&value,))?.is_truthy()? {
+        if !inspect.call_method1("isawaitable", (&value,))?.is_truthy()? {
             deliver(Ok(value.unbind()));
             return Ok(());
         }

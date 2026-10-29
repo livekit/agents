@@ -636,6 +636,202 @@ pub fn stt_node(stt: Bound<'_, PyAny>, audio: Bound<'_, PyAny>, conn_options: ::
     Ok(super::voice::SttNodeEvents(::std::sync::Arc::new(out)))
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/speech_handle.rs.
+type SpeechHandleImpl = <crate::Selected as super::Implementations>::SpeechHandle;
+
+fn _extract_speech_handle_wait_for_generation_step(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<usize>(&obj, "step")).map(Some) }
+}
+
+#[pyclass(frozen, name = "SpeechHandle", module = "livekit.agents._core")]
+pub struct SpeechHandle(pub(crate) ::std::sync::Arc<SpeechHandleImpl>);
+
+#[pymethods]
+impl SpeechHandle {
+    /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
+    /// behind it.
+    #[new]
+    #[pyo3(signature = (*, speech_id = "".to_owned(), allow_interruptions = true))]
+    fn new(speech_id: ::std::string::String, allow_interruptions: bool) -> PyResult<SpeechHandle> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::new(speech_id, allow_interruptions);
+        Ok(SpeechHandle(::std::sync::Arc::new(out)))
+    }
+
+    /// The host's object for this speech, as it set it; `None` until then.
+    #[getter]
+    #[pyo3(name = "host")]
+    fn host_object(&self) -> PyResult<::std::option::Option<::lk_agents_abi::HostRef>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::host_object(&self.0);
+        Ok(out)
+    }
+
+    /// Set by the host when it creates its handle over this one: from then on every event, tool
+    /// and hook naming the speech hands back this object.
+    #[setter(host)]
+    fn set_host_object(&self, host: ::lk_agents_abi::HostRef) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::set_host_object(&self.0, host);
+        Ok(())
+    }
+
+    /// `speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
+    /// the id it was constructed with.
+    #[getter]
+    fn id(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::id(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn num_steps(&self) -> PyResult<u32> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::num_steps(&self.0);
+        Ok(out)
+    }
+
+    /// What this speech committed to the conversation; a copy.
+    #[getter]
+    fn chat_items(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::ChatItem>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::chat_items(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn scheduled(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::scheduled(&self.0);
+        Ok(out)
+    }
+
+    /// `True` from the tick `interrupt()` was called, and once the loop has interrupted the speech
+    /// for any reason (an interruption, a supersede, the close).
+    #[getter]
+    fn interrupted(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::interrupted(&self.0);
+        Ok(out)
+    }
+
+    fn done(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::done(&self.0);
+        Ok(out)
+    }
+
+    /// The core's last accepted `allow_interruptions`.
+    #[getter]
+    fn allow_interruptions(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::allow_interruptions(&self.0);
+        Ok(out)
+    }
+
+    /// Enqueues the change; the accepted view changes when the loop applies it.
+    #[setter(allow_interruptions)]
+    fn set_allow_interruptions(&self, value: bool) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::set_allow_interruptions(&self.0, value).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// The exception the speech failed with: the host's own object when a provider raised one.
+    fn exception(&self) -> PyResult<::std::option::Option<::lk_agents_abi::errors::ProviderError>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::exception(&self.0).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// `interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
+    /// command is sent when the loop creates it.
+    #[pyo3(signature = (*, force = false))]
+    fn interrupt(&self, force: bool) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::interrupt(&self.0, force).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
+    /// when the speech is already interrupted, without counting the attempt.
+    fn hold_interruptions(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::hold_interruptions(&self.0).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// `_release_interruptions`. Idempotent past zero, like the reference's.
+    fn release_interruptions(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::release_interruptions(&self.0).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// `wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
+    /// tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
+    /// the session ended before creating, or a handle constructed directly, has nothing to play.
+    #[pyo3(signature = (*, origin = None))]
+    fn wait_for_playout<'py>(&self, py: Python<'py>, origin: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::wait_for_playout(&this, origin)
+                .await.map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// `_wait_for_generation(step_idx)`: one step of the turn, not the whole thing; `None` is the
+    /// latest. No generation, no such step and a never-created speech are distinct errors.
+    #[pyo3(signature = (step))]
+    fn wait_for_generation<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_speech_handle_wait_for_generation_step)] step: ::std::option::Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::wait_for_generation(&this, step)
+                .await.map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// Resolves when the speech is interrupted, and only then: a speech that finishes normally
+    /// never resolves this, so `wait_if_not_interrupted` can race it.
+    fn wait_for_interrupted<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::wait_for_interrupted(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// Resolves once the loop has created the speech and put it in the queue.
+    fn wait_until_created<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::wait_until_created(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::speech_handle::Speech`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::speech_handle::Speech>(),
+        read: |obj| {
+            let this = obj.cast::<SpeechHandle>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::speech_handle::Speech> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/events.rs.
 type RtcRuntimeImpl = <crate::Selected as super::Implementations>::RtcRuntime;
 

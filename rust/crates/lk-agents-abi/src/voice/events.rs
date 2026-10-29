@@ -166,7 +166,7 @@ pub struct SpeechCreated {
     pub user_initiated: bool,
     /// `SpeechKind::as_source_str`: `"say"` or `"generate_reply"`.
     pub source: String,
-    pub speech_handle: crate::CoreObject,
+    pub speech_handle: std::sync::Arc<dyn crate::voice::speech_handle::Speech>,
 }
 
 // --- the tool lifecycle ---------------------------------------------------------------------------
@@ -437,7 +437,7 @@ pub struct RunSettledWire {
     /// Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent).
     pub run_error: Option<crate::agent::run::RunError>,
     /// The last owned speech's `_core.SpeechHandle`; `None` when the run owned none.
-    pub speech_handle: Option<crate::CoreObject>,
+    pub speech_handle: Option<std::sync::Arc<dyn crate::voice::speech_handle::Speech>>,
 }
 
 /// The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's

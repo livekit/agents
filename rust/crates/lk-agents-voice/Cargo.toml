@@ -34,7 +34,6 @@ tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
-pyo3 = { workspace = true, optional = true }
 
 [dev-dependencies]
 lk-agents-test-support = { path = "../lk-agents-test-support" }
@@ -48,5 +47,3 @@ tokio = { workspace = true, features = ["test-util"] }
 # (blingfire's C++ stays: the TTS leg's sentence batching is not optional).
 default = ["native-audio"]
 native-audio = ["lk-agents-media/resample"]
-# The Python binding, expanded in place: only `lk-agents-py` enables it.
-python = ["dep:pyo3", "lk-agents-abi/python"]

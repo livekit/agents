@@ -9,6 +9,7 @@ pub mod calls;
 pub mod events;
 pub mod io;
 pub mod nodes;
+pub mod speech_handle;
 pub mod room_io;
 pub mod rtc;
 pub mod session;
