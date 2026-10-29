@@ -643,6 +643,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> VoiceRunResult[Run_T]:
         """Reply to ``user_input`` and record what the reply did, for assertions. ``retries``
         overrides the current agent's retry budgets for this run (``AgentRetries``)."""
+        budgets = _retries(retries, self.current_agent._retries)
         result = VoiceRunResult[Run_T](
             user_input=user_input,
             output_type=output_type,
@@ -651,7 +652,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._running.run(
             user_input=user_input,
             expects_output=output_type is not None,
-            max_retries=_retries(retries, self.current_agent._retries).output,
+            tool_retries=budgets.tools,
+            output_retries=budgets.output,
             retry_instructions=_OUTPUT_RETRY_PROMPT,
             origin=_origin(),
             host=result,

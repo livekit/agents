@@ -161,7 +161,7 @@ impl SessionApi {
                 builder.capture_run = Some(crate::run_result::RunSpec {
                     user_input: None,
                     expects_output: false,
-                    max_retries: 0,
+                    retries: lk_agents_abi::agent::Retries { output: 0, ..Default::default() },
                     retry_instructions: String::new(),
                     host: None,
                 });

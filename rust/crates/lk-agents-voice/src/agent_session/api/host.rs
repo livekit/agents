@@ -1175,14 +1175,17 @@ impl SessionApi {
     #[host(method(send = SpeechCommand::ReleaseUserTurn))]
     pub fn release_user_turn(&self);
 
-    /// `AgentSession.run(user_input=, output_type=, output_options=)`, answered on the stream:
-    /// every run event carries `host`, the host's `RunResult`.
+    /// `AgentSession.run(user_input=, output_type=, retries=)`, answered on the stream: every run
+    /// event carries `host`, the host's `RunResult`. `tool_retries`/`output_retries`: the run's
+    /// budgets, resolved over the current agent's.
     #[host(method(kw_only))]
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         &self,
         user_input: Option<String>,
         expects_output: bool,
-        max_retries: u32,
+        tool_retries: u32,
+        output_retries: u32,
         retry_instructions: String,
         origin: Option<&str>,
         host: Option<lk_agents_abi::HostRef>,
@@ -1190,7 +1193,7 @@ impl SessionApi {
         let spec = crate::run_result::RunSpec {
             user_input,
             expects_output,
-            max_retries,
+            retries: lk_agents_abi::agent::Retries { tools: tool_retries, output: output_retries },
             retry_instructions,
             host,
         };

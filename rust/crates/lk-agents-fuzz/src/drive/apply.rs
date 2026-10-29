@@ -647,6 +647,7 @@ impl Run {
                 .run(
                     user_input.clone().map(|UserText(t)| t),
                     *expects_output,
+                    lk_agents_abi::agent::Retries::default().tools,
                     retries.0,
                     "Please try again.".into(),
                     None,

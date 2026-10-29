@@ -10,6 +10,7 @@ use crate::events::{
 };
 use crate::speech_handle::SpeechHandle;
 use crate::trace::HandoffStep;
+use lk_agents_abi::agent::Retries;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::{HostRef, Ts};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,8 +23,9 @@ pub struct RunSpec {
     pub user_input: Option<String>,
     /// `output_type is not None`: a run ending without output is re-prompted.
     pub expects_output: bool,
-    /// The run's output budget (`retries["output"]`): re-prompts before the run fails.
-    pub max_retries: u32,
+    /// The run's budgets (`run(retries=)` over the agent's): its replies' tools spend `tools`,
+    /// and a run ending without output is re-prompted up to `output` times.
+    pub retries: Retries,
     /// The per-turn system message of the re-prompt.
     pub retry_instructions: String,
     /// The host's own object for the run (its `RunResult`), handed back on every run event.
@@ -62,6 +64,7 @@ struct OpenRun {
     /// `__last_speech_handle`: its error and output decide the verdict.
     last: Option<Arc<SpeechHandle>>,
     expects_output: bool,
+    budgets: Retries,
     retries_left: u32,
     retries: u32,
     retry_instructions: String,
@@ -103,7 +106,8 @@ impl Runs {
             owned: BTreeSet::new(),
             last: None,
             expects_output: spec.expects_output,
-            retries_left: spec.max_retries,
+            budgets: spec.retries,
+            retries_left: spec.retries.output,
             retries: 0,
             retry_instructions: spec.retry_instructions.clone(),
         });
@@ -113,6 +117,12 @@ impl Runs {
     /// The open run, as its events name it.
     pub(super) fn current(&self) -> Option<RunRef> {
         self.open.as_ref().map(|r| r.run.clone())
+    }
+
+    /// The open run's budgets, when it owns `speech`.
+    pub(crate) fn retries_of(&self, speech: SpeechId) -> Option<Retries> {
+        let r = self.open.as_ref()?;
+        r.owned.contains(&Owned::Speech(speech)).then_some(r.budgets)
     }
 
     pub(super) fn owns(&self, what: Owned) -> bool {
