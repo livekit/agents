@@ -116,9 +116,19 @@ It does not originate a new subject or send outbound attachments.
 
 ## Attachments
 
-An image or a document on a message becomes typed chat content the model
-sees natively, with a reference the application resolves; the bytes are not
-stored with the thread. A tool takes it as a typed argument:
+An image or a document arrives as an A2A file part whose `url` is an
+application reference; the bytes are not stored with the thread, and a part
+with inline bytes is refused. The model reads the attachment as a text content
+item in the message, at the part's position, holding its typed record:
+
+```json
+{"type": "attachment", "ref": "https://files.example/r/7f3a", "name": "box.jpg", "media_type": "image/jpeg"}
+```
+
+`name` and `media_type` are present when the part carries them. These are the
+fields of the typed attachment content a later release delivers natively, in
+the same position, without a protocol change for clients. A tool takes the
+reference as a typed argument:
 
 ```python
 class Photo(BaseModel):

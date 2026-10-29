@@ -102,14 +102,26 @@ impl Message {
         })
     }
 
-    /// The parts as chat content: text as is, data as compact JSON, a file as its part's JSON.
+    /// The parts as chat content: text as is, data as compact JSON, an attachment as its typed
+    /// record in JSON (channels.md "Attachments"): `{"type": "attachment", "ref", "name",
+    /// "media_type"}`, the fields a typed attachment content item will carry.
     pub fn content(&self) -> Vec<String> {
         self.parts
             .iter()
             .map(|p| match &p.content {
                 a2a::PartContent::Text(t) => t.clone(),
                 a2a::PartContent::Data(d) => d.to_string(),
-                _ => serde_json::to_string(p).unwrap_or_default(),
+                a2a::PartContent::Url(reference) => {
+                    let mut attachment = Map::new();
+                    attachment.insert("type".into(), "attachment".into());
+                    attachment.insert("ref".into(), reference.clone().into());
+                    attachment.extend(p.filename.clone().map(|n| ("name".into(), n.into())));
+                    attachment
+                        .extend(p.media_type.clone().map(|t| ("media_type".into(), t.into())));
+                    Value::Object(attachment).to_string()
+                }
+                // Refused at receipt (`attachments::validate_received_parts`).
+                a2a::PartContent::Raw(_) => String::new(),
             })
             .collect()
     }
@@ -335,7 +347,7 @@ mod tests {
             vec![
                 "hi",
                 r#"{"b":1,"a":2}"#,
-                r#"{"url":"https://x/y.png","mediaType":"image/png"}"#,
+                r#"{"type":"attachment","ref":"https://x/y.png","media_type":"image/png"}"#,
                 "there"
             ]
         );
