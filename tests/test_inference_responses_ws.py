@@ -556,10 +556,10 @@ async def test_gateway_session_expiring_is_ignored() -> None:
     await llm_model.aclose()
 
 
-async def test_ws_pool_session_is_55_minutes() -> None:
+async def test_ws_pool_session_is_50_minutes() -> None:
     llm_model = _make_llm()
 
-    assert _transport(llm_model)._pool._max_session_duration == 3300
+    assert _transport(llm_model)._pool._max_session_duration == 3000
     await llm_model.aclose()
 
 
