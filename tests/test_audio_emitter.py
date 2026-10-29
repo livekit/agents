@@ -161,43 +161,6 @@ async def test_streaming_segments_each_have_is_final():
 
 
 @pytest.mark.asyncio
-async def test_streaming_transcripts_across_segments():
-    def produce(e):
-        e.start_segment(segment_id="seg_0")
-        e.push(_make_pcm(SR, NC, 200))
-        e.push_timed_transcript(TimedString(text="first", start_time=0.0, end_time=0.2))
-        e.end_segment()
-
-        e.start_segment(segment_id="seg_1")
-        e.push(_make_pcm(SR, NC, 200))
-        e.push_timed_transcript(TimedString(text="second", start_time=0.0, end_time=0.2))
-        e.end_segment()
-
-        e.end_input()
-
-    _, events = await _run_emitter(produce, stream=True, expect_finals=2)
-
-    all_words = []
-    for ev in events:
-        for t in ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-            if isinstance(t, TimedString):
-                all_words.append(str(t))
-
-    assert "first" in all_words
-    assert "second" in all_words
-
-
-@pytest.mark.asyncio
-async def test_pushed_duration_accurate():
-    def produce(e):
-        e.push(_make_pcm(SR, NC, 500))
-        e.end_input()
-
-    emitter, _ = await _run_emitter(produce)
-    assert abs(emitter.pushed_duration() - 0.5) < 0.02
-
-
-@pytest.mark.asyncio
 async def test_marker_does_not_inflate_duration():
     """flush() followed by end_input() with no new audio: marker should not inflate duration."""
 

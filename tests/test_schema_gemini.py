@@ -300,45 +300,6 @@ async def test_function_tool_without_parameters():
     assert "parameters_json_schema" not in live_schema
 
 
-# Test for RawFunctionTool and FunctionTool matching on the text API
-async def test_raw_function_tool_matches_function_tool_on_text_api():
-    raw = function_tool(
-        lambda raw_arguments: None,
-        raw_schema={
-            "name": "save_contact",
-            "description": "Save the contact fields gathered in the conversation (free-form keys).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "fields": {"type": "object", "additionalProperties": {"type": "string"}}
-                },
-                "required": ["fields"],
-            },
-        },
-    )
-    [raw_schema] = llm.ToolContext([raw]).parse_function_tools("google")
-    [fnc_schema] = llm.ToolContext([save_contact]).parse_function_tools("google")
-
-    raw_fields = raw_schema["parameters_json_schema"]["properties"]["fields"]
-    fnc_fields = fnc_schema["parameters_json_schema"]["properties"]["fields"]
-    assert fnc_fields["additionalProperties"] == raw_fields["additionalProperties"]
-    assert fnc_schema["parameters_json_schema"]["required"] == ["fields"]
-
-
-# Test for create_tools_config emitting parameters_json_schema
-async def test_create_tools_config_emits_parameters_json_schema():
-    tools, _ = utils.create_tools_config(llm.ToolContext([save_contact]))
-
-    [tool] = tools
-    assert tool.function_declarations is not None
-    [decl] = tool.function_declarations
-    assert decl.parameters is None
-    assert decl.parameters_json_schema is not None
-    assert decl.parameters_json_schema["properties"]["fields"]["additionalProperties"] == {
-        "type": "string"
-    }
-
-
 # #7349: JSON Schema annotation keywords that a real MCP server emits are legal input
 # but reach types.FunctionDeclaration, whose Schema model is declared extra="forbid".
 

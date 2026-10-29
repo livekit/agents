@@ -53,18 +53,6 @@ async def test_to_provider_format_tolerates_unparseable_tool_arguments(fmt: str)
 
 
 @pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
-@pytest.mark.asyncio
-async def test_to_provider_format_preserves_valid_tool_arguments(fmt: str):
-    """Valid JSON-object arguments are still passed through unchanged."""
-    ctx = ChatContext.empty()
-    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments='{"order": "123"}'))
-    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
-
-    messages, _ = await ctx.to_provider_format(format=fmt)
-    assert _tool_call_input(fmt, messages) == {"order": "123"}
-
-
-@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [

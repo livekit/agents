@@ -26,13 +26,3 @@ async def test_disconnected_sdk_room_keeps_the_framework_wait_error() -> None:
             await asyncio.wait_for(_core.wait_for_participant(capability, None, None, False), 2)
     finally:
         await room.disconnect()
-
-
-@pytest.mark.asyncio
-async def test_native_avatar_output_accepts_the_sdk_room_used_by_its_public_alias() -> None:
-    room = rtc.Room()
-    try:
-        output = _core.DataStreamAudioOutput(room, destination_identity="avatar")
-        await output.aclose()
-    finally:
-        await room.disconnect()

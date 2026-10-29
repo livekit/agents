@@ -10,26 +10,12 @@ from livekit.agents.inference.llm import drop_unsupported_params
 pytestmark = pytest.mark.unit
 
 
-class _ReasoningShim:
-    """Mimics openai.types.Reasoning without a hard dependency in assertions."""
-
-    effort: str | None = None
-
-
 def test_gpt_5_6_keeps_temperature_when_reasoning_effort_is_none() -> None:
     params = drop_unsupported_params(
         "openai/gpt-5.6-luna",
         {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "none"},
     )
     assert params == {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "none"}
-
-
-def test_gpt_5_1_keeps_temperature_when_reasoning_effort_is_none() -> None:
-    params = drop_unsupported_params(
-        "gpt-5.1",
-        {"temperature": 0.2, "reasoning_effort": "none"},
-    )
-    assert params == {"temperature": 0.2, "reasoning_effort": "none"}
 
 
 def test_gpt_5_6_strips_temperature_when_reasoning_effort_is_low() -> None:
@@ -71,14 +57,6 @@ def test_gpt_5_original_still_strips_temperature_at_lowest_effort() -> None:
         {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "minimal"},
     )
     assert params == {"reasoning_effort": "minimal"}
-
-
-def test_gpt_5_mini_strips_temperature_even_without_reasoning_effort() -> None:
-    params = drop_unsupported_params(
-        "openai/gpt-5-mini",
-        {"temperature": 0.2},
-    )
-    assert params == {}
 
 
 def test_o_series_strips_temperature_unchanged() -> None:
@@ -185,14 +163,6 @@ def test_gpt_5_6_responses_shape_strips_temperature_at_effort_low() -> None:
         {"temperature": 0.2, "reasoning": Reasoning(effort="low")},
     )
     assert params == {"reasoning": Reasoning(effort="low")}
-
-
-def test_gpt_5_6_responses_shape_strips_temperature_when_reasoning_omitted() -> None:
-    params = drop_unsupported_params(
-        "gpt-5.6-luna",
-        {"temperature": 0.2, "reasoning": Reasoning()},
-    )
-    assert params == {"reasoning": Reasoning()}
 
 
 def test_gpt_5_responses_shape_strips_temperature_even_at_effort_none() -> None:

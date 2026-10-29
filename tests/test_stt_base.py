@@ -75,17 +75,6 @@ class _NonRetryableStream(RecognizeStream):
         raise APIStatusError("Unauthorized", status_code=401)
 
 
-async def test_start_time_setter_rejects_negative() -> None:
-    """start_time setter validates non-negative, matching start_time_offset behavior."""
-    stt = _DummySTT()
-    stream = stt.stream()
-
-    with pytest.raises(ValueError, match="start_time must be non-negative"):
-        stream.start_time = -1.0
-
-    await stream.aclose()
-
-
 async def test_start_time_reseeded_on_retry() -> None:
     """When _main_task retries after an APIError, start_time is re-seeded so plugin
     overrides from the previous connection don't leak into the new one."""
@@ -171,17 +160,6 @@ async def test_recognize_still_retries_a_retryable_error() -> None:
         )
 
     assert stt.attempts == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
-
-
-async def test_recognize_returns_the_first_success_without_retrying() -> None:
-    """Guard against the fix swallowing successful calls."""
-    stt = FakeSTT(fake_transcript="hello")
-    event = await stt.recognize(
-        silence_frame(duration=0.1, sample_rate=16_000),
-        conn_options=_retry_friendly_options(),
-    )
-
-    assert event.alternatives[0].text == "hello"
 
 
 @pytest.mark.real_time

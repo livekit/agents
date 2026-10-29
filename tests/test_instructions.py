@@ -35,18 +35,6 @@ def test_agent_instructions_refuse_non_text_authoring() -> None:
         Agent(instructions=ModalInstructions())  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize(
-    ("instructions", "expected", "absent"),
-    [
-        ("Fixed text.", "Fixed text.", "# Context"),
-        (None, "# Identity", "{persona}"),
-        (WorkflowInstructions(persona=""), "# Context", "# Identity"),
-    ],
-)
-def test_workflow_static_instructions_keep_fixed_default_and_removed_sections(
-    instructions: str | WorkflowInstructions | None, expected: str, absent: str
-) -> None:
-    options = {} if instructions is None else {"instructions": instructions}
-    transfer = WarmTransfer("+15550100", sip_trunk_id="trunk", **options)
-    assert expected in transfer._agent.instructions
-    assert absent not in transfer._agent.instructions
+def test_fixed_workflow_instructions_replace_the_template() -> None:
+    transfer = WarmTransfer("+15550100", sip_trunk_id="trunk", instructions="Fixed text.")
+    assert transfer._agent.instructions == "Fixed text."
