@@ -670,6 +670,8 @@ pub struct Recording {
     /// The session's tasks its close cancelled at the cleanup bound (`Runtime::close`), by name,
     /// and when.
     late_tasks: Vec<(Observed, String)>,
+    /// The tool calls whose body refused the host's cancellation, and when.
+    cancels_refused: Vec<(Observed, String)>,
     /// How many times the run's only thread went idle: each is a wake-up of the session's work
     /// on virtual time (a timer, a poll), the cost of a call that is doing nothing.
     parks: u64,
@@ -767,6 +769,10 @@ impl Recording {
 
     pub fn late_tasks(&self) -> &[(Observed, String)] {
         &self.late_tasks
+    }
+
+    pub fn cancels_refused(&self) -> &[(Observed, String)] {
+        &self.cancels_refused
     }
 
     /// Every input the case sent, taken or refused, in order.
@@ -1057,6 +1063,10 @@ impl Recording {
 
     pub fn record_task(&mut self, task: Task) {
         self.tasks.push(task);
+    }
+
+    pub fn record_cancel_refused(&mut self, at: Observed, call_id: String) {
+        self.cancels_refused.push((at, call_id));
     }
 
     pub fn record_late_tasks(&mut self, at: Observed, names: Vec<String>) {

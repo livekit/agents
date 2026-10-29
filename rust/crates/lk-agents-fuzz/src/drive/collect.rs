@@ -174,6 +174,9 @@ impl Run {
                 Record::Generated { at, generation, chunk } => {
                     self.record.record_generated(at, generation % 255, chunk);
                 }
+                Record::CancelRefused { at, call_id } => {
+                    self.record.record_cancel_refused(at, call_id);
+                }
                 Record::Breach { at, socket, breach } => {
                     self.record.record_breach(at, socket, breach);
                 }

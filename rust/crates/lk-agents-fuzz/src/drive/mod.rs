@@ -233,6 +233,9 @@ pub struct Setup {
     /// `Agent(use_tts_aligned_transcript=)` on the first agent and on every agent a handoff
     /// installs; `None` defers to the session's.
     pub agent_aligned_transcript: Option<bool>,
+    /// Every tool body catches its cancellation and runs on (`except CancelledError:` in a
+    /// Python tool): the host's cancel is refused, and the body still waits for its answer.
+    pub tools_refuse_cancel: bool,
 }
 
 /// Each leg's `max_retry`, and the interval between retries.
@@ -443,6 +446,7 @@ impl Default for Setup {
             avatar_latency_ms: 20,
             conn: None,
             chunked_tts: false,
+            tools_refuse_cancel: false,
         }
     }
 }

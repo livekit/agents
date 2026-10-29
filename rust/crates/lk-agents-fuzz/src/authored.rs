@@ -347,6 +347,13 @@ impl Authored {
         self
     }
 
+    /// The body of tool call `call_id` refused the host's cancellation.
+    pub fn cancel_refused(mut self, call_id: &str) -> Self {
+        let at = self.next();
+        self.recording.record_cancel_refused(at, call_id.to_owned());
+        self
+    }
+
     /// The session's close cancelled its task `name` at the cleanup bound.
     pub fn late_task(mut self, name: &str) -> Self {
         let at = self.next();

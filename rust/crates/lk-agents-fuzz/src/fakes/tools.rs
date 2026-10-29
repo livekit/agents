@@ -60,7 +60,7 @@ pub struct FakeTools {
     /// detach afterwards (seed 5818).
     cancelled: Mutex<std::collections::BTreeSet<String>>,
     /// The bodies still running, by call id: a cancel ends one at once, as the host cancels the
-    /// callback's task (`AgentHost.cancel`).
+    /// callback's task (`AgentHost.cancel`), unless the bodies refuse it.
     running: Mutex<BTreeMap<String, oneshot::Sender<()>>>,
 }
 
@@ -276,7 +276,11 @@ impl AgentHost for FakeTools {
         let call_id = call_of(invocation).call_id.clone();
         self.cancelled.lock().unwrap().insert(call_id.clone());
         if let Some(cancel) = self.running.lock().unwrap().remove(&call_id) {
-            let _ = cancel.send(());
+            if self.registry.refuses_cancel() {
+                self.registry.record_cancel_refused(call_id.clone());
+            } else {
+                let _ = cancel.send(());
+            }
         }
         if let Some(slot) = self.detached.lock().unwrap().remove(&call_id) {
             self.registry.mark_closed(slot);

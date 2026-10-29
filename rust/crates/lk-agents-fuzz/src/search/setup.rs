@@ -99,6 +99,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         tts_alignment: TtsAlignment::None,
         aligned_transcript: None,
         agent_aligned_transcript: None,
+        tools_refuse_cancel: false,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -188,5 +189,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     };
     setup.aligned_transcript = said(rng);
     setup.agent_aligned_transcript = said(rng);
+    // Drawn last: one setup in ten has tool bodies that refuse their cancellation.
+    setup.tools_refuse_cancel = rng.u8(0..100) < 10;
     setup
 }

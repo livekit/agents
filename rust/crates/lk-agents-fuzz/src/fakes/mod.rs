@@ -172,6 +172,11 @@ pub enum Record {
         generation: u32,
         chunk: u16,
     },
+    /// A tool body refused the host's cancellation and runs on.
+    CancelRefused {
+        at: Observed,
+        call_id: String,
+    },
     /// What the n-th realtime socket's server refused, or answered from the wrong state.
     Breach {
         at: Observed,
@@ -286,6 +291,8 @@ pub struct Registry {
     tool_serial: AtomicU32,
     /// The voice provider is down: every synthesis fails at the open until it comes back.
     voice_down: std::sync::atomic::AtomicBool,
+    /// Tool bodies refuse their cancellation (`Setup::tools_refuse_cancel`).
+    refuse_cancel: std::sync::atomic::AtomicBool,
     /// The session, once it exists: what a tool body calls, as `RunContext` does.
     session: std::sync::OnceLock<Arc<VoiceSession>>,
     /// When each synthesis with a voice latency will hand over its first audio, until it has: work
@@ -307,6 +314,7 @@ impl Registry {
             next,
             tool_serial: AtomicU32::new(0),
             voice_down: std::sync::atomic::AtomicBool::new(false),
+            refuse_cancel: std::sync::atomic::AtomicBool::new(false),
             session: std::sync::OnceLock::new(),
             voice_due: std::sync::Mutex::default(),
         };
@@ -320,6 +328,20 @@ impl Registry {
 
     pub(super) fn voice_down(&self) -> bool {
         self.voice_down.load(Ordering::SeqCst)
+    }
+
+    /// Whether tool bodies refuse their cancellation, as the setup says.
+    pub fn set_refuse_cancel(&self, refuse: bool) {
+        self.refuse_cancel.store(refuse, Ordering::SeqCst);
+    }
+
+    pub(super) fn refuses_cancel(&self) -> bool {
+        self.refuse_cancel.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn record_cancel_refused(&self, call_id: String) {
+        let at = self.stamps.next();
+        self.write(Record::CancelRefused { at, call_id });
     }
 
     /// The session was built: what running tool bodies call.

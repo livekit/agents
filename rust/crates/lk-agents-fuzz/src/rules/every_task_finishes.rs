@@ -6,6 +6,10 @@
 //! is waiting on something only it, or nothing, can end: it would hold whatever it owns for the
 //! life of the process. The runner stops waiting on it and records it as stuck, naming the line
 //! that spawned it. A task that panicked died with whatever it was doing half done.
+//!
+//! One straggler is owed to the host, not the session: a tool call whose body refused its
+//! cancellation runs on until the close's bound cancels it. Each refusal excuses one late
+//! `tool call`; `close_completes_at_its_bound` judges that the close still ended on time.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -21,8 +25,8 @@ impl Rule for EveryTaskFinishes {
         id: "every_task_finishes",
         guarantee: "Every task the session spawned finishes, without panicking, once the session \
                     has closed.",
-        examples: &[all_finished],
-        counterexamples: &[one_stuck, one_panicked, one_late],
+        examples: &[all_finished, a_refused_cancel_runs_to_the_bound],
+        counterexamples: &[one_stuck, one_panicked, one_late, more_late_than_refused],
         probe: Some(a_reply),
     };
 
@@ -49,7 +53,12 @@ impl Rule for EveryTaskFinishes {
                 )
             });
         }
+        let mut refused = r.cancels_refused().len();
         for (at, name) in r.late_tasks() {
+            if name == TOOL_CALL && refused > 0 {
+                refused -= 1;
+                continue;
+            }
             check.expect_with(Subject::Session, false, || {
                 format!(
                     "the session's task {name:?} was still running at its close's cleanup bound, \
@@ -60,6 +69,9 @@ impl Rule for EveryTaskFinishes {
         }
     }
 }
+
+/// The runtime's name for a tool call's task (`ToolStep::dispatch`).
+const TOOL_CALL: &str = "tool call";
 
 /// Every task the run joined finished.
 fn all_finished() -> Recording {
@@ -93,6 +105,26 @@ fn one_late() -> Recording {
         .task(TaskEnd::Finished)
         .sent(Input::Close { drain: false })
         .late_task("audio reader")
+        .done()
+}
+
+/// A tool body refused its cancellation: the close cancelled its call at the bound.
+fn a_refused_cancel_runs_to_the_bound() -> Recording {
+    Authored::new()
+        .task(TaskEnd::Finished)
+        .sent(Input::Close { drain: false })
+        .cancel_refused("call_1")
+        .late_task(TOOL_CALL)
+        .done()
+}
+
+/// One refusal excuses one late tool call, not two.
+fn more_late_than_refused() -> Recording {
+    Authored::new()
+        .sent(Input::Close { drain: false })
+        .cancel_refused("call_1")
+        .late_task(TOOL_CALL)
+        .late_task(TOOL_CALL)
         .done()
 }
 
