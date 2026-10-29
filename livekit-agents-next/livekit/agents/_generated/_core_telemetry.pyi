@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from .._core import ChatItem
+from .chat_items import ChatItem
 from .llm import ChatChunk
 from .metrics import LLMMetrics, STTMetrics, TTSMetrics
 from .stt import SpeechEvent

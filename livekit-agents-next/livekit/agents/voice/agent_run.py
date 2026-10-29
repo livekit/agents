@@ -229,7 +229,6 @@ async def start_run(
     conn_options: APIConnectOptions,
 ) -> tuple[_TextRun[Context_T], _core.AgentRunUpdates]:
     """Start one native invocation; its core owns managed checkpoints and settlement."""
-    from .._core_view import to_core_item, to_core_items
 
     hooks = door_hooks()
     if isinstance(message, str):
@@ -257,8 +256,8 @@ async def start_run(
             RunRequest(
                 invocation_id=run.id,
                 execution_id=hooks.task_id if hooks is not None else None,
-                message=to_core_item(message),
-                history=to_core_items(history),
+                message=message,
+                history=history,
                 answer_tool=hooks.answer_tool if hooks is not None else None,
                 delegated=hooks.delegated if hooks is not None else False,
                 conn_options=conn_options,
@@ -277,7 +276,6 @@ def settled_result(
 ) -> RunResult[Any]:
     """The settled invocation as the caller's ``RunResult``; this run's usage is added to the
     caller's accumulator."""
-    from .._core_view import from_core_item
 
     result = settled.result
     if result.interrupted and run.hooks is not None:
@@ -291,8 +289,8 @@ def settled_result(
     if accumulate:
         run.usage._add(usage)
     common: _SettledArgs = {
-        "new_messages": [from_core_item(i) for i in result.new_messages],
-        "all_messages": [from_core_item(i) for i in result.all_messages],
+        "new_messages": list(result.new_messages),
+        "all_messages": list(result.all_messages),
         "usage": usage,
         "verbatim": result.verbatim,
     }

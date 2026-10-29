@@ -34,9 +34,11 @@ impl _core_JudgeRunner {
     /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
     /// outcomes in judge order. An unknown built-in judge is refused before any runs.
     #[pyo3(signature = (judges, chat_ctx, reference))]
-    fn evaluate<'py>(&self, py: Python<'py>, judges: Bound<'_, PyAny>, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, reference: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+    fn evaluate<'py>(&self, py: Python<'py>, judges: Bound<'_, PyAny>, chat_ctx: Bound<'_, PyAny>, reference: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let judges = judges.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::evals::judge_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let chat_ctx = chat_ctx.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let reference = reference.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)

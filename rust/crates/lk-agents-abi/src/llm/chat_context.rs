@@ -9,11 +9,15 @@ use std::time::SystemTime;
 pub type Extra = serde_json::Map<String, serde_json::Value>;
 
 use crate::{HostRef, MediaRef};
-use lk_agents_host_derive::Host;
 
-/// `ChatRole` (`chat_context.py:222`). Declaration order matches the reference's; the wire strings
-/// are the exact `Literal`s, the `to_core`/`from_core` contract.
-#[crate::host(wire_enum)]
+// The Python `module` and `path` of every record here that names none of its own.
+#[crate::host(file(module = "chat_items", path = "livekit.agents.llm.chat_context"))]
+const _: () = ();
+
+// `ChatRole` (`chat_context.py:222`). Declaration order matches the reference's; the wire strings
+// are the exact `Literal`s.
+#[crate::host(record(module = "chat_items", name = "ChatRole", extract, emit))]
+#[crate::host(wire_strs)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
@@ -70,9 +74,10 @@ impl ItemKind {
     }
 }
 
-/// `ImageContent.inference_detail` (`chat_context.py:203`). OpenAI-only today. An unknown value is
-/// refused, never defaulted: it reaches OpenAI's request body verbatim.
-#[crate::host(wire_enum)]
+// `ImageContent.inference_detail` (`chat_context.py:203`). OpenAI-only today. An unknown value is
+// refused, never defaulted: it reaches OpenAI's request body verbatim.
+#[crate::host(record(module = "chat_items", extract, emit))]
+#[crate::host(wire_strs)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InferenceDetail {
@@ -83,27 +88,15 @@ pub enum InferenceDetail {
 }
 
 /// A URL passes through as-is; a frame is encoded first, and the resize fields apply only to it.
+/// The frame crosses as its side-table key, handed back as the host's own frame (callers compare
+/// by identity).
+#[crate::host(handwritten(extract, emit, host = "str | rtc.VideoFrame", py))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
 pub enum ImageSource {
     Url(String),
     Frame(MediaRef),
-}
-
-/// The host's own frame back out of the side table, not a copy: callers compare by identity.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for ImageSource {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        match self {
-            ImageSource::Url(url) => Ok(pyo3::types::PyString::new(py, &url).into_any()),
-            ImageSource::Frame(r) => r.into_pyobject(py),
-        }
-    }
 }
 
 // `bare_urls`: the `///` below is a Python docstring, and the reference writes the URL bare.
@@ -135,205 +128,133 @@ impl<'py> pyo3::IntoPyObject<'py> for ImageSource {
 /// # With an external URL
 /// chat_image = ImageContent(image="https://example.com/image.jpg")
 /// ```
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
+// Field order (`type` after `id`) is `model_dump()` key order and the `repr`'s.
+#[crate::host(record(
+    module = "chat_items",
     pydantic,
-    name = "ImageContent",
-    tag = "type",
-    tag_value = "image_content",
-    tag_after = "id",
-    host_field(name = "_cache", ty = "dict[Any, Any]", private = "yes", default_factory = "dict")
-)]
-#[binding(emit, model_dump)]
+    constant(type = "image_content"),
+    constants_after = "id",
+    private(_cache = "dict[object, object]"),
+    extract,
+    emit,
+    model_dump,
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageContent {
-    /// Unique identifier for the image
-    #[python(default_factory = "lambda: utils.shortuuid(\"img_\")", import = "..:utils")]
+    /// Unique identifier for the image. Use a new id when replacing inline image data
+    /// or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
+    #[host(default_factory = "..utils.shortuuid(\"img_\")")]
     pub id: String,
     /// Either a string URL or a VideoFrame object
-    #[python(ty = "str | rtc.VideoFrame", import = "livekit:rtc")]
     pub image: ImageSource,
     /// Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
-    #[python(ty = "int | None", default = "None")]
+    #[host(default = None)]
     pub inference_width: Option<u32>,
     /// Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
-    #[python(ty = "int | None", default = "None")]
+    #[host(default = None)]
     pub inference_height: Option<u32>,
     /// Detail parameter for LLM provider, if supported.
     ///
     /// Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
-    #[python(ty = "Literal[\"auto\", \"high\", \"low\"]", default = "\"auto\"")]
+    #[host(default = "auto")]
     pub inference_detail: InferenceDetail,
     /// MIME type of the image
-    #[python(ty = "str | None", default = "None")]
+    #[host(default = None)]
     pub mime_type: Option<String>,
 }
 
-// `chat_context.py:216`. No `tag_after`: `type` comes first, and pydantic field order is
-// `model_dump()` key order.
+// `chat_context.py:216`: `type` comes first, and pydantic field order is `model_dump()` key order.
+#[crate::host(record(
+    module = "chat_items",
+    pydantic,
+    constant(type = "audio_content"),
+    extract,
+    emit,
+    model_dump,
+))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(pydantic, name = "AudioContent", tag = "type", tag_value = "audio_content")]
-#[binding(emit, model_dump)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioContent {
-    // One side-table entry for the whole `list[rtc.AudioFrame]`; the reference field is `frame`.
-    #[host(rename = "frame")]
-    #[python(ty = "list[rtc.AudioFrame]", import = "livekit:rtc")]
-    pub frames: MediaRef,
-    #[python(default = "None")]
+    // One side-table entry for the whole list.
+    #[host(annotation = "list[rtc.AudioFrame]")]
+    pub frame: MediaRef,
+    #[host(default = None)]
     pub transcript: Option<String>,
 }
 
+// One element of `ChatMessage.content`, in the reference's union order.
+#[crate::host(record(module = "chat_items", transparent, extract, emit))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
 pub enum ChatContent {
-    Text(String),
     Image(ImageContent),
     Audio(AudioContent),
-}
-
-/// One element of `ChatMessage.content`: `str | ImageContent | AudioContent`, built by the host one
-/// constructor per arm so Rust never reads attributes or dispatches on `.type`.
-#[crate::host(object(
-    cell = "value",
-    pid = false,
-    pyclass(eq, from_py_object),
-    derive(Clone, PartialEq),
-    stub = "@property",
-    stub = "def value(self) -> Any: ..."
-))]
-impl ChatContent {
-    /// A plain `str` content part.
-    #[host(method)]
-    pub fn text(text: String) -> Self {
-        ChatContent::Text(text)
-    }
-
-    /// `ImageContent` whose `image` is a URL or a `data:` URI, passed to the provider untouched.
-    #[host(method(kw_only, defaults(inference_detail = "auto")))]
-    pub fn image_url(
-        id: String,
-        url: String,
-        inference_width: Option<u32>,
-        inference_height: Option<u32>,
-        inference_detail: InferenceDetail,
-        mime_type: Option<String>,
-    ) -> Self {
-        let image = ImageSource::Url(url);
-        ChatContent::Image(ImageContent {
-            id,
-            image,
-            inference_width,
-            inference_height,
-            inference_detail,
-            mime_type,
-        })
-    }
-
-    /// `ImageContent` whose `image` is an `rtc.VideoFrame`; only its side-table key crosses.
-    #[host(method(kw_only, defaults(inference_detail = "auto")))]
-    pub fn image_frame(
-        id: String,
-        frame: MediaRef,
-        inference_width: Option<u32>,
-        inference_height: Option<u32>,
-        inference_detail: InferenceDetail,
-        mime_type: Option<String>,
-    ) -> Self {
-        let image = ImageSource::Frame(frame);
-        ChatContent::Image(ImageContent {
-            id,
-            image,
-            inference_width,
-            inference_height,
-            inference_detail,
-            mime_type,
-        })
-    }
-
-    /// `AudioContent`: one side-table entry for the whole `list[rtc.AudioFrame]`.
-    #[host(method(kw_only))]
-    pub fn audio(frames: MediaRef, transcript: Option<String>) -> Self {
-        ChatContent::Audio(AudioContent { frames, transcript })
-    }
-
-    /// `"text"`, or the pydantic model's own `type` literal, so the host switches on one table.
-    #[host(getter)]
-    pub fn kind(&self) -> &'static str {
-        match self {
-            ChatContent::Text(_) => "text",
-            ChatContent::Image(_) => "image_content",
-            ChatContent::Audio(_) => "audio_content",
-        }
-    }
+    Text(String),
 }
 
 // `MetricsMetadata` (`chat_context.py:226`). A field with no value contributes no key.
+#[crate::host(record(module = "chat_items", typed_dict, extract, emit, model_dump))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(typed_dict, total = "False", name = "MetricsMetadata")]
-#[binding(emit, extract, from_items, model_dump)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MetricsMetadata {
-    #[binding(skip_if_none)]
-    #[python(ty = "str")]
+    #[host(default = None)]
     pub model_name: Option<String>,
-    #[binding(skip_if_none)]
-    #[python(ty = "str")]
+    #[host(default = None)]
     pub model_provider: Option<String>,
 }
 
 // `chat_context.py:231`, `total=False`: absent is distinct from null (and an absent list from an
-// empty one), so every field is `skip_if_none`.
+// empty one), so every field is absent when `None`.
+#[crate::host(record(module = "chat_items", typed_dict, extract, emit, model_dump))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(typed_dict, total = "False", name = "MetricsReport")]
-#[binding(emit, extract, from_items, skip_if_none, model_dump)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MetricsReport {
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub started_speaking_at: Option<f64>,
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub stopped_speaking_at: Option<f64>,
 
     /// Time taken to obtain the transcript after the end of the user's speech
     ///
     /// User `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub transcription_delay: Option<f64>,
     /// Amount of time between the end of speech and the decision to end the user's turn
     ///
     /// User `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub end_of_turn_delay: Option<f64>,
     /// Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
     ///
     /// User `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub on_user_turn_completed_delay: Option<f64>,
 
     /// Time taken for the `llm_node` to return the first token
     ///
     /// Assistant `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub llm_node_ttft: Option<f64>,
     /// LLM output tokens per second for this turn, measured at the `llm_node` over the
     /// streaming window (first to last text chunk). Absent for a reply that arrived in a
     /// single chunk, which has no measurable rate
     ///
     /// Assistant `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub llm_node_tps: Option<f64>,
     /// Time from LLM generation start until the first sentence reached the TTS provider, as
     /// segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
     /// an interruption before the first frame, or a `tts_node` synthesizing audio on its own
     ///
     /// Assistant `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub llm_node_ttfs: Option<f64>,
     /// Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
     ///
     /// Assistant `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub tts_node_ttfb: Option<f64>,
     /// Delay between forwarding the first audio frame and the `AudioOutput` reporting
     /// playback started. Near-zero for the default room output (self-reported when the frame
@@ -342,37 +263,40 @@ pub struct MetricsReport {
     /// the `lk.playback_started` RPC.
     ///
     /// Assistant `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub playback_latency: Option<f64>,
     /// Time from when the user finished speaking to when the agent began responding
     ///
     /// Assistant `ChatMessage` only
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub e2e_latency: Option<f64>,
     /// Provider-known request or response IDs associated with this turn.
     ///
     /// Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
     /// provider-side logs.
-    #[python(ty = "list[str]")]
+    #[host(default = None)]
     pub provider_request_ids: Option<Vec<String>>,
 
-    #[python(ty = "MetricsMetadata")]
+    #[host(default = None)]
     pub llm_metadata: Option<MetricsMetadata>,
-    #[python(ty = "MetricsMetadata")]
+    #[host(default = None)]
     pub tts_metadata: Option<MetricsMetadata>,
-    #[python(ty = "MetricsMetadata")]
+    #[host(default = None)]
     pub stt_metadata: Option<MetricsMetadata>,
 }
 
-// `chat_context.py:310`. The text properties keep their bodies in `_bindings` (`text_content` imports `strip_expr_markup` lazily: a cycle).
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
+// `chat_context.py:310`. The text properties keep their bodies in `_bindings` (`text_content`
+// imports `strip_expr_markup` lazily: a cycle).
+#[crate::host(record(
+    module = "chat_items",
     pydantic,
-    name = "ChatMessage",
-    tag = "type",
-    tag_value = "message",
-    tag_after = "id",
+    constant(type = "message"),
+    constants_after = "id",
+    extract,
+    emit,
+    model_dump,
+))]
+#[python(
     property(
         name = "text_content",
         ret = "str | None",
@@ -386,27 +310,25 @@ pub struct MetricsReport {
         doc = "Returns a string of all text content in the message, exactly as generated\n(assistant messages may contain expressive ``<expr/>`` tags).\n\nMultiple text content items will be joined by a newline."
     )
 )]
-#[binding(emit, extract, from_items, model_dump)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChatMessage {
-    #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
+    #[host(default_factory = "..utils.shortuuid(\"item_\")")]
     pub id: String,
-    // `type_import`: `chat_context.py` imports this generated module, so a runtime import is a cycle.
-    #[python(ty = "ChatRole", type_import = "..llm.chat_context:ChatRole")]
     pub role: Role,
-    #[python(ty = "list[ChatContent]", type_import = "..llm.chat_context:ChatContent")]
-    #[binding(dump_with = crate::llm::to_dict::content_dump)]
+    #[host(dump_with = crate::llm::to_dict::content_dump)]
     pub content: Vec<ChatContent>,
-    #[python(default = "False")]
+    #[host(default = false)]
     pub interrupted: bool,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub transcript_confidence: Option<f64>,
     // `None` is the reference's empty dict.
-    #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
+    #[host(default_factory = "dict")]
     pub extra: Extra,
-    #[python(ty = "MetricsReport", default_factory = "lambda: MetricsReport()")]
+    #[host(default_factory = "MetricsReport()")]
     pub metrics: MetricsReport,
     // Wall clock, not `Ts`.
-    #[python(ty = "float", default_factory = "time.time")]
+    #[host(default_factory = "time.time")]
     pub created_at: SystemTime,
 }
 
@@ -472,61 +394,66 @@ impl ChatMessage {
 }
 
 // `chat_context.py:361`.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
+#[crate::host(record(
+    module = "chat_items",
     pydantic,
-    name = "FunctionCall",
-    tag = "type",
-    tag_value = "function_call",
-    tag_after = "id"
-)]
-#[binding(emit, extract, model_dump)]
+    constant(type = "function_call"),
+    constants_after = "id",
+    extract,
+    emit,
+    model_dump,
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
-    #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
+    #[host(default_factory = "..utils.shortuuid(\"item_\")")]
     pub id: String,
     pub call_id: String,
     pub arguments: String,
     pub name: String,
-    #[python(ty = "float", default_factory = "time.time")]
+    #[host(default_factory = "time.time")]
     pub created_at: SystemTime,
     /// Extra data for this function call. Can include provider-specific data
     /// (e.g., extra["google"] for thought signatures).
     // Thought signatures actually travel as a separate `thought_signatures` argument
     // (`_provider_format/google.py:23`), so this stays JSON.
-    #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
+    #[host(default_factory = "dict")]
     pub extra: Extra,
     /// Optional group ID for parallel function calls. When multiple function calls
     /// should be grouped together (e.g., parallel tool calls from a single API response),
     /// set this to a shared value. If not set, falls back to using id for grouping.
-    #[python(default = "None")]
+    #[host(default = None)]
     pub group_id: Option<String>,
 }
 
 // `chat_context.py:374`.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
+#[crate::host(record(
+    module = "chat_items",
     pydantic,
-    name = "FunctionCallOutput",
-    tag = "type",
-    tag_value = "function_call_output",
-    tag_after = "id"
-)]
-#[binding(emit, model_dump)]
+    constant(type = "function_call_output"),
+    constants_after = "id",
+    extract,
+    emit,
+    model_dump,
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCallOutput {
-    #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
+    #[host(default_factory = "..utils.shortuuid(\"item_\")")]
     pub id: String,
     // Defaults to `""` in the reference, not `None`.
-    #[python(default = "\"\"")]
+    #[host(default = "")]
     pub name: String,
     pub call_id: String,
     pub output: String,
     pub is_error: bool,
-    #[python(ty = "float", default_factory = "time.time")]
+    #[host(default_factory = "time.time")]
     pub created_at: SystemTime,
-    /// Whether the model should answer once it receives this output (read by realtime models only).
-    #[python(default = "True")]
+    /// Whether the model should answer once it receives this output.
+    ///
+    /// VoiceSession uses it to decide whether to generate a follow-up reply.
+    /// Realtime models can also use it to schedule their response.
+    #[host(default = true)]
     pub reply_required: bool,
 }
 
@@ -551,66 +478,64 @@ impl FunctionCallOutput {
     }
 }
 
-// `chat_context.py:389`; `...Item` to stay apart from `AgentHandoffEvent`.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-// `tag_after = "id"`: `chat_context.py` writes `id` then `type`, and field order is user-visible
-// (`model_dump()` and `repr`).
-#[python(
-    pydantic,
+// `chat_context.py:389`; `...Item` to stay apart from `AgentHandoffEvent`. `chat_context.py`
+// writes `id` then `type`, and field order is user-visible (`model_dump()` and `repr`).
+#[crate::host(record(
+    module = "chat_items",
     name = "AgentHandoff",
-    tag = "type",
-    tag_value = "agent_handoff",
-    tag_after = "id"
-)]
-#[binding(emit, model_dump)]
+    pydantic,
+    constant(type = "agent_handoff"),
+    constants_after = "id",
+    extract,
+    emit,
+    model_dump,
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentHandoffItem {
-    #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
+    #[host(default_factory = "..utils.shortuuid(\"item_\")")]
     pub id: String,
     // `None` on the first handoff of a session.
-    #[python(default = "None")]
+    #[host(default = None)]
     pub old_agent_id: Option<String>,
     pub new_agent_id: String,
-    #[python(ty = "float", default_factory = "time.time")]
+    #[host(default_factory = "time.time")]
     pub created_at: SystemTime,
 }
 
 // `chat_context.py:397`.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
+#[crate::host(record(
+    module = "chat_items",
     pydantic,
-    zero_defaults,
-    name = "AgentConfigUpdate",
-    tag = "type",
-    tag_value = "agent_config_update",
-    tag_after = "id"
-)]
-#[binding(emit, model_dump)]
+    constant(type = "agent_config_update"),
+    constants_after = "id",
+    extract,
+    emit,
+    model_dump,
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConfigUpdate {
-    #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
+    #[host(default_factory = "..utils.shortuuid(\"item_\")")]
     pub id: String,
+    #[host(default = None)]
     pub instructions: Option<String>,
+    #[host(default = None)]
     pub tools_added: Option<Vec<String>>,
+    #[host(default = None)]
     pub tools_removed: Option<Vec<String>>,
-    #[python(ty = "float", default_factory = "time.time")]
+    #[host(default_factory = "time.time")]
     pub created_at: SystemTime,
     /// Full tool definitions (in-memory only, not serialized).
-    // `_tools: list[Tool]`, a `PrivateAttr` of live callables (`chat_context.py:405`).
-    #[host(rename = "_tools")]
-    #[python(
-        private,
-        ty = "list[Tool]",
-        type_import = "..llm.tool_context:Tool",
-        default_factory = "list"
-    )]
-    #[python(required)]
+    // The live callables, interned whole: `agent_activity.py:599` mutates the same list later.
+    #[host(private, default_factory = "list", annotation = "list[livekit.agents.llm.tool_context.Tool]")]
     #[cfg_attr(feature = "serde", serde(skip))]
     pub tools: Option<HostRef>,
 }
 
-/// Not boxed: boxing `ChatMessage` would cost an allocation per message on the warm `to_core` path.
+// Not boxed: boxing `ChatMessage` would cost an allocation per message on the warm read path.
 #[allow(clippy::large_enum_variant)]
+#[crate::host(record(module = "chat_items", transparent, discriminator = "type", extract, emit))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
@@ -622,133 +547,7 @@ pub enum ChatItem {
     AgentConfigUpdate(AgentConfigUpdate),
 }
 
-/// One row of conversation history: the discriminated union of `chat_context.py:407`, built by the
-/// host one constructor per variant. `created_at` is a wall clock; ids are always host-supplied.
-#[crate::host(object(
-    cell = "value",
-    pid = false,
-    pyclass(eq, from_py_object),
-    derive(Clone, PartialEq),
-    stub = "def fields(self) -> dict[str, Any]: ..."
-))]
 impl ChatItem {
-    #[allow(clippy::too_many_arguments)]
-    #[host(method(kw_only, defaults(interrupted = false)))]
-    pub fn message(
-        id: String,
-        role: Role,
-        content: Vec<ChatContent>,
-        created_at: SystemTime,
-        interrupted: bool,
-        transcript_confidence: Option<f64>,
-        extra: Option<Extra>,
-        metrics: Option<MetricsReport>,
-    ) -> Self {
-        ChatItem::Message(ChatMessage {
-            id,
-            role,
-            content,
-            interrupted,
-            transcript_confidence,
-            extra: extra.unwrap_or_default(),
-            metrics: metrics.unwrap_or_default(),
-            created_at,
-        })
-    }
-
-    #[host(method(kw_only))]
-    pub fn function_call(
-        id: String,
-        call_id: String,
-        arguments: String,
-        name: String,
-        created_at: SystemTime,
-        extra: Option<Extra>,
-        group_id: Option<String>,
-    ) -> Self {
-        let extra = extra.unwrap_or_default();
-        ChatItem::FunctionCall(FunctionCall {
-            id,
-            call_id,
-            arguments,
-            name,
-            created_at,
-            extra,
-            group_id,
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[host(method(kw_only, defaults(reply_required = true)))]
-    pub fn function_call_output(
-        id: String,
-        call_id: String,
-        output: String,
-        is_error: bool,
-        created_at: SystemTime,
-        name: Option<String>,
-        reply_required: bool,
-    ) -> Self {
-        let name = name.unwrap_or_default();
-        ChatItem::FunctionCallOutput(FunctionCallOutput {
-            id,
-            name,
-            call_id,
-            output,
-            is_error,
-            created_at,
-            reply_required,
-        })
-    }
-
-    #[host(method(kw_only))]
-    pub fn agent_handoff(
-        id: String,
-        new_agent_id: String,
-        created_at: SystemTime,
-        old_agent_id: Option<String>,
-    ) -> Self {
-        ChatItem::AgentHandoff(AgentHandoffItem { id, old_agent_id, new_agent_id, created_at })
-    }
-
-    /// `tools` is interned whole, even when empty: `agent_activity.py:599` mutates the same list
-    /// object in place later.
-    #[host(method(kw_only))]
-    pub fn agent_config_update(
-        id: String,
-        created_at: SystemTime,
-        instructions: Option<String>,
-        tools_added: Option<Vec<String>>,
-        tools_removed: Option<Vec<String>>,
-        tools: Option<HostRef>,
-    ) -> Self {
-        ChatItem::AgentConfigUpdate(AgentConfigUpdate {
-            id,
-            instructions,
-            tools_added,
-            tools_removed,
-            created_at,
-            tools,
-        })
-    }
-
-    /// The pydantic `type` literal, so `from_core` can index a `{type: model}` table.
-    #[host(getter(name = "type"))]
-    pub fn type_literal(&self) -> &'static str {
-        self.kind().as_str()
-    }
-
-    /// `AgentConfigUpdate._tools`, the original list, or `None`. Not in `fields` because a
-    /// `PrivateAttr` is not a constructor kwarg.
-    #[host(getter(name = "tools"))]
-    pub fn host_tools(&self) -> Option<&HostRef> {
-        match self {
-            ChatItem::AgentConfigUpdate(c) => c.tools.as_ref(),
-            _ => None,
-        }
-    }
-
-    #[host(getter)]
     pub fn id(&self) -> &str {
         match self {
             ChatItem::Message(m) => &m.id,
@@ -761,7 +560,6 @@ impl ChatItem {
 
     /// Wall clock, not monotonic: items minted on both sides of the boundary are ordered against
     /// each other by this. Mint from [`Clock::wall`](crate::Clock::wall), strictly increasing.
-    #[host(getter)]
     pub fn created_at(&self) -> SystemTime {
         match self {
             ChatItem::Message(m) => m.created_at,
@@ -833,10 +631,6 @@ mod history;
 pub use history::{ItemFacts, copy_excludes_facts, copy_plan, merge_plan, truncate_plan};
 mod plans;
 pub use plans::{ChatContextPlans, ChatFactsError, HostFacts};
-
-// The Python `module` and `path` of every record here that names none of its own.
-#[crate::host(file(module = "chat_items", path = "livekit.agents.llm.chat_context"))]
-const _: () = ();
 
 /// A conversation, ordered by [`ChatItem::created_at`]. Nothing assumes `items` is sorted.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -940,43 +734,6 @@ impl ChatContext {
 impl From<Vec<ChatItem>> for ChatContext {
     fn from(items: Vec<ChatItem>) -> Self {
         ChatContext { items }
-    }
-}
-
-// The two methods no declaration expresses: each builds the host's view of a variant.
-#[cfg(feature = "python")]
-#[pyo3::pymethods]
-impl PyChatContent {
-    /// The `str` for a text part; the model's constructor kwargs for the other two, with media
-    /// resolved back to the original host object.
-    #[getter]
-    fn value<'py>(&self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        use pyo3::IntoPyObjectExt as _;
-        match &self.inner {
-            ChatContent::Text(t) => t.into_bound_py_any(py),
-            ChatContent::Image(img) => img.into_bound_py_any(py),
-            ChatContent::Audio(audio) => audio.into_bound_py_any(py),
-        }
-    }
-}
-
-#[cfg(feature = "python")]
-#[pyo3::pymethods]
-impl PyChatItem {
-    /// Every field of this variant keyed by its pydantic name (without `type`), so `from_core` is
-    /// `Model(**item.fields())` once `content` is mapped.
-    fn fields<'py>(
-        &self,
-        py: pyo3::Python<'py>,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
-        use pyo3::IntoPyObject as _;
-        match &self.inner {
-            ChatItem::Message(m) => m.into_pyobject(py),
-            ChatItem::FunctionCall(f) => f.into_pyobject(py),
-            ChatItem::FunctionCallOutput(f) => f.into_pyobject(py),
-            ChatItem::AgentHandoff(h) => h.into_pyobject(py),
-            ChatItem::AgentConfigUpdate(c) => c.into_pyobject(py),
-        }
     }
 }
 

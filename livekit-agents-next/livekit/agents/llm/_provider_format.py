@@ -49,14 +49,9 @@ def convert_mid_conversation_instructions(
 ) -> llm.ChatContext:
     """Rewrite every system or developer message but a leading preamble as a ``role`` message
     wrapped in ``template``, so it keeps its position; one without text is dropped."""
-    from .._core_view import from_core_item, to_core_items
 
-    plan = _core.convert_mid_conversation_instructions(
-        to_core_items(chat_ctx.items), role=role, template=template
-    )
-    return llm.ChatContext(
-        [chat_ctx.items[i] if new is None else from_core_item(new) for i, new in plan]
-    )
+    plan = _core.convert_mid_conversation_instructions(chat_ctx.items, role=role, template=template)
+    return llm.ChatContext([chat_ctx.items[i] if new is None else new for i, new in plan])
 
 
 TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
@@ -101,7 +96,6 @@ async def to_chat_ctx(
     ProviderMessages,
     GoogleFormatData | BedrockFormatData | AnthropicFormatData | MistralFormatData | None,
 ]:
-    from .._core_view import to_core_items
     from .chat_context import ImageContent
     from .utils import serialize_image
 
@@ -114,7 +108,7 @@ async def to_chat_ctx(
     }
     messages, data = await _core.to_provider_format(
         format,
-        to_core_items(chat_ctx.items),
+        chat_ctx.items,
         images=images,
         inject_dummy_user_message=inject_dummy_user_message,
         inject_trailing_user_message=inject_trailing_user_message,

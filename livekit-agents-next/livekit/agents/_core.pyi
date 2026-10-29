@@ -51,8 +51,6 @@ from ._generated._core_classes import (
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
     AudioOutputCapabilities as AudioOutputCapabilities,
     AudioStreamOptions as AudioStreamOptions,
-    ChatContent as ChatContent,
-    ChatItem as ChatItem,
     ChatRequest as ChatRequest,
     GetAddressResult as GetAddressResult,
     GetCardNumberResult as GetCardNumberResult,

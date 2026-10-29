@@ -347,7 +347,7 @@ pub struct EndOfSpeechEvent {
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemAddedWire {
-    /// The `_core.ChatItem`; the host rebuilds its `llm.ChatMessage` with `ChatContext._from_core`.
+    /// The item, as its `llm.ChatItem` model.
     pub item: crate::ChatItem,
     /// Which agent's frame produced it, as the opaque id the host gave the core.
     pub agent: String,

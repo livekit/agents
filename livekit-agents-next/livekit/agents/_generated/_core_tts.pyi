@@ -11,7 +11,7 @@ from typing import Any
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 
-from .._core import ChatItem
+from .chat_items import ChatItem
 from .expressive import SpeechSteeringOptions
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...

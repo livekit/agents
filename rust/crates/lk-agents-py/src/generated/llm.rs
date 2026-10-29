@@ -73,8 +73,10 @@ type ChatContextDiffsImpl = <crate::Selected as super::Implementations>::ChatCon
 /// update patches the item in place, keeping its server-side position.
 #[pyfunction]
 #[pyo3(signature = (old, new))]
-pub fn compute_chat_ctx_diff(old: ::std::vec::Vec<::lk_agents_abi::ChatItem>, new: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<(::std::vec::Vec<::std::string::String>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>)> {
+pub fn compute_chat_ctx_diff(old: Bound<'_, PyAny>, new: Bound<'_, PyAny>) -> PyResult<(::std::vec::Vec<::std::string::String>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>)> {
     crate::host::check_pid()?;
+    let old = old.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+    let new = new.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
     let out = <ChatContextDiffsImpl as ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs>::compute_chat_ctx_diff(old, new);
     Ok(out)
 }
@@ -548,8 +550,9 @@ impl InferenceLlm {
     /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
     /// caller's job, read in its context.
     #[pyo3(signature = (items, *, tools, conn_options, parallel_tool_calls = None, tool_choice = None, response_format = None, extra_kwargs = None, headers = None))]
-    fn chat(&self, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
+    fn chat(&self, items: Bound<'_, PyAny>, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
         crate::host::check_pid()?;
+        let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -807,9 +810,11 @@ fn _extract_llm_algorithms_prepare_provider_format_thought_signatures(obj: &Boun
 
 #[pyfunction]
 #[pyo3(signature = (format, items, *, images = None, inject_dummy_user_message = true, inject_trailing_user_message = false, thought_signatures = None))]
-pub fn to_provider_format<'py>(py: Python<'py>, format: ::std::string::String, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, images: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::lk_agents_abi::llm::provider_format::SerializedImage>>, inject_dummy_user_message: bool, inject_trailing_user_message: bool, #[pyo3(from_py_with = _extract_llm_algorithms_prepare_provider_format_thought_signatures)] thought_signatures: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::vec::Vec<u8>>>) -> PyResult<Bound<'py, PyAny>> {
+pub fn to_provider_format<'py>(py: Python<'py>, format: ::std::string::String, items: Bound<'_, PyAny>, images: Option<Bound<'_, PyAny>>, inject_dummy_user_message: bool, inject_trailing_user_message: bool, #[pyo3(from_py_with = _extract_llm_algorithms_prepare_provider_format_thought_signatures)] thought_signatures: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::vec::Vec<u8>>>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
+    let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+    let images = images.map(|v| v.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, crate::generated::records::llm::serialized_image_from_py(&item)?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())).transpose()?;
     crate::host::future_into_py(py, async move {
         let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::types::PyList::new(py, x0.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::lk_agents_abi::python::value_to_py(py, &x1)?])?.into_any() }, py))
@@ -818,10 +823,12 @@ pub fn to_provider_format<'py>(py: Python<'py>, format: ::std::string::String, i
 
 #[pyfunction]
 #[pyo3(signature = (items, *, role, template))]
-pub fn convert_mid_conversation_instructions(items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, role: ::lk_agents_abi::Role, template: ::std::string::String) -> PyResult<::std::vec::Vec<(usize, ::std::option::Option<::lk_agents_abi::ChatItem>)>> {
+pub fn convert_mid_conversation_instructions<'py>(py: Python<'py>, items: Bound<'_, PyAny>, role: Bound<'_, PyAny>, template: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
+    let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+    let role = crate::generated::records::chat_items::chat_role_from_py(&role)?;
     let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::convert_mid_conversation_instructions(items, role, &template);
-    Ok(out)
+    Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, match x1 { None => py.None().into_bound(py), Some(x) => crate::generated::records::chat_items::chat_item_to_py(py, x)? }])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
 }
 
 #[pyfunction]
@@ -1066,8 +1073,9 @@ type ChatContextDictImpl = <crate::Selected as super::Implementations>::ChatCont
 /// ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
 #[pyfunction]
 #[pyo3(signature = (items, *, exclude_image = true, exclude_audio = true, exclude_timestamp = true, exclude_function_call = false, exclude_metrics = false, exclude_config_update = false, strip_markup = false))]
-pub fn chat_ctx_to_dict<'py>(py: Python<'py>, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, exclude_image: bool, exclude_audio: bool, exclude_timestamp: bool, exclude_function_call: bool, exclude_metrics: bool, exclude_config_update: bool, strip_markup: bool) -> PyResult<Bound<'py, PyAny>> {
+pub fn chat_ctx_to_dict<'py>(py: Python<'py>, items: Bound<'_, PyAny>, exclude_image: bool, exclude_audio: bool, exclude_timestamp: bool, exclude_function_call: bool, exclude_metrics: bool, exclude_config_update: bool, strip_markup: bool) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
+    let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
     let out = <ChatContextDictImpl as ::lk_agents_abi::llm::to_dict::ChatContextDict>::chat_ctx_to_dict(items, exclude_image, exclude_audio, exclude_timestamp, exclude_function_call, exclude_metrics, exclude_config_update, strip_markup).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
 }
@@ -1334,7 +1342,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let items_arg = items;
         let names_arg = names;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_configure", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(items_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?, match items_arg { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() }, ::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
                 Ok((host.bind(py).getattr("_core_configure")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -1380,7 +1388,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let items_arg = items;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_append_items", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(items_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(py, items_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
                 Ok((host.bind(py).getattr("_core_append_items")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2102,7 +2110,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let host = ::std::sync::Arc::clone(&self.host);
         let items_arg = items;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_update_chat_ctx", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(items_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(py, items_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
                 Ok((host.bind(py).getattr("_core_update_chat_ctx")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2125,7 +2133,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let host = ::std::sync::Arc::clone(&self.host);
         let item_arg = item;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_push_item", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(item_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::chat_items::chat_item_to_py(py, item_arg)?];
                 Ok((host.bind(py).getattr("_core_push_item")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

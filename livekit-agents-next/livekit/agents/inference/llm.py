@@ -327,10 +327,10 @@ class _GatewayStream(llm.LLMStream):
         self._request = request
 
     async def _run(self) -> None:
-        from .._core_view import to_core_items, tool_specs
+        from .._core_view import tool_specs
 
         native = self._native_llm.chat(
-            to_core_items(self._chat_ctx.items),
+            self._chat_ctx.items,
             tools=tool_specs(self._tools),
             conn_options=self._request_conn_options,
             **self._request,

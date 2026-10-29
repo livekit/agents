@@ -5,7 +5,7 @@ A core proxy calls ``_core_<method>`` on the object it was handed. The provider 
 ``tts.TTS``, ``llm.LLM``, ``vad.VAD``, ``llm.RealtimeModel`` and their streams) carry that
 surface themselves, generated with them. An io leg is seen through its view here (the proxy's
 declared ``view``), a room through ``duck(obj, cls)``, ``cls`` naming the base class the core
-expects; the duplex and turn-detection views answer over a plugin's public API. Chat items cross as ``_core.ChatItem``.
+expects; the duplex and turn-detection views answer over a plugin's public API.
 """
 
 from __future__ import annotations
@@ -16,15 +16,13 @@ import functools
 from collections.abc import Callable, Sequence
 from typing import Any, Never, Protocol
 
-from pydantic import TypeAdapter
-
 from livekit import rtc
 
 from . import _core, llm
 from ._generated import duplex, realtime_wire
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.turn_events import EotPrediction
-from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
+from .llm.chat_context import ChatItem
 from .llm.tool_context import (
     ProviderTool,
     Tool,
@@ -184,7 +182,7 @@ class _DuplexSession:
         self._session.push_audio(frame)
 
     async def _core_configure(
-        self, instructions: str | None, items: list[_core.ChatItem] | None, names: list[str]
+        self, instructions: str | None, items: list[ChatItem] | None, names: list[str]
     ) -> None:
         await self._session._update_session(
             instructions=instructions or NOT_GIVEN,
@@ -195,8 +193,8 @@ class _DuplexSession:
     async def _core_update_instructions(self, instructions: str) -> None:
         await self._session._update_instructions(instructions)
 
-    async def _core_append_items(self, items: list[_core.ChatItem]) -> None:
-        await self._session._append_items([from_core_item(i) for i in items])
+    async def _core_append_items(self, items: list[ChatItem]) -> None:
+        await self._session._append_items(items)
 
     async def _core_update_tools(self, names: list[str]) -> None:
         await self._session._update_tools(offered_tools(self._tools(), names))
@@ -227,8 +225,8 @@ class _DuplexSession:
         self._events.put_nowait(None)
 
 
-def _chat_ctx(items: list[_core.ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
-    return NOT_GIVEN if items is None else llm.ChatContext([from_core_item(i) for i in items])
+def _chat_ctx(items: list[ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
+    return NOT_GIVEN if items is None else llm.ChatContext(items)
 
 
 class FallbackListener(Protocol):
@@ -452,62 +450,3 @@ def offered_tools(pool: Sequence[Tool | Toolset], names: Sequence[str]) -> list[
     ctx = llm.ToolContext(pool)
     named = [t for n in names if (t := ctx.get_function_tool(n)) is not None]
     return [*named, *(t for t in ctx.flatten() if isinstance(t, ProviderTool))]
-
-
-# --- chat items -------------------------------------------------------------------------------
-
-_ITEM: TypeAdapter[ChatItem] = TypeAdapter(ChatItem)
-
-
-def to_core_item(item: ChatItem, *, content: Sequence[ChatContent] | None = None) -> _core.ChatItem:
-    fields = item.model_dump(exclude={"type", "content"} if item.type == "message" else {"type"})
-    match item.type:
-        case "message":
-            fields["content"] = [
-                _to_core_content(c) for c in (item.content if content is None else content)
-            ]
-            return _core.ChatItem.message(**fields)
-        case "function_call":
-            return _core.ChatItem.function_call(**fields)
-        case "function_call_output":
-            return _core.ChatItem.function_call_output(**fields)
-        case "agent_handoff":
-            return _core.ChatItem.agent_handoff(**fields)
-        case "agent_config_update":
-            return _core.ChatItem.agent_config_update(**fields)
-    raise TypeError(f"unknown chat item {item.type!r}")
-
-
-def to_core_items(items: Sequence[ChatItem]) -> list[_core.ChatItem]:
-    return [to_core_item(i) for i in items]
-
-
-def from_core_item(item: _core.ChatItem | dict[str, Any]) -> ChatItem:
-    """A ``_core.ChatItem``, or the dict of its fields (how records carrying one emit it)."""
-    fields = item if isinstance(item, dict) else item.fields()
-    if fields["type"] == "message":
-        fields["content"] = [_from_core_content(c) for c in fields["content"]]
-    return _ITEM.validate_python(fields)
-
-
-def _to_core_content(content: ChatContent) -> _core.ChatContent:
-    if isinstance(content, str):
-        return _core.ChatContent.text(content)
-    if isinstance(content, AudioContent):
-        return _core.ChatContent.audio(frames=content.frame, transcript=content.transcript)
-    assert isinstance(content, ImageContent)
-    if isinstance(content.image, str):
-        image = functools.partial(_core.ChatContent.image_url, url=content.image)
-    else:
-        image = functools.partial(_core.ChatContent.image_frame, frame=content.image)
-    return image(
-        id=content.id,
-        inference_width=content.inference_width,
-        inference_height=content.inference_height,
-        inference_detail=content.inference_detail,
-        mime_type=content.mime_type,
-    )
-
-
-def _from_core_content(content: _core.ChatContent) -> Any:
-    return content.value

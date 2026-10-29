@@ -45,8 +45,9 @@ pub struct Storage(pub(crate) ::std::sync::Arc<StorageImpl>);
 #[pymethods]
 impl Storage {
     #[pyo3(signature = (thread_id, lane, *, initial_history = None))]
-    fn _core_voice_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String, initial_history: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+    fn _core_voice_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String, initial_history: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let initial_history = initial_history.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_voice_store(&this, thread_id, lane, initial_history)
@@ -386,10 +387,10 @@ pub struct _core_VoiceStore(pub(crate) ::std::sync::Arc<_core_VoiceStoreImpl>);
 impl _core_VoiceStore {
     /// `None` preserves the application's explicit constructor history.
     #[getter]
-    fn initial_history(&self) -> PyResult<::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>> {
+    fn initial_history<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = <_core_VoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::initial_history(&self.0);
-        Ok(out)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::pyo3::types::PyList::new(py, value.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())).transpose()?)
     }
 
     #[getter]

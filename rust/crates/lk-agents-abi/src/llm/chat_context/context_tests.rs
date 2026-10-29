@@ -293,7 +293,7 @@ fn media_content_survives_a_copy_and_compares_by_side_table_id() {
         })
     };
     let audio = ChatContent::Audio(crate::AudioContent {
-        frames: crate::MediaRef::new(99, &registry),
+        frame: crate::MediaRef::new(99, &registry),
         transcript: Some("hi".into()),
     });
 

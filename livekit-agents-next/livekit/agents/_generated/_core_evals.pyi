@@ -11,7 +11,7 @@ from typing import Any
 from livekit.agents.evals import _Evaluation
 from livekit.agents.llm import LLM
 
-from .._core import ChatItem
+from .chat_items import ChatItem
 from .evals import EvaluationScore, IntentJudgment, JudgeOutcome, JudgeSpec
 
 class _core_JudgeRunner:

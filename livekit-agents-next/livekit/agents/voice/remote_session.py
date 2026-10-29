@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from google.protobuf.json_format import MessageToDict
 
 from .. import _core, llm
-from .._core_view import to_core_items
 from .._generated.remote_session_wire import STATE_OPTION_FIELDS
 from ..job import get_job_context
 from ..log import logger
@@ -44,21 +43,21 @@ class RemoteSessionAccess:
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
 
-    async def _core_chat_history(self) -> list[_core.ChatItem]:
-        return to_core_items(self._session.history.items)
+    async def _core_chat_history(self) -> list[llm.ChatItem]:
+        return self._session.history.items
 
-    async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[_core.ChatItem]]:
+    async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[llm.ChatItem]]:
         agent = self._session.current_agent
         tools = list(llm.ToolContext(agent.tools).function_tools)
-        return agent.name, agent._instructions, tools, to_core_items(self._session.history.items)
+        return agent.name, agent._instructions, tools, self._session.history.items
 
-    async def _core_run_input(self, text: str) -> tuple[list[_core.ChatItem] | None, str | None]:
+    async def _core_run_input(self, text: str) -> tuple[list[llm.ChatItem] | None, str | None]:
         try:
             await self._session.interrupt(force=True)
             result = await self._session._run(user_input=text)
         except Exception as e:
             return None, str(e)
-        return to_core_items(result.new_messages()), None
+        return result.new_messages(), None
 
     async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
         options = self._session.options

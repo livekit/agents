@@ -55,7 +55,7 @@ pub struct FunctionToolCall {
 #[crate::host(record(module = "llm", pydantic, emit, extract))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChoiceDelta {
-    #[host(default = None, host_type = "..llm.chat_context.ChatRole")]
+    #[host(default = None)]
     pub role: Option<Role>,
     #[host(default = None)]
     pub content: Option<String>,

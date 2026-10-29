@@ -350,7 +350,12 @@ def chat_message_raw_text_content(message: ChatMessage) -> str | None:
 
 
 def chat_message_text_content(message: ChatMessage) -> str | None:
-    return _core.chat_message_text_content(_text_parts(message), message.role == "assistant")
+    raw = message.raw_text_content
+    if raw is None or message.role != "assistant":
+        return raw
+    from .tts import strip_expr_markup
+
+    return strip_expr_markup(raw)
 
 
 def metrics_repr(metrics: BaseModel) -> str:

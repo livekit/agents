@@ -78,9 +78,8 @@ class SpeechHandle:
 
     @property
     def chat_items(self) -> list[llm.ChatItem]:
-        from .._core_view import from_core_item
 
-        return [from_core_item(i) for i in self._core.chat_items]
+        return list(self._core.chat_items)
 
     def done(self) -> bool:
         return self._core.done()

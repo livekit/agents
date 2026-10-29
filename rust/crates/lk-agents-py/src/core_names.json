@@ -17,8 +17,6 @@
     "BasicSentenceTokenizer",
     "BasicWordTokenizer",
     "ByteStreamSender",
-    "ChatContent",
-    "ChatItem",
     "ChatRequest",
     "ConnectionPoolState",
     "ConsoleIo",

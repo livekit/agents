@@ -1,7 +1,7 @@
 //! The host conversions no declaration expresses: a type declared `handwritten(.., py)` in ABI
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
-use lk_agents_abi::ApiConnectOptions;
+use lk_agents_abi::{ApiConnectOptions, ImageSource, MediaRef};
 use lk_agents_abi::python::MaybeNull;
 use lk_agents_abi::voice::session_options::{
     BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions,
@@ -87,4 +87,20 @@ pub fn expressive_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Expressive> {
             .map(|v| v.extract())
             .transpose()?,
     })))
+}
+
+/// A URL as itself; any other image (an `rtc.VideoFrame`) by its side-table key.
+pub fn image_source_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ImageSource> {
+    Ok(match obj.cast::<PyString>() {
+        Ok(url) => ImageSource::Url(url.to_str()?.to_owned()),
+        Err(_) => ImageSource::Frame(obj.extract::<MediaRef>()?),
+    })
+}
+
+/// The host's own frame back out of the side table, not a copy: callers compare by identity.
+pub fn image_source_to_py<'py>(py: Python<'py>, value: ImageSource) -> PyResult<Bound<'py, PyAny>> {
+    match value {
+        ImageSource::Url(url) => Ok(PyString::new(py, &url).into_any()),
+        ImageSource::Frame(frame) => frame.into_pyobject(py),
+    }
 }

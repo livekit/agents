@@ -11,8 +11,8 @@ from typing import Any
 from livekit.agents.llm import LLM
 from livekit.agents.voice.agent_host import AgentCallbacks
 
-from .._core import ChatItem
 from .agent_run import AgentDefinition, EventExpectation, RunRequest, RunUpdate
+from .chat_items import ChatItem
 
 class VoiceAgent:
     """`_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the

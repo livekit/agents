@@ -32,8 +32,8 @@ from .events import (
 if TYPE_CHECKING:
     from livekit.agents._core import SpeechHandle
 
-    from .._core import ChatItem
     from .agent_run import RunError
+    from .chat_items import ChatItem, FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
     from .telemetry import RecordingOptions
@@ -58,7 +58,7 @@ class ToolCallStartedWire:
     `llm.FunctionCall`.
     """
 
-    function_call: dict[str, object]
+    function_call: FunctionCall
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -115,7 +115,7 @@ class ItemAddedWire:
     """`conversation_item_added`'s payload."""
 
     item: ChatItem
-    """The `_core.ChatItem`; the host rebuilds its `llm.ChatMessage` with `ChatContext._from_core`."""
+    """The item, as its `llm.ChatItem` model."""
     agent: str
     """Which agent's frame produced it, as the opaque id the host gave the core."""
     visibility: str

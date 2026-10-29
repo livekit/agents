@@ -410,7 +410,7 @@ mod tests {
             inference_detail: InferenceDetail::High,
             mime_type: Some("image/png".into()),
         };
-        let audio = AudioContent { frames: media_ref(5), transcript: Some("said".into()) };
+        let audio = AudioContent { frame: media_ref(5), transcript: Some("said".into()) };
         let items = vec![msg(Role::User, vec![ChatContent::Image(img), ChatContent::Audio(audio)])];
         let opts =
             ToDictOptions { exclude_image: false, exclude_audio: false, ..Default::default() };

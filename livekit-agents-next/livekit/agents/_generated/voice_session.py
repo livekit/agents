@@ -37,9 +37,9 @@ if TYPE_CHECKING:
     from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
     from livekit.agents.voice.remote_session import RemoteSessionAccess
 
-    from .._core import ChatItem
     from ..types import NotGivenOr
     from .agent_run import FunctionToolInfo
+    from .chat_items import ChatItem
     from .keyterms import STTContextOptions
     from .turn import TurnHandlingOptions
 

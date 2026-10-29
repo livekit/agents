@@ -25,7 +25,6 @@ from opentelemetry import trace
 from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
 from .. import _core, llm
-from .._core_view import to_core_item
 from .._generated.agent_run import (
     EventExpectation,
     EventExpectationFunctionCall,
@@ -343,7 +342,7 @@ class RunAssert:
 
     def __init__(self, events: list[RunEvent]) -> None:
         self._events = events
-        self._core = _core.RunEvents([to_core_item(e.item) for e in events])
+        self._core = _core.RunEvents([e.item for e in events])
 
     @overload
     def __getitem__(self, key: int) -> EventAssert: ...

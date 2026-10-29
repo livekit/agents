@@ -22,6 +22,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core
+from .._generated.llm import SerializedImage
 from .._generated.tool_report import (
     ToolOutcomeCompleted,
     ToolOutcomeFailed,
@@ -67,11 +68,8 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
 
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
     """The minimal create/remove/update operations turning ``old_ctx`` into ``new_ctx``."""
-    from .._core_view import to_core_items
 
-    to_remove, to_create, to_update = _core.compute_chat_ctx_diff(
-        to_core_items(old_ctx.items), to_core_items(new_ctx.items)
-    )
+    to_remove, to_create, to_update = _core.compute_chat_ctx_diff(old_ctx.items, new_ctx.items)
     return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
@@ -93,14 +91,6 @@ def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
         return issubclass(ty, RunContext)
     except TypeError:
         return False
-
-
-@dataclass
-class SerializedImage:
-    inference_detail: str
-    mime_type: str | None
-    data_bytes: bytes | None = None
-    external_url: str | None = None
 
 
 async def serialize_image(image: ImageContent, *, use_cache: bool = True) -> SerializedImage:

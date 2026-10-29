@@ -9,6 +9,7 @@ from collections.abc import AsyncIterable, Mapping, Sequence
 from typing import Any, Self
 
 from datetime import date
+
 from livekit.agents import VAD
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.llm import LLM
@@ -22,12 +23,13 @@ from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoIn
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import AudioFrame
 
-from .._core import ChatContent, ChatItem, PlaybackInfo, RoomEventBus, SessionRecorder, VoiceAgent
+from .._core import PlaybackInfo, RoomEventBus, SessionRecorder, VoiceAgent
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
 from .amd import AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
+from .chat_items import ChatContent, ChatItem
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .room_io import _StreamInfo
 from .session_options import (

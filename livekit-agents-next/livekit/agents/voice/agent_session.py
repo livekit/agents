@@ -33,9 +33,7 @@ from .. import _bindings, _core, inference, llm, stt, tts
 from .._core_view import (
     TurnDetector,
     chat_request,
-    from_core_item,
     realtime_model,
-    to_core_items,
     tool_specs,
 )
 from .._generated.agent_run import FunctionToolInfo
@@ -72,7 +70,6 @@ from ..job import get_job_context
 from ..llm import (
     LLM,
     ChatContext,
-    FunctionCall,
     RealtimeModel,
     StopResponse,
     ToolError,
@@ -589,7 +586,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 self._voice_store = await self._thread._storage.threads._core_voice_store(
                     self._thread.id,
                     self._thread._agent_name,
-                    initial_history=to_core_items(chat_ctx.items) if chat_ctx is not None else None,
+                    initial_history=chat_ctx.items if chat_ctx is not None else None,
                 )
                 self._store = ContextStore(
                     activation=self._voice_store.activation,
@@ -597,7 +594,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 )
                 saved = self._voice_store.initial_history
                 if saved is not None:
-                    self._chat_ctx = ChatContext([from_core_item(item) for item in saved])
+                    self._chat_ctx = ChatContext(list(saved))
             except StorageError as error:
                 logger.warning("the voice lane could not be loaded", extra={"error": str(error)})
         if self._store is None:
@@ -639,7 +636,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 dynamic_instructions=frame["dynamic_instructions"],
                 agent=frame["agent"],
                 agent_host=frame["agent_host"],
-                chat_ctx=to_core_items(self._chat_ctx.items),
+                chat_ctx=self._chat_ctx.items,
                 storage=self._voice_store,
                 stt=_bindings.core_leg(frame.get("stt", self._stt)),
                 vad=_bindings.core_leg(self._vad),
@@ -840,7 +837,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             instructions=instructions if is_given(instructions) else None,
             allow_interruptions=allow_interruptions if is_given(allow_interruptions) else None,
             tool_choice=tool_choice if is_given(tool_choice) else None,
-            chat_ctx=to_core_items(chat_ctx.items) if is_given(chat_ctx) else None,
+            chat_ctx=chat_ctx.items if is_given(chat_ctx) else None,
             on_enter=_origin() == "hook" and _hook_name.get(None) == "on_enter",
             origin=_origin(),
             **toolset,
@@ -893,12 +890,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             return
         frame = self._frame(agent)
         if chat_ctx is not None:
-            frame["chat_ctx"] = to_core_items(chat_ctx.items)
+            frame["chat_ctx"] = chat_ctx.items
         self._core.update_agent(UpdateAgentArgs(**frame))
 
     def _agent_chat_ctx(self) -> ChatContext:
         """The driving agent's own context, as the core keeps it."""
-        return ChatContext([from_core_item(i) for i in self._running.agent_chat_ctx()])
+        return ChatContext(list(self._running.agent_chat_ctx()))
 
     def update_options(
         self,
@@ -1144,10 +1141,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             handle._mark_done()
 
     def _on_history_reloaded(self, wire: HistoryReloadedWire) -> None:
-        self._chat_ctx = ChatContext([from_core_item(item) for item in wire.items])
+        self._chat_ctx = ChatContext(list(wire.items))
 
     def _on_item_added(self, wire: ItemAddedWire) -> None:
-        item = from_core_item(wire.item)
+        item = wire.item
         # an output told again changed in place (an answered question's)
         idx = self._chat_ctx.index_by_id(item.id) if item.type == "function_call_output" else None
         if idx is not None:
@@ -1161,7 +1158,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
 
     def _on_run_item(self, wire: RunItemAddedWire) -> None:
         if (run := _wire_run(wire.run)) is not None:
-            run._item_added(from_core_item(wire.item))
+            run._item_added(wire.item)
 
     def _on_run_refused(self, wire: RunRefusedWire) -> None:
         if (run := _wire_run(wire.run)) is not None:
@@ -1182,7 +1179,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
 
     def _on_tool_update(self, wire: ToolExecutionUpdatedWire) -> None:
         update: ToolUpdate = (
-            ToolCallStarted(function_call=FunctionCall.model_validate(wire.update.function_call))
+            ToolCallStarted(function_call=wire.update.function_call)
             if isinstance(wire.update, ToolCallStartedWire)
             else wire.update
         )
@@ -1530,12 +1527,12 @@ class _AgentHooks:
     async def _core_on_user_turn_completed(
         self,
         agent: Agent,
-        chat_ctx: list[_core.ChatItem],
+        chat_ctx: list[llm.ChatItem],
         new_transcript: str,
         transcript_confidence: float,
-    ) -> tuple[str | None, list[_core.ChatItem] | None, bool]:
+    ) -> tuple[str | None, list[llm.ChatItem] | None, bool]:
         session = self._session
-        turn_ctx = ChatContext([from_core_item(i) for i in chat_ctx])
+        turn_ctx = ChatContext(list(chat_ctx))
         message = llm.ChatMessage(
             role="user", content=[new_transcript], transcript_confidence=transcript_confidence
         )
@@ -1548,16 +1545,16 @@ class _AgentHooks:
                 except StopResponse:
                     stop = True
         changed = [i.id for i in turn_ctx.items] != before
-        return message.text_content, to_core_items(turn_ctx.items) if changed else None, stop
+        return message.text_content, turn_ctx.items if changed else None, stop
 
     async def _core_function_tools_executed(
         self,
-        function_calls: list[_core.ChatItem],
-        function_call_outputs: list[_core.ChatItem],
+        function_calls: list[llm.ChatItem],
+        function_call_outputs: list[llm.ChatItem],
     ) -> list[bool]:
         ev = FunctionToolsExecutedEvent(
-            function_calls=[from_core_item(c) for c in function_calls],
-            function_call_outputs=[from_core_item(o) for o in function_call_outputs],
+            function_calls=list(function_calls),
+            function_call_outputs=list(function_call_outputs),
         )
         self._session.emit("function_tools_executed", ev)
         return [o.reply_required for o in ev.function_call_outputs]

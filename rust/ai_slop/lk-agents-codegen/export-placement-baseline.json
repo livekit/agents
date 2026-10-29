@@ -5,8 +5,6 @@
   "pyclass|rust/crates/lk-agents-py/src/turn.rs|struct PyTurn|pyclass (name = \"Turn\" , module = \"livekit.agents._core\" , frozen)",
   "pyfunction|rust/crates/lk-agents-abi/src/python/host_errors.rs|fn resolve_host_ref|pyfunction",
   "pyfunction|rust/crates/lk-agents-py/src/runtime.rs|fn init|pyfunction",
-  "pymethods|rust/crates/lk-agents-abi/src/llm/chat_context.rs|impl  for PyChatContent|pyo3 :: pymethods",
-  "pymethods|rust/crates/lk-agents-abi/src/llm/chat_context.rs|impl  for PyChatItem|pyo3 :: pymethods",
   "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyRun|pymethods",
   "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyThread|pymethods",
   "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyTurn|pymethods"

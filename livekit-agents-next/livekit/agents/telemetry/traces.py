@@ -153,8 +153,7 @@ def _chat_item_span_attribute(item: ChatItem) -> dict[str, object]:
 
 def _append_transcript_item(
     builder: _core._core_PreparedTranscript, item: ChatItem, item_count: int
-) -> _core.ChatItem:
-    from .._core_view import to_core_item
+) -> ChatItem:
     from ..llm.chat_context import AudioContent, ImageContent
     from ._export import attribute_bytes
 
@@ -174,9 +173,10 @@ def _append_transcript_item(
         ]
         fields = {**fields, "content": content}
     builder.check_input(item_count, attribute_bytes(fields))
-    native_item = to_core_item(item, content=content)
-    builder.append(native_item)
-    return native_item
+    if content is not None:
+        item = item.model_copy(update={"content": content})
+    builder.append(item)
+    return item
 
 
 async def _upload_session_report(
@@ -189,7 +189,6 @@ async def _upload_session_report(
     metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
     """Project host objects off the event loop; the native client uploads the recording."""
-    from .._core_view import from_core_item
     from . import _export
     from ._export import attribute_bytes
 
@@ -266,7 +265,7 @@ async def _upload_session_report(
                 chat_history=[],
             ),
             destination.upload_gate.disabled,
-            lambda item: _chat_item_span_attribute(from_core_item(item)),
+            lambda item: _chat_item_span_attribute(item),
             capture_content=capture_content,
         )
         for record in records:

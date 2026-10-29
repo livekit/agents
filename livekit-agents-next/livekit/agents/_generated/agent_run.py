@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from livekit.agents._core import SpeechHandle
     from livekit.agents.types import APIConnectOptions
 
-    from .._core import ChatItem
+    from .chat_items import ChatItem, FunctionCall
     from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_report import Approval
@@ -40,7 +40,7 @@ class Invocation:
     context_scope: str | None
     application_context: object | None
     history: list[ChatItem]
-    function_call: dict[str, object] | None
+    function_call: FunctionCall | None
     """The tool call, for a tool's preparation, read-back and body."""
     approval: Approval | None
     """The call's approval scope: the body runs on a granted read-back."""

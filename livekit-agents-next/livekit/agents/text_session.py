@@ -78,7 +78,6 @@ class TextSession(Generic[Context_T, Output_T]):
         retries: int | AgentRetries | None = None,
     ) -> RunStream[TextSessionTurn[Output_T]]:
         async def start() -> _Started[TextSessionTurn[Output_T]]:
-            from ._core_view import to_core_item
 
             hooks = door_hooks()
             if isinstance(message, str):
@@ -147,7 +146,7 @@ class TextSession(Generic[Context_T, Output_T]):
                         root_scope=root_scope,
                         contexts={root_scope: context},
                         separate_contexts=self._context_factory is not None,
-                        message=to_core_item(incoming),
+                        message=incoming,
                         state=state,
                         delegated=hooks.delegated if hooks is not None else False,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,

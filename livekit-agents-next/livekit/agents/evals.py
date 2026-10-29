@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from . import _bindings, _core
-from ._core_view import to_core_items
 from ._generated.evals import (
     EvaluationScore,
     IntentJudgment,
@@ -420,8 +419,8 @@ async def _evaluate(
     with tracer.start_as_current_span("judge_evaluation") as span:
         outcomes = await _runner(llm, _Evaluation(chat_ctx, reference, llm)).evaluate(
             specs,
-            to_core_items(chat_ctx.items),
-            None if reference is None else to_core_items(reference.items),
+            chat_ctx.items,
+            None if reference is None else reference.items,
         )
         for outcome in outcomes:
             if isinstance(outcome, JudgeOutcomeFailed):

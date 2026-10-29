@@ -205,10 +205,11 @@ impl AgentClient {
     }
 
     #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
-    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: Option<Bound<'_, PyAny>>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: Option<Bound<'_, PyAny>>, chat_ctx: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let message = crate::generated::records::a2a_client::message_input_from_py(&message)?;
         let metadata = metadata.map(|v| crate::generated::records::a2a_client::message_metadata_from_py(&v)).transpose()?;
+        let chat_ctx = chat_ctx.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx)
@@ -356,17 +357,20 @@ pub struct _core_RemoteInteraction(pub(crate) ::std::sync::Arc<_core_RemoteInter
 impl _core_RemoteInteraction {
     #[new]
     #[pyo3(signature = (endpoint, tool_id, function_call, history))]
-    fn new(endpoint: ::std::string::String, tool_id: ::std::string::String, function_call: ::lk_agents_abi::ChatItem, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<_core_RemoteInteraction> {
+    fn new(endpoint: ::std::string::String, tool_id: ::std::string::String, function_call: Bound<'_, PyAny>, history: Bound<'_, PyAny>) -> PyResult<_core_RemoteInteraction> {
         crate::host::check_pid()?;
+        let function_call = crate::generated::records::chat_items::chat_item_from_py(&function_call)?;
+        let history = history.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(_core_RemoteInteraction(::std::sync::Arc::new(out)))
     }
 
     /// The call's message; `thread_id` shares the caller's thread under `token`'s grant for it.
     #[pyo3(signature = (arguments, structured, offers_extension, history, thread_id = None, token = None))]
-    fn message<'py>(&self, py: Python<'py>, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>, thread_id: ::std::option::Option<::std::string::String>, token: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+    fn message<'py>(&self, py: Python<'py>, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, token: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
+        let history = history.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history, thread_id, token).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
     }

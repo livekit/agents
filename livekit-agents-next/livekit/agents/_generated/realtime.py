@@ -343,7 +343,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def _core_attach(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> None:
         """Report this session's events to the framework, which offers it the tools ``tools``
         names."""
-        from .._core_view import forward_session_events, to_core_item
+        from .._core_view import forward_session_events
 
         self._core_tools = tools
         self._core_events: asyncio.Queue[wire.Event | None] = asyncio.Queue()
@@ -356,9 +356,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self.on(
             "remote_item_added",
             lambda ev: put(
-                wire.RemoteItemAdded(
-                    previous_item_id=ev.previous_item_id, item=to_core_item(ev.item)
-                )
+                wire.RemoteItemAdded(previous_item_id=ev.previous_item_id, item=ev.item)
             ),
         )
 
@@ -388,15 +386,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         await self.update_instructions(instructions)
 
     async def _core_update_chat_ctx(self, items: list[Any]) -> None:
-        from .._core_view import from_core_item
-
-        await self.update_chat_ctx(ChatContext([from_core_item(i) for i in items]))
+        await self.update_chat_ctx(ChatContext(items))
 
     async def _core_push_item(self, item: Any) -> None:
-        from .._core_view import from_core_item
-
         ctx = self.chat_ctx.copy()
-        ctx.insert(from_core_item(item))
+        ctx.insert(item)
         await self.update_chat_ctx(ctx)
 
     async def _core_update_tools(self, names: list[str]) -> None:

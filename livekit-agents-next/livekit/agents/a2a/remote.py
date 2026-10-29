@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Sequence
 
 from .. import _core
-from .._core_view import to_core_item, to_core_items
 from .._generated.a2a_client import AgentCard
 from .._generated.a2a_remote import (
     RemoteEvent,
@@ -93,8 +92,8 @@ class _RemoteTool(Toolset):
         interaction = _core._core_RemoteInteraction(
             self._url,
             self._card.name,
-            to_core_item(ctx.function_call),
-            to_core_items(history.items),
+            ctx.function_call,
+            history.items,
         )
         # with no token of its own, the call shares its thread with the endpoint under a grant
         # minted for that thread (docs/internals/storage.md "Two brains, one thread")
@@ -109,7 +108,7 @@ class _RemoteTool(Toolset):
                 raw_arguments,
                 self._card.structured_input,
                 client.offers_extension,
-                to_core_items(history.items),
+                history.items,
                 shared,
                 token if shared else None,
             )

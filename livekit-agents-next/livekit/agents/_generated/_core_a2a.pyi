@@ -11,12 +11,13 @@ from typing import Self
 from livekit.agents.storage.context import _TurnHost
 from livekit.agents.types import APIConnectOptions
 
-from .._core import ChatItem, Storage
+from .._core import Storage
 from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
 from .a2a_door import DoorConfig, DoorFrame
 from .a2a_remote import RemoteEvent
+from .chat_items import ChatItem
 
 class _core_Credentials:
     def __init__(self, api_key: str, api_secret: str) -> None: ...

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from livekit.agents.llm.tool_context import ToolChoice
     from livekit.rtc import AudioFrame
 
-    from .._core import ChatItem
+    from .chat_items import ChatItem
     from .metrics import AgentMetrics
 
 

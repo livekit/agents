@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from .._core import ChatItem, Thread
+from .._core import Thread
+from .chat_items import ChatItem
 from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
 from .storage_context import (
     AppStatement,

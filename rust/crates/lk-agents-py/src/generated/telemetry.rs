@@ -536,8 +536,9 @@ pub fn recording_enabled(options: Bound<'_, PyAny>) -> PyResult<bool> {
 /// ``disabled`` or the transcript is not recorded.
 #[pyfunction]
 #[pyo3(signature = (disabled, options, item, projected, capture_content, identity))]
-pub fn _core_session_chat_record<'py>(py: Python<'py>, disabled: bool, options: Bound<'_, PyAny>, item: ::lk_agents_abi::ChatItem, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+pub fn _core_session_chat_record<'py>(py: Python<'py>, disabled: bool, options: Bound<'_, PyAny>, item: Bound<'_, PyAny>, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
+    let item = crate::generated::records::chat_items::chat_item_from_py(&item)?;
     let projected = ::lk_agents_abi::python::value_from_py(&projected, "projected")?;
     let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity);
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::log_record_wire_to_py(py, value)?)).transpose()?)
@@ -853,8 +854,9 @@ impl _core_PreparedTranscript {
     }
 
     #[pyo3(signature = (item))]
-    fn append(&self, item: ::lk_agents_abi::ChatItem) -> PyResult<()> {
+    fn append(&self, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let item = crate::generated::records::chat_items::chat_item_from_py(&item)?;
         <_core_PreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append(&self.0, item).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -929,7 +931,7 @@ impl ::lk_agents_abi::telemetry::report::ChatItemProjection for ChatItemProjecti
         let host = ::std::sync::Arc::clone(&self.host);
         let item_arg = item;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(item_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::chat_items::chat_item_to_py(py, item_arg)?];
                 Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {

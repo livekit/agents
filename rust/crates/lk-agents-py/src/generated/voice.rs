@@ -740,10 +740,10 @@ impl SpeechHandle {
 
     /// What this speech committed to the conversation; a copy.
     #[getter]
-    fn chat_items(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::ChatItem>> {
+    fn chat_items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::chat_items(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     #[getter]
@@ -1399,8 +1399,9 @@ impl VoiceSession {
     /// `AgentActivity.push_video(frame)`: one sampled frame, on its way to the model. `False`
     /// when the loop did not take it (not started or closed); a non-image part raises.
     #[pyo3(signature = (content))]
-    fn push_video(&self, content: ::lk_agents_abi::ChatContent) -> PyResult<bool> {
+    fn push_video(&self, content: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
+        let content = crate::generated::records::chat_items::chat_content_from_py(&content)?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::push_video(&self.0, content).map_err(|e: ::lk_agents_abi::voice::session::NotAnImage| <::lk_agents_abi::voice::session::NotAnImage as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
@@ -1408,8 +1409,9 @@ impl VoiceSession {
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
     /// apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
     #[pyo3(signature = (*, user_input = None, instructions = None, allow_interruptions = None, tool_choice = None, chat_ctx = None, tools = None, tools_host = None, voice_agent = None, on_enter = false, origin = None))]
-    fn generate_reply(&self, user_input: ::std::option::Option<::std::string::String>, instructions: ::std::option::Option<::std::string::String>, allow_interruptions: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>, tools: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ToolSpec>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>, on_enter: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
+    fn generate_reply(&self, user_input: ::std::option::Option<::std::string::String>, instructions: ::std::option::Option<::std::string::String>, allow_interruptions: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, chat_ctx: Option<Bound<'_, PyAny>>, tools: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ToolSpec>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>, on_enter: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
         crate::host::check_pid()?;
+        let chat_ctx = chat_ctx.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let voice_agent = voice_agent.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).transpose()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, allow_interruptions, tool_choice, chat_ctx, tools, tools_host, voice_agent, on_enter, origin).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::handles::SpeechHandle::from(out))
@@ -1522,8 +1524,9 @@ impl VoiceSession {
 
     /// `Agent.update_chat_ctx()` on a running agent: replace the context.
     #[pyo3(signature = (items))]
-    fn update_chat_ctx(&self, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<()> {
+    fn update_chat_ctx(&self, items: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_chat_ctx(&self.0, items).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -1680,10 +1683,10 @@ impl VoiceSession {
     }
 
     /// `Agent.chat_ctx` of the driving agent; empty before `start()`.
-    fn agent_chat_ctx(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::ChatItem>> {
+    fn agent_chat_ctx<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::agent_chat_ctx(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
@@ -4976,7 +4979,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let new_transcript_arg = new_transcript.to_owned();
         let transcript_confidence_arg = transcript_confidence;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_user_turn_completed", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(chat_ctx_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::types::PyList::new(py, chat_ctx_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
                 Ok((host.bind(py).getattr("_core_on_user_turn_completed")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -4989,7 +4992,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 }
             };
             let o = out.bind(py);
-            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.extract::<::std::string::String>()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::ChatItem>().map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.extract::<::std::string::String>()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -5024,7 +5027,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let function_calls_arg = function_calls;
         let function_call_outputs_arg = function_call_outputs;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_function_tools_executed", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(function_calls_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(function_call_outputs_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::types::PyList::new(py, function_calls_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::pyo3::types::PyList::new(py, function_call_outputs_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
                 Ok((host.bind(py).getattr("_core_function_tools_executed")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

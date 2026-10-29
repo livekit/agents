@@ -859,7 +859,6 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
     endpoint's real authorization admits it, and the back office answers in T on its own lane.
     A project credential alone (what it minted before) is refused 403 for a message."""
     from livekit.agents import _core
-    from livekit.agents._core_view import to_core_item
     from livekit.agents.llm import FunctionCall
 
     seen: dict[str, Any] = {}
@@ -881,7 +880,7 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
     url = f"https://agents.test/{ENDPOINT}"
     token = _core._core_remote_token(url, None, caller.thread_id)
     call = FunctionCall(call_id="call_1", name="desk", arguments='{"request": "book"}')
-    interaction = _core._core_RemoteInteraction(url, "desk", to_core_item(call), [])
+    interaction = _core._core_RemoteInteraction(url, "desk", call, [])
     message = interaction.message({"request": "book"}, False, True, [], caller.thread_id, token)
     assert message.context_id == caller.thread_id
     async with http_client(server) as http:

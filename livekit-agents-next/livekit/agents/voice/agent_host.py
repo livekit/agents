@@ -387,9 +387,8 @@ class _Operation:
             return binding
         run = copy.copy(_current_run())
         run.id = self._invocation.invocation_id
-        from .._core_view import from_core_item
 
-        run._history = [from_core_item(item) for item in self._invocation.history]
+        run._history = list(self._invocation.history)
         run.execution_id = self._invocation.execution_id
         run.frame_id = self._invocation.frame_id
         run.context_scope = self._invocation.context_scope
@@ -554,18 +553,10 @@ def _current_run() -> _TextRun:
 
 
 def _function_call(invocation: Invocation) -> FunctionCall:
-    from .._core_view import from_core_item
-
     call = invocation.function_call
     if call is None:
         raise RuntimeError("a tool callback has no function call")
-    if isinstance(call, FunctionCall):
-        return call
-    if isinstance(call, dict) and "type" not in call:
-        call = {**call, "type": "function_call"}
-    item = from_core_item(call)
-    assert isinstance(item, FunctionCall)
-    return item
+    return call
 
 
 def _operation_key(invocation: Invocation) -> tuple[str, int]:

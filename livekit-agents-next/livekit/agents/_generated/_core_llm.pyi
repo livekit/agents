@@ -13,13 +13,13 @@ from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.tool_context import ToolChoice
-from livekit.agents.llm.utils import SerializedImage
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 from livekit.rtc import AudioFrame
 
-from .._core import ChatItem, TtsStream
-from .llm import ChatChunk
+from .._core import TtsStream
+from .chat_items import ChatItem, ChatRole
+from .llm import ChatChunk, SerializedImage
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 
@@ -309,7 +309,7 @@ async def to_provider_format(
 def convert_mid_conversation_instructions(
     items: Sequence[ChatItem],
     *,
-    role: str,
+    role: ChatRole,
     template: str,
 ) -> list[tuple[int, ChatItem | None]]: ...
 

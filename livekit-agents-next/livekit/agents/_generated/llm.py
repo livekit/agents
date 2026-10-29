@@ -4,6 +4,7 @@
 # `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/llm/llm.rs
 #     rust/crates/lk-agents-abi/src/llm/events.rs
+#     rust/crates/lk-agents-abi/src/llm/provider_format/image.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -14,6 +15,7 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, Never
 
@@ -23,14 +25,14 @@ from typing_extensions import Self, TypeVar
 from livekit import rtc
 
 from .. import _bindings, _core
-from ..llm.chat_context import ChatRole
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
-from .chat_items import MetricsMetadata
+from .chat_items import ChatRole, MetricsMetadata
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
     from ..llm.tool_context import Tool, ToolChoice
+    from .chat_items import InferenceDetail
 
 
 # The declared records.
@@ -103,11 +105,20 @@ class ChatChunk(BaseModel):
         return _bindings.chat_chunk_has_response(self)
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SerializedImage:
+    inference_detail: InferenceDetail
+    mime_type: str | None
+    data_bytes: bytes | None = None
+    external_url: str | None = None
+
+
 CompletionUsage.__module__ = "livekit.agents.llm"
 FunctionToolCall.__module__ = "livekit.agents.llm"
 ChoiceDelta.__module__ = "livekit.agents.llm"
 CollectedResponse.__module__ = "livekit.agents.llm"
 ChatChunk.__module__ = "livekit.agents.llm"
+SerializedImage.__module__ = "livekit.agents.llm.utils"
 
 
 class LLMError(BaseModel):

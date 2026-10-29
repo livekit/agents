@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/llm/chat_context.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -9,7 +10,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NotRequired, TypeAlias
 
 from pydantic import BaseModel, Field, PrivateAttr
 from typing_extensions import TypedDict
@@ -19,8 +20,12 @@ from livekit import rtc
 from .. import _bindings, utils
 
 if TYPE_CHECKING:
-    from ..llm.chat_context import ChatContent, ChatRole
-    from ..llm.tool_context import Tool
+    from livekit.agents.llm.tool_context import Tool
+
+ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
+
+
+InferenceDetail: TypeAlias = Literal["auto", "high", "low"]
 
 
 class ImageContent(BaseModel):
@@ -54,7 +59,9 @@ class ImageContent(BaseModel):
     """
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
-    """Unique identifier for the image"""
+    """Unique identifier for the image. Use a new id when replacing inline image data
+    or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
+    """
     type: Literal["image_content"] = "image_content"
     image: str | rtc.VideoFrame
     """Either a string URL or a VideoFrame object"""
@@ -62,14 +69,14 @@ class ImageContent(BaseModel):
     """Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)"""
     inference_height: int | None = None
     """Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)"""
-    inference_detail: Literal["auto", "high", "low"] = "auto"
+    inference_detail: InferenceDetail = "auto"
     """Detail parameter for LLM provider, if supported.
 
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
     mime_type: str | None = None
     """MIME type of the image"""
-    _cache: dict[Any, Any] = PrivateAttr(default_factory=dict)
+    _cache: dict[object, object] = PrivateAttr(default_factory=dict)
 
 
 class AudioContent(BaseModel):
@@ -78,54 +85,57 @@ class AudioContent(BaseModel):
     transcript: str | None = None
 
 
-class MetricsMetadata(TypedDict, total=False):
-    model_name: str
-    model_provider: str
+ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
-class MetricsReport(TypedDict, total=False):
-    started_speaking_at: float
-    stopped_speaking_at: float
-    transcription_delay: float
+class MetricsMetadata(TypedDict):
+    model_name: NotRequired[str]
+    model_provider: NotRequired[str]
+
+
+class MetricsReport(TypedDict):
+    started_speaking_at: NotRequired[float]
+    stopped_speaking_at: NotRequired[float]
+    transcription_delay: NotRequired[float]
     """Time taken to obtain the transcript after the end of the user's speech
 
     User `ChatMessage` only
     """
-    end_of_turn_delay: float
+    end_of_turn_delay: NotRequired[float]
     """Amount of time between the end of speech and the decision to end the user's turn
 
     User `ChatMessage` only
     """
-    on_user_turn_completed_delay: float
+    on_user_turn_completed_delay: NotRequired[float]
     """Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
 
     User `ChatMessage` only
     """
-    llm_node_ttft: float
+    llm_node_ttft: NotRequired[float]
     """Time taken for the `llm_node` to return the first token
 
     Assistant `ChatMessage` only
     """
-    llm_node_tps: float
+    llm_node_tps: NotRequired[float]
     """LLM output tokens per second for this turn, measured at the `llm_node` over the
     streaming window (first to last text chunk). Absent for a reply that arrived in a
     single chunk, which has no measurable rate
 
     Assistant `ChatMessage` only
     """
-    llm_node_ttfs: float
+    llm_node_ttfs: NotRequired[float]
     """Time from LLM generation start until the first sentence reached the TTS provider, as
     segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
     an interruption before the first frame, or a `tts_node` synthesizing audio on its own
 
     Assistant `ChatMessage` only
     """
-    tts_node_ttfb: float
+    tts_node_ttfb: NotRequired[float]
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
 
     Assistant `ChatMessage` only
     """
-    playback_latency: float
+    playback_latency: NotRequired[float]
     """Delay between forwarding the first audio frame and the `AudioOutput` reporting
     playback started. Near-zero for the default room output (self-reported when the frame
     is pushed to the track, so it doesn't account for network delivery to the client);
@@ -134,20 +144,20 @@ class MetricsReport(TypedDict, total=False):
 
     Assistant `ChatMessage` only
     """
-    e2e_latency: float
+    e2e_latency: NotRequired[float]
     """Time from when the user finished speaking to when the agent began responding
 
     Assistant `ChatMessage` only
     """
-    provider_request_ids: list[str]
+    provider_request_ids: NotRequired[list[str]]
     """Provider-known request or response IDs associated with this turn.
 
     Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
     provider-side logs.
     """
-    llm_metadata: MetricsMetadata
-    tts_metadata: MetricsMetadata
-    stt_metadata: MetricsMetadata
+    llm_metadata: NotRequired[MetricsMetadata]
+    tts_metadata: NotRequired[MetricsMetadata]
+    stt_metadata: NotRequired[MetricsMetadata]
 
 
 class ChatMessage(BaseModel):
@@ -208,7 +218,11 @@ class FunctionCallOutput(BaseModel):
     is_error: bool
     created_at: float = Field(default_factory=time.time)
     reply_required: bool = True
-    """Whether the model should answer once it receives this output (read by realtime models only)."""
+    """Whether the model should answer once it receives this output.
+
+    VoiceSession uses it to decide whether to generate a follow-up reply.
+    Realtime models can also use it to schedule their response.
+    """
 
 
 class AgentHandoff(BaseModel):
@@ -230,13 +244,12 @@ class AgentConfigUpdate(BaseModel):
     """Full tool definitions (in-memory only, not serialized)."""
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+ChatItem: TypeAlias = Annotated[
+    ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
+    Field(discriminator="type"),
+]
+
+
 ImageContent.__module__ = "livekit.agents.llm.chat_context"
 AudioContent.__module__ = "livekit.agents.llm.chat_context"
 MetricsMetadata.__module__ = "livekit.agents.llm.chat_context"

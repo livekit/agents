@@ -108,9 +108,7 @@ def restore(state: TextSessionState) -> TextSessionState:
 
 
 def history(frame: Any) -> list[Any]:
-    from livekit.agents._core_view import from_core_item
-
-    return [from_core_item(item) for item in frame.history]
+    return list(frame.history)
 
 
 @pytest.mark.parametrize("mode", ["fresh", "fork"])

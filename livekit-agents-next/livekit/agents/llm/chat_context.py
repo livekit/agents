@@ -14,17 +14,28 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Literal, TypeAlias, overload
 
-from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypedDict
+from pydantic import TypeAdapter
 
-from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
-from .. import _core, utils
+from .. import _core
+from .._generated.chat_items import (
+    AgentConfigUpdate,
+    AgentHandoff,
+    AudioContent,
+    ChatContent,
+    ChatItem,
+    ChatMessage,
+    ChatRole,
+    FunctionCall,
+    FunctionCallOutput,
+    ImageContent,
+    MetricsMetadata,
+    MetricsReport,
+)
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -41,290 +52,40 @@ if TYPE_CHECKING:
 
     from ..llm import LLM, Tool, Toolset
 
+__all__ = [
+    "AgentConfigUpdate",
+    "AgentHandoff",
+    "AudioContent",
+    "ChatContent",
+    "ChatContext",
+    "ChatItem",
+    "ChatMessage",
+    "ChatRole",
+    "FunctionCall",
+    "FunctionCallOutput",
+    "ImageContent",
+    "MetricsMetadata",
+    "MetricsReport",
+    "ProviderFormat",
+]
 
-class ImageContent(BaseModel):
-    """
-    ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
-
-    You may need to consult your LLM provider's documentation on supported URL types.
-
-    ```python
-    # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
-    async for event in rtc.VideoStream(video_track):
-        chat_image = ImageContent(image=event.frame)
-        # this instance is now available for your ChatContext
-
-    # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
-    from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
-
-    image_bytes = await encode(
-        event.frame,
-        EncodeOptions(
-            format="PNG",
-            resize_options=ResizeOptions(width=512, height=512, strategy="scale_aspect_fit"),
-        ),
-    )
-    chat_image = ImageContent(
-        image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
-    )
-
-    # With an external URL
-    chat_image = ImageContent(image="https://example.com/image.jpg")
-    ```
-    """
-
-    id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
-    """
-    Unique identifier for the image. Use a new id when replacing inline image data
-    or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
-    """
-
-    type: Literal["image_content"] = Field(default="image_content")
-
-    image: str | rtc.VideoFrame
-    """
-    Either a string URL or a VideoFrame object
-    """
-    inference_width: int | None = None
-    """
-    Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
-    """
-    inference_height: int | None = None
-    """
-    Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
-    """
-    inference_detail: Literal["auto", "high", "low"] = "auto"
-    """
-    Detail parameter for LLM provider, if supported.
-
-    Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
-    """
-    mime_type: str | None = None
-    """
-    MIME type of the image
-    """
-    _cache: dict[object, object] = PrivateAttr(default_factory=dict)
-
-
-class AudioContent(BaseModel):
-    type: Literal["audio_content"] = Field(default="audio_content")
-    frame: list[rtc.AudioFrame]
-    transcript: str | None = None
-
-
-ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 ProviderFormat: TypeAlias = Literal[
     "openai", "openai.responses", "google", "aws", "anthropic", "mistralai"
 ]
 
 
-# The metrics are stored in a dict, since some fields may not be relevant
-# in certain context (e.g., text-only mode or when using a speech-to-speech model).
-class MetricsMetadata(TypedDict, total=False):
-    model_name: str
-    model_provider: str
-
-
-class MetricsReport(TypedDict, total=False):
-    started_speaking_at: float
-    stopped_speaking_at: float
-
-    transcription_delay: float
-    """Time taken to obtain the transcript after the end of the user's speech
-
-    User `ChatMessage` only
-    """
-
-    end_of_turn_delay: float
-    """Amount of time between the end of speech and the decision to end the user's turn
-
-    User `ChatMessage` only
-    """
-
-    on_user_turn_completed_delay: float
-    """Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
-
-    User `ChatMessage` only
-    """
-
-    llm_node_ttft: float
-    """Time taken for the `llm_node` to return the first token
-
-    Assistant `ChatMessage` only
-    """
-
-    llm_node_tps: float
-    """LLM output tokens per second for this turn, measured at the `llm_node` over the
-    streaming window (first to last text chunk). Absent for a reply that arrived in a
-    single chunk, which has no measurable rate
-
-    Assistant `ChatMessage` only
-    """
-
-    llm_node_ttfs: float
-    """Time from LLM generation start until the first sentence reached the TTS provider, as
-    segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
-    an interruption before the first frame, or a `tts_node` synthesizing audio on its own
-
-    Assistant `ChatMessage` only
-    """
-
-    tts_node_ttfb: float
-    """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
-
-    Assistant `ChatMessage` only
-    """
-
-    playback_latency: float
-    """Delay between forwarding the first audio frame and the `AudioOutput` reporting
-    playback started. Near-zero for the default room output (self-reported when the frame
-    is pushed to the track, so it doesn't account for network delivery to the client);
-    meaningful when a remote avatar worker is in the chain and reports playback via
-    the `lk.playback_started` RPC.
-
-    Assistant `ChatMessage` only
-    """
-
-    e2e_latency: float
-    """Time from when the user finished speaking to when the agent began responding
-
-    Assistant `ChatMessage` only
-    """
-
-    provider_request_ids: list[str]
-    """Provider-known request or response IDs associated with this turn.
-
-    Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
-    provider-side logs.
-    """
-
-    llm_metadata: MetricsMetadata
-    tts_metadata: MetricsMetadata
-    stt_metadata: MetricsMetadata
-
-
-class _ChatItemBase(BaseModel):
-    """Shared by every :data:`ChatItem` type; adds no fields."""
-
-    def _essential_fields(self) -> tuple[object, ...]:
-        """What identifies this item's content beyond its id and type: what
-        :meth:`ChatContext.is_equivalent` compares. Timestamps, metrics and other metadata are
-        left out."""
-        return ()
-
-
-class ChatMessage(_ChatItemBase):
-    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    type: Literal["message"] = "message"
-    role: ChatRole
-    content: list[ChatContent]
-    interrupted: bool = False
-    transcript_confidence: float | None = None
-    extra: dict[str, object] = Field(default_factory=dict)
-    metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
-    created_at: float = Field(default_factory=time.time)
-
-    @property
-    def text_content(self) -> str | None:
-        """
-        Returns a string of all text content in the message, with LiveKit's
-        expressive ``<expr/>`` tags removed from assistant messages.
-
-        Multiple text content items will be joined by a newline.
-        Use :attr:`raw_text_content` for the exact model-facing content.
-        """
-        raw = self.raw_text_content
-        if raw is None or self.role != "assistant":
-            return raw
-
-        from ..tts import strip_expr_markup
-
-        return strip_expr_markup(raw)
-
-    @property
-    def raw_text_content(self) -> str | None:
-        """
-        Returns a string of all text content in the message, exactly as generated
-        (assistant messages may contain expressive ``<expr/>`` tags).
-
-        Multiple text content items will be joined by a newline.
-        """
-        text_parts = [c for c in self.content if isinstance(c, str)]
-        if not text_parts:
-            return None
-        return "\n".join(text_parts)
-
-    def _essential_fields(self) -> tuple[object, ...]:
-        return (self.role, self.interrupted, self.content)
-
-
-ChatContent: TypeAlias = ImageContent | AudioContent | str
-
-
-class FunctionCall(_ChatItemBase):
-    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    type: Literal["function_call"] = "function_call"
-    call_id: str
-    arguments: str
-    name: str
-    created_at: float = Field(default_factory=time.time)
-    extra: dict[str, object] = Field(default_factory=dict)
-    """Extra data for this function call. Can include provider-specific data
-    (e.g., extra["google"] for thought signatures)."""
-    group_id: str | None = None
-    """Optional group ID for parallel function calls. When multiple function calls
-    should be grouped together (e.g., parallel tool calls from a single API response),
-    set this to a shared value. If not set, falls back to using id for grouping."""
-
-    def _essential_fields(self) -> tuple[object, ...]:
-        return (self.name, self.call_id, self.arguments)
-
-
-class FunctionCallOutput(_ChatItemBase):
-    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    type: Literal["function_call_output"] = Field(default="function_call_output")
-    name: str = Field(default="")
-    call_id: str
-    output: str
-    is_error: bool
-    created_at: float = Field(default_factory=time.time)
-    reply_required: bool = Field(default=True)
-    """Whether the model should answer once it receives this output.
-
-    VoiceSession uses it to decide whether to generate a follow-up reply.
-    Realtime models can also use it to schedule their response.
-    """
-
-    def _essential_fields(self) -> tuple[object, ...]:
-        return (self.name, self.call_id, self.output, self.is_error)
-
-
-class AgentHandoff(_ChatItemBase):
-    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    type: Literal["agent_handoff"] = Field(default="agent_handoff")
-    old_agent_id: str | None = None
-    new_agent_id: str
-    created_at: float = Field(default_factory=time.time)
-
-
-class AgentConfigUpdate(_ChatItemBase):
-    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    type: Literal["agent_config_update"] = Field(default="agent_config_update")
-
-    instructions: str | None = None
-    tools_added: list[str] | None = None
-    tools_removed: list[str] | None = None
-
-    created_at: float = Field(default_factory=time.time)
-
-    _tools: list[Tool] = PrivateAttr(default_factory=list)
-    """Full tool definitions (in-memory only, not serialized)."""
-
-
-ChatItem = Annotated[
-    ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
-    Field(discriminator="type"),
-]
+def _essential_fields(item: ChatItem) -> tuple[object, ...]:
+    """What identifies an item's content beyond its id and type: what
+    :meth:`ChatContext.is_equivalent` compares. Timestamps, metrics and other metadata are left
+    out."""
+    match item:
+        case ChatMessage():
+            return (item.role, item.interrupted, item.content)
+        case FunctionCall():
+            return (item.name, item.call_id, item.arguments)
+        case FunctionCallOutput():
+            return (item.name, item.call_id, item.output, item.is_error)
+    return ()
 
 
 def _facts(
@@ -504,10 +265,8 @@ class ChatContext:
     ) -> dict[str, object]:
         """``{"items": [...]}``, each item's JSON dump (the core's ``chat_ctx_to_dict``).
         ``strip_markup`` strips the ``<expr/>`` dialect from assistant messages."""
-        from .._core_view import to_core_items
-
         return _core.chat_ctx_to_dict(
-            to_core_items(self.items),
+            self.items,
             exclude_image=exclude_image,
             exclude_audio=exclude_audio,
             exclude_timestamp=exclude_timestamp,
@@ -601,9 +360,7 @@ class ChatContext:
 
     async def _summarize(self, llm_v: LLM, *, keep_last_turns: int = 2) -> ChatContext:
         """Replace all but the last ``keep_last_turns`` turns with an LLM-written summary."""
-        from .._core_view import to_core_items
-
-        plan = _core.chat_ctx_summarize_plan(to_core_items(self.items), keep_last_turns)
+        plan = _core.chat_ctx_summarize_plan(self.items, keep_last_turns)
         if plan is None:
             return self
         split_idx, preserved, system_prompt, user_content, created_at = plan
@@ -650,8 +407,7 @@ class ChatContext:
           - Function calls: compares `name`, `call_id`, and `arguments`.
           - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
 
-        Does not consider timestamps or other metadata. Each item type declares its fields
-        in ``_essential_fields``, which item fingerprints hash as well.
+        Does not consider timestamps or other metadata.
         """
         if self is other:
             return True
@@ -660,7 +416,7 @@ class ChatContext:
             return False
 
         return all(
-            a.id == b.id and a.type == b.type and a._essential_fields() == b._essential_fields()
+            a.id == b.id and a.type == b.type and _essential_fields(a) == _essential_fields(b)
             for a, b in zip(self.items, other.items, strict=True)
         )
 

@@ -75,8 +75,9 @@ pub struct RunEvents(pub(crate) RunEventsImpl);
 impl RunEvents {
     #[new]
     #[pyo3(signature = (events))]
-    fn new(events: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<RunEvents> {
+    fn new(events: Bound<'_, PyAny>) -> PyResult<RunEvents> {
         crate::host::check_pid()?;
+        let events = events.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::new(events);
         Ok(RunEvents(out))
     }

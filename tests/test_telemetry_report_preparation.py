@@ -22,21 +22,10 @@ async def test_ten_thousand_python_items_reach_the_report_and_the_host_sdk():
 
 
 @pytest.mark.asyncio
-async def test_oversize_python_item_is_refused_before_native_conversion(monkeypatch):
-    from livekit.agents import _core_view
-
-    converted = False
-
-    def conversion_must_not_run(item):
-        nonlocal converted
-        converted = True
-        raise AssertionError("oversize content reached native extraction")
-
-    monkeypatch.setattr(_core_view, "to_core_item", conversion_must_not_run)
+async def test_oversize_python_item_is_refused():
     item = llm.ChatMessage(role="user", content=["x" * (1024 * 1024)])
     with capture_reports() as capture, pytest.raises(RuntimeError, match="64 KiB"):
         await prepare(make_report([item]))
-    assert not converted
     assert capture.uploads == {} and capture.items == {}
 
 
