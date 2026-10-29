@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-/// Defined here to keep dependencies to `{tokio, async-trait}`.
+/// A boxed `Send` future, the shape futures cross the ABI in.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Which way a task ended; the first of completion and cancellation to happen wins.
@@ -64,15 +64,16 @@ pub trait TaskControl: Send + Sync {
 pub struct OwnedTask<T = ()> {
     /// `None` only once handed to an [`AbortHandle`].
     control: Option<Arc<dyn TaskControl>>,
-    output: BoxFuture<'static, Result<T, TaskError>>,
+    /// `Sync` so an owner shared by reference (an `Arc`'d session, a callback) can hold it.
+    output: TaskOutput<T>,
 }
+
+/// What an executor resolves once the task settled.
+pub type TaskOutput<T> = Pin<Box<dyn Future<Output = Result<T, TaskError>> + Send + Sync>>;
 
 impl<T: 'static> OwnedTask<T> {
     /// For executors: `output` resolves once the task settled.
-    pub fn new(
-        control: Arc<dyn TaskControl>,
-        output: BoxFuture<'static, Result<T, TaskError>>,
-    ) -> Self {
+    pub fn new(control: Arc<dyn TaskControl>, output: TaskOutput<T>) -> Self {
         OwnedTask { control: Some(control), output }
     }
 
@@ -92,7 +93,7 @@ impl<T: 'static> OwnedTask<T> {
         AbortHandle(self.control.take().expect("an owned task has its control"))
     }
 
-    fn map<U: 'static>(mut self, f: impl FnOnce(T) -> U + Send + 'static) -> OwnedTask<U> {
+    fn map<U: 'static>(mut self, f: impl FnOnce(T) -> U + Send + Sync + 'static) -> OwnedTask<U> {
         let output = std::mem::replace(&mut self.output, Box::pin(std::future::pending()));
         OwnedTask {
             control: self.control.take(),

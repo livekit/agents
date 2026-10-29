@@ -140,5 +140,5 @@ pub use utils::bounded_lossy::{AUDIO_QUEUE_FRAMES, BoundedLossy, LossyTx, Pushed
 pub use utils::monotone::Monotone;
 pub use utils::spawner::{
     AbortHandle, BoxFuture, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError,
-    TaskOutcome,
+    TaskOutcome, TaskOutput,
 };
