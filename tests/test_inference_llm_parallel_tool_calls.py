@@ -77,3 +77,43 @@ def test_parallel_calls_in_the_finishing_chunk_are_all_emitted(finish_reason: st
     chunk = stream._parse_choice("chunk", choice, ThinkingTokenFilter())
 
     assert _cities([chunk]) == CITIES
+
+
+def test_arguments_before_name_do_not_raise() -> None:
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        id="call-0",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments=json.dumps({"city": "Paris"})
+                        ),
+                    )
+                ]
+            ),
+        ),
+        # a new call starts with arguments but no name yet
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=1,
+                        id="call-1",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(arguments='{"city": '),
+                    )
+                ]
+            ),
+        ),
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta()),
+    ]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    assert _cities(chunks) == ["Paris"]

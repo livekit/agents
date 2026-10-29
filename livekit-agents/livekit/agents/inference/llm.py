@@ -679,7 +679,9 @@ class LLMStream(llm.LLMStream):
                     # Extract extra from tool call (e.g., Google thought signatures)
                     self._tool_extra = getattr(tool, "extra_content", None)
                 elif tool.function.arguments:
-                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
+                    self._fnc_raw_arguments = (
+                        self._fnc_raw_arguments or ""
+                    ) + tool.function.arguments
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
             completed.append(
