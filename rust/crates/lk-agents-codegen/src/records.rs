@@ -293,8 +293,9 @@ fn construct(class: &str, args: &str, kwargs: &str) -> String {
     format!("crate::host::construct({class}.as_any(), {args}, {kwargs})")
 }
 
-/// A `typed_dict` record's extract and emit bodies: keys of a plain dict, an optional field's key
-/// absent (or `None`) when it holds nothing.
+/// A `typed_dict` record's extract and emit bodies: keys of a plain dict. A `Maybe` key is absent
+/// when not given; an `Option` key with `default = None` is absent (or `None`) when it holds
+/// nothing; any other `Option` key is required and may be `None`.
 fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String), String> {
     let mut reads = String::new();
     let mut pattern = Vec::new();
@@ -307,8 +308,15 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
             ));
         }
         let (key, path) = (f.host_name(), format!("{}.{}", r.name, f.host_name()));
+        let omitted_none = f.default == Some(crate::decl::Literal::None);
         let read = match &f.ty {
-            Ty::Optional(inner) => format!(
+            // An omittable key: absent (or `NOT_GIVEN`) is not given.
+            Ty::Maybe(_) => format!(
+                "match obj.get_item({key:?})? {{ Some(v) => ({})?, None => ::lk_agents_abi::Maybe::NotGiven }}",
+                read(&f.ty, "(&v)", &path)?
+            ),
+            // `default = None`: absent and `None` alike hold nothing.
+            Ty::Optional(inner) if omitted_none => format!(
                 "match obj.get_item({key:?})? {{ Some(v) if !v.is_none() => Some(({})?), _ => None }}",
                 read(inner, "(&v)", &path)?
             ),
@@ -330,7 +338,15 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
         ));
         pattern.push(f.rust_name.clone());
         sets.push_str(&match &f.ty {
-            Ty::Optional(inner) => format!(
+            Ty::Maybe(inner) => format!(
+                "        if let ::lk_agents_abi::Maybe::Given(x) = {} {{
+            dict.set_item({key:?}, {})?;
+        }}
+",
+                f.rust_name,
+                emit(inner, "x")?
+            ),
+            Ty::Optional(inner) if omitted_none => format!(
                 "        if let Some(x) = {} {{
             dict.set_item({key:?}, {})?;
         }}

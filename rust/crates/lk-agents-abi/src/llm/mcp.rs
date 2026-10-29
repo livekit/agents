@@ -29,14 +29,19 @@ pub struct McpToolOptions {
 ))]
 pub struct McpToolOptionsPatch {
     /// Flags passed to the @function_tool decorator, using ToolFlag.
+    #[host(default = None)]
     pub flags: Option<ToolFlag>,
     /// Behavior when a tool is called multiple times in the same context.
+    #[host(default = None)]
     pub on_duplicate: Option<DuplicateMode>,
     /// What counts as a duplicate, e.g. ``"name_and_args"`` to compare arguments too.
+    #[host(default = None)]
     pub duplicate_scope: Option<DuplicateScope>,
     /// Whether to forward the tool's progress notifications to ctx.update().
+    #[host(default = None)]
     pub report_progress: Option<bool>,
     /// The tool's retry budget, in place of the agent's ``retries['tools']``.
+    #[host(default = None)]
     pub retries: Option<u32>,
 }
 

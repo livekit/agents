@@ -147,7 +147,7 @@ class MCPServer:
             flags=options["flags"],
             on_duplicate=options["on_duplicate"],
             duplicate_scope=options["duplicate_scope"],
-            retries=options.get("retries"),
+            retries=options["retries"],
         )
 
     async def aclose(self) -> None:

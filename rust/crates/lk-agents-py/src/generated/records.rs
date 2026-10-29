@@ -1755,9 +1755,7 @@ pub mod mcp {
             dict.set_item("on_duplicate", crate::generated::records::tool_context::duplicate_mode_to_py(py, on_duplicate)?)?;
             dict.set_item("duplicate_scope", crate::generated::records::tool_context::duplicate_scope_to_py(py, duplicate_scope)?)?;
             dict.set_item("report_progress", ::pyo3::IntoPyObjectExt::into_bound_py_any(report_progress, py)?)?;
-            if let Some(x) = retries {
-                dict.set_item("retries", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
-            }
+            dict.set_item("retries", match retries { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             Ok(dict.into_any())
     }
 

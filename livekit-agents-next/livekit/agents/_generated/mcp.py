@@ -27,7 +27,7 @@ class ResolvedToolOptions(TypedDict):
     """Forward the tool's MCP progress notifications to `ctx.update()`. Also selects the
     non-blocking call path (`_tool_called_nonblocking`, which takes a `RunContext`).
     """
-    retries: NotRequired[int]
+    retries: int | None
     """The tool's `retries=`; `None` reads the run's tool budget."""
 
 

@@ -18,6 +18,7 @@ pub struct SttFallbackModel {
     //
     // Omitted rather than nulled: `_normalize_fallback("x")` must equal `[{"model": "x"}]`. On the
     // read side absent and `None` are one request.
+    #[host(default = None)]
     pub extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
@@ -42,5 +43,6 @@ pub struct TtsFallbackModel {
     /// Extra configuration for the model.
     //
     // Omitted, not `None`: a `None` would reach the gateway as `"extra": null`, STT's protocol.
+    #[host(default = None)]
     pub extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
 }

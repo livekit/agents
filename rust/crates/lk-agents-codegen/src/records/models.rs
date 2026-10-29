@@ -404,7 +404,11 @@ fn model(
             }
             for f in fields {
                 let ann = match &f.ty {
-                    Ty::Optional(inner) => {
+                    Ty::Maybe(inner) => {
+                        runtime.add("typing", "NotRequired");
+                        format!("NotRequired[{}]", annotation(inner, module, own, out, typing))
+                    }
+                    Ty::Optional(inner) if f.default == Some(crate::decl::Literal::None) => {
                         runtime.add("typing", "NotRequired");
                         format!("NotRequired[{}]", annotation(inner, module, own, out, typing))
                     }
