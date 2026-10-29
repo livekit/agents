@@ -194,7 +194,7 @@ pub struct RunSettled {
 pub enum RunUpdate {
     #[host(field = "event")]
     Stream(StreamEvent),
-    /// Cancelled work missed its cleanup deadline; the runtime still owns it (decision 14).
+    /// Cancelled work missed its cleanup deadline; the runtime still owns it.
     #[host(field = "pending")]
     IncompleteCleanup(Vec<String>),
     /// The last update of a run that settled with a result.

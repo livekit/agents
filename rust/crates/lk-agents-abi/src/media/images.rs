@@ -33,7 +33,7 @@ impl Default for ImageEncodeOptions {
 pub type PreparedImage = (Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
 
 /// Reads a host video frame as an RGBA [`VideoFrame`], converting it when it is in another
-/// buffer type (decision 94). The host hands one to the runtime as its process starts.
+/// buffer type. The host hands one to the runtime as its process starts.
 #[crate::host(proxy(host = "livekit.agents.utils.images._FrameReader"))]
 pub trait FrameReader: Send + Sync {
     #[host(call, name = "_core_rgba")]

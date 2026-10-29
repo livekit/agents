@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 
 pub use rows::*;
 
-/// A storage failure (decision 82). Every database failure is one of six: `Uncertain`,
+/// A storage failure. Every database failure is one of six: `Uncertain`,
 /// `Rejected`, `LeaseLost`, `Unavailable`, `NotFound`, `VersionConflict`; the rest are the
 /// caller's (`Invalid`, `NotSerializable`, `TooLarge`, `Unauthorized`) or a cancelled turn.
 /// `Unavailable` is the one retryable error. The host raises the classes of
