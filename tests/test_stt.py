@@ -25,6 +25,7 @@ from livekit.plugins import (
     gladia,
     google,
     gradium,
+    inworld,
     mistralai,
     nvidia,
     openai,
@@ -102,7 +103,10 @@ STTs: list[Callable[[], stt.STT]] = [
 ]
 
 # Additional model configurations used only by streaming tests.
-STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [parameter_factory(xai)] + [
+STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
+    parameter_factory(xai),
+    parameter_factory(inworld),
+] + [
     pytest.param(
         lambda: rtzr.STT(sample_rate=16000),
         id="livekit.plugins.rtzr",
