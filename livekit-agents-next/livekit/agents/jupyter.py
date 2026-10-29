@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import logging
 import sys
 import uuid
@@ -13,7 +12,7 @@ from livekit import api
 from livekit.protocol import models
 from livekit.rtc.jupyter import display_room
 
-from . import cli
+from . import _core, cli
 from ._generated.worker_cli import CliArgsStart
 from .job import JobExecutorType
 from .worker import AgentServer
@@ -69,34 +68,9 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
 
         # manually create the user_token and agent_token using the provided api key and secret
         room_name = f"jupyter-room-{uuid.uuid4()}"
-        user_token = (
-            api.AccessToken(api_key, api_secret)
-            .with_identity("user-jupyter")
-            .with_grants(
-                api.VideoGrants(
-                    can_publish=True, can_subscribe=True, room_join=True, room=room_name
-                )
-            )
-            .with_ttl(datetime.timedelta(minutes=1))
-            .to_jwt()
-        )
-
-        agent_token = (
-            api.AccessToken(api_key, api_secret)
-            .with_identity("agent-jupyter")
-            .with_kind("agent")
-            .with_grants(
-                api.VideoGrants(
-                    agent=True,
-                    can_publish=True,
-                    can_subscribe=True,
-                    room_join=True,
-                    can_update_own_metadata=True,
-                    room=room_name,
-                )
-            )
-            .with_ttl(datetime.timedelta(minutes=1))
-            .to_jwt()
+        user_token = _core.room_join_token(api_key, api_secret, "user-jupyter", room_name, ttl=60)
+        agent_token = _core.room_join_token(
+            api_key, api_secret, "agent-jupyter", room_name, agent=True, ttl=60
         )
 
     display_room(ws_url, user_token)

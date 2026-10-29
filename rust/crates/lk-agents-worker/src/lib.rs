@@ -9,7 +9,6 @@ pub use load::{DefaultLoadCalc, LoadInputs, WorkerStatus};
 pub(crate) const LOG: &str = "livekit.agents";
 
 pub mod agent_server;
-pub mod auth;
 pub mod cli;
 pub mod cli_signals;
 pub mod config;
@@ -24,7 +23,6 @@ mod worker;
 #[cfg(test)]
 mod worker_tests;
 
-pub use auth::{TokenError, agent_join_token, extend_job_token, token_identity, worker_token};
 pub use config::{
     ASSIGNMENT_TIMEOUT, DRAIN_TIMEOUT, EnvOption, UPDATE_LOAD_INTERVAL, UPDATE_STATUS_INTERVAL,
     WORKER_PROTOCOL_VERSION, WorkerConfig,

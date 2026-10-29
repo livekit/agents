@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import datetime
 import os
 import platform
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
-
-from livekit import api
 
 from .. import _core
 from ..job import _server_setting
@@ -21,7 +18,6 @@ InferenceClass = Literal["priority", "standard", "low"]
 __all__ = [
     "InferenceClass",
     "Credentials",
-    "create_access_token",
     "extract_quota_usage",
     "get_default_inference_url",
     "get_inference_headers",
@@ -124,14 +120,3 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
     headers.update(ctx.inference_headers)
     headers[HEADER_SESSION_ID] = shortuuid("inference_")
     return headers
-
-
-def create_access_token(api_key: str | None, api_secret: str | None, ttl: float = 600) -> str:
-    """A gateway token, for the clients the core does not run (realtime, avatar)."""
-    return (
-        api.AccessToken(api_key, api_secret)
-        .with_identity("agent")
-        .with_inference_grants(api.access_token.InferenceGrants(perform=True))
-        .with_ttl(datetime.timedelta(seconds=ttl))
-        .to_jwt()
-    )

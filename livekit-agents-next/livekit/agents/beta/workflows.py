@@ -29,7 +29,7 @@ from .._generated.workflows import (
     WarmTransferResult,
     WorkflowInstructions as WorkflowInstructions,
 )
-from ..job import JobContext, get_job_context
+from ..job import JobContext, _server_credentials, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -413,21 +413,8 @@ class _TransferHost:
         self._session.output.set_transcription_enabled(state["transcription_output"])
 
     async def _core_connect_human(self, room_name: str, identity: str) -> _core._core_RoomSession:
-        token = (
-            api.AccessToken()
-            .with_identity(identity)
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=room_name,
-                    can_update_own_metadata=True,
-                    can_publish=True,
-                    can_subscribe=True,
-                )
-            )
-            .with_kind("agent")
-            .to_jwt()
-        )
+        _, api_key, api_secret = _server_credentials()
+        token = _core.room_join_token(api_key, api_secret, identity, room_name, agent=True)
         await self._room.connect(self._job._info.url, token)
         return _core._core_create_room_session(Room.of(self._room))
 

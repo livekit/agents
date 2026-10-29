@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use livekit_api::access_token::{AccessToken, AgentGrants};
 pub use livekit_protocol::agent_db::wire;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::transport::TransportError;
@@ -793,8 +792,6 @@ impl Drop for Request<'_> {
     }
 }
 
-pub const TOKEN_TTL: Duration = Duration::from_secs(3600);
-
 /// The API key and secret, held for the life of the client; a token is minted on every dial.
 #[derive(Clone)]
 pub struct TokenMinter {
@@ -830,12 +827,9 @@ impl TokenMinter {
         &self.api_secret
     }
 
-    /// A fresh token: [`TOKEN_TTL`] long, with the `agent.databaseAdmin` grant.
+    /// A fresh token with the `agent.databaseAdmin` grant, signed by net.
     pub fn mint(&self) -> Result<String, StorageError> {
-        AccessToken::with_api_key(&self.api_key, &self.api_secret)
-            .with_ttl(TOKEN_TTL)
-            .with_agent_grants(AgentGrants { database_admin: true, ..Default::default() })
-            .to_jwt()
+        lk_agents_net::token::database_admin_token(&self.api_key, &self.api_secret)
             .map_err(|e| StorageError::Invalid(format!("token: {e}")))
     }
 }

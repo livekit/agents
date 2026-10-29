@@ -1656,7 +1656,6 @@ dependencies = [
  "httparse",
  "libc",
  "livekit-protocol",
- "livekit-token",
  "lk-agents-abi",
  "lk-agents-net",
  "log",

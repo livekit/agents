@@ -439,8 +439,9 @@ async fn serve_dev_channel(
             log::info!(target: LOG, "reloading {} job(s)", kept.jobs.len());
             let mut jobs = Vec::with_capacity(kept.jobs.len());
             for mut job in kept.jobs {
-                job.token = crate::auth::extend_job_token(&job.token, &api_key, &api_secret)
-                    .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
+                job.token =
+                    lk_agents_net::token::extend_job_token(&job.token, &api_key, &api_secret)
+                        .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
                 job.url = url.clone();
                 jobs.push(from_proto(job));
             }

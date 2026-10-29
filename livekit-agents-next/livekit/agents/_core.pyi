@@ -353,4 +353,5 @@ from ._generated._core_worker import (
     ipc_pair as ipc_pair,
     job_timeline as job_timeline,
     parse_cli as parse_cli,
+    room_join_token as room_join_token,
 )

@@ -404,9 +404,9 @@ fn dial(
     let timeout = config.connection_timeout;
     let mut headers = config.headers.clone();
     if !config.api_key.is_empty() && !config.api_secret.is_empty() {
-        let jwt = crate::auth::worker_token(&config.api_key, &config.api_secret)
+        let jwt = lk_agents_net::token::worker_token(&config.api_key, &config.api_secret)
             .map_err(|e| RuntimeError::Configuration(e.to_string()))?;
-        headers.push(crate::auth::authorization_header(&jwt));
+        headers.push(("Authorization".to_owned(), format!("Bearer {jwt}")));
     }
     Ok(async move {
         tokio::time::timeout(timeout, transport.connect(&url, token.as_deref(), headers))

@@ -19,6 +19,19 @@ from .worker_ipc import StartJobFields
 from .worker_options import ServerOptions
 from .worker_server import EndpointRoute
 
+def room_join_token(
+    api_key: str,
+    api_secret: str,
+    identity: str,
+    room: str,
+    *,
+    agent: bool = False,
+    ttl: float | None = None,
+) -> str:
+    """A token joining `room` as `identity`, publishing, subscribing and updating its own
+    metadata; `agent` joins as an agent. `ttl` in seconds; the signer's default when `None`.
+    """
+
 class EndpointStream:
     async def read(self, max_bytes: int = 65536) -> bytes: ...
     async def write(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...

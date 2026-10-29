@@ -10,6 +10,23 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/worker/mod.rs.
+type JoinTokensImpl = <crate::Selected as super::Implementations>::JoinTokens;
+
+fn _extract_join_tokens_room_join_token_ttl(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "ttl")).map(Some) }
+}
+
+/// A token joining `room` as `identity`, publishing, subscribing and updating its own
+/// metadata; `agent` joins as an agent. `ttl` in seconds; the signer's default when `None`.
+#[pyfunction]
+#[pyo3(signature = (api_key, api_secret, identity, room, *, agent = false, ttl = None))]
+pub fn room_join_token(api_key: ::std::string::String, api_secret: ::std::string::String, identity: ::std::string::String, room: ::std::string::String, agent: bool, #[pyo3(from_py_with = _extract_join_tokens_room_join_token_ttl)] ttl: ::std::option::Option<f64>) -> PyResult<::std::string::String> {
+    crate::host::check_pid()?;
+    let out = <JoinTokensImpl as ::lk_agents_abi::worker::JoinTokens>::room_join_token(api_key, api_secret, identity, room, agent, ttl).map_err(|e: ::lk_agents_abi::worker::TokenRefused| <::lk_agents_abi::worker::TokenRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
 type EndpointStreamImpl = <crate::Selected as super::Implementations>::EndpointStream;
 

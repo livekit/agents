@@ -45,7 +45,9 @@ pub fn simulated_job(
 ) -> Result<RunningJobInfo, String> {
     let token = token.filter(|t| !t.is_empty());
     let agent_identity = match (&token, agent_identity) {
-        (Some(token), _) => Some(crate::token_identity(token).map_err(|e| e.to_string())?),
+        (Some(token), _) => {
+            Some(lk_agents_net::token::token_identity(token).map_err(|e| e.to_string())?)
+        }
         (None, identity) => identity,
     };
     let identity = match agent_identity {
@@ -73,8 +75,15 @@ pub fn simulated_job(
         None if fake_job && (settings.api_key.is_empty() || settings.api_secret.is_empty()) => {
             String::new()
         }
-        None => crate::agent_join_token(&settings.api_key, &settings.api_secret, &identity, room)
-            .map_err(|e| e.to_string())?,
+        None => lk_agents_net::token::room_join_token(
+            &settings.api_key,
+            &settings.api_secret,
+            &identity,
+            room,
+            true,
+            None,
+        )
+        .map_err(|e| e.to_string())?,
     };
     Ok(RunningJobInfo {
         accept_arguments: AcceptArguments {

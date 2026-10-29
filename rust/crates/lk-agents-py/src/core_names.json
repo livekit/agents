@@ -260,6 +260,7 @@
     "resolve_interruption_detector",
     "resolve_keyterm_detection",
     "resolve_mcp_tool_options",
+    "room_join_token",
     "rt_server_turn_detection",
     "rtc_wire_names",
     "send_dtmf_events",

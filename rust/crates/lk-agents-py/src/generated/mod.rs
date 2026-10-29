@@ -160,6 +160,7 @@ pub trait Implementations: 'static {
     type RoomVideoInput: ::lk_agents_abi::voice::room_owner::RoomVideoInput;
     type RoomSession: ::lk_agents_abi::voice::room_owner::RoomSession;
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime<Room = Self::RoomSession>;
+    type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
     type EndpointStream: ::lk_agents_abi::worker::endpoint_host::EndpointStream;
     type EndpointServer: ::lk_agents_abi::worker::endpoint_host::EndpointServer;
     type AsgiReceive: ::lk_agents_abi::worker::endpoint_host::AsgiReceive;
@@ -414,6 +415,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
     m.add_class::<worker::EndpointStream>()?;
     m.add_class::<worker::EndpointServer>()?;
     m.add_class::<worker::_core_AsgiReceive>()?;
