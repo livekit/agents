@@ -11,11 +11,8 @@ use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use tokio::sync::mpsc;
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-#[rustfmt::skip]
-use super::{
-    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, HostException,
-};
+// The bridge's shared items, `AsyncMutex` included: each use site carries its own allowance.
+use super::*;
 use crate::errors::ProviderError;
 
 type Item = Result<Py<PyAny>, ProviderError>;
