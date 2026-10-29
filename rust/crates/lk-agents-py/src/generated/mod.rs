@@ -52,6 +52,7 @@ pub trait Implementations: 'static {
     type InferenceModels: ::lk_agents_abi::inference::InferenceModels;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts<Stream = Self::InferenceTtsStream>;
+    type ChatContextPlans: ::lk_agents_abi::llm::chat_context::ChatContextPlans;
     type ChatContextDiffs: ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs;
     type FixedGate: ::lk_agents_abi::llm::duplex::FixedGate;
     type AdaptiveNoiseGate: ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate;
@@ -208,6 +209,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::merge_realtime_capabilities, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
+    m.add_function(wrap_pyfunction!(llm::chat_ctx_copy_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(llm::chat_ctx_truncate_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(llm::chat_ctx_merge_plan, m)?)?;
     m.add_function(wrap_pyfunction!(llm::compute_chat_ctx_diff, m)?)?;
     m.add_class::<llm::FixedGate>()?;
     m.add_class::<llm::AdaptiveNoiseGate>()?;

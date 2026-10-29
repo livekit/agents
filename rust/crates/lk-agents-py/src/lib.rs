@@ -47,6 +47,7 @@ impl generated::Implementations for Selected {
     type LanguageFunctions = lk_agents_runtime::cores::Languages;
     type ApiErrorFunctions = lk_agents_runtime::net::http::HttpErrors;
     type ChatContextDiffs = lk_agents_runtime::cores::ChatDiffs;
+    type ChatContextPlans = lk_agents_runtime::cores::ChatPlans;
     type ConnectOptionsFunctions = lk_agents_runtime::net::attempts::ConnectOptionsRules;
     type SentencePacer = lk_agents_runtime::inference::tts::pacer::SentencePacer;
     type SynthesisChecks = lk_agents_runtime::inference::tts::checks::SynthesisChecks;

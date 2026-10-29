@@ -438,7 +438,6 @@ fn text_message(parts: Vec<String>, assistant: bool) -> ChatMessage {
 }
 
 /// `ChatMessage.raw_text_content` over the message's text parts.
-#[crate::host(export)]
 pub fn chat_message_raw_text_content(parts: Vec<String>) -> Option<String> {
     text_message(parts, false).raw_text_content()
 }
@@ -846,6 +845,8 @@ chat_item_from!(
 
 mod history;
 pub use history::{ItemFacts, copy_excludes_facts, copy_plan, merge_plan, truncate_plan};
+mod plans;
+pub use plans::{ChatContextPlans, ChatFactsError, HostFacts};
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "chat_items", path = "livekit.agents.llm.chat_context"))]
@@ -954,92 +955,6 @@ impl From<Vec<ChatItem>> for ChatContext {
     fn from(items: Vec<ChatItem>) -> Self {
         ChatContext { items }
     }
-}
-
-/// `(type, id, role, len(content), name, created_at, call_id)`.
-pub type HostFacts = (String, String, Option<String>, usize, Option<String>, f64, Option<String>);
-
-fn host_facts(facts: &[HostFacts]) -> Result<Vec<ItemFacts<'_>>, String> {
-    facts
-        .iter()
-        .map(|(kind, id, role, content_len, name, created_at, call_id)| {
-            Ok(ItemFacts {
-                kind: kind.parse()?,
-                role: role.as_deref().map(str::parse).transpose()?,
-                content_len: *content_len,
-                tool_name: name.as_deref(),
-                call_id: call_id.as_deref(),
-                id,
-                created_at: crate::wall_from_secs(*created_at)
-                    .ok_or_else(|| format!("created_at={created_at} is not a usable wall clock"))?,
-            })
-        })
-        .collect()
-}
-
-/// `ChatContext.copy` as an index plan over the host's own items.
-#[allow(clippy::too_many_arguments)]
-#[crate::host(export(
-    pid = false,
-    name = "chat_ctx_copy_plan",
-    kw_only = "exclude_function_call",
-    defaults(
-        exclude_function_call = false,
-        exclude_instructions = false,
-        exclude_empty_message = false,
-        exclude_handoff = false,
-        exclude_config_update = false
-    )
-))]
-pub fn copy_plan_of(
-    facts: Vec<HostFacts>,
-    exclude_function_call: bool,
-    exclude_instructions: bool,
-    exclude_empty_message: bool,
-    exclude_handoff: bool,
-    exclude_config_update: bool,
-    tools: Option<Vec<String>>,
-) -> Result<Vec<usize>, String> {
-    let opts = CopyOptions {
-        exclude_function_call,
-        exclude_instructions,
-        exclude_empty_message,
-        exclude_handoff,
-        exclude_config_update,
-        tools,
-    };
-    Ok(copy_plan(&host_facts(&facts)?, &opts))
-}
-
-/// `ChatContext.truncate` as an index plan; `None` when under the limit.
-#[crate::host(export(pid = false, name = "chat_ctx_truncate_plan"))]
-pub fn truncate_plan_of(
-    facts: Vec<HostFacts>,
-    max_items: i64,
-) -> Result<Option<Vec<usize>>, String> {
-    Ok(truncate_plan(&host_facts(&facts)?, max_items))
-}
-
-/// `ChatContext.merge` as `(index, j)` insertions.
-#[crate::host(export(
-    pid = false,
-    name = "chat_ctx_merge_plan",
-    kw_only = "exclude_function_call",
-    defaults(
-        exclude_function_call = false,
-        exclude_instructions = false,
-        exclude_config_update = false
-    )
-))]
-pub fn merge_plan_of(
-    mine: Vec<HostFacts>,
-    theirs: Vec<HostFacts>,
-    exclude_function_call: bool,
-    exclude_instructions: bool,
-    exclude_config_update: bool,
-) -> Result<Vec<(usize, usize)>, String> {
-    let opts = MergeOptions { exclude_function_call, exclude_instructions, exclude_config_update };
-    Ok(merge_plan(&host_facts(&mine)?, &host_facts(&theirs)?, &opts))
 }
 
 // The two methods no declaration expresses: each builds the host's view of a variant.

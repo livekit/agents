@@ -208,7 +208,6 @@
     "chat_ctx_to_dict",
     "chat_ctx_truncate_plan",
     "chat_history_summary_xml",
-    "chat_message_raw_text_content",
     "chat_message_text_content",
     "compute_chat_ctx_diff",
     "convert_expression_tags",

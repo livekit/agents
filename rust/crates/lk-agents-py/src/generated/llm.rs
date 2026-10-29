@@ -10,6 +10,53 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/llm/chat_context/plans.rs.
+type ChatContextPlansImpl = <crate::Selected as super::Implementations>::ChatContextPlans;
+
+fn _extract_chat_context_plans_copy_plan_facts(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 7 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 7 items", "facts"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; let item_5 = tuple.get_item(5)?; let item_6 = tuple.get_item(6)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (if item_2.is_none() { Ok(None) } else { (item_2.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "facts"))?, (if item_4.is_none() { Ok(None) } else { (item_4.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "facts"))?, (if item_6.is_none() { Ok(None) } else { (item_6.extract::<::std::string::String>()).map(Some) })?,)) })() }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_chat_context_plans_truncate_plan_facts(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 7 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 7 items", "facts"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; let item_5 = tuple.get_item(5)?; let item_6 = tuple.get_item(6)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (if item_2.is_none() { Ok(None) } else { (item_2.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "facts"))?, (if item_4.is_none() { Ok(None) } else { (item_4.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "facts"))?, (if item_6.is_none() { Ok(None) } else { (item_6.extract::<::std::string::String>()).map(Some) })?,)) })() }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_chat_context_plans_truncate_plan_max_items(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "max_items")
+}
+
+fn _extract_chat_context_plans_merge_plan_mine(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 7 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 7 items", "mine"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; let item_5 = tuple.get_item(5)?; let item_6 = tuple.get_item(6)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (if item_2.is_none() { Ok(None) } else { (item_2.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "mine"))?, (if item_4.is_none() { Ok(None) } else { (item_4.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "mine"))?, (if item_6.is_none() { Ok(None) } else { (item_6.extract::<::std::string::String>()).map(Some) })?,)) })() }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_chat_context_plans_merge_plan_theirs(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 7 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 7 items", "theirs"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; let item_5 = tuple.get_item(5)?; let item_6 = tuple.get_item(6)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (if item_2.is_none() { Ok(None) } else { (item_2.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "theirs"))?, (if item_4.is_none() { Ok(None) } else { (item_4.extract::<::std::string::String>()).map(Some) })?, (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "theirs"))?, (if item_6.is_none() { Ok(None) } else { (item_6.extract::<::std::string::String>()).map(Some) })?,)) })() }).collect::<PyResult<Vec<_>>>())
+}
+
+/// `ChatContext.copy` as an index plan over the host's own items.
+#[pyfunction]
+#[pyo3(signature = (facts, *, exclude_function_call = false, exclude_instructions = false, exclude_empty_message = false, exclude_handoff = false, exclude_config_update = false, tools = None))]
+pub fn chat_ctx_copy_plan(#[pyo3(from_py_with = _extract_chat_context_plans_copy_plan_facts)] facts: ::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>, exclude_function_call: bool, exclude_instructions: bool, exclude_empty_message: bool, exclude_handoff: bool, exclude_config_update: bool, tools: ::std::option::Option<::std::vec::Vec<::std::string::String>>) -> PyResult<::std::vec::Vec<usize>> {
+    let out = <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::copy_plan(facts, exclude_function_call, exclude_instructions, exclude_empty_message, exclude_handoff, exclude_config_update, tools).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// `ChatContext.truncate` as an index plan; `None` when under the limit.
+#[pyfunction]
+#[pyo3(signature = (facts, max_items))]
+pub fn chat_ctx_truncate_plan(#[pyo3(from_py_with = _extract_chat_context_plans_truncate_plan_facts)] facts: ::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>, #[pyo3(from_py_with = _extract_chat_context_plans_truncate_plan_max_items)] max_items: i64) -> PyResult<::std::option::Option<::std::vec::Vec<usize>>> {
+    let out = <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::truncate_plan(facts, max_items).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// `ChatContext.merge` as `(index, j)` insertions.
+#[pyfunction]
+#[pyo3(signature = (mine, theirs, *, exclude_function_call = false, exclude_instructions = false, exclude_config_update = false))]
+pub fn chat_ctx_merge_plan(#[pyo3(from_py_with = _extract_chat_context_plans_merge_plan_mine)] mine: ::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>, #[pyo3(from_py_with = _extract_chat_context_plans_merge_plan_theirs)] theirs: ::std::vec::Vec<(::std::string::String, ::std::string::String, ::std::option::Option<::std::string::String>, usize, ::std::option::Option<::std::string::String>, f64, ::std::option::Option<::std::string::String>)>, exclude_function_call: bool, exclude_instructions: bool, exclude_config_update: bool) -> PyResult<::std::vec::Vec<(usize, usize)>> {
+    let out = <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::merge_plan(mine, theirs, exclude_function_call, exclude_instructions, exclude_config_update).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/ctx_diff.rs.
 type ChatContextDiffsImpl = <crate::Selected as super::Implementations>::ChatContextDiffs;
 

@@ -105,8 +105,8 @@ pub use llm::chat_context::{
     MetricsMetadata, MetricsReport, Modality, Role, UnknownLiteral,
 };
 pub use llm::chat_context::{
-    ChatContext, CopyOptions, HostFacts, ItemFacts, MergeOptions, copy_excludes_facts, copy_plan,
-    copy_plan_of, merge_plan, merge_plan_of, truncate_plan, truncate_plan_of,
+    ChatContext, CopyOptions, ItemFacts, MergeOptions, copy_excludes_facts, copy_plan, merge_plan,
+    truncate_plan,
 };
 pub use llm::chat_context::{Extra, chat_message_raw_text_content};
 pub use llm::events::{ChoiceDelta, CompletionUsage, FunctionToolCall, LlmChunk};

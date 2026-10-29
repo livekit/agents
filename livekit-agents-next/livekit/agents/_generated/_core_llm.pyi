@@ -23,6 +23,34 @@ from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 from .tool_context import DuplicateMode, DuplicateScope
 
+def chat_ctx_copy_plan(
+    facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
+    *,
+    exclude_function_call: bool = False,
+    exclude_instructions: bool = False,
+    exclude_empty_message: bool = False,
+    exclude_handoff: bool = False,
+    exclude_config_update: bool = False,
+    tools: Sequence[str] | None = None,
+) -> list[int]:
+    """`ChatContext.copy` as an index plan over the host's own items."""
+
+def chat_ctx_truncate_plan(
+    facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
+    max_items: int,
+) -> list[int] | None:
+    """`ChatContext.truncate` as an index plan; `None` when under the limit."""
+
+def chat_ctx_merge_plan(
+    mine: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
+    theirs: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
+    *,
+    exclude_function_call: bool = False,
+    exclude_instructions: bool = False,
+    exclude_config_update: bool = False,
+) -> list[tuple[int, int]]:
+    """`ChatContext.merge` as `(index, j)` insertions."""
+
 def compute_chat_ctx_diff(
     old: Sequence[ChatItem],
     new: Sequence[ChatItem],
