@@ -123,6 +123,7 @@ from .run_result import _VoiceRun
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..storage.backends import Storage
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from .amd import AMD
@@ -282,6 +283,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._thread = thread
         self._voice_store: Any = None
         self._store: ContextStore | None = None
+        # the in-memory storage of a call with no loaded lane
+        self._memory: Storage | None = None
 
         self._core: _core.VoiceSession = None  # type: ignore[assignment]
         self._room: rtc.Room | None = None
@@ -337,9 +340,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @property
     def store(self) -> ContextStore:
-        """The active host's explicitly managed context store."""
+        """The call's store for explicit ``load_context`` and ``save_context``: the thread's
+        lane, or memory when the call has no thread or its lane did not load."""
         if self._store is None:
-            raise RuntimeError("This session has no thread storage")
+            raise RuntimeError("VoiceSession isn't running")
         return self._store
 
     @property
@@ -470,8 +474,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             hosting = hosting or plan.hosting
             job_ctx.init_recording(self._recording_options)
 
+        from ..storage.context_store import ContextStore
+
         if self._thread is not None:
-            from ..storage.context_store import ContextStore
             from ..storage.errors import StorageError
 
             try:
@@ -489,6 +494,17 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._chat_ctx = ChatContext([from_core_item(item) for item in saved])
             except StorageError as error:
                 logger.warning("the voice lane could not be loaded", extra={"error": str(error)})
+        if self._store is None:
+            # no lane to save into: the call's context fields load and save in memory
+            from ..storage.backends import Storage
+
+            self._memory = Storage({}, None)
+            info = await self._memory.threads.create_thread()
+            self._store = ContextStore(
+                activation=await self._memory.threads._core_context_store(
+                    info.thread_id, agent.name
+                )
+            )
 
         hooks = _AgentHooks(self)
         frame = self._frame(agent)
@@ -631,6 +647,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._voice_store.aclose()
             except StorageError as error:
                 logger.warning("the voice store could not close", extra={"error": str(error)})
+        if self._memory is not None:
+            assert self._store is not None
+            self._store._close()
+            await self._memory.aclose()
         if self._recording_finished is None and self._recorder is not None:
             self._recording_finished = asyncio.ensure_future(self._recorder.finish())
         if self._recording_finished is not None:

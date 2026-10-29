@@ -194,6 +194,27 @@ async def test_storage_failure_at_voice_start_is_logged_without_ending_the_call(
         assert "the voice lane could not be loaded" in caplog.text
 
 
+@pytest.mark.parametrize("deleted_thread", [False, True])
+async def test_call_without_a_loaded_lane_keeps_its_context_in_memory(
+    thread_storage: Storage,
+    deleted_thread: bool,
+) -> None:
+    thread = None
+    if deleted_thread:
+        thread_id = await new_session(thread_storage, "desk")
+        thread = Thread(thread_storage, thread_id, agent_name="desk")
+        await thread_storage.threads.delete_thread(thread_id)
+    app = Application()
+    async with VoiceSession(llm=ObservedLLM(), context=app, thread=thread) as session:
+        await session.start(Agent(instructions="desk", name="desk"))
+        await session.store.load_context(app)
+        app.draft.count = 2
+        await session.store.save_context(app)
+        restored = Application()
+        await session.store.load_context(restored)
+        assert restored.draft.count == 2
+
+
 async def test_failed_voice_generation_abandons_saved_fields_before_the_next_turn(
     thread_storage: Storage,
 ) -> None:
