@@ -8,7 +8,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/api.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/host.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/provider.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/inference/fallback.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/chat_context.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/events.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/llm.rs",

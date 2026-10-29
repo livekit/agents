@@ -218,17 +218,17 @@ pub fn stt_resolve_vad_for_model(model: ::std::option::Option<::std::string::Str
 /// `_normalize_fallback`'s string arm for an STT chain.
 #[pyfunction]
 #[pyo3(signature = (model))]
-pub fn stt_normalize_fallback_str(model: ::std::string::String) -> PyResult<::lk_agents_abi::inference::fallback::SttFallbackModel> {
+pub fn stt_normalize_fallback_str<'py>(py: Python<'py>, model: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_normalize_fallback_str(model);
-    Ok(out)
+    Ok(crate::generated::records::inference_stt::fallback_model_to_py(py, out)?)
 }
 
 /// `_normalize_fallback`'s string arm for a TTS chain.
 #[pyfunction]
 #[pyo3(signature = (model))]
-pub fn tts_normalize_fallback_str(model: ::std::string::String) -> PyResult<::lk_agents_abi::inference::fallback::TtsFallbackModel> {
+pub fn tts_normalize_fallback_str<'py>(py: Python<'py>, model: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_normalize_fallback_str(model);
-    Ok(out)
+    Ok(crate::generated::records::inference_tts::fallback_model_to_py(py, out)?)
 }
 
 /// `inference.STT`'s capabilities. Word alignment holds only when the model and every
@@ -366,7 +366,7 @@ impl InferenceTts {
     fn new(model: ::std::string::String, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, conn_options: ::lk_agents_abi::ApiConnectOptions, voice: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, encoding: ::std::string::String, #[pyo3(from_py_with = _extract_inference_tts_new_sample_rate)] sample_rate: u32, extra_kwargs: Option<Bound<'_, PyAny>>, fallback: Option<Bound<'_, PyAny>>) -> PyResult<InferenceTts> {
         ::lk_agents_abi::python::check_pid()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }).transpose()?;
-        let fallback = fallback.map(|v| v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| items.iter().map(|item| { if !item.is_instance_of::<::pyo3::types::PyDict>() { return Err(::pyo3::exceptions::PyValueError::new_err("each fallback entry must be a dict")); } item.extract::<::lk_agents_abi::inference::fallback::TtsFallbackModel>() }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let fallback = fallback.map(|v| v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| items.iter().map(|item| { if !item.is_instance_of::<::pyo3::types::PyDict>() { return Err(::pyo3::exceptions::PyValueError::new_err("each fallback entry must be a dict")); } crate::generated::records::inference_tts::fallback_model_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(model, base_url, api_key, api_secret, conn_options, voice, language, encoding, sample_rate, extra_kwargs, fallback).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InferenceTts(::std::sync::Arc::new(out)))
     }

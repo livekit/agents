@@ -13,7 +13,8 @@ from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 
 from .._core import InferenceTtsStream
-from .inference_tts import FallbackModel
+from .inference_stt import FallbackModel
+from .inference_tts import FallbackModel as HostFallbackModel
 from .realtime import RealtimeCapabilities
 from .stt import STTCapabilities
 from .tts import TTSCapabilities
@@ -111,10 +112,10 @@ def eot_select(
 def stt_resolve_vad_for_model(model: str | None = None, *, has_vad: bool = False) -> str:
     """`_resolve_vad_for_model`: what the host does with the caller's VAD for this model."""
 
-def stt_normalize_fallback_str(model: str) -> dict[str, object]:
+def stt_normalize_fallback_str(model: str) -> FallbackModel:
     """`_normalize_fallback`'s string arm for an STT chain."""
 
-def tts_normalize_fallback_str(model: str) -> dict[str, object]:
+def tts_normalize_fallback_str(model: str) -> HostFallbackModel:
     """`_normalize_fallback`'s string arm for a TTS chain."""
 
 def stt_capabilities(
@@ -203,7 +204,7 @@ class InferenceTts:
         encoding: str = "pcm_s16le",
         sample_rate: int = 24000,
         extra_kwargs: dict[str, object] | None = None,
-        fallback: list[FallbackModel] | None = None,
+        fallback: list[HostFallbackModel] | None = None,
     ) -> None: ...
     def set_expressive(self, expressive: bool) -> None: ...
     @property

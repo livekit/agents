@@ -1166,6 +1166,56 @@ pub mod evals {
     }
 }
 
+pub mod inference_stt {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/fallback.rs.
+
+    pub fn fallback_model_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::inference::fallback::SttFallbackModel> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::inference::fallback::SttFallbackModel {
+                model: { let v = obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model"))?; ((&v).extract::<::std::string::String>())? },
+                extra_kwargs: match obj.get_item("extra_kwargs")? { Some(v) if !v.is_none() => Some((match ::lk_agents_abi::python::value_from_py((&v), "FallbackModel.extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FallbackModel.extra_kwargs: expected a dict")) })?), _ => None },
+            })
+    }
+
+    pub fn fallback_model_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::inference::fallback::SttFallbackModel) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::inference::fallback::SttFallbackModel { model, extra_kwargs } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("model", ::pyo3::IntoPyObjectExt::into_bound_py_any(model, py)?)?;
+            if let Some(x) = extra_kwargs {
+                dict.set_item("extra_kwargs", ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any())?;
+            }
+            Ok(dict.into_any())
+    }
+}
+
+pub mod inference_tts {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/fallback.rs.
+
+    pub fn fallback_model_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::inference::fallback::TtsFallbackModel> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::inference::fallback::TtsFallbackModel {
+                model: { let v = obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model"))?; ((&v).extract::<::std::string::String>())? },
+                voice: match obj.get_item("voice")? { Some(v) if !v.is_none() => ((&v).extract::<::std::string::String>())?, _ => "".to_owned() },
+                extra_kwargs: match obj.get_item("extra_kwargs")? { Some(v) if !v.is_none() => Some((match ::lk_agents_abi::python::value_from_py((&v), "FallbackModel.extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FallbackModel.extra_kwargs: expected a dict")) })?), _ => None },
+            })
+    }
+
+    pub fn fallback_model_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::inference::fallback::TtsFallbackModel) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::inference::fallback::TtsFallbackModel { model, voice, extra_kwargs } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("model", ::pyo3::IntoPyObjectExt::into_bound_py_any(model, py)?)?;
+            dict.set_item("voice", ::pyo3::IntoPyObjectExt::into_bound_py_any(voice, py)?)?;
+            if let Some(x) = extra_kwargs {
+                dict.set_item("extra_kwargs", ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any())?;
+            }
+            Ok(dict.into_any())
+    }
+}
+
 pub mod io_events {
     use pyo3::prelude::*;
 

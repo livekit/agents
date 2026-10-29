@@ -1,7 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
-#     rust/crates/lk-agents-abi/src/inference/fallback.rs
 #     rust/crates/lk-agents-abi/src/inference/mod.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -9,9 +8,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
-from typing_extensions import NotRequired
+# The declared records.
 
 
 class FallbackModel(TypedDict):
@@ -25,9 +24,9 @@ class FallbackModel(TypedDict):
 
     model: str
     """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
-    voice: str
+    voice: NotRequired[str]
     """Voice to use for the model."""
-    extra_kwargs: NotRequired[dict[str, Any]]
+    extra_kwargs: NotRequired[dict[str, object]]
     """Extra configuration for the model."""
 
 
@@ -149,7 +148,6 @@ TTSEncoding = Literal["pcm_s16le"]
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-FallbackModel.__module__ = "livekit.agents.inference.tts"
 CartesiaOptions.__module__ = "livekit.agents.inference.tts"
 DeepgramOptions.__module__ = "livekit.agents.inference.tts"
 RimeOptions.__module__ = "livekit.agents.inference.tts"
