@@ -228,11 +228,10 @@ from ._generated._core_tokenize import (
     xml_tokenize as xml_tokenize,
 )
 from ._generated._core_tts import (
-    FallbackTtsStream as FallbackTtsStream,
-    InferenceTtsStream as InferenceTtsStream,
     Markup as Markup,
     SentencePacer as SentencePacer,
     TranscriptMarkupStripper as TranscriptMarkupStripper,
+    TtsStream as TtsStream,
     chat_ctx_summarize_plan as chat_ctx_summarize_plan,
     chat_history_summary_xml as chat_history_summary_xml,
     chat_message_text_content as chat_message_text_content,

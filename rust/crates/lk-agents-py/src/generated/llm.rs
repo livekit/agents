@@ -411,7 +411,7 @@ impl FallbackTts {
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, text, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::FallbackTtsStream(::std::sync::Arc::new(out)), py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::TtsStream(::std::sync::Arc::new(out)), py))
         })
     }
 
@@ -422,7 +422,7 @@ impl FallbackTts {
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::FallbackTtsStream(::std::sync::Arc::new(out)), py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::TtsStream(::std::sync::Arc::new(out)), py))
         })
     }
 }

@@ -111,8 +111,7 @@ impl generated::Implementations for Selected {
     type TtsTokenLog = lk_agents_runtime::inference::fallback::TokenLog;
     type FallbackTts = lk_agents_runtime::inference::fallback::FallbackTts;
     type InferenceTts = lk_agents_runtime::inference::tts::GatewayTts;
-    type FallbackTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
-    type InferenceTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
+    type TtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
     type StreamAdapterFunctions = lk_agents_runtime::inference::tts::adapter::AdapterStreams;
     type TokenizeFunctions = lk_agents_runtime::cores::SpeechTokenizer;
     type HostTokenization = lk_agents_runtime::cores::HostTokenizer;

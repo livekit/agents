@@ -3,26 +3,12 @@
 use crate::SynthesizedAudio;
 use crate::errors::{ProviderError, PullError};
 
-/// One live synthesis.
-#[crate::host(class(name = "InferenceTtsStream"))]
-pub trait InferenceTtsStream: Send + Sync + Sized + 'static {
+/// One synthesis, `SynthesizeStream`'s shape: text in through `push_text`, `flush` and
+/// `end_input`, audio out through `recv`. `aclose` cancels it; it does not end the input.
+#[crate::host(class(name = "TtsStream"))]
+pub trait TtsStream: Send + Sync + Sized + 'static {
     #[host(call)]
-    fn push(&self, text: String) -> Result<(), ProviderError>;
-    #[host(call)]
-    fn flush(&self) -> Result<(), ProviderError>;
-    #[host(call)]
-    fn end_input(&self) -> Result<(), ProviderError>;
-    #[host(await)]
-    async fn recv(&self) -> Result<Option<SynthesizedAudio>, PullError>;
-    #[host(await)]
-    async fn aclose(&self);
-}
-
-/// One synthesis, served by whichever entry the chain picks.
-#[crate::host(class(name = "FallbackTtsStream"))]
-pub trait FallbackTtsStream: Send + Sync + Sized + 'static {
-    #[host(call)]
-    fn push_text(&self, token: String) -> Result<(), ProviderError>;
+    fn push_text(&self, text: String) -> Result<(), ProviderError>;
     #[host(call)]
     fn flush(&self) -> Result<(), ProviderError>;
     #[host(call)]

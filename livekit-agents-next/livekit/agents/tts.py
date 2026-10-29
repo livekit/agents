@@ -151,7 +151,7 @@ def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:
 
 
 async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:
-    """Forward a core synthesis (``_core.*TtsStream``) into ``output_emitter``."""
+    """Forward a core ``TtsStream`` into ``output_emitter``."""
     out = _into(output_emitter, stream=stream)
     while (audio := await native.recv()) is not None:
         out(audio)
@@ -300,18 +300,15 @@ async def _duplex(
     output_emitter: AudioEmitter,
     texts: Any,
     lower: Any,
-    push: Any = None,
 ) -> None:
-    """Text from ``texts`` into a core duplex synthesis (``push``, its ``push_text`` by default),
-    its audio into ``output_emitter``."""
-    push = push or native.push_text
+    """Text from ``texts`` into a core ``TtsStream``, its audio into ``output_emitter``."""
 
     def feed(text: Any) -> None:
         if isinstance(text, SynthesizeStream.Flush):
             native.flush()
         elif text := lower(text):
             stream.mark_started()
-            push(text)
+            native.push_text(text)
 
     await _bindings.pump(native, texts, feed, _into(output_emitter, stream=True))
 

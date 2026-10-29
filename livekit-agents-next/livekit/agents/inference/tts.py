@@ -326,4 +326,4 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        await tts._duplex(self, native, output_emitter, self.input, lambda t: t, native.push)
+        await tts._duplex(self, native, output_emitter, self.input, lambda t: t)

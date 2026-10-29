@@ -71,7 +71,7 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    #[host(class(name = "FallbackTtsStream"))]
+    #[host(class(name = "TtsStream"))]
     type Stream;
     #[host(new)]
     fn new(

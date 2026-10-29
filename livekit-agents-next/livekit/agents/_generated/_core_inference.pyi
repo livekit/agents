@@ -11,7 +11,7 @@ from typing import Any
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 
-from .._core import InferenceTtsStream
+from .._core import TtsStream
 from .inference_stt import FallbackModel
 from .inference_tts import FallbackModel as HostFallbackModel
 from .stt import STTCapabilities
@@ -204,4 +204,4 @@ class InferenceTts:
         *,
         headers: Sequence[tuple[str, str]] | None = None,
         conn_options: APIConnectOptions | None = None,
-    ) -> InferenceTtsStream: ...
+    ) -> TtsStream: ...

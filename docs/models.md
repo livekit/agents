@@ -57,7 +57,9 @@ errors keep their class and diagnostic cause through an agent run.
 
 `retryable` permits retry consideration; it does not establish safe replay.
 Delivered output is not replayed on failure without a deduplication protocol.
-A TTS stream speaks every flushed segment once. Provider cancellation ends
+A TTS stream (`tts.stream()`) takes text through `push_text()`, `flush()` and
+`end_input()`, and speaks every flushed segment once; `aclose()` cancels it
+without ending its input. Provider cancellation ends
 the request without retry or a provider-health penalty.
 
 A concurrent pull of a provider stream raises `StreamStateError` without

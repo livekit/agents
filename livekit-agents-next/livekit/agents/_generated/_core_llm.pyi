@@ -18,7 +18,7 @@ from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 from livekit.rtc import AudioFrame
 
-from .._core import ChatItem, FallbackTtsStream
+from .._core import ChatItem, TtsStream
 from .llm import ChatChunk
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
@@ -157,8 +157,8 @@ class FallbackTts:
         self,
         text: str,
         conn_options: APIConnectOptions | None = None,
-    ) -> FallbackTtsStream: ...
-    async def stream(self, conn_options: APIConnectOptions | None = None) -> FallbackTtsStream: ...
+    ) -> TtsStream: ...
+    async def stream(self, conn_options: APIConnectOptions | None = None) -> TtsStream: ...
 
 class TtsTokenLog:
     """The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text

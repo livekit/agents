@@ -36,7 +36,7 @@ pub trait StreamAdapterFunctions {
     #[host(env)]
     type Env;
 
-    #[host(class(name = "FallbackTtsStream"))]
+    #[host(class(name = "TtsStream"))]
     type Stream;
 
     #[host(function)]

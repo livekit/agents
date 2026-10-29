@@ -178,7 +178,7 @@ pub fn tts_adapter_stream<'py>(py: Python<'py>, provider: Bound<'_, PyAny>, conn
     let provider = crate::generated::tts::TtsProxy::from_host(&provider)?;
     crate::host::future_into_py(py, async move {
         let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(&env, provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::FallbackTtsStream(::std::sync::Arc::new(out)), py))
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::TtsStream(::std::sync::Arc::new(out)), py))
     })
 }
 
@@ -239,30 +239,31 @@ impl SentencePacer {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
-type InferenceTtsStreamImpl = <crate::Selected as super::Implementations>::InferenceTtsStream;
+type TtsStreamImpl = <crate::Selected as super::Implementations>::TtsStream;
 
-/// One live synthesis.
-#[pyclass(frozen, name = "InferenceTtsStream", module = "livekit.agents._core")]
-pub struct InferenceTtsStream(pub(crate) ::std::sync::Arc<InferenceTtsStreamImpl>);
+/// One synthesis, `SynthesizeStream`'s shape: text in through `push_text`, `flush` and
+/// `end_input`, audio out through `recv`. `aclose` cancels it; it does not end the input.
+#[pyclass(frozen, name = "TtsStream", module = "livekit.agents._core")]
+pub struct TtsStream(pub(crate) ::std::sync::Arc<TtsStreamImpl>);
 
 #[pymethods]
-impl InferenceTtsStream {
+impl TtsStream {
     #[pyo3(signature = (text))]
-    fn push(&self, text: ::std::string::String) -> PyResult<()> {
+    fn push_text(&self, text: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        <InferenceTtsStreamImpl as ::lk_agents_abi::tts::streams::InferenceTtsStream>::push(&self.0, text).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::push_text(&self.0, text).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     fn flush(&self) -> PyResult<()> {
         crate::host::check_pid()?;
-        <InferenceTtsStreamImpl as ::lk_agents_abi::tts::streams::InferenceTtsStream>::flush(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::flush(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     fn end_input(&self) -> PyResult<()> {
         crate::host::check_pid()?;
-        <InferenceTtsStreamImpl as ::lk_agents_abi::tts::streams::InferenceTtsStream>::end_input(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::end_input(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -270,7 +271,7 @@ impl InferenceTtsStream {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <InferenceTtsStreamImpl as ::lk_agents_abi::tts::streams::InferenceTtsStream>::recv(&this, )
+            let out = <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::recv(&this, )
                 .await.map_err(|e: ::lk_agents_abi::errors::PullError| <::lk_agents_abi::errors::PullError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
@@ -280,56 +281,7 @@ impl InferenceTtsStream {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <InferenceTtsStreamImpl as ::lk_agents_abi::tts::streams::InferenceTtsStream>::aclose(&this, )
-                .await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-        })
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
-type FallbackTtsStreamImpl = <crate::Selected as super::Implementations>::FallbackTtsStream;
-
-/// One synthesis, served by whichever entry the chain picks.
-#[pyclass(frozen, name = "FallbackTtsStream", module = "livekit.agents._core")]
-pub struct FallbackTtsStream(pub(crate) ::std::sync::Arc<FallbackTtsStreamImpl>);
-
-#[pymethods]
-impl FallbackTtsStream {
-    #[pyo3(signature = (token))]
-    fn push_text(&self, token: ::std::string::String) -> PyResult<()> {
-        crate::host::check_pid()?;
-        <FallbackTtsStreamImpl as ::lk_agents_abi::tts::streams::FallbackTtsStream>::push_text(&self.0, token).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    fn flush(&self) -> PyResult<()> {
-        crate::host::check_pid()?;
-        <FallbackTtsStreamImpl as ::lk_agents_abi::tts::streams::FallbackTtsStream>::flush(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    fn end_input(&self) -> PyResult<()> {
-        crate::host::check_pid()?;
-        <FallbackTtsStreamImpl as ::lk_agents_abi::tts::streams::FallbackTtsStream>::end_input(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
-            let out = <FallbackTtsStreamImpl as ::lk_agents_abi::tts::streams::FallbackTtsStream>::recv(&this, )
-                .await.map_err(|e: ::lk_agents_abi::errors::PullError| <::lk_agents_abi::errors::PullError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-        })
-    }
-
-    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
-            let out = <FallbackTtsStreamImpl as ::lk_agents_abi::tts::streams::FallbackTtsStream>::aclose(&this, )
+            let out = <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::aclose(&this, )
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })

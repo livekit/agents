@@ -159,8 +159,7 @@ impl SynthesizedAudio {
 /// May not drop: a dropped token silently mangles speech.
 pub type TtsSink = Box<dyn StreamSink<String>>;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-/// Both TTS paths yield this. Drained by the gateway's `InferenceTtsStream` and the fallback
-/// chain's `FallbackTtsStream` (no sink for a one-shot `synthesize()`).
+/// Both TTS paths yield this, drained by a `TtsStream` (no sink for a one-shot `synthesize()`).
 pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
 
 // The factory methods are `async`: base-class stream constructors call `asyncio.create_task`,
