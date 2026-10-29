@@ -68,15 +68,9 @@ pub enum Operation {
         run_id: String,
         task_id: String,
         channel: Option<String>,
-        /// `false` is the `concurrent` policy: no lease, append-only.
-        exclusive: bool,
-        /// Wait for the lane up to the door's `wait_timeout`.
-        wait: bool,
-        interrupt: bool,
+        access: Access,
         /// Claim `task_id` (`submitted` to `working`) in the acquire.
         pickup: bool,
-        /// Run under the lease the receive took.
-        resume: bool,
     },
     ReadTask(String),
     ReadInbox,
@@ -128,6 +122,18 @@ pub enum Operation {
     ReleaseDrained,
     /// The lane's last runs, newest first: what names the task of the run holding the lane.
     ReadRuns(usize),
+}
+
+/// How a run takes the lane.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Access {
+    /// The `concurrent` policy: no lease, append-only.
+    Concurrent,
+    /// Takes the lease, waiting for it up to the door's `wait_timeout` when `wait`; `interrupt`
+    /// marks this worker the lane's waiter meanwhile, so the holder yields.
+    Exclusive { wait: bool, interrupt: bool },
+    /// Runs under the lease the receive or the last drain kept, else takes it without waiting.
+    Kept,
 }
 
 /// What a turn stages into its open run.
@@ -274,13 +280,13 @@ enum Phase {
         at: Duration,
         next: Next,
     },
-    Open,
     RejectSubmit,
     RejectAccepted,
     Closing(After),
-    Pickup,
-    Recover,
-    Commit,
+    Run {
+        path: Path,
+        step: RunStep,
+    },
     Abandon {
         unavailable: bool,
     },
@@ -294,25 +300,34 @@ enum Phase {
         stale: bool,
     },
     Inbox,
-    DrainOpen,
-    DrainPickup,
-    DrainOrphan,
-    DrainRecover,
-    DrainCommit,
-    DrainAbandon {
-        unavailable: bool,
-    },
     Release,
-    RecoveryOpen {
-        stale: bool,
-    },
-    RecoveryFail,
-    RecoveryOrphans,
     Refused,
     /// Failing tasks ([`Failing`]) between two phases.
     Failing,
     Turn(Step),
     Finished,
+}
+
+/// Whose run a [`RunStep`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Path {
+    /// The message's own.
+    Main,
+    /// A batch inbox's, under the kept lease.
+    Drain,
+    /// Failing what a dead holder left; `stale` first fails this message's `submitted` row.
+    Recovery { stale: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RunStep {
+    Open,
+    Pickup,
+    /// A claimed row was failed.
+    Orphan,
+    /// A dead holder's `working` rows were failed: the turn follows.
+    Recover,
+    Commit,
 }
 
 /// One durable arrival. IDs are supplied once; recovery and drain run IDs derive from the task
@@ -513,37 +528,28 @@ impl TaskMachine {
         }
     }
 
-    fn open(&mut self, run_id: String, task_id: String, channel: Option<String>) -> Operation {
-        Operation::Open {
-            run_id,
-            task_id,
-            channel,
-            exclusive: true,
-            wait: false,
-            interrupt: false,
-            pickup: false,
-            resume: false,
-        }
-    }
-
     fn next(&mut self, next: Next) -> Operation {
         match next {
             Next::Drain => self.read_inbox(),
             Next::Pickup => {
-                self.phase = Phase::Pickup;
+                self.phase = Phase::Run { path: Path::Main, step: RunStep::Pickup };
                 Operation::Pickup(self.task_id.clone())
             }
             Next::Open => {
-                self.phase = Phase::Open;
+                self.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
+                let access = match self.policy {
+                    Policy::Concurrent => Access::Concurrent,
+                    policy => Access::Exclusive {
+                        wait: policy != Policy::Reject,
+                        interrupt: policy == Policy::Interrupt,
+                    },
+                };
                 Operation::Open {
                     run_id: self.task_id.clone(),
                     task_id: self.task_id.clone(),
                     channel: Some(self.message.channel.clone()),
-                    exclusive: self.policy != Policy::Concurrent,
-                    wait: !matches!(self.policy, Policy::Reject | Policy::Concurrent),
-                    interrupt: self.policy == Policy::Interrupt,
+                    access,
                     pickup: self.policy != Policy::Reject,
-                    resume: false,
                 }
             }
         }
@@ -591,9 +597,14 @@ impl TaskMachine {
     /// Takes the lane without waiting, to fail what a dead holder left: its `working` rows, and
     /// with `stale` this message's own `submitted` row.
     fn recovery_open(&mut self, stale: bool) -> Operation {
-        self.phase = Phase::RecoveryOpen { stale };
-        let run_id = self.mint("recover");
-        self.open(run_id, self.task_id.clone(), None)
+        self.phase = Phase::Run { path: Path::Recovery { stale }, step: RunStep::Open };
+        Operation::Open {
+            run_id: self.mint("recover"),
+            task_id: self.task_id.clone(),
+            channel: None,
+            access: Access::Exclusive { wait: false, interrupt: false },
+            pickup: false,
+        }
     }
 
     /// Answers with the task as it now stands; `reason` when it cannot be read.
@@ -614,13 +625,13 @@ impl TaskMachine {
 
     fn drain_pickup(&mut self) -> Operation {
         if self.index < self.rows.len() {
-            self.phase = Phase::DrainPickup;
+            self.phase = Phase::Run { path: Path::Drain, step: RunStep::Pickup };
             Operation::Pickup(self.rows[self.index].task_id.clone())
         } else if self.batch.is_empty() {
             self.drain_commit()
         } else {
             let skip = self.rows.iter().map(|r| r.task_id.clone()).collect();
-            self.fail_orphans(skip, Phase::DrainRecover)
+            self.fail_orphans(skip, Phase::Run { path: Path::Drain, step: RunStep::Recover })
         }
     }
 
@@ -688,7 +699,7 @@ impl TaskMachine {
     }
 
     fn drain_commit(&mut self) -> Operation {
-        self.phase = Phase::DrainCommit;
+        self.phase = Phase::Run { path: Path::Drain, step: RunStep::Commit };
         Operation::Commit {
             answer_task: None,
             keep_lease: true,
@@ -763,17 +774,34 @@ impl TaskMachine {
                     return Ok(self.after_accepted(next, now));
                 }
             }
-            (Phase::Open, Completion::Opened { closed: true, .. }) => self.close(After::Observe),
-            (Phase::Open, Completion::Opened { .. }) if self.policy == Policy::Reject => {
-                // the row is written under the lease: a refused message leaves none
-                self.phase = Phase::RejectSubmit;
-                Operation::Submit(self.submitted())
+            (
+                Phase::Run { path, step: RunStep::Open },
+                Completion::Opened { closed, picked_up, .. },
+            ) => {
+                match path {
+                    Path::Main if closed => self.close(After::Observe),
+                    Path::Main if self.policy == Policy::Reject => {
+                        // the row is written under the lease: a refused message leaves none
+                        self.phase = Phase::RejectSubmit;
+                        Operation::Submit(self.submitted())
+                    }
+                    // a client canceled the task before its turn: nothing runs
+                    Path::Main if !picked_up => self.close(After::Observe),
+                    Path::Main => self.recover(now),
+                    Path::Drain => {
+                        self.leased = true;
+                        self.drain_pickup()
+                    }
+                    // still `submitted` with the lane free: its waiter died before the lane
+                    Path::Recovery { stale: true } => {
+                        let then = Phase::Run { path, step: RunStep::Orphan };
+                        self.fail_task(self.task_id.clone(), REASON_WORKER_LOST, then)
+                    }
+                    Path::Recovery { stale: false } => {
+                        self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover })
+                    }
+                }
             }
-            (Phase::Open, Completion::Opened { picked_up: false, .. }) => {
-                // a client canceled the task before its turn: nothing runs
-                self.close(After::Observe)
-            }
-            (Phase::Open, Completion::Opened { picked_up: true, .. }) => self.recover(now),
             (Phase::RejectSubmit, Completion::Submitted(true)) => {
                 self.phase = Phase::RejectAccepted;
                 Operation::Accepted(self.task_id.clone())
@@ -783,10 +811,24 @@ impl TaskMachine {
                 self.close(After::Receipt)
             }
             (Phase::RejectAccepted, Completion::Done) => self.next(Next::Pickup),
-            (Phase::Pickup, Completion::Picked(None)) => self.close(After::Observe),
-            (Phase::Pickup, Completion::Picked(Some(_))) => self.recover(now),
-            (Phase::Recover, Completion::Done) => self.single_turn(now),
-            (Phase::Commit, Completion::Committed { task, run_id }) => {
+            (Phase::Run { path: Path::Main, step: RunStep::Pickup }, Completion::Picked(was)) => {
+                if was.is_some() {
+                    self.recover(now)
+                } else {
+                    self.close(After::Observe)
+                }
+            }
+            (Phase::Run { path, step: RunStep::Recover }, Completion::Done) => match path {
+                Path::Main => self.single_turn(now),
+                Path::Drain => {
+                    self.start_turn(self.batch.clone(), self.task_ids.clone(), true, now)
+                }
+                Path::Recovery { .. } => self.close(After::Observe),
+            },
+            (
+                Phase::Run { path: Path::Main, step: RunStep::Commit },
+                Completion::Committed { task, run_id },
+            ) => {
                 let (task_id, output) = self.answer.take().unwrap_or_default();
                 return Err(Finish::Answer(Answer {
                     output,
@@ -795,18 +837,12 @@ impl TaskMachine {
                     ..Answer::row(task_id, task, Some("not-written"))
                 }));
             }
-            (
-                Phase::Abandon { unavailable: true } | Phase::DrainAbandon { unavailable: true },
-                Completion::Done,
-            ) => {
+            (Phase::Abandon { unavailable: true }, Completion::Done) => {
                 self.answer = None;
                 let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
                 self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
             }
-            (
-                Phase::Abandon { unavailable: false } | Phase::DrainAbandon { unavailable: false },
-                Completion::Done,
-            ) => {
+            (Phase::Abandon { unavailable: false }, Completion::Done) => {
                 return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
                     StorageError::Invalid("a run was abandoned without its cause".into())
                 })));
@@ -850,29 +886,21 @@ impl TaskMachine {
                 self.index = 0;
                 self.batch.clear();
                 self.task_ids.clear();
-                self.phase = Phase::DrainOpen;
-                Operation::Open {
-                    run_id,
-                    task_id,
-                    channel,
-                    exclusive: true,
-                    wait: false,
-                    interrupt: false,
-                    pickup: false,
-                    resume: self.leased,
-                }
+                self.phase = Phase::Run { path: Path::Drain, step: RunStep::Open };
+                let access = if self.leased {
+                    Access::Kept
+                } else {
+                    Access::Exclusive { wait: false, interrupt: false }
+                };
+                Operation::Open { run_id, task_id, channel, access, pickup: false }
             }
-            (Phase::DrainOpen, Completion::Opened { .. }) => {
-                self.leased = true;
-                self.drain_pickup()
-            }
-            (Phase::DrainPickup, Completion::Picked(was)) => {
+            (Phase::Run { path: Path::Drain, step: RunStep::Pickup }, Completion::Picked(was)) => {
                 let row = &self.rows[self.index];
                 match was {
                     Some(TaskState::Working) => {
                         // a dead holder's: the pickup took it, it fails worker-lost
                         let task_id = row.task_id.clone();
-                        self.phase = Phase::DrainOrphan;
+                        self.phase = Phase::Run { path: Path::Drain, step: RunStep::Orphan };
                         return Ok(Some(self.failed(REASON_WORKER_LOST, vec![task_id])));
                     }
                     Some(_) => {
@@ -887,14 +915,18 @@ impl TaskMachine {
                 self.index += 1;
                 self.drain_pickup()
             }
-            (Phase::DrainOrphan, Completion::Done) => {
-                self.index += 1;
-                self.drain_pickup()
-            }
-            (Phase::DrainRecover, Completion::Done) => {
-                self.start_turn(self.batch.clone(), self.task_ids.clone(), true, now)
-            }
-            (Phase::DrainCommit, Completion::Committed { run_id, .. }) => {
+            (Phase::Run { path, step: RunStep::Orphan }, Completion::Done) => match path {
+                Path::Drain => {
+                    self.index += 1;
+                    self.drain_pickup()
+                }
+                // a recovery's stale row: the dead holder's `working` rows follow
+                _ => self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover }),
+            },
+            (
+                Phase::Run { path: Path::Drain, step: RunStep::Commit },
+                Completion::Committed { run_id, .. },
+            ) => {
                 self.run_id = Some(run_id);
                 self.phase = Phase::Release;
                 Operation::ReleaseDrained
@@ -903,15 +935,6 @@ impl TaskMachine {
                 self.leased = !released;
                 if released { self.observe() } else { self.read_inbox() }
             }
-            (Phase::RecoveryOpen { stale: true }, Completion::Opened { .. }) => {
-                // still `submitted` with the lane free: its waiter died before the lane
-                self.fail_task(self.task_id.clone(), REASON_WORKER_LOST, Phase::RecoveryFail)
-            }
-            (Phase::RecoveryOpen { stale: false }, Completion::Opened { .. })
-            | (Phase::RecoveryFail, Completion::Done) => {
-                self.fail_orphans(Vec::new(), Phase::RecoveryOrphans)
-            }
-            (Phase::RecoveryOrphans, Completion::Done) => self.close(After::Observe),
             (Phase::Closing(After::Observe), Completion::Done) => self.observe(),
             (Phase::Refused, Completion::Runs(runs)) => {
                 let running_task_id =
@@ -930,11 +953,11 @@ impl TaskMachine {
     /// Under the lease, a dead holder's `working` rows fail before the turn; a `concurrent` run
     /// holds no lease and fails nothing.
     fn recover(&mut self, now: Duration) -> Operation {
-        self.phase = Phase::Recover;
         if self.policy == Policy::Concurrent {
             return self.single_turn(now);
         }
-        self.fail_orphans(vec![self.task_id.clone()], Phase::Recover)
+        let then = Phase::Run { path: Path::Main, step: RunStep::Recover };
+        self.fail_orphans(vec![self.task_id.clone()], then)
     }
 
     /// This message's own turn.
@@ -963,11 +986,17 @@ impl TaskMachine {
             self.phase = self.failing.take().expect("tasks are failing").then;
         }
         let operation = match (self.phase, &error) {
-            (Phase::Open, StorageError::Rejected { .. }) if self.policy == Policy::Reject => {
+            (
+                Phase::Run { path: Path::Main, step: RunStep::Open },
+                StorageError::Rejected { .. },
+            ) if self.policy == Policy::Reject => {
                 self.phase = Phase::Refused;
                 Operation::ReadRuns(RUNS_FOR_REJECT)
             }
-            (Phase::Open, StorageError::Rejected { .. }) => {
+            (
+                Phase::Run { path: Path::Main, step: RunStep::Open },
+                StorageError::Rejected { .. },
+            ) => {
                 // the lane was not released within the wait
                 let then = Phase::Answer { reason: Some(REASON_LEASE_TIMEOUT) };
                 self.fail_task(self.task_id.clone(), REASON_LEASE_TIMEOUT, then)
@@ -976,7 +1005,7 @@ impl TaskMachine {
                 // a durable task is watched through a transient failure, not given up on
                 return Ok(self.poll(now));
             }
-            (Phase::DrainOpen | Phase::RecoveryOpen { .. }, StorageError::Rejected { .. }) => {
+            (Phase::Run { step: RunStep::Open, .. }, StorageError::Rejected { .. }) => {
                 return Ok(self.poll(now));
             }
             (Phase::Turn(_), _) => {
@@ -988,12 +1017,8 @@ impl TaskMachine {
                 };
                 let reason = python_reason(&error);
                 self.error = Some(error);
-                let drain = self.turn.take().is_some_and(|t| t.drain);
-                self.phase = if drain {
-                    Phase::DrainAbandon { unavailable }
-                } else {
-                    Phase::Abandon { unavailable }
-                };
+                self.turn = None;
+                self.phase = Phase::Abandon { unavailable };
                 Operation::Abandon { outcome, reason }
             }
             (Phase::Answer { reason }, _) => {
@@ -1001,18 +1026,13 @@ impl TaskMachine {
                 let answer = Answer::row(self.answering(), None, reason);
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
             }
-            (Phase::DrainCommit, StorageError::Uncertain(_)) => self.resolve_later(),
-            (Phase::DrainCommit, _) => {
-                let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
-                self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
-            }
-            (Phase::Commit, StorageError::Uncertain(_)) => {
+            (Phase::Run { step: RunStep::Commit, .. }, StorageError::Uncertain(_)) => {
                 // a lost acknowledgment is not a failure: the message's task stays as it is while
                 // the resolver finds the run (decision 39); once applied, it names its answer
                 self.answer = None;
                 self.resolve_later()
             }
-            (Phase::Commit, _) => {
+            (Phase::Run { step: RunStep::Commit, .. }, _) => {
                 // a rejected save fails the message's own task; its staged changes are absent,
                 // so a question it answered still waits
                 self.answer = None;

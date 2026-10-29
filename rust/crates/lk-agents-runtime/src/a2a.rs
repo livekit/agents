@@ -14,7 +14,8 @@ use tokio_util::task::TaskTracker;
 use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
 use lk_agents_core::a2a::task::{
-    Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine, rejected_commit,
+    Access, Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine,
+    rejected_commit,
 };
 use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
@@ -224,16 +225,12 @@ impl Turn {
                 }
                 Completion::Done
             }
-            Operation::Open {
-                run_id,
-                task_id,
-                channel,
-                exclusive,
-                wait,
-                interrupt,
-                pickup,
-                resume,
-            } => {
+            Operation::Open { run_id, task_id, channel, access, pickup } => {
+                let (exclusive, wait, interrupt) = match access {
+                    Access::Concurrent => (false, false, false),
+                    Access::Exclusive { wait, interrupt } => (true, wait, interrupt),
+                    Access::Kept => (true, false, false),
+                };
                 let options = RunOptions {
                     exclusive,
                     wait,
@@ -243,9 +240,9 @@ impl Turn {
                     wait_timeout: machine.wait_timeout(),
                     ..RunOptions::new(run_id, task_id)
                 };
-                let run = match call.lease.take().filter(|_| resume) {
-                    Some(lease) => call.lane.resume(options, lease).await?,
-                    None => call.lane.open(options).await?,
+                let run = match (access, call.lease.take()) {
+                    (Access::Kept, Some(lease)) => call.lane.resume(options, lease).await?,
+                    _ => call.lane.open(options).await?,
                 };
                 let history_end = run.history.iter().map(ItemRow::created_at).fold(0.0, f64::max);
                 let opened = Completion::Opened {

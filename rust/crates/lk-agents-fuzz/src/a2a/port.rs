@@ -22,7 +22,7 @@ use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskRow, TaskWrite, merge_write};
-use lk_agents_core::a2a::task::{Completion, HandlerEvent, Operation};
+use lk_agents_core::a2a::task::{Access, Completion, HandlerEvent, Operation};
 
 use super::handler::Handler;
 
@@ -309,10 +309,12 @@ impl Port {
         wait_timeout: Duration,
         now: Duration,
     ) -> Option<Result<Completion, StorageError>> {
-        let Operation::Open { run_id, task_id, exclusive, wait, interrupt, pickup, resume, .. } =
-            operation
-        else {
+        let Operation::Open { run_id, task_id, access, pickup, .. } = operation else {
             unreachable!("an open")
+        };
+        let (wait, interrupt) = match *access {
+            Access::Exclusive { wait, interrupt } => (wait, interrupt),
+            Access::Concurrent | Access::Kept => (false, false),
         };
         let history_end = self.items.iter().map(ItemRow::created_at).fold(0.0, f64::max);
         let items = self.items.clone();
@@ -328,7 +330,7 @@ impl Port {
             handler: None,
             sent: (false, None),
         };
-        if !exclusive {
+        if *access == Access::Concurrent {
             // no lease, nothing claimed: the run goes only while its row is still `submitted`
             let picked_up = *pickup
                 && self.tasks.get(task_id).is_some_and(|r| r.status == TaskState::Submitted);
@@ -339,10 +341,12 @@ impl Port {
             *run = Some(open(false, 0, None));
             return Some(Ok(Completion::Opened { closed: true, picked_up: false, history_end }));
         }
-        let mine = *resume && *kept && self.lease.as_ref().is_some_and(|h| h.worker == worker);
+        let mine = *access == Access::Kept
+            && *kept
+            && self.lease.as_ref().is_some_and(|h| h.worker == worker);
         if !mine && !self.may_take(worker, task_id, now) {
-            if *wait && waited < wait_timeout {
-                if *interrupt && self.held_by_other(worker, now) {
+            if wait && waited < wait_timeout {
+                if interrupt && self.held_by_other(worker, now) {
                     self.waiter = Some(worker);
                 }
                 return None;

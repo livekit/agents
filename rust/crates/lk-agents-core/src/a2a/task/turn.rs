@@ -11,8 +11,8 @@ use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{ItemRow, TaskPatch, TaskRow};
 
 use super::{
-    Completion, Finish, Handle, HandlerEvent, Operation, Phase, RunEnd, Stage, TASKS_IN_CONTEXT,
-    TaskMachine,
+    Completion, Finish, Handle, HandlerEvent, Operation, Path, Phase, RunEnd, RunStep, Stage,
+    TASKS_IN_CONTEXT, TaskMachine,
 };
 use crate::a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TaskTransition, TurnIds, Verdict, answer_pending,
@@ -164,7 +164,7 @@ impl TaskMachine {
                 if turn.drain {
                     self.drain_commit()
                 } else {
-                    self.phase = Phase::Commit;
+                    self.phase = Phase::Run { path: Path::Main, step: RunStep::Commit };
                     Operation::Commit {
                         answer_task: Some(turn.answer_task),
                         keep_lease: false,

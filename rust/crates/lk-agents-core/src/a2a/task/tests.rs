@@ -33,7 +33,7 @@ fn opened(closed: bool, picked_up: bool) -> Completion {
 /// Drives `m`, its orphans just recovered, through a turn whose pending question is `pending` and
 /// whose handler answers `output` at once: the operation after the settlement.
 fn turn(m: &mut TaskMachine, pending: Option<TaskRow>, output: HandlerOutput) -> Operation {
-    m.phase = Phase::Recover;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(1);
     let mut op = step(m, Completion::Done);
     loop {
@@ -93,7 +93,10 @@ fn row(status: TaskState) -> TaskRow {
 fn reject_resend_observes_the_original_task_after_a_lost_submit_race() {
     let mut m = machine(Policy::Reject);
     m.handle(Event::Start, Duration::ZERO);
-    assert!(matches!(step(&mut m, Completion::Task(None)), Operation::Open { wait: false, .. }));
+    assert!(matches!(
+        step(&mut m, Completion::Task(None)),
+        Operation::Open { access: Access::Exclusive { wait: false, .. }, .. }
+    ));
     assert!(matches!(step(&mut m, opened(false, false)), Operation::Submit(_)));
     assert!(matches!(step(&mut m, Completion::Submitted(false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::FindReceipt(id) if id == "m"));
@@ -107,7 +110,7 @@ fn concurrent_handler_waits_for_a_conditional_task_claim() {
     step(&mut m, Completion::Submitted(true));
     assert!(matches!(
         step(&mut m, Completion::Done),
-        Operation::Open { exclusive: false, pickup: true, .. }
+        Operation::Open { access: Access::Concurrent, pickup: true, .. }
     ));
     assert!(matches!(step(&mut m, opened(false, false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
@@ -116,7 +119,7 @@ fn concurrent_handler_waits_for_a_conditional_task_claim() {
 #[test]
 fn batch_preserves_the_callers_continuation_target() {
     let mut m = machine(Policy::Batch);
-    m.phase = Phase::DrainPickup;
+    m.phase = Phase::Run { path: Path::Drain, step: RunStep::Pickup };
     m.pending = Some(1);
     let mut wire = m.message.to_a2a();
     wire.task_id = Some("waiting".into());
@@ -139,7 +142,7 @@ fn batch_preserves_the_callers_continuation_target() {
 #[test]
 fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
     let mut m = machine(Policy::Queue);
-    m.phase = Phase::Recover;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(4);
     assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(None));
     let abandon =
@@ -158,7 +161,7 @@ fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
 #[test]
 fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
     let mut m = machine(Policy::Queue);
-    m.phase = Phase::Open;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     assert!(matches!(step(&mut m, opened(false, true)), Operation::ReadWorking));
     let working = |id: &str| TaskRow { task_id: id.into(), ..row(TaskState::Working) };
@@ -171,7 +174,7 @@ fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
     assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(None));
     // the lease ran out: the receipt fails lease-timeout, unless a client already ended it
     let mut m = machine(Policy::Queue);
-    m.phase = Phase::Open;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     let rejected = StorageError::Rejected { running_task_id: None };
     assert!(matches!(operation(at(&mut m, Duration::ZERO, Err(rejected))), Operation::Pickup(_)));
@@ -199,7 +202,7 @@ fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
 fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
     // reject: the holder's task is named
     let mut m = machine(Policy::Reject);
-    m.phase = Phase::Open;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     let rejected = StorageError::Rejected { running_task_id: None };
     assert!(matches!(
@@ -215,7 +218,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         running_task_id: Some(id) }))] if id == "AST_r"));
     // a waiter whose wait ran out fails its task lease-timeout
     let mut m = machine(Policy::Queue);
-    m.phase = Phase::Open;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     assert!(matches!(operation(at(&mut m, Duration::ZERO, Err(rejected))), Operation::Pickup(_)));
     assert!(matches!(
@@ -231,7 +234,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         StorageError::Uncertain("lost".into()),
     ] {
         let mut m = machine(Policy::Queue);
-        m.phase = Phase::Open;
+        m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
         m.pending = Some(1);
         let effects = at(&mut m, Duration::ZERO, Err(error.clone()));
         assert!(matches!(&effects[..], [Effect::Finished(Err(e))] if *e == error), "{error}");
@@ -255,7 +258,7 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
         assert!(effects.is_empty(), "{effects:?}");
         now = m.wake_at().expect("polling");
         let next = operation(m.handle(Event::Wake, now));
-        if let Operation::Open { wait: false, .. } = next {
+        if let Operation::Open { access: Access::Exclusive { wait: false, .. }, .. } = next {
             reopened = true;
             break;
         }
@@ -343,7 +346,7 @@ fn a_refused_drain_waits_and_drains_later() {
 #[test]
 fn a_concurrent_message_canceled_before_its_turn_does_not_run() {
     let mut m = machine(Policy::Concurrent);
-    m.phase = Phase::Open;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     assert!(matches!(step(&mut m, opened(false, false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
@@ -387,7 +390,7 @@ fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() 
 #[test]
 fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
     let mut m = continuing(Policy::Queue, Some("merged"));
-    m.phase = Phase::Recover;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(1);
     assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(Some("merged".into())));
     assert_eq!(step(&mut m, Completion::Task(None)), Operation::ReadPending(None));
@@ -406,7 +409,7 @@ fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
 #[test]
 fn a_concurrent_turn_leaves_a_pending_question_alone() {
     let mut m = continuing(Policy::Concurrent, Some("waiting"));
-    m.phase = Phase::Recover;
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(1);
     let Operation::Handle(handle) = step(&mut m, Completion::Done) else {
         panic!("a concurrent turn reads no pending question")
