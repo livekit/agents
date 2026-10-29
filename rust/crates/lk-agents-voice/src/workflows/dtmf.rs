@@ -86,6 +86,41 @@ pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
     Ok(dtmf_event_to_code(event))
 }
 
+/// Why `send_dtmf_events` stopped before every key was published.
+#[derive(Debug)]
+pub enum DtmfSendError {
+    NotConnected,
+    /// The key that was not published: not a DTMF symbol, or the room refused it.
+    Key {
+        event: String,
+        error: String,
+    },
+}
+
+impl DtmfSendError {
+    /// The room's refusal of `event`, in the host's own words when the host raised it.
+    pub fn refused(event: &str, error: lk_agents_abi::voice::rtc::RtcError) -> Self {
+        let error = match error {
+            lk_agents_abi::voice::rtc::RtcError::Host(host) => host.message,
+            other => other.to_string(),
+        };
+        DtmfSendError::Key { event: event.to_owned(), error }
+    }
+}
+
+/// What `send_dtmf_events` answers the model: the keys sent, or the first that failed and why.
+pub fn dtmf_send_answer(events: &[String], outcome: Result<(), DtmfSendError>) -> String {
+    match outcome {
+        Ok(()) => format!("Successfully sent DTMF events: {}", events.join(", ")),
+        Err(DtmfSendError::NotConnected) => {
+            "Failed to send DTMF events: room is not connected".into()
+        }
+        Err(DtmfSendError::Key { event, error }) => {
+            format!("Failed to send DTMF event: {event}. Error: {error}")
+        }
+    }
+}
+
 /// `format_dtmf` (`beta/workflows/utils.py:44`): the space-joined digits that fill
 /// `prompts::dtmf`'s `{digits}` hole.
 #[lk_agents_abi::host(export(name = "format_dtmf", pid = false))]

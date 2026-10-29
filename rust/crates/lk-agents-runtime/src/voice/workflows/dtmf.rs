@@ -2,7 +2,7 @@
 
 pub use lk_agents_voice::workflows::dtmf::DtmfResult;
 use lk_agents_voice::workflows::dtmf::{
-    DtmfEvent, DtmfReception, ReceiveDtmfError, dtmf_event_to_code,
+    DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_code, dtmf_send_answer,
 };
 use std::time::Duration;
 
@@ -10,33 +10,27 @@ use std::time::Duration;
 pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
 
 /// `send_dtmf_events(events)`: each key published as a keypad tone in `room`, 0.3 s apart; the
-/// answer to the model names the keys sent, or the first that failed and why.
+/// answer to the model is [`dtmf_send_answer`]'s.
 pub async fn send_dtmf_events(
     room: lk_agents_abi::voice::room_owner::RoomSession,
     events: Vec<String>,
     clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
 ) -> String {
-    let Some(room) = room.0.rtc() else {
-        return "Failed to send DTMF events: room is not connected".into();
-    };
-    for event in &events {
-        let sent = match DtmfEvent::parse(event) {
-            Some(key) => room
-                .local()
-                .publish_dtmf(u32::from(dtmf_event_to_code(key)), event.clone())
+    let outcome = async {
+        let room = room.0.rtc().ok_or(DtmfSendError::NotConnected)?;
+        for event in &events {
+            let code = dtmf_code(event)
+                .map_err(|error| DtmfSendError::Key { event: event.clone(), error })?;
+            room.local()
+                .publish_dtmf(u32::from(code), event.clone())
                 .await
-                .map_err(|err| match err {
-                    lk_agents_abi::voice::rtc::RtcError::Host(host) => host.message,
-                    other => other.to_string(),
-                }),
-            None => Err(format!("unknown DTMF symbol {event:?}")),
-        };
-        if let Err(error) = sent {
-            return format!("Failed to send DTMF event: {event}. Error: {error}");
+                .map_err(|error| DtmfSendError::refused(event, error))?;
+            clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
         }
-        clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
+        Ok(())
     }
-    format!("Successfully sent DTMF events: {}", events.join(", "))
+    .await;
+    dtmf_send_answer(&events, outcome)
 }
 
 /// `receive_dtmf(room, num_digits, timeout, stop_event)`: the keys a SIP caller presses in
