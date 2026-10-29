@@ -36,9 +36,9 @@ async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_
 
 struct PendingTextCleanup {
     captured: AtomicBool,
-    cancelled: lk_agents_abi::Monotone<bool>,
-    allow_cleanup: lk_agents_abi::Monotone<bool>,
-    completed: lk_agents_abi::Monotone<bool>,
+    cancelled: lk_agents_net::monotone::Monotone<bool>,
+    allow_cleanup: lk_agents_net::monotone::Monotone<bool>,
+    completed: lk_agents_net::monotone::Monotone<bool>,
     retained: Mutex<Option<Box<dyn Send>>>,
 }
 
@@ -46,9 +46,9 @@ impl Default for PendingTextCleanup {
     fn default() -> Self {
         Self {
             captured: AtomicBool::new(false),
-            cancelled: lk_agents_abi::Monotone::new(false),
-            allow_cleanup: lk_agents_abi::Monotone::new(false),
-            completed: lk_agents_abi::Monotone::new(false),
+            cancelled: lk_agents_net::monotone::Monotone::new(false),
+            allow_cleanup: lk_agents_net::monotone::Monotone::new(false),
+            completed: lk_agents_net::monotone::Monotone::new(false),
             retained: Mutex::new(None),
         }
     }

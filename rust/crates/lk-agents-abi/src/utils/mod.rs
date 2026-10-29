@@ -15,7 +15,6 @@ pub mod filters;
 pub mod frame;
 pub mod host_ref;
 pub mod maybe;
-pub mod monotone;
 pub mod resample;
 pub mod spawner;
 pub mod stream;

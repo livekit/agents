@@ -2,6 +2,7 @@
 //!
 //! - [`clock`]: the process's clocks, on Tokio time.
 //! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
+//! - [`monotone`]: a level-triggered cell whose value only moves forward.
 //! - [`http`]: HTTPS exchanges reporting transport observations, under [`attempts`].
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
@@ -23,6 +24,7 @@ pub mod clock;
 pub mod credentials;
 pub mod env;
 pub mod http;
+pub mod monotone;
 pub mod session_report;
 pub mod source;
 pub mod sse;

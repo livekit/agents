@@ -5,8 +5,8 @@ use state::{
     Creation, CreationInterrupt, Effect as StateEffect, Input as StateInput, Reply, SpeechState,
 };
 
+use lk_agents_abi::ChatItem;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{ChatItem, Monotone};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -168,10 +168,10 @@ pub struct SpeechHandle {
     /// before the loop has acted on it.
     interrupt_requested: AtomicBool,
 
-    scheduled: Monotone<bool>,
+    scheduled: watch::Sender<bool>,
     /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
-    interrupted: Monotone<bool>,
-    done: Monotone<bool>,
+    interrupted: watch::Sender<bool>,
+    done: watch::Sender<bool>,
 
     // Level-triggered, because `SpeechHandle._clear_authorization` clears it.
     authorized: watch::Sender<bool>,
@@ -180,7 +180,7 @@ pub struct SpeechHandle {
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One cell per tool-loop step, addressed absolutely.
-    generations: Mutex<Vec<Arc<Monotone<bool>>>>,
+    generations: Mutex<Vec<Arc<watch::Sender<bool>>>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     num_steps: AtomicU32,
 
@@ -199,6 +199,12 @@ impl PartialEq for SpeechHandle {
 }
 
 impl Eq for SpeechHandle {}
+
+/// Resolves once `flag` is set: level-triggered, so a late waiter does not hang.
+async fn raised(flag: &watch::Sender<bool>) {
+    // The handle holds the sender for the whole wait, so the channel never closes under it.
+    let _ = flag.subscribe().wait_for(|set| *set).await;
+}
 
 use lk_agents_abi::lock;
 
@@ -230,14 +236,14 @@ impl SpeechHandle {
                 match effect {
                     StateEffect::PublishAcceptedView(view) => {
                         self.interruptions.send_replace(view.allow_interruptions);
-                        self.interrupted.set(view.interrupted);
-                        self.done.set(view.done);
+                        self.interrupted.send_replace(view.interrupted);
+                        self.done.send_replace(view.done);
                     }
                     StateEffect::PublishRequestFlag(requested) => {
                         self.interrupt_requested.store(requested, Ordering::Release);
                     }
                     StateEffect::NewGeneration => {
-                        self.generations.lock().unwrap().push(Arc::new(Monotone::new(false)));
+                        self.generations.lock().unwrap().push(Arc::new(watch::Sender::new(false)));
                     }
                     StateEffect::PublishAuthorization(authorized) => {
                         self.authorized.send_replace(authorized);
@@ -249,7 +255,7 @@ impl SpeechHandle {
             (transition.reply, generation_done)
         };
         if let Some(step) = generation_done {
-            self.generation_cell(step).set(true);
+            self.generation_cell(step).send_replace(true);
         }
         Ok(reply)
     }
@@ -268,9 +274,9 @@ impl SpeechHandle {
             creation: watch::Sender::new(creation),
             api,
             interrupt_requested: AtomicBool::new(false),
-            scheduled: Monotone::new(false),
-            interrupted: Monotone::new(false),
-            done: Monotone::new(false),
+            scheduled: watch::Sender::new(false),
+            interrupted: watch::Sender::new(false),
+            done: watch::Sender::new(false),
             authorized: watch::Sender::new(false),
             interruptions: watch::Sender::new(allow_interruptions),
             generations: Mutex::new(Vec::new()),
@@ -377,7 +383,7 @@ impl SpeechHandle {
 
     /// The loop interrupted the speech: its playout, its tools and any follow-up step.
     pub fn interrupted(&self) -> bool {
-        self.interrupted.get()
+        *self.interrupted.borrow()
     }
 
     /// The loop refused the host's `interrupt()` (the speech disallowed it by then): the request
@@ -396,21 +402,21 @@ impl SpeechHandle {
 
     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
     pub fn mark_scheduled(&self) {
-        self.scheduled.set(true);
+        self.scheduled.send_replace(true);
     }
 
     /// `_wait_for_scheduled`. The caller must re-check [`interrupted`](Self::interrupted) after:
     /// a cancelled speech is never marked scheduled, so the driver races this against the interrupt.
     pub async fn wait_for_scheduled(&self) {
-        self.scheduled.wait_for(|s| *s).await;
+        raised(&self.scheduled).await;
     }
 
     pub async fn wait_for_interrupted(&self) {
-        self.interrupted.wait_for(|i| *i).await;
+        raised(&self.interrupted).await;
     }
 
     pub async fn wait_for_done(&self) {
-        self.done.wait_for(|d| *d).await;
+        raised(&self.done).await;
     }
 
     /// `allow_interruptions` as the loop last wrote it.
@@ -468,7 +474,7 @@ impl SpeechHandle {
             .expect("authorizing a generation cannot refuse");
     }
 
-    /// `_clear_authorization`, right after the gate; must not be a [`Monotone`].
+    /// `_clear_authorization`, right after the gate: the one flag that goes back to false.
     pub fn clear_authorization(&self) {
         self.transition(HandleInput::Accepted(StateInput::ClearAuthorization))
             .expect("clearing authorization cannot refuse");
@@ -502,14 +508,14 @@ impl SpeechHandle {
     /// passes the step captured at tool-call time, so a long tool waits for its own step's playout.
     pub async fn wait_for_generation(&self, step: usize) -> Result<(), SpeechError> {
         let step = lock(&self.inner).state.generation(step)?;
-        self.generation_cell(step).wait_for(|done| *done).await;
+        raised(&self.generation_cell(step)).await;
         Ok(())
     }
 
     /// `_wait_for_generation()` with `step_idx=-1`: the step currently running.
     pub async fn wait_for_latest_generation(&self) -> Result<(), SpeechError> {
         let step = lock(&self.inner).state.latest_generation()?;
-        self.generation_cell(step).wait_for(|done| *done).await;
+        raised(&self.generation_cell(step)).await;
         Ok(())
     }
 
@@ -520,7 +526,7 @@ impl SpeechHandle {
     }
 
     /// The lock is released before any await.
-    fn generation_cell(&self, step: usize) -> Arc<Monotone<bool>> {
+    fn generation_cell(&self, step: usize) -> Arc<watch::Sender<bool>> {
         self.generations
             .lock()
             .unwrap()
@@ -630,11 +636,11 @@ impl SpeechHandle {
     }
 
     pub fn scheduled(&self) -> bool {
-        self.scheduled.get()
+        *self.scheduled.borrow()
     }
 
     pub fn done(&self) -> bool {
-        self.done.get()
+        *self.done.borrow()
     }
 }
 

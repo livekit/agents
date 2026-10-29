@@ -4,7 +4,7 @@ use super::super::traits::AudioSource;
 use super::super::{PlaybackInfo, TrackPublishOptions, frame_duration};
 use super::super::{Result, RtcError};
 use lk_agents_abi::AudioFrame;
-use lk_agents_abi::{Clock, Monotone, Ts};
+use lk_agents_abi::{Clock, Ts};
 use lk_agents_voice::room_io::playout::PlayoutLedger;
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -18,7 +18,7 @@ use tokio::sync::futures::Notified;
 pub struct FakeAudioSource {
     clock: Arc<dyn Clock>,
     queue_size: Duration,
-    close_started: Monotone<bool>,
+    close_started: tokio::sync::watch::Sender<bool>,
     close_flow: tokio::sync::watch::Sender<bool>,
     state: Mutex<SourceState>,
     /// Woken by `settle`, `clear_queue` and `close`; parked on by `capture` and `wait_for_playout`.
@@ -50,7 +50,7 @@ impl FakeAudioSource {
         FakeAudioSource {
             clock,
             queue_size: Duration::from_millis(opts.queue_size_ms as u64),
-            close_started: Monotone::new(false),
+            close_started: tokio::sync::watch::Sender::new(false),
             close_flow: tokio::sync::watch::channel(true).0,
             state: Mutex::new(SourceState { drain_at: now, ..SourceState::default() }),
             wake: Notify::new(),
@@ -63,7 +63,7 @@ impl FakeAudioSource {
     }
 
     pub async fn wait_for_close_started(&self) {
-        self.close_started.wait_for(|started| *started).await;
+        let _ = self.close_started.subscribe().wait_for(|started| *started).await;
     }
 
     pub fn captured(&self) -> Vec<AudioFrame> {
@@ -208,7 +208,7 @@ impl AudioSource for FakeAudioSource {
 
     fn close<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.close_started.set(true);
+            self.close_started.send_replace(true);
             let mut flow = self.close_flow.subscribe();
             let _ = flow.wait_for(|flowing| *flowing).await;
             // Closing discards the queue as a truncation, so `played + discarded` stays `captured`.
