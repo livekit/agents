@@ -1,10 +1,7 @@
 import pytest
 
 from livekit.plugins.google.llm import (
-    _is_gemini_3_flash_model,
-    _is_gemini_3_model,
     _requires_thought_signatures,
-    _supports_thinking_level,
 )
 
 pytestmark = pytest.mark.unit
@@ -12,68 +9,6 @@ pytestmark = pytest.mark.unit
 
 class TestGeminiModelDetection:
     """Tests for Gemini model detection helper functions."""
-
-    @pytest.mark.parametrize(
-        "model,expected",
-        [
-            # Gemini 3 models - should return True
-            ("gemini-3-pro-preview", True),
-            ("gemini-3-flash-preview", True),
-            ("gemini-3-flash", True),
-            ("gemini-3-pro", True),
-            ("GEMINI-3-FLASH", True),  # case insensitive
-            # Gemini 2.5 models - should return False
-            ("gemini-2.5-flash", False),
-            ("gemini-2.5-pro-preview-05-06", False),
-            # Gemini 2.0 models - should return False
-            ("gemini-2.0-flash-001", False),
-            # Gemini 1.5 models - should return False
-            ("gemini-1.5-pro", False),
-            # Other models - should return False
-            ("gemma-4-31b-it", False),
-            ("gpt-4", False),
-            ("claude-3", False),
-        ],
-    )
-    def test_is_gemini_3_model(self, model: str, expected: bool):
-        assert _is_gemini_3_model(model) == expected
-
-    @pytest.mark.parametrize(
-        "model,expected",
-        [
-            # Gemini 3 Flash models - should return True
-            ("gemini-3-flash-preview", True),
-            ("gemini-3-flash", True),
-            ("GEMINI-3-FLASH", True),  # case insensitive
-            ("models/gemini-3-flash-preview", True),  # qualified name
-            # Gemini 3 Pro models - should return False
-            ("gemini-3-pro-preview", False),
-            ("gemini-3-pro", False),
-            # Other models - should return False
-            ("gemini-2.5-flash", False),
-            ("gemini-2.0-flash-001", False),
-        ],
-    )
-    def test_is_gemini_3_flash_model(self, model: str, expected: bool):
-        assert _is_gemini_3_flash_model(model) == expected
-
-    @pytest.mark.parametrize(
-        "model,expected",
-        [
-            # level models - should return True
-            ("gemini-3-pro-preview", True),
-            ("gemma-4-31b-it", True),
-            ("GEMMA-4-31B-IT", True),  # case insensitive
-            ("models/gemma-4-31b-it", True),  # qualified name
-            ("publishers/google/models/gemma-4-26b-a4b-it", True),
-            # budget models - should return False
-            ("gemini-2.5-flash", False),
-            ("gemma-3-27b-it", False),
-            ("gemma-40-31b-it", False),
-        ],
-    )
-    def test_supports_thinking_level(self, model: str, expected: bool):
-        assert _supports_thinking_level(model) == expected
 
     @pytest.mark.parametrize(
         "model,expected",

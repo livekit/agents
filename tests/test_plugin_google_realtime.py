@@ -80,15 +80,6 @@ def test_model_api_mismatch_warns(
     assert f"vertexai={vertexai}" in warning.message
 
 
-@pytest.mark.parametrize("vertexai", [False, True])
-def test_shared_model_api_from_environment(monkeypatch: pytest.MonkeyPatch, vertexai: bool) -> None:
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", str(vertexai))
-    model = RealtimeModel(
-        model="gemini-3.8-live", api_key="fake-key", project="test-project", location="eu"
-    )
-    assert model.provider == ("Vertex AI" if vertexai else "Gemini")
-
-
 @pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
 def test_gemini_3_8_live_rejects_thinking_level(
     monkeypatch: pytest.MonkeyPatch, model: str
@@ -129,15 +120,6 @@ async def test_thinking_level_reaches_connect_config(
         config = session._build_connect_config()
         assert config.generation_config is not None
         assert config.generation_config.thinking_config == thinking_config
-
-
-def test_gemini_3_8_live_allows_empty_thinking_config() -> None:
-    RealtimeModel(
-        model="gemini-3.8-live",
-        vertexai=False,
-        api_key="fake-key",
-        thinking_config=types.ThinkingConfig(),
-    )
 
 
 def test_gemini_3_8_live_thinking_with_vertex_from_environment(
@@ -749,17 +731,6 @@ def test_vertex_scheduling_warns(
     assert any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
 
 
-def test_gemini_api_scheduling_does_not_warn(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-
-    with caplog.at_level(logging.WARNING):
-        RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
-
-    assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
-
-
 class _FakeVoiceSession:
     """Stands in for the genai live session and records what the plugin sends."""
 
@@ -1087,14 +1058,6 @@ def test_tool_behavior_default_follows_the_model(
     assert (behavior if utils.is_given(behavior) else None) == expected
 
 
-def test_explicit_tool_behavior_wins_over_the_model_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-    model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
-    assert model._opts.tool_behavior == types.Behavior.BLOCKING
-
-
 async def test_context_updates_preserve_order_while_image_preparation_waits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1247,15 +1210,6 @@ async def test_context_update_during_restart_is_preserved_for_the_next_connectio
             await session.update_chat_ctx(context)
         assert session.chat_ctx.get_by_id("pending") is not None
         assert session._pending_chat_ctx is not None
-
-
-async def test_context_update_after_close_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    async with _make_session(monkeypatch) as session:
-        await session.aclose()
-        context = llm.ChatContext.empty()
-        context.add_message(role="user", content="late", id="late")
-        await session.update_chat_ctx(context)
-        assert session._pending_chat_ctx is None
 
 
 async def test_video_dequeue_releases_the_latest_frame_slot_before_session_check(

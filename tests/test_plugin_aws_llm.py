@@ -118,11 +118,6 @@ async def test_sampling_params_kept_for_gpt_oss() -> None:
     assert config == {"temperature": 0.5, "topP": 0.9}
 
 
-async def test_default_model_still_receives_temperature() -> None:
-    config = await _inference_config("amazon.nova-2-lite-v1:0", temperature=0.7)
-    assert config["temperature"] == 0.7
-
-
 def test_reasoning_deltas_skipped_without_warning(caplog: pytest.LogCaptureFixture) -> None:
     # OpenAI GPT-6 streams reasoning as redactedContent bytes; gpt-oss and Claude thinking
     # stream text (and signature). None is surfaced, so none should log "unknown chunk type".

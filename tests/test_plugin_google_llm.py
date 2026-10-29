@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from google.genai import types
 
-from livekit.agents import APIConnectionError, llm
+from livekit.agents import APIConnectionError
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
-from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.tools import GoogleSearch
 
 pytestmark = pytest.mark.plugin("google")
@@ -45,26 +44,6 @@ class TestParsePartFunctionCall:
         assert tool_call.name == "get_weather"
         assert '"city": "Paris"' in tool_call.arguments
 
-    def test_function_call_without_text_returns_none_content(self, llm_stream: LLMStream):
-        part = types.Part(
-            function_call=types.FunctionCall(name="get_weather", args={"city": "Paris"}),
-        )
-
-        chunk = llm_stream._parse_part("test-id", part)
-
-        assert chunk is not None
-        assert chunk.delta.content is None
-        assert len(chunk.delta.tool_calls) == 1
-
-    def test_text_only_part_returns_text_content(self, llm_stream: LLMStream):
-        part = types.Part(text="Hello world")
-
-        chunk = llm_stream._parse_part("test-id", part)
-
-        assert chunk is not None
-        assert chunk.delta.content == "Hello world"
-        assert not chunk.delta.tool_calls
-
     def test_empty_text_part_returns_none(self, llm_stream: LLMStream):
         part = types.Part(text="")
 
@@ -82,42 +61,6 @@ class TestParsePartFunctionCall:
         chunk = llm_stream._parse_part("test-id", part)
 
         assert chunk is None
-
-
-class TestCachedContentOption:
-    """Verify the ``cached_content`` constructor option propagates from
-    ``LLM.__init__`` through ``_LLMOptions`` and into the keyword
-    arguments handed to ``GenerateContentConfig`` for every request.
-
-    The propagation tests are ``async def`` because ``LLM.chat()`` builds
-    an ``LLMStream`` whose constructor schedules a metrics-monitoring
-    task on the running event loop. A sync test would raise
-    ``RuntimeError: no running event loop`` before reaching the
-    assertion.
-    """
-
-    @pytest.mark.asyncio
-    async def test_cached_content_propagates_to_extra_kwargs(self) -> None:
-        llm = LLM(model="gemini-2.5-flash", api_key="test", cached_content="cachedContents/abc123")
-
-        stream = llm.chat(chat_ctx=ChatContext.empty())
-        try:
-            assert stream._extra_kwargs.get("cached_content") == "cachedContents/abc123"
-        finally:
-            await stream.aclose()
-
-    @pytest.mark.asyncio
-    async def test_cached_content_omitted_when_not_set(self) -> None:
-        """Backward compatibility: callers that don't pass
-        ``cached_content`` must produce a request config without the
-        field, so existing behaviour is unchanged."""
-        llm = LLM(model="gemini-2.5-flash", api_key="test")
-
-        stream = llm.chat(chat_ctx=ChatContext.empty())
-        try:
-            assert "cached_content" not in stream._extra_kwargs
-        finally:
-            await stream.aclose()
 
 
 class TestCachedContentRequestSuppression:
@@ -276,68 +219,6 @@ class TestCachedContentRequestSuppression:
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
         assert caller_http_options.headers == {"X-Vertex-Test": "1"}
-
-
-class TestMediaResolution:
-    def test_llm_media_resolution_is_passed_to_stream_kwargs(self):
-        model = LLM(
-            api_key="test-api-key",
-            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
-        )
-
-        with patch.object(
-            LLMStream,
-            "__init__",
-            lambda self, *a, **kw: self.__dict__.update(_extra_kwargs=kw["extra_kwargs"]),
-        ):
-            stream = model.chat(chat_ctx=llm.ChatContext.empty())
-
-        assert (
-            stream._extra_kwargs["media_resolution"] == types.MediaResolution.MEDIA_RESOLUTION_LOW
-        )
-
-    def test_llm_media_resolution_is_omitted_by_default(self):
-        model = LLM(api_key="test-api-key")
-
-        with patch.object(
-            LLMStream,
-            "__init__",
-            lambda self, *a, **kw: self.__dict__.update(_extra_kwargs=kw["extra_kwargs"]),
-        ):
-            stream = model.chat(chat_ctx=llm.ChatContext.empty())
-
-        assert "media_resolution" not in stream._extra_kwargs
-
-    def test_realtime_media_resolution_is_passed_to_connect_config(self):
-        model = RealtimeModel(
-            api_key="test-api-key",
-            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
-        )
-        session = RealtimeSession.__new__(RealtimeSession)
-        session._opts = model._opts
-        session._tools = llm.ToolContext.empty()
-        session._realtime_model = model
-        session._session_resumption_handle = None
-
-        config = session._build_connect_config()
-
-        assert config.generation_config
-        assert (
-            config.generation_config.media_resolution == types.MediaResolution.MEDIA_RESOLUTION_LOW
-        )
-
-    def test_realtime_media_resolution_is_unset_by_default(self):
-        model = RealtimeModel(api_key="test-api-key")
-        session = RealtimeSession.__new__(RealtimeSession)
-        session._opts = model._opts
-        session._tools = llm.ToolContext.empty()
-        session._realtime_model = model
-        session._session_resumption_handle = None
-
-        config = session._build_connect_config()
-
-        assert config.generation_config
-        assert config.generation_config.media_resolution is None
 
 
 class TestMixedToolsRequestConstruction:

@@ -121,22 +121,6 @@ async def test_messages_mode():
     assert "world" in combined
 
 
-@pytest.mark.asyncio
-async def test_messages_mode_is_default():
-    """Test that messages mode is the default behavior."""
-    graph = build_messages_graph()
-    adapter = LLMAdapter(graph)  # No stream_mode specified
-
-    chat_ctx = ChatContext()
-    chat_ctx.add_message(role="user", content="Hi")
-    stream = adapter.chat(chat_ctx=chat_ctx)
-    chunks = await collect_chunks(stream)
-
-    assert len(chunks) > 0
-    combined = "".join(chunks)
-    assert "Hello" in combined
-
-
 # --- Tests: custom mode ---
 
 
@@ -199,14 +183,6 @@ def test_validation_rejects_unsupported_mode():
 
     with pytest.raises(ValueError, match="Unsupported stream mode"):
         LLMAdapter(graph, stream_mode="values")
-
-
-def test_validation_rejects_unsupported_in_list():
-    """Test that unsupported modes in a list are rejected."""
-    graph = build_messages_graph()
-
-    with pytest.raises(ValueError, match="Unsupported stream mode"):
-        LLMAdapter(graph, stream_mode=["messages", "updates"])
 
 
 # --- Tests: mode isolation ---

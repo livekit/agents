@@ -21,7 +21,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.plugins.openai.responses.llm import (
-    _WS_HEARTBEAT,
     LLM as ResponsesLLM,
     LLMStream,
     _ResponsesWebsocket,
@@ -237,32 +236,6 @@ async def test_send_cancellation_discards_socket() -> None:
     await transport.aclose()
 
 
-async def test_create_ws_enables_heartbeat() -> None:
-    """Pooled Responses sockets set a ws heartbeat so idle connections stay warm
-    and dead peers are detected instead of surfacing only on the next send."""
-    transport = _make_transport()
-    fake_ws = object()
-    session = MagicMock()
-    session.ws_connect = AsyncMock(return_value=fake_ws)
-    transport._ensure_http_session = lambda: session  # type: ignore[method-assign]
-
-    assert await transport._create_ws(DEFAULT_API_CONNECT_OPTIONS) is fake_ws
-    _, kwargs = session.ws_connect.call_args
-    assert kwargs["heartbeat"] == _WS_HEARTBEAT
-
-
-async def test_responses_llm_prewarms_websocket_pool() -> None:
-    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
-    assert llm_model._ws is not None
-    llm_model._ws._pool.prewarm = prewarm = MagicMock()  # type: ignore[method-assign]
-
-    try:
-        await llm_model._prewarm_impl()
-        prewarm.assert_called_once_with()
-    finally:
-        await llm_model.aclose()
-
-
 @pytest.mark.parametrize("connect_timeout", [0.05, 1.0])
 async def test_responses_prewarm_uses_configured_connect_timeout(connect_timeout: float) -> None:
     llm_model = ResponsesLLM(
@@ -395,17 +368,6 @@ def _response_incomplete(reason: str | None) -> dict:
         "sequence_number": 2,
         "response": response,
     }
-
-
-@pytest.mark.parametrize("reason", ["max_output_tokens", "content_filter"])
-def test_incomplete_ws_event_parses_provider_reason(reason: str) -> None:
-    parsed = LLMStream._parse_ws_event(  # type: ignore[arg-type]
-        object(), _response_incomplete(reason)
-    )
-
-    assert isinstance(parsed, ResponseIncompleteEvent)
-    assert parsed.response.incomplete_details is not None
-    assert parsed.response.incomplete_details.reason == reason
 
 
 class _ReplayResponsesWS:

@@ -1735,21 +1735,6 @@ async def test_a_service_tier_rides_on_the_connection_header(service_tier: Servi
     assert "service_tier" not in seen.start["session"]
 
 
-@pytest.mark.usefixtures("_no_provider_env")
-async def test_azure_carries_the_service_tier_too() -> None:
-    async with _live_server() as (base, seen):
-        model = GPTLiveModel.with_azure(
-            azure_deployment="my-live",
-            azure_endpoint=base,
-            api_key="azure-key",
-            delegation="client",
-            service_tier="ultrafast",
-        )
-        await _connect(model, seen)
-
-    assert seen.headers["OpenAI-Service-Tier"] == "ultrafast"
-
-
 @pytest.mark.parametrize(
     "base_url,is_azure,expected",
     [

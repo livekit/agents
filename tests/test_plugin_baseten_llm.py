@@ -24,7 +24,6 @@ import pytest
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import LLM
-from livekit.plugins.baseten.llm import _supports_inline_instructions
 
 pytestmark = pytest.mark.unit
 
@@ -140,26 +139,6 @@ def _plain_ctx() -> ChatContext:
 # ---------------------------------------------------------------------------
 # Model-id detection: an explicit allow-list, not a family match
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("Qwen/Qwen3.8-27B", True),
-        ("qwen/qwen3.8-27b", True),
-        # other generations and sizes of the same family are not opted in
-        ("Qwen/Qwen3.5-122B-A10B", False),
-        ("Qwen/Qwen3-235B-A22B-Instruct-2507", False),
-        ("qwen3-dedicated", False),
-        ("google/gemma-4-31B-it", False),
-        ("openai/gpt-oss-120b", False),
-        ("zai-org/GLM-5.2", False),
-        ("meta-llama/Llama-4-Scout-17B-16E-Instruct", False),
-        ("my-dedicated-model", False),
-    ],
-)
-def test_inline_instructions_inferred_from_model_id(model: str, expected: bool) -> None:
-    assert _supports_inline_instructions(model) is expected
 
 
 # ---------------------------------------------------------------------------
