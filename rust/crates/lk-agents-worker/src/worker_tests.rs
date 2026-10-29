@@ -11,10 +11,10 @@ use async_trait::async_trait;
 
 use crate::EnvOption;
 use crate::JobDecision;
+use crate::WorkerConfig;
 use crate::protocol::{self, RegisterWorkerResponse, ServerMessage, server_message};
 use crate::*;
 use crate::{HostError, JobId, WorkerHost};
-use crate::{WorkerConfig, WorkerState};
 use lk_agents_abi::{Clock, Ts};
 
 // The two pure decisions
@@ -169,11 +169,10 @@ fn conn_with(
 ) -> (Worker, Arc<Mutex<Wire>>, WorkerClient) {
     let wire = Arc::new(Mutex::new(Wire::default()));
     let t = ScriptedTransport { script: Mutex::new(steps.into()), wire: wire.clone() };
-    let m = WorkerState::new(cfg_worker);
     let (c, h) = Worker::with_components(
         Arc::new(t),
         runtime_cfg(max_retry),
-        m,
+        cfg_worker,
         Arc::new(host),
         Arc::new(FrozenClock),
         crate::test_support::blocking_io(),
@@ -198,7 +197,7 @@ async fn register_is_the_first_message_written_and_the_worker_id_lands() {
         "first message was {:?}",
         first.message
     );
-    assert_eq!(c.state().worker_id(), "W-7");
+    assert_eq!(c.snapshot_now().worker_id, "W-7");
 }
 
 // Catches: an off-by-one in the retry ladder; `max_retry = 2` means three attempts, not two.
@@ -227,7 +226,7 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
     );
     let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
     assert_eq!(wire.lock().unwrap().attempts, 2, "did not reconnect after the close");
-    assert_eq!(c.state().worker_id(), "W-2", "did not re-register on the new socket");
+    assert_eq!(c.snapshot_now().worker_id, "W-2", "did not re-register on the new socket");
 }
 
 // Catches: the reconnect budget spent over the worker's lifetime instead of per outage (the
@@ -249,7 +248,7 @@ async fn a_connection_restores_the_retry_budget() {
     );
     let _ = tokio::time::timeout(Duration::from_secs(30), c.run()).await;
     assert_eq!(wire.lock().unwrap().attempts, 3);
-    assert_eq!(c.state().worker_id(), "W-2", "gave up after the second outage");
+    assert_eq!(c.snapshot_now().worker_id, "W-2", "gave up after the second outage");
 }
 
 // Catches: `Drain` not reaching the machine while `run()` is in flight.
@@ -263,7 +262,7 @@ async fn drain_reaches_a_running_connection_from_another_task() {
         h2.send(WorkerCommand::Drain { timeout: None }).unwrap();
     });
     let _ = tokio::time::timeout(Duration::from_millis(200), c.run()).await;
-    assert!(c.state().draining(), "drain never reached the machine");
+    assert!(c.snapshot_now().draining, "drain never reached the machine");
     assert!(h.snapshot().draining, "the snapshot did not follow the machine");
 }
 
@@ -325,10 +324,10 @@ fn load_conn(host: LoadHost) -> (Worker, WorkerClient) {
 #[tokio::test(start_paused = true)]
 async fn no_user_load_function_means_the_core_samples_for_itself() {
     let (mut c, _h) = load_conn(LoadHost::default());
-    c.sample_load().await.expect("sampled");
-    c.sample_load().await.expect("sampled");
+    c.sample_load_now().await.expect("sampled");
+    c.sample_load_now().await.expect("sampled");
     // With no user override, use the core CPU monitor.
-    let load = c.state().worker_load();
+    let load = c.snapshot_now().worker_load;
     assert!(load.is_finite() && (0.0..=1.0).contains(&load), "load out of range: {load}");
 }
 
@@ -338,11 +337,10 @@ async fn no_user_load_function_means_the_core_samples_for_itself() {
 async fn a_user_load_function_wins_and_is_asked_exactly_once() {
     let user_calls = Arc::new(Mutex::new(0));
     let (mut c, h) = load_conn(LoadHost { user: Some(0.42), user_calls: user_calls.clone() });
-    c.sample_load().await.expect("sampled");
-    assert!((c.state().worker_load() - 0.42).abs() < 1e-6, "{}", c.state().worker_load());
+    c.sample_load_now().await.expect("sampled");
+    assert!((c.snapshot_now().worker_load - 0.42).abs() < 1e-6, "{}", c.snapshot_now().worker_load);
     assert_eq!(*user_calls.lock().unwrap(), 1);
-    c.publish();
-    assert_eq!(h.snapshot().worker_load, c.state().worker_load());
+    assert_eq!(h.snapshot().worker_load, c.snapshot_now().worker_load);
 }
 
 // Runtime scheduling tests use channels for the peer and gates for slow host operations.
@@ -499,10 +497,7 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
             closed: closed.clone(),
         }),
         runtime_cfg(max_retry),
-        WorkerState::new(WorkerConfig {
-            load_threshold: EnvOption::Fixed(0.7),
-            ..Default::default()
-        }),
+        WorkerConfig { load_threshold: EnvOption::Fixed(0.7), ..Default::default() },
         Arc::new(GatedHost {
             started: start,
             decisions: decisions.clone(),
@@ -706,7 +701,7 @@ async fn closing_cancels_an_unfinished_dial() {
     let (mut runtime, handle) = Worker::with_components(
         Arc::new(HangingTransport(tokio::sync::Notify::new())),
         runtime_cfg(0),
-        WorkerState::new(WorkerConfig::default()),
+        WorkerConfig::default(),
         Arc::new(LoadHost::default()),
         Arc::new(TestClock(tokio::time::Instant::now())),
         crate::test_support::blocking_io(),

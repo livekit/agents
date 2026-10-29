@@ -2,24 +2,22 @@
 //! are cancelled when it stops; writes are ordered, bounded and per-connection, and a reconnect
 //! regenerates state rather than replaying.
 
-use crate::Slot;
 use crate::hw::cpu::CpuMonitor;
 use crate::protocol::{self, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage};
-use crate::state::ConnectionRetry;
 use crate::transport::{
     Connected, EndpointStream, HttpStreamResetCode, StreamPreamble, TransportError, TransportEvent,
     WorkerSink, WorkerTransport,
 };
-use crate::{DefaultLoadCalc, WorkerState, WorkerStateEffect, WorkerStateInput};
+use crate::{DefaultLoadCalc, WorkerConfig};
 use crate::{JobDecision, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use lk_agents_abi::{Clock, WallAnchor};
+use lk_agents_abi::{Clock, TimerSet, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::TokioSpawner;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -41,9 +39,11 @@ pub enum RuntimeError {
     RetriesExhausted { retries: u32, source: Box<RuntimeError> },
 }
 
-pub use crate::state::retry_delay;
+mod jobs;
+use jobs::{ConnState, Pending, WorkerTimer};
+pub use jobs::{Slot, retry_delay};
 
-/// Connection events and host-operation completions are [`WorkerStateInput`]s instead.
+/// What a client asks of a running worker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerCommand {
     Drain { timeout: Option<Duration> },
@@ -152,8 +152,8 @@ pub struct RuntimeConfig {
 
 pub struct Worker {
     transport: Arc<dyn WorkerTransport>,
-    cfg: RuntimeConfig,
-    state: WorkerState,
+    runtime_cfg: RuntimeConfig,
+    cfg: WorkerConfig,
     host: Arc<dyn WorkerHost>,
     pub(super) blocking_io: lk_agents_net::blocking_io::BlockingIo,
     clock: Arc<dyn Clock>,
@@ -172,8 +172,29 @@ pub struct Worker {
     endpoints: HashMap<u64, OwnedTask>,
     next_endpoint: u64,
     closing: bool,
+    /// Bumped on each connection: a decision or launch of an older one is stale.
     generation: u64,
+    /// The connection is to be replaced once its writes settled.
     rollover_requested: bool,
+    timers: TimerSet<WorkerTimer>,
+    conn: ConnState,
+    worker_id: String,
+    worker_load: f32,
+    pending: Vec<Pending>,
+    /// Each settled job's last status, answered again to a repeated assignment.
+    dispositions: BTreeMap<JobId, JobStatus>,
+    assignment_capacity: usize,
+    /// A full assignment history is rolling over: new offers are refused until it reconnects.
+    rolling_over: bool,
+    /// Requests parked until the next load sample, in arrival order.
+    awaiting_load: VecDeque<Slot>,
+    active: Vec<RunningJobInfo>,
+    next_slot: u32,
+    draining: bool,
+    drain_reported: bool,
+    previous_status: Option<crate::WorkerStatus>,
+    /// Places the dispatch timeline in unix time.
+    wall: WallAnchor,
 }
 
 impl Drop for Worker {
@@ -468,7 +489,8 @@ impl PendingWrite {
 }
 
 enum Completion {
-    Input(WorkerStateInput),
+    Decision { generation: u64, slot: Slot, decision: JobDecision },
+    Launched { generation: u64, slot: Slot, result: Result<JobId, HostError> },
     Load(Option<f32>),
     CpuSample(Result<(CpuMonitor, Option<f32>), tokio::task::JoinError>),
     Done,
@@ -488,7 +510,7 @@ impl Worker {
         Self::with_components(
             transport.build().into(),
             connection,
-            WorkerState::new(config),
+            config,
             host,
             Arc::new(RealClock::new()),
             blocking_io,
@@ -498,8 +520,8 @@ impl Worker {
     /// Explicit runtime components, for custom drivers and tests.
     pub fn with_components(
         transport: Arc<dyn WorkerTransport>,
-        cfg: RuntimeConfig,
-        state: WorkerState,
+        runtime_cfg: RuntimeConfig,
+        cfg: WorkerConfig,
         host: Arc<dyn WorkerHost>,
         clock: Arc<dyn Clock>,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
@@ -517,8 +539,9 @@ impl Worker {
         (
             Self {
                 transport,
+                runtime_cfg,
                 cfg,
-                state: state.with_wall(WallAnchor::of(&*clock)),
+                wall: WallAnchor::of(&*clock),
                 host,
                 blocking_io,
                 clock,
@@ -537,25 +560,42 @@ impl Worker {
                 closing: false,
                 generation: 0,
                 rollover_requested: false,
+                timers: TimerSet::new(),
+                conn: ConnState::Disconnected,
+                worker_id: String::new(),
+                worker_load: 0.0,
+                pending: Vec::new(),
+                dispositions: BTreeMap::new(),
+                assignment_capacity: jobs::DEFAULT_ASSIGNMENT_CAPACITY,
+                rolling_over: false,
+                awaiting_load: VecDeque::new(),
+                active: Vec::new(),
+                next_slot: 0,
+                draining: false,
+                drain_reported: false,
+                previous_status: None,
             },
             handle,
         )
     }
 
-    pub(crate) fn publish(&self) {
-        let mut s = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
-        s.worker_id = self.state.worker_id().to_owned();
-        s.draining = self.state.draining();
-        s.active_jobs = self.state.active_jobs().len();
-        s.reserved_slots = self.state.reserved_slots();
-        s.worker_load = self.state.worker_load();
+    fn shared(&self) -> std::sync::MutexGuard<'_, Snapshot> {
+        self.snapshot.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn state(&self) -> &WorkerState {
-        &self.state
+    fn publish(&self) {
+        let reserved_slots = self.reserved_slots();
+        let mut s = self.shared();
+        s.worker_id = self.worker_id.clone();
+        s.draining = self.draining;
+        s.active_jobs = self.active.len();
+        s.reserved_slots = reserved_slots;
+        s.worker_load = self.worker_load;
     }
-    pub fn state_mut(&mut self) -> &mut WorkerState {
-        &mut self.state
+
+    /// The server has answered the registration on the current connection.
+    pub fn registered(&self) -> bool {
+        self.conn == ConnState::Registered
     }
 
     fn notify(&self, event: WorkerNotification) {
@@ -563,9 +603,14 @@ impl Worker {
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
-        let mut connection = ConnectionIo::new(self.cfg.connection_timeout);
-        let effects = self.state.start(self.clock.now());
-        self.execute(effects, &mut connection.outbox);
+        let mut connection = ConnectionIo::new(self.runtime_cfg.connection_timeout);
+        // The 0.5 s load timer lives outside any connection.
+        self.timers.arm(
+            WorkerTimer::LoadSample,
+            self.clock.now().saturating_add(crate::UPDATE_LOAD_INTERVAL),
+        );
+        self.sample_load();
+        self.publish();
         let result = self.run_loop(&mut connection).await;
 
         self.operations.clear();
@@ -576,18 +621,18 @@ impl Worker {
         connection.close().await;
         let reason =
             result.as_ref().err().map(ToString::to_string).unwrap_or_else(|| "closed".into());
-        self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).finished = Some(reason.clone());
+        self.shared().finished = Some(reason.clone());
         self.notify(WorkerNotification::Stopped(WorkerStopped { reason }));
         result
     }
 
     async fn run_loop(&mut self, connection: &mut ConnectionIo) -> Result<(), RuntimeError> {
         let mut commands_open = true;
-        let mut retries = ConnectionRetry::new(self.cfg.max_retry);
+        let mut retries: u32 = 0;
         let mut control_open = true;
         while !self.closing {
-            let effects = self.state.tick(self.clock.now());
-            self.execute(effects, &mut connection.outbox);
+            self.tick(&mut connection.outbox);
+            self.publish();
             self.maybe_rollover(connection);
             if self.control.has_changed().unwrap_or(false) {
                 self.handle_control(&mut connection.outbox);
@@ -596,7 +641,7 @@ impl Worker {
                 }
             }
             let timer = self
-                .state
+                .timers
                 .next_deadline()
                 .map(|at| at.saturating_duration_since(self.clock.now()))
                 .unwrap_or(Duration::from_secs(3600));
@@ -622,20 +667,18 @@ impl Worker {
                     }
                     Ok(())
                 }
-                event = connection.next_event(self.transport.clone(), &self.cfg) => {
+                event = connection.next_event(self.transport.clone(), &self.runtime_cfg) => {
                     event.map(|event| {
                         if matches!(event, ConnectionEvent::Registered(_)) {
-                            retries.registered();
+                            retries = 0;
                         }
                         self.handle_connection_event(event, &mut connection.outbox)
                     })
                 }
-                _ = tokio::time::sleep(timer) => {
-                    let effects = self.state.tick(self.clock.now());
-                    self.execute(effects, &mut connection.outbox);
-                    Ok(())
-                }
+                _ = tokio::time::sleep(timer) => Ok(()),
             };
+            self.settle();
+            self.publish();
             // Commands may update local state while offline, but their writes must not be replayed.
             if !connection.is_connected() {
                 connection.outbox.clear();
@@ -652,50 +695,32 @@ impl Worker {
     }
 
     fn handle_control(&mut self, outbox: &mut Outbox) {
-        let effects = self.state.tick(self.clock.now());
-        self.execute(effects, outbox);
+        self.tick(outbox);
         let control = self.control.borrow_and_update().clone();
         if let Some(timeout) = control.drain {
-            let effects = self.state.drain(self.clock.now(), timeout);
-            self.execute(effects, outbox);
+            self.drain(timeout, outbox);
         }
         self.closing |= control.close;
     }
 
     fn handle_command(&mut self, command: WorkerCommand, outbox: &mut Outbox) {
-        let effects = self.state.tick(self.clock.now());
-        self.execute(effects, outbox);
+        self.tick(outbox);
         match command {
             WorkerCommand::Close => self.closing = true,
-            WorkerCommand::Drain { timeout } => {
-                let effects = self.state.drain(self.clock.now(), timeout);
-                self.execute(effects, outbox);
-            }
+            WorkerCommand::Drain { timeout } => self.drain(timeout, outbox),
             WorkerCommand::JobStatus { job_id, status } => {
-                self.feed(WorkerStateInput::JobStatus { job_id, status }, outbox);
+                self.on_job_status(job_id, status, outbox)
             }
         }
     }
 
     fn handle_connection_event(&mut self, event: ConnectionEvent, outbox: &mut Outbox) {
+        self.tick(outbox);
         match event {
-            ConnectionEvent::Connected => {
-                self.generation += 1;
-                self.feed(WorkerStateInput::Connecting { generation: self.generation }, outbox);
-            }
-            ConnectionEvent::Registered(response) => {
-                self.feed(
-                    WorkerStateInput::Registered { generation: self.generation, response },
-                    outbox,
-                );
-            }
-            ConnectionEvent::ServerMessage(message) => {
-                self.feed(WorkerStateInput::Server { generation: self.generation, message }, outbox)
-            }
-            ConnectionEvent::AvailabilitySent(job_id) => self.feed(
-                WorkerStateInput::AvailabilitySent { generation: self.generation, job_id },
-                outbox,
-            ),
+            ConnectionEvent::Connected => self.on_connecting(outbox),
+            ConnectionEvent::Registered(response) => self.on_registered(response, outbox),
+            ConnectionEvent::ServerMessage(message) => self.on_server(message, outbox),
+            ConnectionEvent::AvailabilitySent(job_id) => self.on_availability_sent(job_id),
             ConnectionEvent::EndpointRequest(stream) => self.serve_endpoint(stream),
             ConnectionEvent::Progress => {}
         }
@@ -722,24 +747,26 @@ impl Worker {
         );
     }
 
+    /// Reconnects after a lost connection: at once first, then on a linear ladder capped at ten
+    /// seconds, until `max_retry` attempts are spent.
     fn reconnect(
         &mut self,
         connection: &mut ConnectionIo,
         error: RuntimeError,
-        retries: &mut ConnectionRetry,
+        retries: &mut u32,
     ) -> Result<(), RuntimeError> {
         if matches!(error, RuntimeError::Configuration(_)) {
             return Err(error);
         }
         self.disconnect(connection);
-        let now = self.clock.now();
-        let at = retries.disconnected(now).map_err(|attempts| RuntimeError::RetriesExhausted {
-            retries: attempts,
-            source: Box::new(error),
-        })?;
-        let delay = at.saturating_duration_since(now);
-        debug_assert_eq!(retries.wake_at(), Some(at));
-        connection.retry_after(delay);
+        if *retries >= self.runtime_cfg.max_retry {
+            return Err(RuntimeError::RetriesExhausted {
+                retries: *retries,
+                source: Box::new(error),
+            });
+        }
+        connection.retry_after(retry_delay(*retries));
+        *retries += 1;
         Ok(())
     }
 
@@ -748,10 +775,8 @@ impl Worker {
         connection.disconnect();
         self.requests.clear();
         self.endpoints.clear();
-        self.feed(
-            WorkerStateInput::Disconnected { generation: self.generation },
-            &mut connection.outbox,
-        );
+        self.on_disconnected();
+        self.settle();
         connection.outbox.clear();
         self.send_failure = None;
     }
@@ -764,22 +789,28 @@ impl Worker {
         }
     }
 
-    fn feed(&mut self, input: WorkerStateInput, outbox: &mut Outbox) {
-        let effects = self.state.handle(self.clock.now(), input);
-        self.execute(effects, outbox);
+    /// Samples the load (the user's `load_fnc`, else the CPU), one sample at a time.
+    fn sample_load(&mut self) {
+        if self.load_pending {
+            return;
+        }
+        self.load_pending = true;
+        let host = self.host.clone();
+        self.operations.push(async move { Completion::Load(host.user_load().await) }.boxed());
     }
 
     fn complete(&mut self, completion: Completion, outbox: &mut Outbox) {
+        self.tick(outbox);
         match completion {
-            Completion::Input(input) => {
-                if let WorkerStateInput::RequestDecision { slot, .. } = &input {
-                    self.requests.remove(slot);
-                }
-                self.feed(input, outbox);
+            Completion::Decision { generation, slot, decision } => {
+                self.on_decision(generation, slot, decision, outbox)
+            }
+            Completion::Launched { generation, slot, result } => {
+                self.on_launched(generation, slot, result, outbox)
             }
             Completion::Load(Some(load)) => {
                 self.load_pending = false;
-                self.feed(WorkerStateInput::LoadSampled(load), outbox);
+                self.on_load(load, outbox);
             }
             Completion::Load(None) => {
                 let blocking_io = self.blocking_io.clone();
@@ -791,7 +822,7 @@ impl Worker {
                             log::Level::Debug,
                             format!("worker CPU sample deferred error={error}"),
                         );
-                        self.feed(WorkerStateInput::LoadSampled(self.default_load.get()), outbox);
+                        self.on_load(self.default_load.get(), outbox);
                         return;
                     }
                 };
@@ -817,123 +848,13 @@ impl Worker {
                         format!("worker CPU sampler failed error={error}"),
                     ),
                 }
-                self.feed(WorkerStateInput::LoadSampled(self.default_load.get()), outbox);
+                self.on_load(self.default_load.get(), outbox);
             }
             Completion::Done => {}
             Completion::EndpointDone(id) => {
                 self.endpoints.remove(&id);
             }
         }
-    }
-
-    fn execute(&mut self, effects: Vec<WorkerStateEffect>, outbox: &mut Outbox) {
-        for effect in effects {
-            let host = self.host.clone();
-            match effect {
-                WorkerStateEffect::RolloverConnection => self.rollover_requested = true,
-                WorkerStateEffect::Diagnostic { level, message } => {
-                    crate::diagnostics::emit(level, message)
-                }
-                WorkerStateEffect::Send(message) => {
-                    if let Err(error) = outbox.push(message, None) {
-                        self.send_failure = Some(error);
-                    }
-                }
-                WorkerStateEffect::SendAvailability { job_id, arguments } => {
-                    let message = availability_message(&job_id, arguments);
-                    if let Err(error) = outbox.push(message, Some(job_id)) {
-                        self.send_failure = Some(error);
-                    }
-                }
-                WorkerStateEffect::AskUser { slot, request } => {
-                    let generation = self.generation;
-                    let (decided, decision) = tokio::sync::oneshot::channel();
-                    let task = TokioSpawner::current().spawn(async move {
-                        let _ = decided.send(host.on_job_request(request).await);
-                    });
-                    self.requests.insert(slot, task);
-                    self.operations.push(
-                        async move {
-                            match decision.await {
-                                Ok(decision) => {
-                                    Completion::Input(WorkerStateInput::RequestDecision {
-                                        generation,
-                                        slot,
-                                        decision,
-                                    })
-                                }
-                                Err(_) => Completion::Done,
-                            }
-                        }
-                        .boxed(),
-                    );
-                }
-                WorkerStateEffect::CancelRequest { slot } => {
-                    self.requests.remove(&slot);
-                }
-                WorkerStateEffect::LaunchJob { slot, info } => {
-                    let generation = self.generation;
-                    self.operations.push(
-                        async move {
-                            Completion::Input(WorkerStateInput::JobLaunched {
-                                generation,
-                                slot,
-                                result: host.launch_job(*info).await,
-                            })
-                        }
-                        .boxed(),
-                    );
-                }
-                WorkerStateEffect::TerminateJob(id) => self.operations.push(
-                    async move {
-                        if let Err(error) = host.terminate_job(id.clone()).await {
-                            crate::diagnostics::emit(
-                                log::Level::Error,
-                                format!("failed to terminate job job_id={id} error={error}"),
-                            );
-                        }
-                        Completion::Done
-                    }
-                    .boxed(),
-                ),
-                WorkerStateEffect::SampleLoad if !self.load_pending => {
-                    self.load_pending = true;
-                    self.operations
-                        .push(async move { Completion::Load(host.user_load().await) }.boxed());
-                }
-                WorkerStateEffect::SampleLoad => {}
-                WorkerStateEffect::Registered {
-                    worker_id,
-                    region,
-                    protocol,
-                    deployment,
-                    agent_name,
-                } => {
-                    self.notify(WorkerNotification::Registered(WorkerRegistered {
-                        worker_id,
-                        region,
-                        protocol,
-                        deployment,
-                        agent_name,
-                    }));
-                }
-                WorkerStateEffect::SetTargetIdleProcesses(n) => {
-                    self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).target_idle_processes =
-                        Some(n);
-                }
-                WorkerStateEffect::DrainFinished => {
-                    self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).drain_outcome =
-                        Some("finished".into());
-                    self.notify(WorkerNotification::DrainFinished(WorkerDrainFinished {}));
-                }
-                WorkerStateEffect::DrainTimedOut => {
-                    self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).drain_outcome =
-                        Some("timed_out".into());
-                    self.notify(WorkerNotification::DrainTimedOut(WorkerDrainTimedOut {}));
-                }
-            }
-        }
-        self.publish();
     }
 }
 
@@ -1044,9 +965,15 @@ mod write_tests {
     }
 
     impl Worker {
-        pub(crate) async fn sample_load(&mut self) -> Result<(), RuntimeError> {
-            let mut outbox = Outbox::new(self.cfg.connection_timeout);
-            self.execute(vec![WorkerStateEffect::SampleLoad], &mut outbox);
+        /// The snapshot as the worker would publish it now.
+        pub(crate) fn snapshot_now(&self) -> Snapshot {
+            self.publish();
+            self.shared().clone()
+        }
+
+        pub(crate) async fn sample_load_now(&mut self) -> Result<(), RuntimeError> {
+            let mut outbox = Outbox::new(self.runtime_cfg.connection_timeout);
+            self.sample_load();
             while let Some(completed) = self.operations.next().await {
                 self.complete(completed, &mut outbox);
             }

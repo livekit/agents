@@ -19,9 +19,6 @@ pub mod hw;
 pub mod ipc;
 pub mod protocol;
 pub mod server;
-pub mod state;
-#[cfg(test)]
-mod state_tests;
 pub mod transport;
 mod worker;
 #[cfg(test)]
@@ -37,7 +34,6 @@ pub use lk_agents_abi::worker::worker::{
     AcceptArguments, JobDecision, JobInfo, JobRequest, RunningJobInfo, WorkerDrainFinished,
     WorkerDrainTimedOut, WorkerPermissions, WorkerRegistered, WorkerStopped,
 };
-pub use state::{Slot, WorkerState, WorkerStateEffect, WorkerStateInput, WorkerTimer};
 pub use transport::{
     AgentEndpointKind, Connected, EndpointReader, EndpointStream, EndpointWriter,
     HttpStreamResetCode, StreamPreamble, TransportConfig, TransportError, TransportEvent,
@@ -45,7 +41,8 @@ pub use transport::{
 };
 pub use worker::{
     EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig, RuntimeError,
-    Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification, retry_delay,
+    Slot, Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification,
+    retry_delay,
 };
 
 #[cfg(test)]

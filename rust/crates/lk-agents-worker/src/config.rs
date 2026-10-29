@@ -30,7 +30,7 @@ pub const DEFAULT_LOAD_THRESHOLD_PROD: f32 = 0.7;
 /// `math.inf`.
 pub const DEFAULT_LOAD_THRESHOLD_DEV: f32 = f32::INFINITY;
 
-/// Resolved settings for [`crate::WorkerState`]; performs no environment reads.
+/// Resolved settings for [`crate::Worker`]; performs no environment reads.
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub agent_name: String,
