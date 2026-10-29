@@ -302,8 +302,24 @@ fn expand_host(
         (I::Fn(f), Some("export")) => f.attrs.retain(|a| !a.path().is_ident("python")),
         _ => {}
     }
-    strip(&mut parsed);
+    // A later `host` attribute on the item reads the inner markers too (`wire_strs` reads the
+    // variants' renames): only the item's last expansion strips them.
+    if !item_attrs(&parsed).iter().any(lk_agents_bindgen::is_host) {
+        strip(&mut parsed);
+    }
     quote::quote!(#parsed #extra)
+}
+
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Enum(e) => &e.attrs,
+        syn::Item::Struct(s) => &s.attrs,
+        syn::Item::Trait(t) => &t.attrs,
+        syn::Item::Impl(i) => &i.attrs,
+        syn::Item::Fn(f) => &f.attrs,
+        syn::Item::Const(c) => &c.attrs,
+        _ => &[],
+    }
 }
 
 /// The item's in-place binding (`lk-agents-bindgen`); the pairing is checked by the caller.
@@ -351,7 +367,12 @@ fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStrea
             Some(lk_agents_bindgen::Value::Text(s)) => quote::quote!(#s.into()),
             Some(lk_agents_bindgen::Value::Rust(r)) => r.parse::<proc_macro2::TokenStream>()?,
             _ if is_maybe(&f.ty) => quote::quote!(::core::default::Default::default()),
-            _ => return Err(syn::Error::new_spanned(f, "`record(.., default)`: every field declares its `default`")),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    f,
+                    "`record(.., default)`: every field declares its `default`",
+                ));
+            }
         };
         let name = &f.ident;
         inits.push(quote::quote!(#name: #value));
@@ -555,6 +576,45 @@ fn wire_strs<'a>(
 #[cfg(test)]
 mod tests {
     use quote::quote;
+
+    /// `item`'s outer `host` attributes expanded one at a time, first to last, as rustc does.
+    fn expand_all(item: proc_macro2::TokenStream) -> String {
+        let mut item: syn::Item = syn::parse2(item).unwrap();
+        let mut impls: Vec<syn::Item> = Vec::new();
+        while let Some(i) = super::item_attrs(&item).iter().position(lk_agents_bindgen::is_host) {
+            let syn::Item::Enum(e) = &mut item else { unreachable!("an enum") };
+            let args = e.attrs.remove(i).meta.require_list().unwrap().tokens.clone();
+            // The expansion is the item followed by its impls; the item expands on.
+            let file: syn::File =
+                syn::parse2(super::expand_host(args, quote!(#item), false)).unwrap();
+            let mut items = file.items.into_iter();
+            item = items.next().unwrap();
+            impls.extend(items);
+        }
+        quote!(#item #(#impls)*).to_string()
+    }
+
+    // Catches: an earlier expansion stripping the variants' `#[host(rename)]` before `wire_strs`
+    // reads them, so the wire string silently falls back to `machine_vm` (AMDCategory, 74b0adf1a).
+    #[test]
+    fn a_renamed_variant_keeps_its_wire_string_in_either_attribute_order() {
+        for item in [
+            quote! {
+                #[host(record(module = "m", emit))]
+                #[host(wire_strs)]
+                enum E { #[host(rename = "machine-vm")] MachineVm }
+            },
+            quote! {
+                #[host(wire_strs)]
+                #[host(record(module = "m", emit))]
+                enum E { #[host(rename = "machine-vm")] MachineVm }
+            },
+        ] {
+            let out = expand_all(item);
+            assert!(out.contains("\"machine-vm\" =>"), "{out}");
+            assert!(!out.contains("rename"), "a marker outlived the last expansion: {out}");
+        }
+    }
 
     // Catches: `#[host(object)]` leaving a per-method marker on the impl (rustc would reject the
     // unknown attribute), or `#[host(..)]` accepting an item/word pair the codegen never reads.
