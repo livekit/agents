@@ -847,22 +847,27 @@ fn an_enum_record_crosses_as_its_str_enum_members() {
         r#"
         /// Why a session closed.
         #[crate::host(record(module = "session", extract, emit, enum))]
-        pub enum CloseReason { Error, JobShutdown }
+        pub enum CloseReason {
+            Error,
+            /// The job ended.
+            #[host(rename = "job-shutdown")]
+            JobShutdown,
+        }
         "#,
     )
     .expect("resolves");
     let models = crate::records::python(&decls).expect("models");
     let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
     assert!(
-        session.contains("from enum import Enum\n")
-            && session.contains("class CloseReason(str, Enum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job_shutdown\"\n"),
+        session.contains("from enum import Enum, unique\n")
+            && session.contains("@unique\nclass CloseReason(str, Enum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job-shutdown\"\n    \"\"\"The job ended.\"\"\"\n"),
         "{session}"
     );
     let shell = crate::records::conversions(&decls).expect("emits").text;
     assert!(
-        shell.contains("::lk_agents_abi::llm::class::CloseReason::JobShutdown => \"job_shutdown\"")
+        shell.contains("::lk_agents_abi::llm::class::CloseReason::JobShutdown => \"job-shutdown\"")
             && shell.contains("crate::host::construct(CLOSE_REASON.import(py, \"livekit.agents._generated.session\", \"CloseReason\")?.as_any(), (value,), None)?")
-            && shell.contains("\"job_shutdown\" => Ok(::lk_agents_abi::llm::class::CloseReason::JobShutdown)"),
+            && shell.contains("\"job-shutdown\" => Ok(::lk_agents_abi::llm::class::CloseReason::JobShutdown)"),
         "{shell}"
     );
     let err = crate::decl::tests::read(

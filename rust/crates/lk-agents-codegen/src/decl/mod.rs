@@ -71,8 +71,8 @@ pub enum RecordBody {
     Struct(Vec<Field>),
     /// A data-variant enum: one model class per variant, the class is the tag.
     Variants(Vec<Variant>),
-    /// A unit-only enum: a `Literal` of each variant's host string.
-    Literals(Vec<(String, String)>),
+    /// A unit-only enum: a `Literal` of each variant's host string, by Rust variant, with its doc.
+    Literals(Vec<(String, String, Vec<String>)>),
 }
 
 #[derive(Debug, Clone)]

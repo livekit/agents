@@ -475,20 +475,22 @@ fn model(
         }
         RecordBody::Literals(values) if r.enumeration => {
             runtime.add("enum", "Enum");
-            let mut s = format!("\n\nclass {}(str, Enum):\n", r.name);
+            runtime.add("enum", "unique");
+            let mut s = format!("\n\n@unique\nclass {}(str, Enum):\n", r.name);
             if !r.doc.is_empty() {
                 s.push_str(&docstring(&r.doc, "    "));
                 s.push('\n');
             }
-            for (_, host) in values {
-                s.push_str(&format!("    {} = {host:?}\n", host.to_uppercase()));
+            for (rust, host, doc) in values {
+                s.push_str(&format!("    {} = {host:?}\n", crate::decl::resolve::snake(rust).to_uppercase()));
+                s.push_str(&docstring(doc, "    "));
             }
             s
         }
         RecordBody::Literals(values) => {
             runtime.add("typing", "Literal");
             runtime.add("typing", "TypeAlias");
-            let values: Vec<String> = values.iter().map(|(_, h)| format!("{h:?}")).collect();
+            let values: Vec<String> = values.iter().map(|(_, h, _)| format!("{h:?}")).collect();
             let mut s = format!("\n\n{}: TypeAlias = Literal[{}]\n", r.name, values.join(", "));
             s.push_str(&docstring(&r.doc, ""));
             s

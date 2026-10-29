@@ -87,7 +87,7 @@ impl Resolver<'_> {
                         voc::only(&vat, &entries, &["rename"])?;
                         let value = voc::text(&vat, &entries, "rename")?
                             .unwrap_or_else(|| snake(&v.ident.to_string()));
-                        values.push((v.ident.to_string(), value));
+                        values.push((v.ident.to_string(), value, doc(&v.attrs)));
                     }
                     RecordBody::Literals(values)
                 } else if enumeration {

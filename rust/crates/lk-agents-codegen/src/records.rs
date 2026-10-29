@@ -204,9 +204,9 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
         RecordBody::Literals(values) => {
             let arms: String = values
                 .iter()
-                .map(|(v, host)| format!("            {host:?} => Ok(Self::{v}),\n"))
+                .map(|(v, host, _)| format!("            {host:?} => Ok(Self::{v}),\n"))
                 .collect();
-            let expected: Vec<String> = values.iter().map(|(_, h)| format!("{h:?}")).collect();
+            let expected: Vec<String> = values.iter().map(|(_, h, _)| format!("{h:?}")).collect();
             let extract = format!(
                 "        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;\n        match &*value {{\n{arms}            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{other:?}} is not one of {expected}\"))),\n        }}\n",
                 name = r.name,
@@ -214,7 +214,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             );
             let arms: String = values
                 .iter()
-                .map(|(v, host)| format!("            Self::{v} => {host:?},\n"))
+                .map(|(v, host, _)| format!("            Self::{v} => {host:?},\n"))
                 .collect();
             let value = match r.enumeration {
                 true => {
