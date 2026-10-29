@@ -1,14 +1,14 @@
-//! Tests for [`AudioEmitter`](crate::AudioEmitter) (`tts/tts.py:835-1344`), from
+//! Tests for [`AudioEmitter`](super::AudioEmitter) (`tts/tts.py:835-1344`), from
 //! `agents/tests/test_tts.py:799-1110` on a virtual clock.
 //!
 //! The fixture is the reference's: 1 kHz mono, `frame_size_ms=100`, so a 100 ms frame is 100
 //! samples and the tail is 10. `AudioByteStream` is progressive: a 100-sample push comes out as
 //! 20 + 40 + (40 held).
 
-use crate::TimedString;
-use crate::Ts;
+use lk_agents_abi::media::emitter::EmitterError;
+use lk_agents_abi::{Frame, SynthesizedAudio, TimedString, Ts};
 
-use super::{AudioEmitter, Effects, EmitterError, HostEffect};
+use super::{AudioEmitter, Effects, HostEffect};
 
 const SR: u32 = 1000;
 const CH: u16 = 1;
@@ -21,7 +21,7 @@ fn secs(s: f64) -> Ts {
 }
 
 /// Every frame sent, in order.
-fn sent(eff: &Effects) -> Vec<&crate::SynthesizedAudio> {
+fn sent(eff: &Effects) -> Vec<&SynthesizedAudio> {
     eff.iter()
         .filter_map(|e| match e {
             HostEffect::Send(a) => Some(&**a),
@@ -258,11 +258,17 @@ fn misuse_of_the_lifecycle_is_refused() {
     let mut fx = Fx::streaming("a");
     fx.push(100);
     assert_eq!(fx.em.start_segment("b").unwrap_err(), EmitterError::SegmentAlreadyOpen);
-    assert_eq!(fx.em.initialize("req2", SR, CH, FRAME_MS, true).unwrap_err(), EmitterError::AlreadyStarted);
+    assert_eq!(
+        fx.em.initialize("req2", SR, CH, FRAME_MS, true).unwrap_err(),
+        EmitterError::AlreadyStarted
+    );
 
     let mut fx = Fx::new(false);
     assert_eq!(fx.em.start_segment("x").unwrap_err(), EmitterError::StartSegmentNotStreaming);
-    assert_eq!(fx.em.end_segment(fx.now, &mut fx.eff).unwrap_err(), EmitterError::EndSegmentNotStreaming);
+    assert_eq!(
+        fx.em.end_segment(fx.now, &mut fx.eff).unwrap_err(),
+        EmitterError::EndSegmentNotStreaming
+    );
 
     let mut em = AudioEmitter::new("test");
     let mut eff = Effects::new();
@@ -498,7 +504,7 @@ fn the_dump_wav_header_describes_its_frames() {
 #[test]
 fn a_pushed_frame_goes_out_as_framed_with_only_the_tail_held() {
     let mut fx = Fx::streaming("s");
-    let frame = crate::Frame { data: vec![0u8; 960 * 2], samples_per_channel: 960 };
+    let frame = Frame { data: vec![0u8; 960 * 2], samples_per_channel: 960 };
     fx.em.push_frame(fx.now, frame, &mut fx.eff).unwrap();
     let out: u32 = sent(&fx.eff).iter().map(|a| a.frame.samples_per_channel).sum();
     assert!(out < 960 && out > 0, "one frame out, its 10 ms tail held: {out}");
@@ -507,6 +513,6 @@ fn a_pushed_frame_goes_out_as_framed_with_only_the_tail_held() {
     assert_eq!(total, 960);
 
     let mut idle = Fx::new(true);
-    let frame = crate::Frame { data: vec![0u8; 4], samples_per_channel: 2 };
+    let frame = Frame { data: vec![0u8; 4], samples_per_channel: 2 };
     assert_eq!(idle.em.push_frame(idle.now, frame, &mut idle.eff), Err(EmitterError::NoSegment));
 }

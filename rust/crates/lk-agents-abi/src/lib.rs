@@ -65,7 +65,7 @@ pub use worker::job::{
 };
 
 #[cfg(feature = "python")]
-pub use tts::emitter::{AudioEmitter, EmitterError, SegmentDump};
+pub use media::emitter::EmitterError;
 pub use utils::resample::{Quality, ResampleError, Resampler};
 
 pub use llm::llm::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};

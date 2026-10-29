@@ -7,6 +7,7 @@
 #[cfg(feature = "blingfire")]
 pub mod blingfire;
 pub mod decoder;
+pub mod emitter;
 pub mod error;
 #[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;

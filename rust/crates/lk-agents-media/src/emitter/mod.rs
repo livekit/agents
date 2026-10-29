@@ -1,12 +1,13 @@
 //! `AudioEmitter` (`tts/tts.py:835`). A state machine, not a push sink: after 0.15 s sent it
-//! compares wall clock against audio duration and arms its own flush timer ([`on_drift`](AudioEmitter::on_drift)).
-//! PCM only: the runtime decodes. No channel, so a misuse error surfaces from the call that made it.
+//! compares wall clock against audio duration and arms its own flush timer
+//! ([`on_drift`](AudioEmitter::on_drift)). PCM only: its owner decodes. No channel, so a misuse
+//! error surfaces from the call that made it.
 
 use std::time::Duration;
 
-use crate::TimedString;
-use crate::{AudioByteStream, Frame, Ts};
-use crate::{AudioFrame, SynthesizedAudio};
+use lk_agents_abi::media::emitter::EmitterError;
+use lk_agents_abi::{AudioByteStream, AudioEncoding, AudioFrame, Frame, SynthesizedAudio};
+use lk_agents_abi::{TimedString, Ts};
 
 /// What the machine asks of its owner, in order.
 pub enum HostEffect {
@@ -31,38 +32,6 @@ const DRIFT_MARGIN: f64 = 0.02;
 const TAIL_MS: u32 = 10;
 /// The end-of-segment marker is 10 ms of silence: `sample_rate // 100` (`tts/tts.py:1155`).
 const MARKER_DIVISOR: u32 = 100;
-
-/// Every misuse the reference raises `RuntimeError` for. Messages are verbatim: plugin tests
-/// assert on them.
-#[crate::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum EmitterError {
-    /// A mime type nothing in this build decodes, refused before any byte is framed as PCM.
-    #[error("AudioEmitter: {0}")]
-    #[host(kind = "NotImplementedError")]
-    UnsupportedMime(String),
-    #[error("AudioEmitter: decode failed: {0}")]
-    Decode(String),
-    /// The runtime or the host output failed underneath the emitter.
-    #[error("AudioEmitter: {0}")]
-    Unavailable(String),
-    #[error("AudioEmitter already started")]
-    AlreadyStarted,
-    #[error("AudioEmitter isn't started")]
-    NotStarted,
-    #[error(
-        "start_segment() can only be called when SynthesizeStream is initialized with stream=True"
-    )]
-    StartSegmentNotStreaming,
-    #[error(
-        "end_segment() can only be called when SynthesizeStream is initialized with stream=True"
-    )]
-    EndSegmentNotStreaming,
-    #[error("start_segment() called before the previous segment was ended")]
-    SegmentAlreadyOpen,
-    #[error("start_segment() must be called before pushing audio data")]
-    NoSegment,
-}
 
 /// Pulled out by the owner when `LK_DUMP_TTS` is on; the host appends the local-time stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -622,7 +591,7 @@ impl AudioEmitter {
             started_time: None,
             // Consumed, not copied, or the synchroniser speaks the words twice.
             timed_transcript: std::mem::take(&mut self.timed_transcripts),
-            encoding: crate::AudioEncoding::Pcm,
+            encoding: AudioEncoding::Pcm,
         }
     }
 

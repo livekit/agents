@@ -1,10 +1,9 @@
-//! The TTS emitter's host class and its output port; framing, decoding and the drift timer stay
-//! native.
+//! The TTS emitter's host class, its errors and its output port; framing (lk-agents-media),
+//! decoding and the drift timer (lk-agents-inference) stay native.
 
 use std::sync::Arc;
 
 use crate::errors::HostError;
-use crate::tts::emitter::EmitterError;
 use crate::{AudioFrame, TimedString};
 
 /// Where a synthesis' audio goes: `tts.py`'s `_EmitterOutput` over the host channel. Its calls
@@ -80,4 +79,36 @@ pub trait AudioEmitter: Send + Sync + Sized + 'static {
     fn _note_provider_request_id(&self, context_id: String) -> Result<(), EmitterError>;
     #[host(getter)]
     fn output_closed(&self) -> Result<bool, EmitterError>;
+}
+
+/// Every misuse the reference raises `RuntimeError` for. Messages are verbatim: plugin tests
+/// assert on them.
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EmitterError {
+    /// A mime type nothing in this build decodes, refused before any byte is framed as PCM.
+    #[error("AudioEmitter: {0}")]
+    #[host(kind = "NotImplementedError")]
+    UnsupportedMime(String),
+    #[error("AudioEmitter: decode failed: {0}")]
+    Decode(String),
+    /// The runtime or the host output failed underneath the emitter.
+    #[error("AudioEmitter: {0}")]
+    Unavailable(String),
+    #[error("AudioEmitter already started")]
+    AlreadyStarted,
+    #[error("AudioEmitter isn't started")]
+    NotStarted,
+    #[error(
+        "start_segment() can only be called when SynthesizeStream is initialized with stream=True"
+    )]
+    StartSegmentNotStreaming,
+    #[error(
+        "end_segment() can only be called when SynthesizeStream is initialized with stream=True"
+    )]
+    EndSegmentNotStreaming,
+    #[error("start_segment() called before the previous segment was ended")]
+    SegmentAlreadyOpen,
+    #[error("start_segment() must be called before pushing audio data")]
+    NoSegment,
 }

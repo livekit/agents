@@ -12,9 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use lk_agents_abi::media::emitter::EmitterOutput;
-use lk_agents_abi::tts::emitter::{AudioEmitter as Machine, Effects, EmitterError, HostEffect};
+use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
 use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Frame, Spawner, SpawnerExt, TimedString, Ts};
+use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{DecodePlan, Decoder};
 use tokio::sync::{Notify, watch};
