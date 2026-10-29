@@ -328,6 +328,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_voice_session_start, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_avatar_join, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::wait_for_participant_attribute, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;
     m.add_class::<worker::EndpointStream>()?;
     m.add_class::<worker::EndpointServer>()?;
     m.add_class::<worker::_core_AsgiReceive>()?;

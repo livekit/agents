@@ -268,3 +268,27 @@ def _core_create_room_session(room: Room | None) -> _core_RoomSession: ...
 
 async def wait_avatar_join(room: _core_RoomSession, identity: str) -> tuple[float, float]:
     """Wait for the supplied room's connection, avatar participant and subscribed video track."""
+
+async def wait_for_participant(
+    room: _core_RoomSession,
+    identity: str | None,
+    kinds: Sequence[int] | None,
+    include_local: bool,
+) -> str | None: ...
+
+async def wait_for_agent(room: _core_RoomSession, name: str | None) -> str: ...
+
+async def wait_for_participant_attribute(
+    room: _core_RoomSession,
+    identity: str,
+    attribute: str,
+    value: str,
+) -> None: ...
+
+async def wait_for_track_publication(
+    room: _core_RoomSession,
+    identity: str | None,
+    kinds: Sequence[int] | None,
+    include_local: bool,
+    subscribed: bool,
+) -> tuple[str | None, str]: ...

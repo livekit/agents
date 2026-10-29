@@ -14,7 +14,6 @@ mod error;
 pub mod events;
 pub mod playout;
 pub mod ports;
-pub mod wait;
 pub use capabilities::{
     AudioInputStream, AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcHost,
     RtcRoom, TextStreamWriter, TrackPublication,

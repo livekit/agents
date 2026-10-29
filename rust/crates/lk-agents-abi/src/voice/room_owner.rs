@@ -5,7 +5,7 @@ use crate::voice::room_io::{
     DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
 use crate::voice::rtc::capabilities::RtcRoom;
-use crate::voice::rtc::{ParticipantIdentity, TrackSid};
+use crate::voice::rtc::{ParticipantIdentity, RtcError, TrackSid};
 use crate::{AudioFrame, Clock, Closed, Spawner, VirtualClock};
 use std::sync::Arc;
 
@@ -138,6 +138,57 @@ pub trait RoomRuntime {
         room: RoomSession,
         identity: String,
     ) -> std::result::Result<(f64, f64), crate::voice::rtc::RtcError>;
+
+    #[host(function)]
+    async fn wait_for_participant(
+        room: RoomSession,
+        identity: Option<String>,
+        kinds: Option<Vec<i32>>,
+        include_local: bool,
+    ) -> std::result::Result<Option<ParticipantIdentity>, RtcError> {
+        room.0
+            .rtc()
+            .ok_or(RtcError::NotConnected)?
+            .wait_for_participant(identity, kinds, include_local)
+            .await
+    }
+
+    #[host(function)]
+    async fn wait_for_agent(
+        room: RoomSession,
+        name: Option<String>,
+    ) -> std::result::Result<ParticipantIdentity, RtcError> {
+        room.0.rtc().ok_or(RtcError::NotConnected)?.wait_for_agent(name).await
+    }
+
+    #[host(function)]
+    async fn wait_for_participant_attribute(
+        room: RoomSession,
+        identity: String,
+        attribute: String,
+        value: String,
+    ) -> std::result::Result<(), RtcError> {
+        room.0
+            .rtc()
+            .ok_or(RtcError::NotConnected)?
+            .wait_for_participant_attribute(identity, attribute, value)
+            .await
+    }
+
+    #[host(function)]
+    async fn wait_for_track_publication(
+        room: RoomSession,
+        identity: Option<String>,
+        kinds: Option<Vec<i32>>,
+        include_local: bool,
+        subscribed: bool,
+    ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError> {
+        room.0
+            .rtc()
+            .ok_or(RtcError::NotConnected)?
+            .wait_for_track_publication(identity, kinds, include_local, subscribed)
+            .await
+    }
 }
 
 fn input_closed(outcome: Closed) -> Result<()> {

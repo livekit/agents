@@ -164,10 +164,6 @@ from ._generated._core_classes import (
     validate_card_number as validate_card_number,
     validate_synthesis as validate_synthesis,
     video_queue_frames as video_queue_frames,
-    wait_for_agent as wait_for_agent,
-    wait_for_participant as wait_for_participant,
-    wait_for_participant_attribute as wait_for_participant_attribute,
-    wait_for_track_publication as wait_for_track_publication,
 )
 from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
@@ -379,6 +375,10 @@ from ._generated._core_voice import (
     receive_dtmf as receive_dtmf,
     send_dtmf_events as send_dtmf_events,
     wait_avatar_join as wait_avatar_join,
+    wait_for_agent as wait_for_agent,
+    wait_for_participant as wait_for_participant,
+    wait_for_participant_attribute as wait_for_participant_attribute,
+    wait_for_track_publication as wait_for_track_publication,
 )
 from ._generated._core_worker import (
     EndpointServer as EndpointServer,

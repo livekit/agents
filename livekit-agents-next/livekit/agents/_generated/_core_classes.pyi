@@ -404,26 +404,6 @@ def instructions_message_id() -> str: ...
 def remove_instructions(item_ids: list[str]) -> list[int]: ...
 def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
 def video_queue_frames() -> int: ...
-async def wait_for_participant(
-    room: _core_RoomSession,
-    identity: str | None,
-    kinds: list[int] | None,
-    include_local: bool,
-) -> str | None: ...
-async def wait_for_agent(room: _core_RoomSession, name: str | None = None) -> str: ...
-async def wait_for_participant_attribute(
-    room: _core_RoomSession,
-    identity: str,
-    attribute: str,
-    value: str,
-) -> None: ...
-async def wait_for_track_publication(
-    room: _core_RoomSession,
-    identity: str | None,
-    kinds: list[int] | None,
-    include_local: bool,
-    subscribed: bool,
-) -> tuple[str | None, str]: ...
 def validate_synthesis(
     text: str,
     duration: float,
