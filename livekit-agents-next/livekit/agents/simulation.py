@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, Union
 
 from livekit.protocol import agent_simulation as proto
 
@@ -49,13 +49,12 @@ class SimulationContext:
         return self._scenario
 
     @property
-    def simulation_mode(self) -> int:
-        """How the simulated user interacts with the agent (text chat or audio).
-        Unspecified is treated as text, since simulations predating the field
-        were all text-only."""
-        if self._dispatch.mode == proto.SimulationMode.SIMULATION_MODE_UNSPECIFIED:
-            return proto.SimulationMode.SIMULATION_MODE_TEXT
-        return self._dispatch.mode
+    def simulation_mode(self) -> Literal["text", "audio"]:
+        """How the simulated user interacts with the agent. Unspecified is treated as text,
+        since simulations predating the field were all text-only."""
+        if self._dispatch.mode == proto.SimulationMode.SIMULATION_MODE_AUDIO:
+            return "audio"
+        return "text"
 
     @property
     def simulation_run_id(self) -> str:

@@ -612,8 +612,6 @@ class JobContext:
         about itself outranks what an individual model was configured with. Empty for
         an ordinary job.
         """
-        from livekit.protocol import agent_simulation
-
         from .inference._utils import HEADER_INFERENCE_PRIORITY
 
         headers: dict[str, str] = {}
@@ -624,10 +622,7 @@ class JobContext:
         # simulations are excluded: they run in real time against the audio pipeline,
         # so their latency has to stay representative of production.
         sim = self.simulation_context
-        if (
-            sim is not None
-            and sim.simulation_mode == agent_simulation.SimulationMode.SIMULATION_MODE_TEXT
-        ):
+        if sim is not None and sim.simulation_mode == "text":
             headers[HEADER_INFERENCE_PRIORITY] = "low"
 
         return headers
