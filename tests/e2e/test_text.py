@@ -14,7 +14,6 @@ import pytest
 from a2a.types import a2a_pb2 as pb
 from google.protobuf import json_format
 
-from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON, MERGED_INTO, REASON
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
 from livekit.agents.storage.resolve import Thread
@@ -144,7 +143,7 @@ async def test_text_interrupt_across_workers_does_not_deliver_stale_answer(
         service.release(thread)
     old, new = first.result(), second.result()
     assert old[-1].status_update.status.state == pb.TaskState.TASK_STATE_CANCELED
-    metadata = metadata_from_wire(old[-1].status_update.metadata)
+    metadata = dict(old[-1].status_update.metadata)
     assert metadata[INTERRUPTED] is True
     assert metadata[INTERRUPTION_REASON] == "new-message"
     assert not any(frame.HasField("artifact_update") for frame in old)
@@ -170,7 +169,7 @@ async def test_inbox_burst_merges_messages_into_one_reply(
     assert a.status.state == b.status.state == pb.TaskState.TASK_STATE_COMPLETED
     merged, final = (a, b) if not a.artifacts else (b, a)
     assert not merged.artifacts
-    assert metadata_from_wire(merged.metadata)[MERGED_INTO] == final.id
+    assert dict(merged.metadata)[MERGED_INTO] == final.id
     assert answer(final)
     turns = [call for call in service.calls if call.operation == "turn"]
     assert len(turns) == 1
@@ -203,7 +202,7 @@ async def test_worker_killed_mid_turn_settles_orphan_and_other_worker_continues(
         pb.Task(),
     )
     assert orphan.status.state == pb.TaskState.TASK_STATE_FAILED
-    assert metadata_from_wire(orphan.metadata)[REASON] == "worker-lost"
+    assert dict(orphan.metadata)[REASON] == "worker-lost"
     assert not [call for call in service.calls if call.operation == "book"]
 
 

@@ -20,8 +20,7 @@ from .client import AgentClient, Reply
 from .endpoint import a2a_session
 from .remote import RemoteAgent
 
-# the documented surface (docs/clients.md, docs/server.md, docs/tools.md): the endpoint, card and
-# wire codec modules are the framework's own
+# the documented surface (docs/clients.md, docs/server.md, docs/tools.md): the endpoint and card
 __all__ = [
     "a2a_session",
     "A2ASessionContext",

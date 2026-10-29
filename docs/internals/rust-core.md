@@ -1351,7 +1351,9 @@ cancellation races and cleanup outcomes in both bindings.
 ## Runtime limits and backpressure
 
 Each runtime queue declares its capacity, accounting unit and full behavior.
-Use bytes or media duration as well as item counts when payload sizes vary.
+Use bytes or media duration as well as item counts when payload sizes vary
+widely; a queue whose large payload is one kind (audio) may count bytes for that
+kind only, its other items bounded by count times their transport message limit.
 Admission limits include in-flight operations and producers waiting for space;
 a bounded channel with an unbounded population of blocked tasks is not a bound.
 Retained buffers, pending results and resource tables have ownership and limits.

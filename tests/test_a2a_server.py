@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
@@ -26,7 +26,6 @@ from livekit.agents.a2a import (
     TextPart,
     Unauthorized,
 )
-from livekit.agents.a2a.codec import TaskUpdate, metadata_from_wire, updates_from_events
 from livekit.agents.a2a.endpoint import AGENT_CARD_PATH, A2AEndpoint
 from livekit.agents.a2a.extension import (
     CHANNEL,
@@ -34,6 +33,7 @@ from livekit.agents.a2a.extension import (
     INTERRUPTED,
     INTERRUPTION_REASON,
     KIND,
+    KIND_CHAT_CTX,
     MERGED_INTO,
     REASON,
     as_dict,
@@ -285,19 +285,6 @@ async def test_the_header_is_echoed(thread_storage: Storage) -> None:
         assert artifact["artifact"]["parts"][0]["text"] == "Goodbye."
 
 
-async def _updates(results: list[dict[str, Any]]) -> list[TaskUpdate]:
-    from google.protobuf import json_format
-
-    async def events() -> AsyncIterator[Any]:
-        for r in results:
-            if "result" in r:
-                yield json_format.ParseDict(
-                    r["result"], pb.StreamResponse(), ignore_unknown_fields=True
-                )
-
-    return [u async for u in updates_from_events(events())]
-
-
 async def test_errors_map_as_the_plan_lists_them(thread_storage: Storage) -> None:
     server, _ = make_server(thread_storage)
     async with http_client(server) as http:
@@ -428,7 +415,7 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     results_2 = [r["result"] for r in sse_results(r2)]
     final_1 = results_1[-1]["statusUpdate"]
     assert final_1["status"]["state"] == "TASK_STATE_CANCELED"
-    meta = metadata_from_wire(final_1["metadata"])
+    meta = final_1["metadata"]
     assert meta[INTERRUPTED] is True and meta[INTERRUPTION_REASON] == "new-message"
     assert not any("artifactUpdate" in r for r in results_1)
     artifacts = [r["artifactUpdate"]["artifact"] for r in results_2 if "artifactUpdate" in r]
@@ -481,7 +468,7 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
     task_1, task_2 = r1.json()["result"]["task"], r2.json()["result"]["task"]
     assert batches == [["where", "are you"]]
     assert task_1["status"]["state"] == "TASK_STATE_COMPLETED" and "artifacts" not in task_1
-    assert metadata_from_wire(task_1["metadata"])[MERGED_INTO] == task_2["id"]
+    assert task_1["metadata"][MERGED_INTO] == task_2["id"]
     assert task_2["artifacts"][0]["parts"][0]["text"] == "one reply"
 
 
@@ -831,18 +818,21 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
         return "ok"
 
     server, _ = make_server(thread_storage, handler)
-    from livekit.agents.a2a.codec import chat_ctx_part, message_to_pb
+    from google.protobuf import json_format
 
     history = ChatContext([ChatMessage(role="user", content=["earlier"])])
     msg = {
         "messageId": "m1",
         "role": "ROLE_USER",
-        "parts": [{"text": "what is the fare"}, chat_ctx_part(history)],
+        "parts": [
+            {"text": "what is the fare"},
+            {"data": history.to_dict(exclude_timestamp=False), "metadata": {KIND: KIND_CHAT_CTX}},
+        ],
         "metadata": {KIND: "delegation"},
     }
     async with http_client(server) as http:
         client = await stock_client(http, extensions=EXTENSION_URI)
-        events = await send(client, message_to_pb(msg))
+        events = await send(client, json_format.ParseDict(msg, pb.Message()))
         await client.close()
     assert payloads(events)[-1].status.state == pb.TaskState.TASK_STATE_COMPLETED
     assert seen["channel"] == "delegation"
@@ -868,7 +858,7 @@ async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
         r = await rpc(http, "message/send", {"message": wire("hi", "m1", context_id=ctx_id)})
     task = r.json()["result"]["task"]
     assert task["status"]["state"] == "TASK_STATE_FAILED"
-    reason = metadata_from_wire(task["status"]["message"]["metadata"])[REASON]
+    reason = task["status"]["message"]["metadata"][REASON]
     assert reason == "storage-unavailable"
 
 

@@ -10,7 +10,8 @@ use tokio::sync::{mpsc, watch};
 
 pub(super) const COMMAND_BACKLOG: usize = 128;
 pub(crate) const EVENT_BACKLOG: usize = 256;
-/// Queued audio; the count bound covers every other event's small payload.
+/// Queued audio bytes. Text and tool-argument events are bounded only by `EVENT_BACKLOG` times
+/// the WebSocket message limit.
 const AUDIO_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone)]
