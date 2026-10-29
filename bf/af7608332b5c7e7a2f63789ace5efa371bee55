@@ -1,0 +1,52 @@
+tests/test_plugin_baseten_stt.py
+  s_bcd3e70328118e::t_353c871cf6da63 1-37
+tests/test_inference_stt_start_of_speech.py
+  s_bcd3e70328118e::t_c7d7ac978236d1 16,37,186,190,193,198
+tests/test_stt.py
+  s_bcd3e70328118e::t_b309618eb5bf54 52,59,105,140-151
+livekit-plugins/livekit-plugins-slng/livekit/plugins/slng/stt.py
+  s_bcd3e70328118e::t_933cab74256480 1140
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_bcd3e70328118e::t_933cab74256480 1228-1230
+tests/test_plugin_aws_stt.py
+  s_bcd3e70328118e::t_353c871cf6da63 250,283,287
+tests/test_plugin_slng_stt.py
+  s_bcd3e70328118e::t_c7d7ac978236d1 19,46,53,56,62,65,67,92,147,164
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_bcd3e70328118e::t_933cab74256480 461,469,474
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/stt.py
+  s_bcd3e70328118e::t_933cab74256480 750,753,766
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/stt.py
+  s_bcd3e70328118e::t_933cab74256480 598
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_c7d7ac978236d1 1731,1737-1742
+  s_bcd3e70328118e::t_933cab74256480 1704-1711
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_bcd3e70328118e::t_933cab74256480 78
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/stt.py
+  s_bcd3e70328118e::t_f70bde77e5bcf7 284
+livekit-plugins/livekit-plugins-palabra/livekit/plugins/palabra/stt.py
+  s_bcd3e70328118e::t_c15dfbe63b977b 314
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_bcd3e70328118e::t_c18ca9264979fd 1054-1055
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/stt.py
+  s_bcd3e70328118e::t_bb316486a7b67b 317
+tests/test_plugin_palabra.py
+  s_bcd3e70328118e::t_74e1f00d62518d 536,552,577,587
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfaf7608332b5c7e7a2f63789ace5efa371bee55",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
