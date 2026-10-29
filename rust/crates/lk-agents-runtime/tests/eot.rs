@@ -50,14 +50,7 @@ impl log::Log for HostLogger {
     fn flush(&self) {}
 }
 
-#[cfg(feature = "python")]
-fn with_host_lock<T>(f: impl FnOnce() -> T) -> T {
-    pyo3::Python::initialize();
-    pyo3::Python::attach(|_| f())
-}
-
-// The feature-free suite exercises the identical ordering with a host execution lock.
-#[cfg(not(feature = "python"))]
+/// The host's execution lock (the GIL in Python), held while a host log line is written.
 fn with_host_lock<T>(f: impl FnOnce() -> T) -> T {
     static HOST: Mutex<()> = Mutex::new(());
     let _host = HOST.lock().unwrap();

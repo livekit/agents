@@ -580,12 +580,5 @@
   "pyo3-use:rust/crates/lk-agents-abi/src/worker/worker.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments::extract:pyo3::types": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/worker/worker.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments::extract:pyo3::types::PyDict": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/worker/worker.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments:pyo3::FromPyObject": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/worker/worker.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments:pyo3::PyErr": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/src/images.rs:host_frame:pyo3::IntoPyObjectExt": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/src/images.rs:host_frame:pyo3::PyErr": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/src/images.rs:host_frame:pyo3::Python::attach": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/src/images.rs:host_frame:pyo3::exceptions::PyValueError::new_err": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/src/images.rs:host_frame:pyo3::types::PyAnyMethods": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/tests/eot.rs:with_host_lock:pyo3::Python::attach": 1,
-  "pyo3-use:rust/crates/lk-agents-runtime/tests/eot.rs:with_host_lock:pyo3::Python::initialize": 1
+  "pyo3-use:rust/crates/lk-agents-abi/src/worker/worker.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments:pyo3::PyErr": 1
 }

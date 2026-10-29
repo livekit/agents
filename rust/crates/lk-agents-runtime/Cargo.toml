@@ -28,7 +28,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 base64.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
-pyo3 = { workspace = true, optional = true }
 # Thread storage (all database interaction) and the A2A door's decisions.
 lk-agents-storage = { path = "../lk-agents-storage" }
 livekit-protocol.workspace = true
@@ -58,7 +57,6 @@ media-images = ["lk-agents-media/images"]
 # reaches them through the runtime).
 python = [
     "media-images",
-    "dep:pyo3",
     "lk-agents-abi/python",
     "lk-agents-inference/native-audio",
     "lk-agents-voice/python",
