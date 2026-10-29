@@ -10,6 +10,8 @@ use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use lk_agents_core::tool_outcome::ToolRetries;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::generation::pipeline::CompletionObservation;
+pub(crate) use lk_agents_voice::generation::pipeline::Finished;
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
 use lk_agents_voice::speech_handle::SpeechHandle;
@@ -45,11 +47,6 @@ pub async fn pipeline_reply_task(
     // **Moved, never formatted**: only the binding can release a `ProviderError::Host`'s side-table
     // entry. Not marked here: the loop's `Failed` arm moves the error onto the handle.
     shared.report(GenEvent::Failed { speech, error: Box::new(error) });
-}
-
-pub(crate) struct Finished {
-    pub(crate) outcome: TurnOutcome,
-    pub(crate) interrupted: bool,
 }
 
 fn step_spoken(
@@ -191,23 +188,24 @@ pub(crate) fn finish_step_with(
     tools_running: bool,
     provider_request_ids: Option<Vec<String>>,
 ) -> Finished {
-    let mut acc = acc;
-    // A preemptive reply learns its user turn's metrics when it is adopted, after it started.
-    if let Some(metrics) = handle.user_metrics() {
-        acc.set_user_metrics(metrics);
-    }
-    let mut outcome = acc.finish(FinishInputs {
+    let inputs = FinishInputs {
         stopped_speaking_at: shared.time.wall_secs(),
         interrupted,
         stats,
         message_id,
-    });
-    if let Some(msg) = outcome.assistant_message.as_mut() {
-        msg.metrics.provider_request_ids = provider_request_ids;
-    }
-    let item = outcome.assistant_message.clone();
-    step_spoken(shared, handle, interrupted, has_tool_output, tools_running, item);
-    Finished { outcome, interrupted }
+    };
+    let observed = CompletionObservation {
+        speech: handle.id(),
+        step: handle.num_steps(),
+        adopted_user_metrics: handle.user_metrics(),
+        provider_request_ids,
+        has_tool_output,
+        tools_running,
+    };
+    let (finished, spoken) =
+        lk_agents_voice::generation::pipeline::finish_step(acc, inputs, observed);
+    shared.report(spoken);
+    finished
 }
 
 /// One step of `_pipeline_reply_task_impl` (or `_tts_task`): the words and the voice, two futures
@@ -264,17 +262,11 @@ async fn pipeline_reply_task_impl(
     // The step's item rides with the step: built from what was heard, committed by the loop. The
     // speech's interruption decides `tools_running`: a step whose audio was cut still has tools.
     // A `say` (`_tts_task`) times only its voice: no model, no metadata.
-    let stats = match ctx.source {
-        ReplySource::Llm => TurnStats {
-            llm_ttft: llm_gen_data.metrics.ttft(),
-            llm_tps: llm_gen_data.tps,
-            llm_started_at: Some(llm_gen_data.started_at),
-            llm_metadata: ctx.providers.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
-            tts_metadata: ctx.providers.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
-            llm_extra: llm_gen_data.extra,
-        },
-        _ => TurnStats::default(),
-    };
+    let stats = ctx.source.turn_stats(
+        llm_gen_data,
+        ctx.providers.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
+        ctx.providers.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
+    );
     let has_tools = !tools.is_empty();
     let tools_running = has_tools && !handle.interrupted();
     let finished = finish_step(
@@ -382,12 +374,7 @@ pub(super) fn empty_outcome(
     ctx: &ReplyContext,
     interrupted: bool,
 ) -> TurnOutcome {
-    TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone()).finish(FinishInputs {
-        stopped_speaking_at: shared.time.wall_secs(),
-        interrupted,
-        stats: TurnStats::default(),
-        message_id: ctx.message_id.clone(),
-    })
+    ctx.empty_outcome(shared.time.wall(), shared.time.wall_secs(), interrupted)
 }
 
 pub(super) fn teardown_deadline(shared: &SessionShared) -> Ts {

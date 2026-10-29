@@ -3,6 +3,7 @@
 
 pub mod forward;
 pub mod llm;
+pub mod pipeline;
 pub mod playout;
 pub mod realtime;
 pub mod tts;
