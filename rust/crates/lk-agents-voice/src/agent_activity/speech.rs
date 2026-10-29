@@ -438,6 +438,10 @@ impl Driver {
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         }
+        // The person answers the expert question that owns their reply: forwarded, not replied to.
+        if self.forward_expert_reply(now, info, edits.user_text.as_deref(), out) {
+            return;
+        }
         // A tool claimed this turn (`InputRequired(tool=)`): the reply calls it, a different
         // request from any guessed one.
         let claimed = self.consume_claim();

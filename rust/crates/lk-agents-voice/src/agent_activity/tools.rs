@@ -241,6 +241,7 @@ impl Driver {
             ToolEnd::Error => ToolEndStatus::Error,
             ToolEnd::Cancelled => ToolEndStatus::Cancelled,
             ToolEnd::Detached => {
+                self.open_expert(&call_id);
                 self.fillers_reset_dwell(now, &call_id, out);
                 out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
                     id: call_id.clone(),
@@ -349,6 +350,9 @@ impl Driver {
                 Some(running) => running.early.push(update),
                 None => out.trace(TraceToolStep::UpdateRefused { call_id }),
             }
+            return;
+        }
+        if self.on_expert_update(now, &call_id, &update, out) {
             return;
         }
         let wall = self.step.wall();
@@ -539,7 +543,7 @@ impl Driver {
 
     /// `generate_reply(instructions=, tool_choice="none")` from inside the driver, on `chat_ctx`
     /// when given; a realtime model answers on its own socket.
-    fn reply_with_instructions(
+    pub(crate) fn reply_with_instructions(
         &mut self,
         now: Ts,
         text: String,

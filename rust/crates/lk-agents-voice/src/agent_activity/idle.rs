@@ -53,6 +53,7 @@ impl Driver {
 
         // A pending deferred tool reply takes the idle instant first.
         self.try_deliver_tool_reply(now, out);
+        self.try_present_experts(now, out);
         self.pump_fillers(now, out);
         self.settle_turn_limit(now, out);
         if !self.session.idle.has_waiters() || !self.is_idle() {

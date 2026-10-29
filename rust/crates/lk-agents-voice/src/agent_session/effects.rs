@@ -230,7 +230,9 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         Effect::CancelTool { call_id, .. } => {
             Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
         }
-        Effect::ValidateOutput { .. } | Effect::RenderTemplate { .. } => return None,
+        Effect::ValidateOutput { .. }
+        | Effect::RenderTemplate { .. }
+        | Effect::AnswerExpert { .. } => return None,
     };
     Some(step)
 }
@@ -352,6 +354,11 @@ pub enum Effect {
     CancelTool {
         call_id: String,
         hosted: crate::tool_executor::HostedTool,
+    },
+    /// The person's reply, forwarded to the delegated call's body for its expert.
+    AnswerExpert {
+        hosted: crate::tool_executor::HostedTool,
+        answer: String,
     },
     /// The reply's agent validates an output candidate of `speech`'s run, reported as
     /// [`GenEvent::OutputValidated`](crate::generation::GenEvent::OutputValidated).

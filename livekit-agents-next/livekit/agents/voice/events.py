@@ -216,6 +216,8 @@ class RunContext(Generic[Context_T]):
         self._first_update: asyncio.Future[tuple[str, str]] | None = (
             asyncio.get_running_loop().create_future() if session is not None else None
         )
+        # on a call: the person's reply to the question this delegated call's expert asked
+        self._expert_answer: asyncio.Future[str] | None = None
 
     @property
     def live_session(self) -> VoiceSession[Any] | None:

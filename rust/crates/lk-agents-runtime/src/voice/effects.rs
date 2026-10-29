@@ -403,6 +403,7 @@ impl Runtime {
                 }
             }
             E::CancelTool { hosted, .. } => hosted.cancel(),
+            E::AnswerExpert { hosted, answer } => hosted.host.answer_expert(&hosted.invocation, answer),
             E::ValidateOutput { speech, validation, candidate, hosted } => {
                 let shared = Arc::clone(&self.shared);
                 self.shared.spawner.spawn_unboxed(async move {

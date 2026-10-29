@@ -374,6 +374,7 @@ impl Driver {
             output_nodes,
             toolset,
         );
+        self.observe_experts();
         self.session.apply_providers(llm, tts, out);
 
         // The new agent's view: the context it brought, or the conversation carried forward.

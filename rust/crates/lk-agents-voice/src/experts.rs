@@ -57,28 +57,6 @@ pub struct PendingRequest {
     pub request_id: String,
 }
 
-/// How an input request entered the queue.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Asked {
-    /// Queued; `superseded` is the same expert's earlier request that can no longer be answered.
-    Queued { superseded: Option<String> },
-    /// The same request again: neither queued nor asked twice.
-    Duplicate,
-    /// No open delegation of this call.
-    Refused,
-}
-
-/// How an outcome entered the queue.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Settled {
-    /// Queued to resolve the call; `superseded` is a request that can no longer be answered.
-    Queued { superseded: Option<String> },
-    /// The call is already resolved: never resolved twice.
-    Duplicate,
-    /// Not a delegation of this queue: an ordinary tool end.
-    NotOwned,
-}
-
 /// An answer for a request that is no longer the one waiting: settled, superseded or never asked.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("the expert is no longer waiting for this answer")]
@@ -86,12 +64,13 @@ pub struct Stale;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Delegation {
-    id: String,
     tool: ExpertTool,
     /// The last progress occurrence taken: an older or repeated one is a duplicate.
     progress_seen: u64,
     /// Every input request taken.
     requests: BTreeSet<String>,
+    /// The originating call's pending output is on the record: its outcome can replace it.
+    recorded: bool,
     settled: bool,
 }
 
@@ -131,30 +110,32 @@ pub struct Experts {
 }
 
 impl Experts {
-    /// The adapter started a delegation for `call_id`. A call opens one delegation.
-    pub fn open(&mut self, call_id: &str, delegation_id: &str, tool: ExpertTool) -> bool {
+    /// The call `call_id` delegated to its expert: a delegation is known by its originating call.
+    pub fn open(&mut self, call_id: &str, tool: ExpertTool) -> bool {
         if self.delegations.contains_key(call_id) {
             return false;
         }
         let delegation = Delegation {
-            id: delegation_id.to_owned(),
             tool,
             progress_seen: 0,
             requests: BTreeSet::new(),
+            recorded: false,
             settled: false,
         };
         self.delegations.insert(call_id.to_owned(), delegation);
         true
     }
 
+    /// The originating call's pending output was committed to the record.
+    pub fn recorded(&mut self, call_id: &str) {
+        if let Some(d) = self.delegations.get_mut(call_id) {
+            d.recorded = true;
+        }
+    }
+
     /// The call's delegation is open and unresolved.
     pub fn owns(&self, call_id: &str) -> bool {
         self.delegations.get(call_id).is_some_and(|d| !d.settled)
-    }
-
-    /// The delegation id of the call's delegation.
-    pub fn delegation_id(&self, call_id: &str) -> Option<&str> {
-        self.delegations.get(call_id).map(|d| d.id.as_str())
     }
 
     /// Progress `occurrence` (from 1, increasing per delegation). Queued progress of the same
@@ -178,63 +159,54 @@ impl Experts {
     }
 
     /// The expert asks. Its own earlier request and progress are superseded: only the latest
-    /// question of a delegation can be answered.
+    /// question of a delegation can be answered. A repeated request is not asked twice.
     pub fn ask(
         &mut self,
         call_id: &str,
         request_id: &str,
         question: String,
         verbatim: bool,
-    ) -> Asked {
+    ) -> bool {
         let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
-            return Asked::Refused;
+            return false;
         };
         if !d.requests.insert(request_id.to_owned()) {
-            return Asked::Duplicate;
+            return false;
         }
-        let superseded = self.withdraw(call_id);
+        self.withdraw(call_id);
         let event = Event::Question { request_id: request_id.into(), question, verbatim };
         self.queue.push_back(Queued { call_id: call_id.into(), event });
-        Asked::Queued { superseded }
+        true
     }
 
-    /// The delegation ended with `outcome`, which resolves its originating call once presented.
-    pub fn outcome(&mut self, call_id: &str, outcome: ToolOutcome) -> Settled {
-        match self.delegations.get_mut(call_id) {
-            None => return Settled::NotOwned,
-            Some(d) if d.settled => return Settled::Duplicate,
-            Some(d) => d.settled = true,
-        }
-        let superseded = self.withdraw(call_id);
+    /// The delegation ended with `outcome`, which resolves its originating call once presented;
+    /// never twice.
+    pub fn outcome(&mut self, call_id: &str, outcome: ToolOutcome) -> bool {
+        let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
+            return false;
+        };
+        d.settled = true;
+        self.withdraw(call_id);
         self.queue.push_back(Queued { call_id: call_id.into(), event: Event::Outcome(outcome) });
-        Settled::Queued { superseded }
+        true
     }
 
     /// The application settled or cancelled the interaction: nothing of it is presented, and its
-    /// pending request (returned) can no longer be answered.
-    pub fn cancel(&mut self, call_id: &str) -> Option<String> {
-        let d = self.delegations.get_mut(call_id).filter(|d| !d.settled)?;
+    /// pending request can no longer be answered.
+    pub fn cancel(&mut self, call_id: &str) -> bool {
+        let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
+            return false;
+        };
         d.settled = true;
-        let superseded = self.withdraw(call_id);
+        self.withdraw(call_id);
         self.queue.retain(|q| q.call_id != call_id);
-        superseded
+        true
     }
 
-    /// Drop the call's queued progress and its question, queued or in the foreground: the
-    /// returned request can no longer be answered.
-    fn withdraw(&mut self, call_id: &str) -> Option<String> {
-        let mut superseded =
-            self.foreground.take_if(|f| f.call_id == call_id).map(|f| f.request_id);
-        self.queue.retain(|q| match &q.event {
-            _ if q.call_id != call_id => true,
-            Event::Outcome(_) => true,
-            Event::Question { request_id, .. } => {
-                superseded = Some(request_id.clone());
-                false
-            }
-            Event::Progress(_) => false,
-        });
-        superseded
+    /// Drop the call's queued progress and its question, queued or in the foreground.
+    fn withdraw(&mut self, call_id: &str) {
+        self.foreground.take_if(|f| f.call_id == call_id);
+        self.queue.retain(|q| q.call_id != call_id || matches!(q.event, Event::Outcome(_)));
     }
 
     /// Suspend a presented question the active agent can no longer interact with.
@@ -266,8 +238,13 @@ impl Experts {
             });
         }
         let at = self.queue.iter().position(|q| {
-            floor.reaches(&self.delegations[&q.call_id].tool)
-                && !(matches!(q.event, Event::Question { .. }) && self.foreground.is_some())
+            let d = &self.delegations[&q.call_id];
+            floor.reaches(&d.tool)
+                && match q.event {
+                    Event::Question { .. } => self.foreground.is_none(),
+                    Event::Outcome(_) => d.recorded,
+                    Event::Progress(_) => true,
+                }
         })?;
         let Queued { call_id, event } = self.queue.remove(at)?;
         Some(match event {

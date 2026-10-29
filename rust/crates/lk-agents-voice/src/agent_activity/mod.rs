@@ -3,6 +3,7 @@
 
 use crate::tts::markup::ChatMessageExt;
 pub mod drain;
+mod experts;
 pub mod false_interruption;
 pub mod handoff;
 pub mod hooks;
@@ -551,6 +552,10 @@ impl Driver {
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
         self.reply_recorded(&item, &source, out);
+        // A delegated call's pending output: its expert's outcome may now replace it.
+        if let ChatItem::FunctionCallOutput(output) = &item {
+            self.session.experts.recorded(&output.call_id);
+        }
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit, out);
     }

@@ -9,12 +9,13 @@ from .. import _core
 from .._core_view import to_core_item, to_core_items
 from .._generated.a2a_client import AgentCard
 from .._generated.a2a_remote import (
+    RemoteEvent,
     RemoteEventFollow,
     RemoteEventInputRequired,
     RemoteEventOutcome,
     RemoteEventProgress,
 )
-from .._generated.tool_report import ToolReport
+from .._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from ..llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
 from ..types import APIConnectOptions
 from ..voice.events import RunContext
@@ -106,29 +107,36 @@ class _RemoteTool(Toolset):
                 to_core_items(history.items),
             )
             reply = await client.send(message)
+            if ctx._session is not None:
+                # The live session owns the interaction from here: the call waits on the expert
+                # while the conversation goes on.
+                await ctx.update(_DELEGATED)
             while True:
-                follow: RemoteEventFollow | None = None
+                event: RemoteEvent | None = None
                 async for update in reply:
                     event = interaction.update(update)
                     ctx.function_call.extra.update(interaction.extra)
                     if isinstance(event, RemoteEventProgress):
                         await ctx.update(event.text)
-                    elif isinstance(event, RemoteEventInputRequired):
-                        transition = InputRequired(
-                            event.question,
-                            tool=self._tool,
-                            verbatim=event.verbatim_full,
-                        )
-                        return ToolReport(outcome=event.outcome, transition=transition)
-                    elif isinstance(event, RemoteEventOutcome):
-                        return ToolReport(outcome=event.outcome)
-                    elif isinstance(event, RemoteEventFollow):
-                        follow = event
+                    elif isinstance(
+                        event, RemoteEventInputRequired | RemoteEventOutcome | RemoteEventFollow
+                    ):
                         break
-                if follow is None:
-                    raise RuntimeError("the remote interaction ended without an outcome")
                 await reply.aclose()
-                reply = await client._core_subscribe(follow.task_id, follow.thread_id)
+                if isinstance(event, RemoteEventFollow):
+                    reply = await client._core_subscribe(event.task_id, event.thread_id)
+                elif isinstance(event, RemoteEventInputRequired) and ctx._session is not None:
+                    answer = await _ask_the_person(ctx, event)
+                    reply = await client.send(interaction.answer(event.request_id, answer))
+                elif isinstance(event, RemoteEventInputRequired):
+                    transition = InputRequired(
+                        event.question, tool=self._tool, verbatim=event.verbatim_full
+                    )
+                    return ToolReport(outcome=event.outcome, transition=transition)
+                elif isinstance(event, RemoteEventOutcome):
+                    return ToolReport(outcome=event.outcome)
+                else:
+                    raise RuntimeError("the remote interaction ended without an outcome")
         except asyncio.CancelledError:
             interaction.cancelled()
             ctx.function_call.extra.update(interaction.extra)
@@ -137,6 +145,22 @@ class _RemoteTool(Toolset):
             if reply is not None:
                 await reply.aclose()
             await client.aclose()
+
+
+_DELEGATED = "The request is with the expert: its progress, questions and result reach the person."
+
+
+async def _ask_the_person(ctx: RunContext, event: RemoteEventInputRequired) -> str:
+    """The expert's question goes to the live session, which presents it when the floor permits
+    and forwards the person's reply here."""
+    assert ctx._session is not None
+    ctx._expert_answer = asyncio.get_running_loop().create_future()
+    question = ToolOutcomeInputRequired(question=event.question, verbatim=event.verbatim_full)
+    try:
+        ctx._session._core.tool_update(ctx.function_call.call_id, ToolReport(outcome=question))
+        return await ctx._expert_answer
+    finally:
+        ctx._expert_answer = None
 
 
 __all__ = ["RemoteAgent"]

@@ -10,7 +10,7 @@ fn floor(tools: &[ExpertTool]) -> Floor<'_> {
 
 fn opened() -> Experts {
     let mut experts = Experts::default();
-    assert!(experts.open("call_1", "dlg_1", refunds()));
+    assert!(experts.open("call_1", refunds()));
     experts
 }
 
@@ -23,7 +23,7 @@ fn question(request_id: &str) -> Presentation {
     }
 }
 
-fn ask(experts: &mut Experts, request_id: &str) -> Asked {
+fn ask(experts: &mut Experts, request_id: &str) -> bool {
     experts.ask("call_1", request_id, "What email should receive the receipt?".into(), false)
 }
 
@@ -67,7 +67,7 @@ fn a_question_owns_the_reply_destination_and_takes_exactly_one_answer() {
     let tools = [refunds()];
     let mut experts = opened();
     assert_eq!(experts.collect(floor(&tools)), None);
-    assert_eq!(ask(&mut experts, "r1"), Asked::Queued { superseded: None });
+    assert!(ask(&mut experts, "r1"));
     // Recorded before it is presented: nothing to forward until it is asked.
     assert_eq!(experts.collect(floor(&tools)), None);
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
@@ -81,7 +81,7 @@ fn a_question_owns_the_reply_destination_and_takes_exactly_one_answer() {
 fn only_one_expert_question_owns_the_reply_destination_at_a_time() {
     let tools = [refunds(), ExpertTool::new("https://back.office/agents/baggage", "baggage")];
     let mut experts = opened();
-    assert!(experts.open("call_2", "dlg_2", tools[1].clone()));
+    assert!(experts.open("call_2", tools[1].clone()));
     ask(&mut experts, "r1");
     experts.ask("call_2", "b1", "Which bag?".into(), true);
     assert!(experts.progress("call_2", 1, "Tracing the bag".into()));
@@ -135,24 +135,22 @@ fn a_question_asked_before_switching_to_an_agent_without_its_tool_is_suspended()
 fn duplicate_events_are_never_presented_twice_nor_resolve_the_call_twice() {
     let tools = [refunds()];
     let mut experts = opened();
-    assert!(!experts.open("call_1", "dlg_again", refunds()));
+    assert!(!experts.open("call_1", refunds()));
     assert!(experts.progress("call_1", 1, "Working".into()));
     experts.next(floor(&tools));
     assert!(!experts.progress("call_1", 1, "Working".into()));
     ask(&mut experts, "r1");
-    assert_eq!(ask(&mut experts, "r1"), Asked::Duplicate);
+    assert!(!ask(&mut experts, "r1"));
     let done = ToolOutcome::Value {
         text: "Refunded".into(),
         reply_required: true,
         verbatim: false,
         more: None,
     };
-    assert_eq!(
-        experts.outcome("call_1", done.clone()),
-        Settled::Queued { superseded: Some("r1".into()) }
-    );
-    assert_eq!(experts.outcome("call_1", done.clone()), Settled::Duplicate);
-    assert_eq!(experts.outcome("call_9", done.clone()), Settled::NotOwned);
+    assert!(experts.outcome("call_1", done.clone()));
+    assert!(!experts.outcome("call_1", done.clone()));
+    assert!(!experts.outcome("call_9", done.clone()));
+    experts.recorded("call_1");
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Outcome { call_id: "call_1".into(), outcome: done })
@@ -167,13 +165,13 @@ fn a_settled_or_superseded_question_cannot_receive_a_late_answer() {
     ask(&mut experts, "r1");
     experts.next(floor(&tools));
     // The expert asks again: the first question can no longer be answered.
-    assert_eq!(ask(&mut experts, "r2"), Asked::Queued { superseded: Some("r1".into()) });
+    assert!(ask(&mut experts, "r2"));
     assert_eq!(experts.answer(&pending("r1")), Err(Stale));
     experts.next(floor(&tools));
     // The application cancels: the pending question goes with it, and nothing is presented.
-    assert_eq!(experts.cancel("call_1"), Some("r2".into()));
+    assert!(experts.cancel("call_1"));
     assert_eq!(experts.answer(&pending("r2")), Err(Stale));
-    assert_eq!(experts.outcome("call_1", ToolOutcome::Cancelled), Settled::Duplicate);
+    assert!(!experts.outcome("call_1", ToolOutcome::Cancelled));
     assert_eq!(experts.next(floor(&tools)), None);
 }
 
@@ -188,8 +186,23 @@ fn retained_records_restore_without_presenting_a_delivered_occurrence_again() {
     let mut restored: Experts = serde_json::from_value(saved).unwrap();
     // A replayed delivery after the restore is a duplicate; the queued question is presented once.
     assert!(!restored.progress("call_1", 1, "Working".into()));
-    assert_eq!(ask(&mut restored, "r1"), Asked::Duplicate);
+    assert!(!ask(&mut restored, "r1"));
     assert_eq!(restored.next(floor(&tools)), Some(question("r1")));
-    assert_eq!(restored.delegation_id("call_1"), Some("dlg_1"));
     assert_eq!(restored.next(floor(&tools)), None);
+}
+
+#[test]
+fn an_outcome_resolves_the_originating_call_only_once_its_pending_output_is_recorded() {
+    let tools = [refunds()];
+    let mut experts = opened();
+    experts.outcome("call_1", ToolOutcome::Failed("Refund declined".into()));
+    assert_eq!(experts.next(floor(&tools)), None);
+    experts.recorded("call_1");
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Outcome {
+            call_id: "call_1".into(),
+            outcome: ToolOutcome::Failed("Refund declined".into())
+        })
+    );
 }

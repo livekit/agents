@@ -253,6 +253,11 @@ pub trait AgentHost: Send + Sync {
     /// awaited call still settles, with the cancellation as its outcome.
     #[host(notify)]
     fn cancel(&self, #[host(context)] invocation: &Invocation);
+
+    /// The person's reply to the question the expert of `invocation`'s delegated call asked,
+    /// forwarded to the call's body by its voice session.
+    #[host(notify, requires(tool_call))]
+    fn answer_expert(&self, #[host(context)] _invocation: &Invocation, _answer: String) {}
 }
 
 /// The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads

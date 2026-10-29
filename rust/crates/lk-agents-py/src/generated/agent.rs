@@ -446,6 +446,16 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
                 Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }
+
+    fn answer_expert(&self, invocation: &::lk_agents_abi::agent::Invocation, answer: ::std::string::String) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let answer_arg = answer;
+        ::lk_agents_runtime::host::notify(&self.notifier, "AgentHost.answer_expert", invocation, &[::lk_agents_abi::invoke::Scope::ToolCall], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(answer_arg, py)?];
+                Ok((host.bind(py).getattr("answer_expert")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/agent.rs.

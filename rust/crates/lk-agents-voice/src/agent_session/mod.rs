@@ -88,6 +88,8 @@ pub(crate) struct VoiceSession {
     /// The session's OTel span tree.
     pub(crate) trace: crate::telemetry::SessionTrace,
     pub(crate) storage: storage::StorageTurns,
+    /// The frontend expert event queue, kept across agent replacements.
+    pub(crate) experts: crate::experts::Experts,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -160,6 +162,7 @@ impl VoiceSession {
             amd_skips_replies: false,
             trace: Default::default(),
             storage: storage::StorageTurns::new(storage_enabled),
+            experts: Default::default(),
         }
     }
 

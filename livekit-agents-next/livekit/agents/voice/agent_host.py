@@ -166,6 +166,8 @@ class AgentHost:
         # the callback task of each operation in flight, for `cancel`; on a voice session, the
         # body of a tool call, which outlives its callback once its first `ctx.update()` returned
         self._running: dict[tuple[str, int], asyncio.Task[Any]] = {}
+        # the context of each tool body running on a voice session, which a reply may answer
+        self._bodies: dict[tuple[str, int], RunContext[Any]] = {}
 
     async def render_instructions(self, invocation: Invocation) -> str:
         async with self._operation(invocation):
@@ -258,7 +260,9 @@ class AgentHost:
         )
         key = _operation_key(invocation)
         self._running[key] = body
+        self._bodies[key] = prepared.ctx
         body.add_done_callback(lambda _: self._running.pop(key, None))
+        body.add_done_callback(lambda _: self._bodies.pop(key, None))
         first_update = prepared.ctx._first_update
         assert first_update is not None, "a voice tool's context takes updates"
         await asyncio.wait({body, first_update}, return_when=asyncio.FIRST_COMPLETED)
@@ -342,6 +346,14 @@ class AgentHost:
         task = self._running.get(_operation_key(invocation))
         if task is not None:
             task.cancel()
+
+    def answer_expert(self, invocation: Invocation, answer: str) -> None:
+        """The person's reply to the question the expert of ``invocation``'s delegated call
+        asked, for the call's body waiting on it."""
+        ctx = self._bodies.get(_operation_key(invocation))
+        waiting = None if ctx is None else ctx._expert_answer
+        if waiting is not None and not waiting.done():
+            waiting.set_result(answer)
 
     def _operation(self, invocation: Invocation) -> _Operation:
         return _Operation(self._running, invocation)
