@@ -101,15 +101,10 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
 pub const IN_PLACE: &[&str] = &[
     "::lk_agents_abi::EvaluationRecord",
     "::lk_agents_abi::telemetry::report::RecordingOptions",
-    "::lk_agents_abi::telemetry::report::SpanUpdateWire",
     "::lk_agents_abi::agent::run::RunError",
     "::lk_agents_abi::LogRecordWire",
     "::lk_agents_abi::llm::tool_executor::ToolOutcome",
     "::lk_agents_abi::llm::tool_executor::ToolReport",
-    "::lk_agents_abi::telemetry::loop_monitor::LoopMonitorEmission",
-    "::lk_agents_abi::worker::endpoint::EndpointRequest",
-    "::lk_agents_abi::worker::ipc::ProcessCompletion",
-    "::lk_agents_abi::worker::worker::RegisteredInfo",
 ];
 
 /// A record field defaulting to `None` whose type is a declared record: that record is

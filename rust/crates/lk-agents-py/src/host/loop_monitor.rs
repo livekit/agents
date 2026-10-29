@@ -198,7 +198,10 @@ fn build_report<'py>(
         stacks: block.stacks,
         parent_span_context,
     };
-    LoopMonitorEmission { report, span, log, reported }.into_pyobject(py)
+    crate::generated::records::telemetry::loop_monitor_emission_to_py(
+        py,
+        LoopMonitorEmission { report, span, log, reported },
+    )
 }
 
 /// One reported block, as its span and its log line describe it.

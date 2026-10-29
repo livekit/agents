@@ -112,10 +112,11 @@ impl EndpointServer {
 
     /// Serve `stream` with `app` to completion; `request` is its preamble.
     #[pyo3(signature = (stream, app, request))]
-    fn serve<'py>(&self, py: Python<'py>, stream: Bound<'_, PyAny>, app: Bound<'_, PyAny>, request: ::lk_agents_abi::worker::endpoint::EndpointRequest) -> PyResult<Bound<'py, PyAny>> {
+    fn serve<'py>(&self, py: Python<'py>, stream: Bound<'_, PyAny>, app: Bound<'_, PyAny>, request: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let stream = crate::generated::worker::ExchangeStreamProxy::from_host(&stream)?;
         let app = crate::generated::worker::AsgiApplicationProxy::from_host(&app)?;
+        let request = crate::generated::records::worker_endpoint::endpoint_request_from_py(&request)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <EndpointServerImpl as ::lk_agents_abi::worker::endpoint_host::EndpointServer>::serve(&this, stream, app, request)
@@ -1286,7 +1287,7 @@ impl ::lk_agents_abi::worker::endpoint_host::AsgiApplication for AsgiApplication
         let receive_arg = receive;
         let send_arg = send;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AsgiApplication._core_call", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [crate::generated::records::worker_endpoint::asgi_scope_to_py(py, scope_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_arg, py)?, <dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver as super::NativeToHost>::to_host(py, receive_arg)?, <dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender as super::NativeToHost>::to_host(py, send_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [crate::generated::records::worker_endpoint::asgi_scope_to_py(py, scope_arg)?, crate::generated::records::worker_endpoint::endpoint_request_to_py(py, request_arg)?, <dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver as super::NativeToHost>::to_host(py, receive_arg)?, <dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender as super::NativeToHost>::to_host(py, send_arg)?];
                 Ok((host.bind(py).getattr("_core_call")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -1826,7 +1827,7 @@ impl ::lk_agents_abi::worker::ipc_host::ProcessHost for ProcessHostProxy {
         let completion_arg = completion;
         let pid_arg = pid;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ProcessHost._core_completed", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(completion_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(pid_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::worker_ipc::process_completion_to_py(py, completion_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(pid_arg, py)?];
                 Ok((host.bind(py).getattr("_core_completed")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2832,7 +2833,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let info_arg = info;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ServerHost._core_registered", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(info_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::worker_server::registered_info_to_py(py, info_arg)?];
                 Ok((host.bind(py).getattr("_core_registered")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

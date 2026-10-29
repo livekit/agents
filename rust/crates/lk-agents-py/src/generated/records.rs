@@ -2212,15 +2212,30 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    static SPAN_UPDATE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn span_update_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::SpanUpdateWire) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::report::SpanUpdateWire { span, attrs } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("span", ::pyo3::IntoPyObjectExt::into_bound_py_any(span, py)?)?;
+            kwargs.set_item("attrs", crate::generated::records::telemetry::span_update_attrs_wire_to_py(py, attrs)?)?;
+            crate::host::construct(SPAN_UPDATE_WIRE.import(py, "livekit.agents._generated.telemetry", "SpanUpdateWire")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    static SPAN_UPDATE_ATTRS_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn span_update_attrs_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::SpanUpdateAttrsWire) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::report::SpanUpdateAttrsWire { is_interruption, probability, total_duration, prediction_duration, detection_delay } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("is_interruption", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_interruption, py)?)?;
+            kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
+            kwargs.set_item("total_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_duration, py)?)?;
+            kwargs.set_item("prediction_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(prediction_duration, py)?)?;
+            kwargs.set_item("detection_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(detection_delay, py)?)?;
+            crate::host::construct(SPAN_UPDATE_ATTRS_WIRE.import(py, "livekit.agents._generated.telemetry", "SpanUpdateAttrsWire")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
@@ -2300,31 +2315,72 @@ pub mod telemetry {
     // Declared in rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs.
 
     pub fn loop_block_severity_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::loop_monitor::LoopBlockSeverity) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let value = match value {
+                ::lk_agents_abi::telemetry::loop_monitor::LoopBlockSeverity::Warning => "warning",
+                ::lk_agents_abi::telemetry::loop_monitor::LoopBlockSeverity::Error => "error",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs.
+    static BLOCKED_REPORT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn blocked_report_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::loop_monitor::BlockedReport) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::loop_monitor::BlockedReport { duration, started_at, warn_threshold, severity, gc_time, cpu_time, watchdog_gap, process_descheduled, task_name, stacks, importing, parent_span_context, location } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration, py)?)?;
+            kwargs.set_item("started_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(started_at, py)?)?;
+            kwargs.set_item("warn_threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(warn_threshold, py)?)?;
+            kwargs.set_item("severity", crate::generated::records::telemetry::loop_block_severity_to_py(py, severity)?)?;
+            kwargs.set_item("gc_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(gc_time, py)?)?;
+            kwargs.set_item("cpu_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(cpu_time, py)?)?;
+            kwargs.set_item("watchdog_gap", ::pyo3::IntoPyObjectExt::into_bound_py_any(watchdog_gap, py)?)?;
+            kwargs.set_item("process_descheduled", ::pyo3::IntoPyObjectExt::into_bound_py_any(process_descheduled, py)?)?;
+            kwargs.set_item("task_name", match task_name { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("stacks", ::pyo3::types::PyList::new(py, stacks.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("importing", match importing { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("parent_span_context", match parent_span_context { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("location", match location { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(BLOCKED_REPORT.import(py, "livekit.agents._generated.telemetry", "BlockedReport")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs.
+    static LOOP_MONITOR_SPAN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn loop_monitor_span_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorSpan) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorSpan { attributes, error } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("attributes", ::lk_agents_abi::python::extra_to_py(py, &attributes)?.into_any())?;
+            kwargs.set_item("error", match error { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(LOOP_MONITOR_SPAN.import(py, "livekit.agents._generated.telemetry", "LoopMonitorSpan")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs.
+    static LOOP_MONITOR_LOG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn loop_monitor_log_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorLog) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorLog { message, extra } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+            kwargs.set_item("extra", ::lk_agents_abi::python::extra_to_py(py, &extra)?.into_any())?;
+            crate::host::construct(LOOP_MONITOR_LOG.import(py, "livekit.agents._generated.telemetry", "LoopMonitorLog")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs.
+    static LOOP_MONITOR_EMISSION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn loop_monitor_emission_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorEmission) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorEmission { report, span, log, reported } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("report", crate::generated::records::telemetry::blocked_report_to_py(py, report)?)?;
+            kwargs.set_item("span", match span { None => py.None().into_bound(py), Some(x) => crate::generated::records::telemetry::loop_monitor_span_to_py(py, x)? })?;
+            kwargs.set_item("log", match log { None => py.None().into_bound(py), Some(x) => crate::generated::records::telemetry::loop_monitor_log_to_py(py, x)? })?;
+            kwargs.set_item("reported", ::pyo3::IntoPyObjectExt::into_bound_py_any(reported, py)?)?;
+            crate::host::construct(LOOP_MONITOR_EMISSION.import(py, "livekit.agents._generated.telemetry", "LoopMonitorEmission")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -2979,13 +3035,36 @@ pub mod worker_endpoint {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/worker/endpoint.rs.
+    static ENDPOINT_REQUEST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn endpoint_request_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::endpoint::EndpointRequest> {
-        obj.extract::<::lk_agents_abi::worker::endpoint::EndpointRequest>()
+        let py = obj.py();
+            if !obj.is_instance(ENDPOINT_REQUEST.import(py, "livekit.agents._generated.worker_endpoint", "EndpointRequest")?)? {
+                return Err(super::not_a(obj, "EndpointRequest"));
+            }
+            Ok(::lk_agents_abi::worker::endpoint::EndpointRequest {
+                request_id: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "request_id", |v| v.extract::<::std::string::String>())?,
+                authorized: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "authorized", |v| v.extract::<bool>())?,
+                route: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "route", |v| v.extract::<::std::string::String>())?,
+                kind: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "kind", |v| v.extract::<::std::string::String>())?,
+                client_addr: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "client_addr", |v| v.extract::<::std::string::String>())?,
+                scheme: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "scheme", |v| v.extract::<::std::string::String>())?,
+                timeout_ms: ::lk_agents_abi::python::attr_with(obj, "EndpointRequest", "timeout_ms", |v| ::lk_agents_abi::python::number_from_py::<u64>(v, "EndpointRequest.timeout_ms"))?,
+            })
     }
 
     pub fn endpoint_request_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::endpoint::EndpointRequest) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::worker::endpoint::EndpointRequest { request_id, authorized, route, kind, client_addr, scheme, timeout_ms } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
+            kwargs.set_item("authorized", ::pyo3::IntoPyObjectExt::into_bound_py_any(authorized, py)?)?;
+            kwargs.set_item("route", ::pyo3::IntoPyObjectExt::into_bound_py_any(route, py)?)?;
+            kwargs.set_item("kind", ::pyo3::IntoPyObjectExt::into_bound_py_any(kind, py)?)?;
+            kwargs.set_item("client_addr", ::pyo3::IntoPyObjectExt::into_bound_py_any(client_addr, py)?)?;
+            kwargs.set_item("scheme", ::pyo3::IntoPyObjectExt::into_bound_py_any(scheme, py)?)?;
+            kwargs.set_item("timeout_ms", ::pyo3::IntoPyObjectExt::into_bound_py_any(timeout_ms, py)?)?;
+            crate::host::construct(ENDPOINT_REQUEST.import(py, "livekit.agents._generated.worker_endpoint", "EndpointRequest")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/endpoint.rs.
@@ -3147,15 +3226,60 @@ pub mod worker_ipc {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/worker/ipc.rs.
+    static IPC_FAILURE_IO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static IPC_FAILURE_MALFORMED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static IPC_FAILURE_TOO_LARGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static IPC_FAILURE_UNEXPECTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static IPC_FAILURE_VERSION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn ipc_failure_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::ipc::IpcFailure) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            match value {
+                ::lk_agents_abi::worker::ipc::IpcFailure::Io { kind, os_error, message } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("kind", ::pyo3::IntoPyObjectExt::into_bound_py_any(kind, py)?)?;
+                    kwargs.set_item("os_error", match os_error { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    crate::host::construct(IPC_FAILURE_IO.import(py, "livekit.agents._generated.worker_ipc", "IpcFailureIo")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::ipc::IpcFailure::Malformed { message } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    crate::host::construct(IPC_FAILURE_MALFORMED.import(py, "livekit.agents._generated.worker_ipc", "IpcFailureMalformed")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::ipc::IpcFailure::TooLarge { size } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("size", ::pyo3::IntoPyObjectExt::into_bound_py_any(size, py)?)?;
+                    crate::host::construct(IPC_FAILURE_TOO_LARGE.import(py, "livekit.agents._generated.worker_ipc", "IpcFailureTooLarge")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::ipc::IpcFailure::Unexpected { message } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    crate::host::construct(IPC_FAILURE_UNEXPECTED.import(py, "livekit.agents._generated.worker_ipc", "IpcFailureUnexpected")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::ipc::IpcFailure::Version { received, expected } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("received", ::pyo3::IntoPyObjectExt::into_bound_py_any(received, py)?)?;
+                    kwargs.set_item("expected", ::pyo3::IntoPyObjectExt::into_bound_py_any(expected, py)?)?;
+                    crate::host::construct(IPC_FAILURE_VERSION.import(py, "livekit.agents._generated.worker_ipc", "IpcFailureVersion")?.as_any(), (), Some(&kwargs))
+                },
+            }
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/ipc.rs.
+    static PROCESS_COMPLETION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn process_completion_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::ipc::ProcessCompletion) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::worker::ipc::ProcessCompletion { exit_code, failure } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("exit_code", match exit_code { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("failure", match failure { None => py.None().into_bound(py), Some(x) => crate::generated::records::worker_ipc::ipc_failure_to_py(py, x)? })?;
+            crate::host::construct(PROCESS_COMPLETION.import(py, "livekit.agents._generated.worker_ipc", "ProcessCompletion")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -3163,9 +3287,18 @@ pub mod worker_server {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+    static REGISTERED_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn registered_info_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::worker::RegisteredInfo) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::worker::worker::RegisteredInfo { worker_id, region, protocol, deployment, agent_name } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("worker_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(worker_id, py)?)?;
+            kwargs.set_item("region", ::pyo3::IntoPyObjectExt::into_bound_py_any(region, py)?)?;
+            kwargs.set_item("protocol", ::pyo3::IntoPyObjectExt::into_bound_py_any(protocol, py)?)?;
+            kwargs.set_item("deployment", ::pyo3::IntoPyObjectExt::into_bound_py_any(deployment, py)?)?;
+            kwargs.set_item("agent_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_name, py)?)?;
+            crate::host::construct(REGISTERED_INFO.import(py, "livekit.agents._generated.worker_server", "RegisteredInfo")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
