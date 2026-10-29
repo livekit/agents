@@ -1,5 +1,7 @@
 //! The remote session protocol on its live transport.
 
+#[cfg(test)]
+mod client;
 pub mod driver;
 mod host;
 pub mod room;
