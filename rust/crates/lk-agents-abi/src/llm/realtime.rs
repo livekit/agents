@@ -356,7 +356,7 @@ pub struct TokenUsage {
 /// streams, flattened by `llm/realtime.py`'s `RealtimeSession._core_next_event`. The native-only
 /// variants are not on that wire.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract)]
+#[binding(extract, from_items)]
 #[derive(lk_agents_host_derive::Vocabulary)]
 pub enum Event {
     /// Server-side VAD; also what drives interruption.

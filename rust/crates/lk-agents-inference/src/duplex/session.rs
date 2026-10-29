@@ -1,9 +1,5 @@
 //! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
 
-#[cfg(feature = "python")]
-#[path = "python.rs"]
-mod python;
-
 use crate::realtime::native::queue::{self, Delivery, EventReceiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -56,7 +52,7 @@ impl DuplexModel {
         let anchor = WallAnchor::of(&*clock);
         DuplexModel {
             label: host.label(),
-            caps: host.capabilities().realtime(),
+            caps: crate::duplex::realtime_capabilities(host.capabilities()),
             host,
             audio_timeout,
             clock,

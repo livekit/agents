@@ -235,32 +235,3 @@ def session_records(
 # --- tokenize ------------------------------------------------------------------------------------
 
 # --- inference -----------------------------------------------------------------------------------
-
-class FixedGate:
-    def __init__(
-        self,
-        silence: float,
-        *,
-        activation_ratio: float = 3.0,
-        deactivation_ratio: float = 1.8,
-        min_silence_duration: float = 0.5,
-    ) -> None: ...
-    def update(self, frame: Any) -> bool: ...
-    def deactivate(self) -> None: ...
-
-class AdaptiveNoiseGate:
-    def __init__(
-        self,
-        *,
-        activation_ratio: float = 3.0,
-        deactivation_ratio: float = 1.8,
-        min_silence_duration: float = 0.5,
-        window: float = 10.0,
-    ) -> None: ...
-    def update(self, frame: Any) -> bool: ...
-    def deactivate(self) -> None: ...
-
-class DuplexRealtimeModel:
-    def __init__(self, host: Any, *, audio_timeout: float = 0.8) -> None: ...
-    def capabilities(self) -> Any:
-        """The realtime capabilities the model runs under."""

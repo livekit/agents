@@ -8,7 +8,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from livekit.agents._core_view import AvailabilityObserver
+from livekit import rtc
+from livekit.agents._core_view import AvailabilityObserver, Duplex
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.llm.utils import SerializedImage
@@ -20,6 +21,45 @@ from .mcp import MCPToolOptions
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 from .tool_context import DuplicateMode, DuplicateScope
+
+class FixedGate:
+    """Opens on output that stands out from a silence the plugin already knows."""
+    def __init__(
+        self,
+        silence: float,
+        *,
+        activation_ratio: float = 3.0,
+        deactivation_ratio: float = 1.8,
+        min_silence_duration: float = 0.5,
+    ) -> None: ...
+    def update(self, frame: rtc.AudioFrame) -> bool:
+        """True while the frame belongs to an open burst of output."""
+    def deactivate(self) -> None:
+        """End the open burst, keeping whatever has been learned about the model."""
+
+class AdaptiveNoiseGate:
+    """Opens on output that stands out from the model's own silence: the floor is the quietest
+    `min_silence_duration` stretch it produced while not speaking, within `window`.
+    """
+    def __init__(
+        self,
+        *,
+        activation_ratio: float = 3.0,
+        deactivation_ratio: float = 1.8,
+        min_silence_duration: float = 0.5,
+        window: float = 10.0,
+    ) -> None: ...
+    def update(self, frame: rtc.AudioFrame) -> bool:
+        """True while the frame belongs to an open burst of output."""
+    def deactivate(self) -> None:
+        """End the open burst, keeping whatever has been learned about the model."""
+
+class DuplexRealtimeModel:
+    """`DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it."""
+    def __init__(self, host: Duplex, *, audio_timeout: float = 0.8) -> None:
+        """`audio_timeout`: how long to wait for the next frame before the output counts as finished."""
+    def capabilities(self) -> dict[str, object]:
+        """The realtime capabilities the model runs under."""
 
 class FallbackLlm:
     """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""

@@ -61,7 +61,6 @@ python = [
     "media-images",
     "dep:pyo3",
     "lk-agents-abi/python",
-    "lk-agents-inference/python",
     "lk-agents-inference/native-audio",
     "lk-agents-voice/python",
     "lk-agents-voice/native-audio",

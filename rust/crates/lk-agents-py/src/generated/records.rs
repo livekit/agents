@@ -860,6 +860,99 @@ pub mod agent_run {
     }
 }
 
+pub mod duplex {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+    static DUPLEX_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn duplex_capabilities_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::duplex::DuplexCapabilities> {
+        let py = obj.py();
+            if !obj.is_instance(DUPLEX_CAPABILITIES.import(py, "livekit.agents._generated.duplex", "DuplexCapabilities")?)? {
+                return Err(super::not_a(obj, "DuplexCapabilities"));
+            }
+            Ok(::lk_agents_abi::llm::duplex::DuplexCapabilities {
+                user_transcription: ::lk_agents_abi::python::attr_with(obj, "DuplexCapabilities", "user_transcription", |v| v.extract::<bool>())?,
+                auto_tool_reply_generation: ::lk_agents_abi::python::attr_with(obj, "DuplexCapabilities", "auto_tool_reply_generation", |v| v.extract::<bool>())?,
+                mutable_chat_context: ::lk_agents_abi::python::attr_with(obj, "DuplexCapabilities", "mutable_chat_context", |v| v.extract::<bool>())?,
+                mutable_instructions: ::lk_agents_abi::python::attr_with(obj, "DuplexCapabilities", "mutable_instructions", |v| v.extract::<bool>())?,
+                mutable_tools: ::lk_agents_abi::python::attr_with(obj, "DuplexCapabilities", "mutable_tools", |v| v.extract::<bool>())?,
+            })
+    }
+
+    pub fn duplex_capabilities_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::duplex::DuplexCapabilities) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::duplex::DuplexCapabilities { user_transcription, auto_tool_reply_generation, mutable_chat_context, mutable_instructions, mutable_tools } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("user_transcription", ::pyo3::IntoPyObjectExt::into_bound_py_any(user_transcription, py)?)?;
+            kwargs.set_item("auto_tool_reply_generation", ::pyo3::IntoPyObjectExt::into_bound_py_any(auto_tool_reply_generation, py)?)?;
+            kwargs.set_item("mutable_chat_context", ::pyo3::IntoPyObjectExt::into_bound_py_any(mutable_chat_context, py)?)?;
+            kwargs.set_item("mutable_instructions", ::pyo3::IntoPyObjectExt::into_bound_py_any(mutable_instructions, py)?)?;
+            kwargs.set_item("mutable_tools", ::pyo3::IntoPyObjectExt::into_bound_py_any(mutable_tools, py)?)?;
+            crate::host::construct(DUPLEX_CAPABILITIES.import(py, "livekit.agents._generated.duplex", "DuplexCapabilities")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+    static DUPLEX_AUDIO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn duplex_audio_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::duplex::DuplexAudio> {
+        let py = obj.py();
+            if !obj.is_instance(DUPLEX_AUDIO.import(py, "livekit.agents._generated.duplex", "DuplexAudio")?)? {
+                return Err(super::not_a(obj, "DuplexAudio"));
+            }
+            Ok(::lk_agents_abi::llm::duplex::DuplexAudio {
+                frame: ::lk_agents_abi::python::attr_with(obj, "DuplexAudio", "frame", |v| v.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into))?,
+                start_ms: ::lk_agents_abi::python::attr_with(obj, "DuplexAudio", "start_ms", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "DuplexAudio.start_ms")).map(Some) })?,
+            })
+    }
+
+    pub fn duplex_audio_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::duplex::DuplexAudio) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::duplex::DuplexAudio { frame, start_ms } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("frame", ::pyo3::IntoPyObjectExt::into_bound_py_any(frame, py)?)?;
+            kwargs.set_item("start_ms", match start_ms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(DUPLEX_AUDIO.import(py, "livekit.agents._generated.duplex", "DuplexAudio")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+    static DUPLEX_TRANSCRIPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn duplex_transcript_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::duplex::DuplexTranscript> {
+        let py = obj.py();
+            if !obj.is_instance(DUPLEX_TRANSCRIPT.import(py, "livekit.agents._generated.duplex", "DuplexTranscript")?)? {
+                return Err(super::not_a(obj, "DuplexTranscript"));
+            }
+            Ok(::lk_agents_abi::llm::duplex::DuplexTranscript {
+                text: ::lk_agents_abi::python::attr_with(obj, "DuplexTranscript", "text", |v| v.extract::<::std::string::String>())?,
+                start_ms: ::lk_agents_abi::python::attr_with(obj, "DuplexTranscript", "start_ms", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "DuplexTranscript.start_ms")).map(Some) })?,
+                end_ms: ::lk_agents_abi::python::attr_with(obj, "DuplexTranscript", "end_ms", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "DuplexTranscript.end_ms")).map(Some) })?,
+            })
+    }
+
+    pub fn duplex_transcript_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::duplex::DuplexTranscript) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::duplex::DuplexTranscript { text, start_ms, end_ms } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+            kwargs.set_item("start_ms", match start_ms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("end_ms", match end_ms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(DUPLEX_TRANSCRIPT.import(py, "livekit.agents._generated.duplex", "DuplexTranscript")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+
+    pub fn duplex_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::duplex::DuplexEvent> {
+        if obj.is_instance(&obj.py().import("livekit.agents._generated.duplex")?.getattr("DuplexTranscript")?)? {
+            return Ok(::lk_agents_abi::llm::duplex::DuplexEvent::Transcript(crate::generated::records::duplex::duplex_transcript_from_py(obj)?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::llm::duplex::DuplexEvent::Session(obj.extract::<::lk_agents_abi::llm::realtime::Event>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        Err(super::not_a(obj, "DuplexEvent"))
+    }
+}
+
 pub mod evals {
     use pyo3::prelude::*;
 

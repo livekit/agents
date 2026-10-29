@@ -47,6 +47,9 @@ pub trait Implementations: 'static {
     type InferenceModels: ::lk_agents_abi::inference::InferenceModels;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts<Stream = Self::InferenceTtsStream>;
+    type FixedGate: ::lk_agents_abi::llm::duplex::FixedGate;
+    type AdaptiveNoiseGate: ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate;
+    type DuplexRealtimeModel: ::lk_agents_abi::llm::duplex::DuplexRealtimeModel;
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
     type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts<Stream = Self::FallbackTtsStream>;
     type TtsTokenLog: ::lk_agents_abi::llm::fallback::TtsTokenLog;
@@ -177,6 +180,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::merge_realtime_capabilities, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
+    m.add_class::<llm::FixedGate>()?;
+    m.add_class::<llm::AdaptiveNoiseGate>()?;
+    m.add_class::<llm::DuplexRealtimeModel>()?;
     m.add_class::<llm::FallbackLlm>()?;
     m.add_class::<llm::FallbackLlmChunks>()?;
     m.add_class::<llm::FallbackTts>()?;

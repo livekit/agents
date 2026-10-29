@@ -10,6 +10,172 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+type FixedGateImpl = <crate::Selected as super::Implementations>::FixedGate;
+
+fn _extract_fixed_gate_new_silence(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "silence")
+}
+
+fn _extract_fixed_gate_new_activation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_ratio")
+}
+
+fn _extract_fixed_gate_new_deactivation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_ratio")
+}
+
+fn _extract_fixed_gate_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+}
+
+/// Opens on output that stands out from a silence the plugin already knows.
+#[pyclass(frozen, name = "FixedGate", module = "livekit.agents._core")]
+pub struct FixedGate(::std::sync::Arc<FixedGateImpl>);
+
+#[pymethods]
+impl FixedGate {
+    #[new]
+    #[pyo3(signature = (silence, *, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5))]
+    fn new(#[pyo3(from_py_with = _extract_fixed_gate_new_silence)] silence: f64, #[pyo3(from_py_with = _extract_fixed_gate_new_activation_ratio)] activation_ratio: f64, #[pyo3(from_py_with = _extract_fixed_gate_new_deactivation_ratio)] deactivation_ratio: f64, #[pyo3(from_py_with = _extract_fixed_gate_new_min_silence_duration)] min_silence_duration: f64) -> PyResult<FixedGate> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::new(silence, activation_ratio, deactivation_ratio, min_silence_duration);
+        Ok(FixedGate(::std::sync::Arc::new(out)))
+    }
+
+    /// True while the frame belongs to an open burst of output.
+    #[pyo3(signature = (frame))]
+    fn update(&self, frame: ::lk_agents_abi::AudioFrame) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// End the open burst, keeping whatever has been learned about the model.
+    fn deactivate(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::deactivate(&self.0);
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::llm::duplex::AudioGate`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(),
+        read: |obj| {
+            let this = obj.cast::<FixedGate>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+type AdaptiveNoiseGateImpl = <crate::Selected as super::Implementations>::AdaptiveNoiseGate;
+
+fn _extract_adaptive_noise_gate_new_activation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_ratio")
+}
+
+fn _extract_adaptive_noise_gate_new_deactivation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_ratio")
+}
+
+fn _extract_adaptive_noise_gate_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+}
+
+fn _extract_adaptive_noise_gate_new_window(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "window")
+}
+
+/// Opens on output that stands out from the model's own silence: the floor is the quietest
+/// `min_silence_duration` stretch it produced while not speaking, within `window`.
+#[pyclass(frozen, name = "AdaptiveNoiseGate", module = "livekit.agents._core")]
+pub struct AdaptiveNoiseGate(::std::sync::Arc<AdaptiveNoiseGateImpl>);
+
+#[pymethods]
+impl AdaptiveNoiseGate {
+    #[new]
+    #[pyo3(signature = (*, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5, window = 10.0))]
+    fn new(#[pyo3(from_py_with = _extract_adaptive_noise_gate_new_activation_ratio)] activation_ratio: f64, #[pyo3(from_py_with = _extract_adaptive_noise_gate_new_deactivation_ratio)] deactivation_ratio: f64, #[pyo3(from_py_with = _extract_adaptive_noise_gate_new_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_adaptive_noise_gate_new_window)] window: f64) -> PyResult<AdaptiveNoiseGate> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::new(activation_ratio, deactivation_ratio, min_silence_duration, window);
+        Ok(AdaptiveNoiseGate(::std::sync::Arc::new(out)))
+    }
+
+    /// True while the frame belongs to an open burst of output.
+    #[pyo3(signature = (frame))]
+    fn update(&self, frame: ::lk_agents_abi::AudioFrame) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(&self.0, frame).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// End the open burst, keeping whatever has been learned about the model.
+    fn deactivate(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::deactivate(&self.0);
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::llm::duplex::AudioGate`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(),
+        read: |obj| {
+            let this = obj.cast::<AdaptiveNoiseGate>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+type DuplexRealtimeModelImpl = <crate::Selected as super::Implementations>::DuplexRealtimeModel;
+
+fn _extract_duplex_realtime_model_new_audio_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "audio_timeout")
+}
+
+/// `DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it.
+#[pyclass(frozen, name = "DuplexRealtimeModel", module = "livekit.agents._core")]
+pub struct DuplexRealtimeModel(::std::sync::Arc<DuplexRealtimeModelImpl>);
+
+#[pymethods]
+impl DuplexRealtimeModel {
+    /// `audio_timeout`: how long to wait for the next frame before the output counts as finished.
+    #[new]
+    #[pyo3(signature = (host, *, audio_timeout = 0.8))]
+    fn new(host: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_duplex_realtime_model_new_audio_timeout)] audio_timeout: f64) -> PyResult<DuplexRealtimeModel> {
+        ::lk_agents_abi::python::check_pid()?;
+        let host = crate::generated::llm::DuplexHostProxy::from_host(&host)?;
+        let out = <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::new(host, audio_timeout).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(DuplexRealtimeModel(::std::sync::Arc::new(out)))
+    }
+
+    /// The realtime capabilities the model runs under.
+    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::capabilities(&self.0);
+        Ok(out)
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
+        read: |obj| {
+            let this = obj.cast::<DuplexRealtimeModel>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
 type FallbackLlmImpl = <crate::Selected as super::Implementations>::FallbackLlm;
 
@@ -820,6 +986,426 @@ impl RealtimeFallbackModel {
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+
+/// [`::lk_agents_abi::llm::duplex::AudioGate`] over a host `livekit.agents.llm.AudioGate`.
+#[derive(Clone)]
+pub struct AudioGateProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl AudioGateProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(AudioGateProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(|obj| AudioGateProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
+    fn update(&self, frame: ::lk_agents_abi::AudioFrame) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let frame_arg = frame;
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                Ok((host.bind(py).getattr("update")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.extract::<bool>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn deactivate(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("deactivate")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+
+/// [`::lk_agents_abi::llm::duplex::DuplexHost`] over a host `livekit.agents._core_view.Duplex`.
+#[derive(Clone)]
+pub struct DuplexHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+}
+
+impl DuplexHostProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(DuplexHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(|obj| DuplexHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
+    fn label(&self) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_label")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn capabilities(&self) -> ::std::result::Result<::lk_agents_abi::llm::duplex::DuplexCapabilities, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_capabilities")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (crate::generated::records::duplex::duplex_capabilities_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn gate(&self) -> ::std::result::Result<::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>>, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_gate")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::llm::AudioGateProxy::from_host(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn session(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexSession>, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexHost._core_session", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_session")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (crate::generated::llm::DuplexSessionProxy::from_host(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+
+/// [`::lk_agents_abi::llm::duplex::DuplexSession`] over a host `livekit.agents._core_view._DuplexSession`.
+#[derive(Clone)]
+pub struct DuplexSessionProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: crate::host::Notifier,
+}
+
+impl DuplexSessionProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(DuplexSessionProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(|obj| DuplexSessionProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
+    fn push_audio(&self, frame: ::lk_agents_abi::AudioFrame) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let frame_arg = frame;
+        ::lk_agents_runtime::host::notify(&self.notifier, "DuplexSession._core_push_audio", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                Ok((host.bind(py).getattr("_core_push_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+    }
+
+    fn configure(&self, instructions: ::std::option::Option<::std::string::String>, items: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>, names: ::std::vec::Vec<::std::string::String>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let instructions_arg = instructions;
+        let items_arg = items;
+        let names_arg = names;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_configure", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(items_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
+                Ok((host.bind(py).getattr("_core_configure")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn update_instructions(&self, instructions: ::std::string::String) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let instructions_arg = instructions;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_update_instructions", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update_instructions")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn append_items(&self, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let items_arg = items;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_append_items", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(items_arg, py)?];
+                Ok((host.bind(py).getattr("_core_append_items")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn update_tools(&self, names: ::std::vec::Vec<::std::string::String>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let names_arg = names;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_update_tools", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update_tools")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn generate(&self, instructions: ::std::option::Option<::std::string::String>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let instructions_arg = instructions;
+        let tool_choice_arg = tool_choice;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_generate", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_choice_arg, py)?];
+                Ok((host.bind(py).getattr("_core_generate")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn next_audio(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::llm::duplex::DuplexAudio>, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_next_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_next_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_audio_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn next_event(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::llm::duplex::DuplexEvent>, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_next_event", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_next_event")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_event_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn close_plugin(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_close_plugin", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_close_plugin")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        if let Err(e) = started.await {
+            ::lk_agents_abi::python::log::warn!("DuplexSession._core_close_plugin failed: {e}");
+        }
+        })
+    }
+
+    fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_aclose", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        if let Err(e) = started.await {
+            ::lk_agents_abi::python::log::warn!("DuplexSession._core_aclose failed: {e}");
+        }
+        })
     }
 }
 

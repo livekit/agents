@@ -39,9 +39,6 @@ pub mod testkit;
 pub mod tts;
 pub mod vad;
 
-#[cfg(feature = "python")]
-pub(crate) mod python;
-
 // The `_utils` surface, flat, because the binding re-exports it under the same names (imported by
 // `job.py:515`, `evals/evaluation.py:118` and `openai/responses/llm.py:16`).
 pub use headers::{

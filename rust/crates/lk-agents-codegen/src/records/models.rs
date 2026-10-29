@@ -548,7 +548,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
             }
             HostForm::Dict => "dict[str, object]".into(),
             HostForm::WireStrs => "str".into(),
-            HostForm::Annotation(text) => text.clone(),
+            HostForm::Annotation(text) => typing.annotation(text, &r.rust),
         },
         // Refused by the resolver (`check_record_field`).
         other => unreachable!("`{}` is not a record field", other.rust()),

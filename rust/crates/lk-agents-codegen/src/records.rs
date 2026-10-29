@@ -723,7 +723,12 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
             Ty::Int(_) => ("number", "(obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
             Ty::Float | Ty::Duration => ("number", "(obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()))".into()),
-            Ty::Map(..) | Ty::OrderedMap(..) | Ty::JsonObject => ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".into()),
+            Ty::Map(..)
+            | Ty::OrderedMap(..)
+            | Ty::JsonObject
+            | Ty::Record(Record { host: HostForm::Dict, .. }) => {
+                ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".into())
+            }
             Ty::List(_) => ("list", "obj.is_instance_of::<::pyo3::types::PyList>()".into()),
             other => {
                 return Err(format!(

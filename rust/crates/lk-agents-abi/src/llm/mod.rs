@@ -2,6 +2,7 @@
 //! schemas, tool arguments, and the MCP, tool-executor and fallback records.
 
 pub mod chat_context;
+pub mod duplex;
 pub mod ctx_diff;
 pub mod events;
 pub mod fallback;

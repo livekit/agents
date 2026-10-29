@@ -17,10 +17,7 @@ const HANDWRITTEN_STUB: &str = "_core_handwritten";
 /// baseline) and stubbed in `_core_handwritten.pyi`. It only shrinks: a family moved to declarations
 /// leaves it, and generation fails while a name is both here and generated.
 const HANDWRITTEN: &[&str] = &[
-    "AdaptiveNoiseGate",
     "AgentNodes",
-    "DuplexRealtimeModel",
-    "FixedGate",
     "ItemStream",
     "Role",
     "Run",

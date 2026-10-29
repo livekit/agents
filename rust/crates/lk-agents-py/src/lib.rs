@@ -167,6 +167,14 @@ impl generated::Implementations for Selected {
     type InferenceEot =
         lk_agents_runtime::inference::eot::NativeEot<lk_agents_runtime::process::Process>;
     type EotStream = lk_agents_runtime::inference::eot::DetectorStream;
+    type FixedGate = lk_agents_runtime::inference::duplex::GateClass<
+        lk_agents_runtime::inference::duplex::FixedGate,
+    >;
+    type AdaptiveNoiseGate = lk_agents_runtime::inference::duplex::GateClass<
+        lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
+    >;
+    type DuplexRealtimeModel =
+        lk_agents_runtime::inference::duplex::NativeDuplexModel<lk_agents_runtime::process::Process>;
     type InterruptionDetector = lk_agents_runtime::inference::interruption::NativeInterruptionDetector<
         lk_agents_runtime::process::Process,
     >;

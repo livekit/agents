@@ -13,12 +13,15 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Never, Protocol
 
 from pydantic import TypeAdapter
 
+from livekit import rtc
+
 from . import _core, llm
+from ._generated import duplex
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.turn_events import EotPrediction
 from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
@@ -136,61 +139,82 @@ class Duplex:
     def _core_label(self) -> str:
         return self._adapter.duplex_model.label
 
-    def _core_capabilities(self) -> dict[str, Any]:
-        return dataclasses.asdict(self._adapter.duplex_model.capabilities)
+    def _core_capabilities(self) -> duplex.DuplexCapabilities:
+        return duplex.DuplexCapabilities(
+            **dataclasses.asdict(self._adapter.duplex_model.capabilities)
+        )
 
-    async def _core_session(self) -> tuple[_DuplexSession, Any]:
-        """A new plugin session, and the gate the adapter or the model declares."""
-        model = self._adapter.duplex_model
-        gate = self._adapter._gate() if self._adapter._gate else model.audio_gate()
-        return _DuplexSession(model.session(), self._tools), gate
+    def _core_gate(self) -> Any:
+        """The gate the adapter or the model declares; ``None``: the adaptive gate."""
+        return (
+            self._adapter._gate()
+            if self._adapter._gate
+            else self._adapter.duplex_model.audio_gate()
+        )
+
+    async def _core_session(self) -> _DuplexSession:
+        """A new plugin session."""
+        return _DuplexSession(self._adapter.duplex_model.session(), self._tools)
 
 
 class _DuplexSession:
     """A plugin's ``DuplexSession`` flattened: the core applies the updates in order and pulls
-    the output audio (``_core_audio_stream``); the session's callbacks report one ``kind``-tagged
-    event at a time."""
+    the output audio; the session's callbacks report one event at a time."""
 
     def __init__(
         self, session: llm.DuplexSession, tools: Callable[[], Sequence[Tool | Toolset]]
     ) -> None:
         self._session = session
         self._tools = tools
-        self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        self._audio = aiter(session.audio_stream)
+        self._events: asyncio.Queue[Any] = asyncio.Queue()
         put = self._events.put_nowait
         _forward_session_events(session, put)
         session.on(
             "transcript_delta",
             lambda ev: put(
-                {
-                    "kind": "transcript_delta",
-                    "text": ev.text,
-                    "start_ms": ev.start_ms,
-                    "end_ms": ev.end_ms,
-                }
+                duplex.DuplexTranscript(text=ev.text, start_ms=ev.start_ms, end_ms=ev.end_ms)
             ),
         )
         session.on(
             "function_call", lambda call: put({"kind": "function_call", "call": to_core_item(call)})
         )
 
-    def _core_audio_stream(self) -> AsyncIterator[Any]:
-        return self._session.audio_stream
+    def _core_push_audio(self, frame: rtc.AudioFrame) -> None:
+        self._session.push_audio(frame)
 
-    def _core_push_audio(self, cmd: dict[str, Any]) -> None:
-        self._session.push_audio(cmd["frame"])
-
-    async def _core_update(self, cmd: dict[str, Any]) -> None:
-        await _DUPLEX_UPDATES[cmd["kind"]](self, cmd)
-
-    async def _core_generate(self, cmd: dict[str, Any]) -> None:
-        choice = cmd["tool_choice"]
-        self._session._generate_reply(
-            instructions=cmd["instructions"] or NOT_GIVEN,
-            tool_choice=NOT_GIVEN if choice is None else choice,
+    async def _core_configure(
+        self, instructions: str | None, items: list[_core.ChatItem] | None, names: list[str]
+    ) -> None:
+        await self._session._update_session(
+            instructions=instructions or NOT_GIVEN,
+            chat_ctx=_chat_ctx(items),
+            tools=offered_tools(self._tools(), names),
         )
 
-    async def _core_next_event(self) -> dict[str, Any] | None:
+    async def _core_update_instructions(self, instructions: str) -> None:
+        await self._session._update_instructions(instructions)
+
+    async def _core_append_items(self, items: list[_core.ChatItem]) -> None:
+        await self._session._append_items([from_core_item(i) for i in items])
+
+    async def _core_update_tools(self, names: list[str]) -> None:
+        await self._session._update_tools(offered_tools(self._tools(), names))
+
+    async def _core_generate(self, instructions: str | None, tool_choice: Any) -> None:
+        self._session._generate_reply(
+            instructions=instructions or NOT_GIVEN,
+            tool_choice=NOT_GIVEN if tool_choice is None else tool_choice,
+        )
+
+    async def _core_next_audio(self) -> duplex.DuplexAudio | None:
+        try:
+            item = await anext(self._audio)
+        except StopAsyncIteration:
+            return None
+        return duplex.DuplexAudio(frame=item.frame, start_ms=item.start_ms)
+
+    async def _core_next_event(self) -> Any:
         return await self._events.get()
 
     async def _core_close_plugin(self) -> None:
@@ -203,23 +227,6 @@ class _DuplexSession:
 
 def _chat_ctx(items: list[_core.ChatItem] | None) -> Any:
     return NOT_GIVEN if items is None else llm.ChatContext([from_core_item(i) for i in items])
-
-
-# the updates the core applies one after the other
-_DUPLEX_UPDATES: dict[str, Callable[[_DuplexSession, dict[str, Any]], Awaitable[None]]] = {
-    "configure": lambda v, cmd: v._session._update_session(
-        instructions=cmd["instructions"] or NOT_GIVEN,
-        chat_ctx=_chat_ctx(cmd["items"]),
-        tools=offered_tools(v._tools(), cmd["names"]),
-    ),
-    "update_instructions": lambda v, cmd: v._session._update_instructions(cmd["instructions"]),
-    "append_items": lambda v, cmd: v._session._append_items(
-        [from_core_item(i) for i in cmd["items"]]
-    ),
-    "update_tools": lambda v, cmd: v._session._update_tools(
-        offered_tools(v._tools(), cmd["names"])
-    ),
-}
 
 
 class AvailabilityObserver(Protocol):

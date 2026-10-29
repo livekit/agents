@@ -1,7 +1,6 @@
 [
   "pyo3-dependency:lk-agents-abi:pyo3",
   "pyo3-dependency:lk-agents-abi:pyo3-async-runtimes",
-  "pyo3-dependency:lk-agents-inference:pyo3",
   "pyo3-dependency:lk-agents-runtime:pyo3",
   "pyo3-dependency:lk-agents-voice:pyo3",
   "pyo3-file:rust/crates/lk-agents-abi/src/a2a/auth.rs",
@@ -61,8 +60,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/session_options.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/job.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/worker.rs",
-  "pyo3-file:rust/crates/lk-agents-inference/src/duplex/python.rs",
-  "pyo3-file:rust/crates/lk-agents-inference/src/python.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/images.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/tests/eot.rs"
 ]

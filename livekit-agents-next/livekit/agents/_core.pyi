@@ -6,10 +6,7 @@
 # pyo3 code is still handwritten. `core_names.json` lists the same names.
 
 from ._core_handwritten import (
-    AdaptiveNoiseGate as AdaptiveNoiseGate,
     AgentNodes as AgentNodes,
-    DuplexRealtimeModel as DuplexRealtimeModel,
-    FixedGate as FixedGate,
     ItemStream as ItemStream,
     Role as Role,
     Run as Run,
@@ -217,9 +214,12 @@ from ._generated._core_inference import (
     tts_parse_model_string as tts_parse_model_string,
 )
 from ._generated._core_llm import (
+    AdaptiveNoiseGate as AdaptiveNoiseGate,
+    DuplexRealtimeModel as DuplexRealtimeModel,
     FallbackLlm as FallbackLlm,
     FallbackLlmChunks as FallbackLlmChunks,
     FallbackTts as FallbackTts,
+    FixedGate as FixedGate,
     InferenceLlm as InferenceLlm,
     InferenceLlmChunks as InferenceLlmChunks,
     LlmChoiceParser as LlmChoiceParser,

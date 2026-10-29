@@ -3,6 +3,7 @@
 //! continuous output is gated, cut into generations and given its transcript here.
 
 pub mod gate;
+mod host;
 pub mod segmenter;
 pub mod session;
 #[cfg(test)]
@@ -12,37 +13,27 @@ use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
 use lk_agents_abi::{AudioFrame, ChatItem, ToolChoice};
 
 pub use gate::{AdaptiveNoiseGate, AudioGate, FixedGate};
+pub use host::{GateClass, NativeDuplexModel};
+pub use lk_agents_abi::llm::duplex::DuplexCapabilities;
 pub use segmenter::{AUDIO_TIMEOUT, Fragment, Segmenter, Step};
 
-/// `DuplexCapabilities`: what varies between duplex providers.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DuplexCapabilities {
-    pub user_transcription: bool,
-    pub auto_tool_reply_generation: bool,
-    pub mutable_chat_context: bool,
-    pub mutable_instructions: bool,
-    pub mutable_tools: bool,
-}
-
-impl DuplexCapabilities {
-    /// The realtime capabilities a duplex model runs under: it detects turns and answers them
-    /// itself, speaks only audio, and owns its output timeline.
-    pub fn realtime(self) -> RealtimeCapabilities {
-        RealtimeCapabilities {
-            message_truncation: false,
-            turn_detection: true,
-            auto_turn_reply_generation: true,
-            user_transcription: self.user_transcription,
-            auto_tool_reply_generation: self.auto_tool_reply_generation,
-            audio_output: true,
-            manual_function_calls: false,
-            can_disable_turn_detection: false,
-            mutable_chat_context: self.mutable_chat_context,
-            mutable_instructions: self.mutable_instructions,
-            mutable_tools: self.mutable_tools,
-            per_response_tool_choice: false,
-            supports_say: false,
-        }
+/// The realtime capabilities a duplex model runs under: it detects turns and answers them itself,
+/// speaks only audio, and owns its output timeline.
+pub fn realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities {
+    RealtimeCapabilities {
+        message_truncation: false,
+        turn_detection: true,
+        auto_turn_reply_generation: true,
+        user_transcription: caps.user_transcription,
+        auto_tool_reply_generation: caps.auto_tool_reply_generation,
+        audio_output: true,
+        manual_function_calls: false,
+        can_disable_turn_detection: false,
+        mutable_chat_context: caps.mutable_chat_context,
+        mutable_instructions: caps.mutable_instructions,
+        mutable_tools: caps.mutable_tools,
+        per_response_tool_choice: false,
+        supports_say: false,
     }
 }
 

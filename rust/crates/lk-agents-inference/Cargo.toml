@@ -77,7 +77,6 @@ inventory.workspace = true
 livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
-pyo3 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
@@ -102,5 +101,3 @@ native-audio = ["lk-agents-media/resample"]
 live = []
 # The transport fakes (`testkit`), for tests only.
 testkit = []
-# The Python binding, expanded in place: only `lk-agents-py` enables it.
-python = ["dep:pyo3", "lk-agents-abi/python"]
