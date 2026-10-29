@@ -120,9 +120,10 @@ class _FakeSession:
         return self.ws
 
 
-def _step(inactivity_prob: float) -> dict:
+def _step(inactivity_prob: float, total_duration_s: float = 1.0) -> dict:
     return {
         "type": "step",
+        "total_duration_s": total_duration_s,
         "vad": [
             {"horizon_s": horizon_s, "inactivity_prob": inactivity_prob}
             for horizon_s in (0.5, 1.0, 2.0)
@@ -159,7 +160,7 @@ class _EventCollector:
 
 @pytest.mark.asyncio
 async def test_vad_start_of_speech_opens_a_turn_before_any_text():
-    """With vad_start_threshold, VAD activity after observed silence starts speech."""
+    """With vad_start_threshold, VAD activity starts speech, ignoring warm-up steps."""
     from livekit.agents.stt import SpeechEventType
     from livekit.plugins.gradium import STT
 
@@ -168,14 +169,14 @@ async def test_vad_start_of_speech_opens_a_turn_before_any_text():
     stream = stt.stream()
     collector = _EventCollector(stream)
     try:
-        # low readings before any silence was observed must not open a turn
+        # warm-up steps sent before any audio was processed read as activity
         for prob in (0.1, 0.1):
-            session.ws.incoming.put_nowait(_step(prob))
+            session.ws.incoming.put_nowait(_step(prob, total_duration_s=0.0))
         await collector.drain(session.ws)
         assert collector.events == []
 
-        session.ws.incoming.put_nowait(_step(0.9))
-        session.ws.incoming.put_nowait(_step(0.2))
+        # speech right from the first processed audio opens the turn
+        session.ws.incoming.put_nowait(_step(0.2, total_duration_s=0.08))
         events = await collector.wait_for(1)
         assert [ev.type for ev in events] == [SpeechEventType.START_OF_SPEECH]
 
@@ -201,7 +202,6 @@ async def test_vad_start_of_speech_without_text_still_ends_the_turn():
     stream = stt.stream()
     collector = _EventCollector(stream)
     try:
-        session.ws.incoming.put_nowait(_step(0.9))
         session.ws.incoming.put_nowait(_step(0.2))
         # the first positive step starts the countdown, delay_in_tokens (6) more end the turn
         for _ in range(7):

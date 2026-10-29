@@ -281,8 +281,6 @@ class SpeechStream(stt.SpeechStream):
             nonlocal closing_ws
             buffered_text: list[str] = []
             speaking = False
-            # set once silence has been observed, a later VAD activity opens a turn
-            vad_start_armed = False
             remaining_vad_steps: int | None = None
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
@@ -319,7 +317,6 @@ class SpeechStream(stt.SpeechStream):
                     if type_ == "text":
                         if speaking is False:
                             speaking = True
-                            vad_start_armed = False
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
                         buffered_text.append(data["text"])
@@ -339,18 +336,18 @@ class SpeechStream(stt.SpeechStream):
                         if not speaking:
                             start_threshold = self._opts.vad_start_threshold
                             vad_bucket = self._opts.vad_bucket
-                            if vad_bucket and start_threshold is not None:
-                                inactivity_prob = data["vad"][vad_bucket]["inactivity_prob"]
-                                if inactivity_prob >= start_threshold:
-                                    # the estimate reads low before the model has heard any
-                                    # audio, so only open a turn once silence has been observed
-                                    vad_start_armed = True
-                                elif vad_start_armed:
-                                    speaking = True
-                                    vad_start_armed = False
-                                    self._event_ch.send_nowait(
-                                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                                    )
+                            # steps sent before any audio was processed carry a warm-up
+                            # estimate that reads as activity, ignore them
+                            if (
+                                vad_bucket
+                                and start_threshold is not None
+                                and data.get("total_duration_s", 0.0) > 0
+                                and data["vad"][vad_bucket]["inactivity_prob"] < start_threshold
+                            ):
+                                speaking = True
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                                )
                             self._mark_provider_progress()
                             continue
                         if vad_bucket := self._opts.vad_bucket:
@@ -373,8 +370,6 @@ class SpeechStream(stt.SpeechStream):
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
                                         speaking = False
-                                        # the turn ended on observed silence
-                                        vad_start_armed = True
                                         remaining_vad_steps = None
                                         event = stt.SpeechEvent(
                                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
