@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
@@ -32,15 +32,14 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
+    from anthropic.types import MessageParam as AnthropicMessage
+    from google.genai.types import ContentDict as GoogleMessage
+    from mistralai.client.models import InputEntriesTypedDict as MistralMessage
+    from openai.types.chat import ChatCompletionMessageParam as OpenAIMessage
+    from openai.types.responses import ResponseInputItemParam as OpenAIResponseItem
+    from types_aiobotocore_bedrock_runtime.type_defs import MessageTypeDef as BedrockMessage
+
     from ..llm import LLM, Tool, Toolset
-    from ._provider_format import (
-        AnthropicMessage,
-        BedrockMessage,
-        GoogleMessage,
-        MistralMessage,
-        OpenAIMessage,
-        OpenAIResponseItem,
-    )
 
 
 class ImageContent(BaseModel):
@@ -104,7 +103,7 @@ class ImageContent(BaseModel):
     """
     MIME type of the image
     """
-    _cache: dict[Any, Any] = PrivateAttr(default_factory=dict)
+    _cache: dict[object, object] = PrivateAttr(default_factory=dict)
 
 
 class AudioContent(BaseModel):
@@ -204,7 +203,7 @@ class MetricsReport(TypedDict, total=False):
 class _ChatItemBase(BaseModel):
     """Shared by every :data:`ChatItem` type; adds no fields."""
 
-    def _essential_fields(self) -> tuple[Any, ...]:
+    def _essential_fields(self) -> tuple[object, ...]:
         """What identifies this item's content beyond its id and type: what
         :meth:`ChatContext.is_equivalent` compares. Timestamps, metrics and other metadata are
         left out."""
@@ -218,7 +217,7 @@ class ChatMessage(_ChatItemBase):
     content: list[ChatContent]
     interrupted: bool = False
     transcript_confidence: float | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, object] = Field(default_factory=dict)
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
 
@@ -252,7 +251,7 @@ class ChatMessage(_ChatItemBase):
             return None
         return "\n".join(text_parts)
 
-    def _essential_fields(self) -> tuple[Any, ...]:
+    def _essential_fields(self) -> tuple[object, ...]:
         return (self.role, self.interrupted, self.content)
 
 
@@ -266,7 +265,7 @@ class FunctionCall(_ChatItemBase):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, object] = Field(default_factory=dict)
     """Extra data for this function call. Can include provider-specific data
     (e.g., extra["google"] for thought signatures)."""
     group_id: str | None = None
@@ -274,7 +273,7 @@ class FunctionCall(_ChatItemBase):
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
 
-    def _essential_fields(self) -> tuple[Any, ...]:
+    def _essential_fields(self) -> tuple[object, ...]:
         return (self.name, self.call_id, self.arguments)
 
 
@@ -293,7 +292,7 @@ class FunctionCallOutput(_ChatItemBase):
     Realtime models can also use it to schedule their response.
     """
 
-    def _essential_fields(self) -> tuple[Any, ...]:
+    def _essential_fields(self) -> tuple[object, ...]:
         return (self.name, self.call_id, self.output, self.is_error)
 
 
@@ -325,18 +324,20 @@ ChatItem = Annotated[
 ]
 
 
-def _facts(items: list[ChatItem]) -> list[tuple[Any, ...]]:
+def _facts(
+    items: list[ChatItem],
+) -> list[tuple[str, str, str | None, int, str | None, float, str | None]]:
     """What the core's plans read of each item: ``(type, id, role, len(content), name,
     created_at, call_id)``."""
     return [
         (
             item.type,
             item.id,
-            getattr(item, "role", None),
+            item.role if isinstance(item, ChatMessage) else None,
             len(item.content) if item.type == "message" else 0,
-            getattr(item, "name", None) if item.type.startswith("function_call") else None,
+            item.name if isinstance(item, (FunctionCall, FunctionCallOutput)) else None,
             item.created_at,
-            getattr(item, "call_id", None),
+            item.call_id if isinstance(item, (FunctionCall, FunctionCallOutput)) else None,
         )
         for item in items
     ]
@@ -371,18 +372,25 @@ class ChatContext:
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
         metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
-        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> ChatMessage:
-        given = {"id": id, "interrupted": interrupted, "metrics": metrics, "extra": extra}
-        kwargs: dict[str, Any] = {k: v for k, v in given.items() if is_given(v)}
-        if isinstance(content, str):
-            content = [content]
-        if not is_given(created_at):
-            message = ChatMessage(role=role, content=content, **kwargs)
+        given = {
+            "id": id,
+            "interrupted": interrupted,
+            "created_at": created_at,
+            "metrics": metrics,
+            "extra": extra,
+        }
+        fields: dict[str, object] = {
+            "role": role,
+            "content": [content] if isinstance(content, str) else content,
+            **{key: value for key, value in given.items() if is_given(value)},
+        }
+        message = ChatMessage.model_validate(fields)
+        if is_given(created_at):
+            self._items.insert(self.find_insertion_index(created_at=created_at), message)
+        else:
             self._items.append(message)
-            return message
-        message = ChatMessage(role=role, content=content, created_at=created_at, **kwargs)
-        self._items.insert(self.find_insertion_index(created_at=created_at), message)
         return message
 
     def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
@@ -490,12 +498,12 @@ class ChatContext:
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
         strip_markup: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """``{"items": [...]}``, each item's JSON dump (the core's ``chat_ctx_to_dict``).
         ``strip_markup`` strips the ``<expr/>`` dialect from assistant messages."""
         from .._core_view import to_core_items
 
-        return _core.chat_ctx_to_dict(  # type: ignore[no-any-return]
+        return _core.chat_ctx_to_dict(
             to_core_items(self.items),
             exclude_image=exclude_image,
             exclude_audio=exclude_audio,
@@ -617,8 +625,8 @@ class ChatContext:
         return self
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ChatContext:
-        item_adapter = TypeAdapter(list[ChatItem])
+    def from_dict(cls, data: dict[str, object]) -> ChatContext:
+        item_adapter: TypeAdapter[list[ChatItem]] = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
 
@@ -664,7 +672,7 @@ class _ReadOnlyChatContext(ChatContext):
     )
 
     class _ImmutableList(list[ChatItem]):
-        def _raise_error(self, *args: Any, **kwargs: Any) -> None:
+        def _raise_error(self, *args: object, **kwargs: object) -> None:
             logger.error(_ReadOnlyChatContext.error_msg)
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
@@ -692,7 +700,7 @@ class _ReadOnlyChatContext(ChatContext):
         return True
 
 
-def to_xml(tag_name: str, content: str | None = None, attrs: dict[str, Any] | None = None) -> str:
-    return _core.to_xml(  # type: ignore[no-any-return]
-        tag_name, content, [(k, str(v)) for k, v in (attrs or {}).items()]
-    )
+def to_xml(
+    tag_name: str, content: str | None = None, attrs: dict[str, object] | None = None
+) -> str:
+    return _core.to_xml(tag_name, content, [(k, str(v)) for k, v in (attrs or {}).items()])
