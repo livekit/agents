@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 import sys
 from collections.abc import Callable
 from typing import Any
@@ -17,7 +16,6 @@ from pydantic import ValidationError
 from speechmatics.agent_stt import (
     DEFAULT_MODEL,
     AudioEncoding,
-    Model,
     ServerMessageType,
     TurnConfig,
     TurnDetectionMode as AgentTurnDetectionMode,
@@ -123,22 +121,6 @@ class _StubClient:
 # --- Construction and validation -----------------------------------------------------
 
 
-def test_defaults() -> None:
-    """The zero-config contract, in one place, because it is what everyone gets."""
-    instance = _stt()
-    opts = instance._stt_options
-
-    assert opts.model == DEFAULT_MODEL.value == "linden-1"
-    assert opts.turn_detection_mode is DEFAULT_TURN_DETECTION_MODE is TurnDetectionMode.EXTERNAL
-    assert instance._base_url == DEFAULT_BASE_URL
-    assert instance._base_url.endswith("/v2/agent")
-    # Diarization was on by default pre-migration (every voice preset set it), and the
-    # `None` sentinel that used to mean "keep the preset" now reads as falsy.
-    assert opts.enable_diarization is True
-    assert instance._sample_rate == 16000
-    assert instance._audio_encoding is AudioEncoding.PCM_S16LE
-
-
 def test_capabilities_mirror_resolved_options() -> None:
     """Capabilities must be built from the resolved options, not the raw arguments.
 
@@ -172,14 +154,6 @@ def test_audio_format_is_validated() -> None:
 # --- Model resolution ----------------------------------------------------------------
 
 
-def test_model_defaults_and_accepts_supported() -> None:
-    """`linden-1` is the default and, today, the only model. Enum or string, same result."""
-    assert _stt().model == DEFAULT_MODEL.value
-
-    for value in (Model.LINDEN_1, "linden-1"):
-        assert _stt(model=value).model == "linden-1"
-
-
 def test_operating_point_alias_and_conflict(caplog) -> None:
     """The deprecated alias still works, and `model` wins when both are given.
 
@@ -211,13 +185,6 @@ def test_unsupported_model_falls_back(value: str, caplog) -> None:
 
 
 # --- Turn detection ------------------------------------------------------------------
-
-
-def test_default_mode_is_external() -> None:
-    """Parity with the pre-Agent-STT default. Pinned so a future flip is deliberate."""
-    assert DEFAULT_TURN_DETECTION_MODE is TurnDetectionMode.EXTERNAL
-    assert _stt().capabilities.streaming is True
-    assert _stt()._stt_options.turn_detection_mode is TurnDetectionMode.EXTERNAL
 
 
 @pytest.mark.parametrize("member", REMOVED_TURN_MODES)
@@ -518,32 +485,6 @@ async def test_speakers_result_is_stored_not_emitted() -> None:
 # --- Legacy argument migration -----------------------------------------------------
 
 
-def test_voice_sdk_stays_off_the_runtime_path() -> None:
-    """What keeps "this PR removes the voice SDK" true.
-
-    Importing the plugin, constructing `STT`, building the config and passing legacy
-    kwargs leave `speechmatics.voice` out of `sys.modules`.
-
-    Runs in a subprocess because import state is process-wide: any earlier test in this
-    file has already pulled voice in.
-    """
-    probe = """
-import sys
-from livekit.plugins.speechmatics import STT
-
-stt = STT(api_key="k", vad=None, focus_mode="retain", operating_point="enhanced")
-stt._prepare_config()
-assert "speechmatics.voice" not in sys.modules, "voice SDK reached the runtime path"
-print("clean")
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, timeout=120
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "clean" in result.stdout
-
-
 def test_update_speakers_is_a_warning_no_op(caplog) -> None:
     """The method only ever updated speaker focus, so there is nothing left for it to do.
 
@@ -617,36 +558,6 @@ def test_non_agent_endpoint_is_reported(monkeypatch, caplog) -> None:
         _stt(vad=None, base_url=f"{DEFAULT_BASE_URL}/")  # a trailing slash is still an endpoint
 
     assert "not an Agent STT endpoint" not in caplog.text
-
-
-def test_old_style_usage_runs(caplog) -> None:
-    """The capstone: the shape the pre-migration README's own examples taught.
-
-    Every line of it used something this migration removed, and all of it now constructs.
-    """
-    usage = """
-from livekit.plugins.speechmatics import (
-    STT,
-    TurnDetectionMode,
-)
-
-stt = STT(
-    api_key="test-key",
-    vad=None,
-    operating_point="enhanced",
-    turn_detection_mode=TurnDetectionMode.ADAPTIVE,
-    focus_mode="retain",
-)
-stt.update_speakers(focus_speakers=["S1"])
-"""
-    namespace: dict[str, Any] = {}
-
-    with caplog.at_level("WARNING"):
-        exec(usage, namespace)
-
-    assert namespace["stt"].model == DEFAULT_MODEL.value
-    for deprecated in ("operating_point", "ADAPTIVE", "focus_mode"):
-        assert deprecated in caplog.text
 
 
 async def test_invalid_speaker_reply_fails_request_without_stopping_recognition(

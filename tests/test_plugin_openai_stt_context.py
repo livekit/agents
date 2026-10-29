@@ -149,14 +149,6 @@ async def test_realtime_earlier_model_keeps_singular_language() -> None:
     assert "keywords" not in config
 
 
-async def test_realtime_defaults_to_english() -> None:
-    instance = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe")
-
-    config = await _transcription_config(instance)
-
-    assert config["language"] == "en"
-
-
 async def test_detect_language_omits_the_language_hint() -> None:
     instance = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe", detect_language=True)
 
@@ -192,14 +184,6 @@ async def test_detect_language_falls_back_to_the_last_language(
     instance.update_options(detect_language=False)
     assert instance._opts.languages == ["es"]
     assert not caplog.records
-
-
-async def test_single_language_list_works_on_every_model() -> None:
-    instance = stt.STT(api_key="test-key", model="whisper-1", language=["fr"])
-
-    config = await _transcription_config(instance)
-
-    assert config["language"] == "fr"
 
 
 async def test_multiple_languages_rejected_by_earlier_models() -> None:

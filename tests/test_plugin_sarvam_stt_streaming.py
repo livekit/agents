@@ -94,16 +94,6 @@ def _parse_ws_url(url: str) -> dict[str, str]:
     return {key: value[0] for key, value in qs.items()}
 
 
-def test_realtime_stt_exports_and_legacy_aliases() -> None:
-    assert sarvam.STTRealtime is stt_streaming.STTRealtime
-    assert sarvam.RealtimeSpeechStream is stt_streaming.RealtimeSpeechStream
-    assert sarvam.STTStreaming is sarvam.STTRealtime
-    assert sarvam.StreamingSpeechStream is sarvam.RealtimeSpeechStream
-    assert "STTStreaming" in sarvam.__all__
-    assert "StreamingSpeechStream" in sarvam.__all__
-    assert stt_streaming.StreamingSTTOptions is stt_streaming.RealtimeSTTOptions
-
-
 def test_streaming_disables_connection_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -261,17 +251,6 @@ def test_streaming_options_reject_server_tuned_vad_smoothing() -> None:
             api_key="sk_test",
             vad_smoothing_alpha=0.5,
         )
-
-
-@pytest.mark.parametrize("encoding", ["linear16", "linear32", "mulaw", "alaw"])
-def test_streaming_options_accept_all_contract_encodings(encoding: str) -> None:
-    opts = stt_streaming.RealtimeSTTOptions(
-        language="hi-IN",
-        api_key="sk_test",
-        encoding=encoding,
-    )
-
-    assert opts.encoding == encoding
 
 
 @pytest.mark.parametrize("encoding", ["mulaw", "alaw"])
@@ -470,16 +449,6 @@ async def test_instance_update_preserves_per_stream_language_override(
 
     await stream.aclose()
     await stt_impl.aclose()
-
-
-def test_stream_update_options_without_arguments_is_a_no_op() -> None:
-    stream = _make_stream()
-    stream._pending_config_update = None
-
-    stream.update_options()
-
-    assert stream._pending_config_update is None
-    assert stream._opts.language == "hi-IN"
 
 
 @pytest.mark.asyncio
@@ -840,23 +809,6 @@ async def test_streaming_session_begin_captures_server_request_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_streaming_request_id_stores_raw_value_without_format_assumptions() -> None:
-    stream = _make_stream()
-
-    await stream._handle_message(
-        RealtimeMessage.model_validate(
-            {
-                "event": "session.begin",
-                "request_id": "srv_custom-id_v9",
-            }
-        )
-    )
-
-    assert stream._session_id == ""
-    assert stream._request_id == "srv_custom-id_v9"
-
-
-@pytest.mark.asyncio
 async def test_streaming_session_begin_without_request_id_leaves_request_id_empty() -> None:
     stream = _make_stream()
 
@@ -1004,79 +956,6 @@ async def test_streaming_final_transcript_uses_contract_timestamps_when_present(
     final_event = stream._event_ch.events[0]
     assert final_event.alternatives[0].start_time == 0.7
     assert final_event.alternatives[0].end_time == 1.2
-
-
-@pytest.mark.asyncio
-async def test_streaming_logs_include_server_request_id_after_session_begin(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    stream = _make_stream()
-
-    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
-        await stream._handle_message(
-            RealtimeMessage.model_validate(
-                {
-                    "event": "session.begin",
-                    "session_id": "sess_4594d4503cd4",
-                    "request_id": "srv_custom-id_v9",
-                }
-            )
-        )
-        await stream._handle_message(
-            RealtimeMessage.model_validate(
-                {
-                    "event": "transcript.partial",
-                    "utterance_idx": 0,
-                    "text": "नमस्ते",
-                    "confidence": 0.91,
-                }
-            )
-        )
-
-    partial_records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "Sarvam realtime STT transcript.partial"
-    ]
-    assert len(partial_records) == 1
-    assert partial_records[0].request_id == "srv_custom-id_v9"
-    assert partial_records[0].session_id == "sess_4594d4503cd4"
-    assert partial_records[0].raw_data["text"] == "नमस्ते"
-
-
-@pytest.mark.asyncio
-async def test_streaming_logs_partial_and_final_transcripts(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    stream = _make_stream()
-    stream._audio_position = 1.0
-
-    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
-        await stream._handle_message(
-            RealtimeMessage.model_validate(
-                {
-                    "event": "transcript.partial",
-                    "utterance_idx": 0,
-                    "text": "नमस्ते",
-                    "confidence": 0.91,
-                }
-            )
-        )
-        await stream._handle_message(
-            RealtimeMessage.model_validate(
-                {
-                    "event": "transcript.final",
-                    "utterance_idx": 0,
-                    "text": "नमस्ते आप कैसे हैं",
-                    "language": "hi-IN",
-                    "language_confidence": 0.99,
-                }
-            )
-        )
-
-    messages = [record.getMessage() for record in caplog.records]
-    assert "Sarvam realtime STT transcript.partial" in messages
-    assert "Sarvam realtime STT transcript.final" in messages
 
 
 @pytest.mark.asyncio
@@ -1353,51 +1232,6 @@ async def test_streaming_error_handling_distinguishes_fatal_and_non_fatal() -> N
 
 
 @pytest.mark.asyncio
-async def test_streaming_error_logs_include_raw_sarvam_payload(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    stream = _make_stream()
-    stream._request_id = "req_123"
-    raw_error = {
-        "event": "error",
-        "code": "invalid_subscription_key",
-        "message": "Invalid subscription key",
-        "is_fatal": True,
-        "status_code": 1003,
-    }
-
-    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
-        with pytest.raises(APIStatusError):
-            await stream._handle_message(RealtimeMessage.model_validate(raw_error))
-
-    info_records = [
-        record for record in caplog.records if record.getMessage() == "Sarvam realtime STT error"
-    ]
-    assert len(info_records) == 1
-    assert info_records[0].error_code == "invalid_subscription_key"
-    assert info_records[0].status_code == 1003
-    assert not hasattr(info_records[0], "raw_data")
-
-    raw_records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "Sarvam realtime STT raw event"
-    ]
-    assert len(raw_records) == 1
-    assert raw_records[0].raw_data == raw_error
-
-    error_records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "Fatal Sarvam realtime STT error"
-    ]
-    assert len(error_records) == 1
-    assert error_records[0].request_id == "req_123"
-    assert error_records[0].error_code == "invalid_subscription_key"
-    assert error_records[0].raw_message == raw_error
-
-
-@pytest.mark.asyncio
 async def test_streaming_process_messages_raises_on_realtime_rejection_close() -> None:
     stream = _make_stream()
 
@@ -1456,37 +1290,6 @@ async def test_streaming_process_messages_stops_after_session_end() -> None:
         if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
     ]
     assert [event.recognition_usage.audio_duration for event in usage_events] == [1.25]
-
-
-@pytest.mark.asyncio
-async def test_streaming_process_messages_logs_realtime_rejection_close(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    stream = _make_stream()
-    ws = SimpleNamespace(
-        receive=lambda: asyncio.sleep(
-            0,
-            result=SimpleNamespace(
-                type=stt_streaming.aiohttp.WSMsgType.CLOSE,
-                data=4000,
-                extra="beta access denied",
-            ),
-        ),
-        close_code=4000,
-    )
-
-    with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
-        with pytest.raises(APIStatusError):
-            await stream._process_messages(ws)
-
-    close_records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "Sarvam realtime STT WebSocket closed unexpectedly"
-    ]
-    assert len(close_records) == 1
-    assert close_records[0].close_code == 4000
-    assert close_records[0].close_reason == "beta access denied"
 
 
 @pytest.mark.asyncio

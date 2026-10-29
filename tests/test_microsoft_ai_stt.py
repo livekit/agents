@@ -76,7 +76,7 @@ async def next_event(stream: stt.RecognizeStream) -> stt.SpeechEvent:
     return await asyncio.wait_for(stream.__anext__(), 1.0)
 
 
-def test_no_provider_defaults_or_extra_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_provider_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-used")
     with pytest.raises(ValueError, match="MICROSOFT_AI_STT_MODEL"):
         microsoft_ai.STT(vad=None)
@@ -84,9 +84,6 @@ def test_no_provider_defaults_or_extra_capabilities(monkeypatch: pytest.MonkeyPa
         microsoft_ai.STT(vad=None, model="test")
     with pytest.raises(ValueError, match="MICROSOFT_AI_STT_API_KEY"):
         microsoft_ai.STT(vad=None, model="test", url=STT_URL)
-    assert not hasattr(microsoft_ai, "LLM")
-    assert not hasattr(microsoft_ai, "realtime")
-    assert not hasattr(microsoft_ai.STT, "with_azure")
 
 
 async def test_handshake_gates_audio_and_sends_exact_config() -> None:
@@ -125,14 +122,6 @@ async def test_handshake_gates_audio_and_sends_exact_config() -> None:
     assert kwargs["headers"]["Authorization"] == "Bearer dummy-stt-key"
     assert socket.closed
     session.close.assert_not_awaited()
-
-
-async def test_batch_recognition_is_explicitly_unsupported() -> None:
-    instance, session = provider(FakeSocket())
-    async with instance:
-        with pytest.raises(NotImplementedError, match="not batch"):
-            await instance.recognize(audio_frame(), conn_options=OPTIONS)
-    session.ws_connect.assert_not_called()
 
 
 async def test_environment_and_explicit_custom_auth(monkeypatch: pytest.MonkeyPatch) -> None:

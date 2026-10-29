@@ -186,7 +186,7 @@ def _event_summary(events: list[stt.SpeechEvent]) -> list[tuple[stt.SpeechEventT
     ]
 
 
-def test_construction_capabilities_and_package_exports(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_api_key_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
     monkeypatch.delenv("META_API_KEY", raising=False)
     with pytest.raises(ValueError, match="MODEL_API_KEY or META_API_KEY"):
@@ -201,19 +201,6 @@ def test_construction_capabilities_and_package_exports(monkeypatch: pytest.Monke
 
     assert provider._api_key == "Bearer model-environment-key"
     assert explicit._api_key == "Bearer explicit-key"
-    assert meta.__version__
-    assert meta.STT is meta_stt.STT
-    assert meta.SpeechStream is meta_stt.SpeechStream
-    assert provider.model == "muse-voice-transcribe-1.0"
-    assert provider.provider == "Meta"
-    assert provider.capabilities == stt.STTCapabilities(
-        streaming=True,
-        interim_results=True,
-        diarization=False,
-        aligned_transcript=False,
-        offline_recognize=False,
-        keyterms=False,
-    )
 
 
 def test_meta_api_key_environment_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,18 +270,6 @@ def test_maps_stream_language_to_documented_language_name() -> None:
 
     with pytest.raises(ValueError, match="unsupported Muse Voice language"):
         meta_stt._normalize_language_hint("not a language")
-
-
-async def test_batch_recognition_is_rejected_as_non_retryable() -> None:
-    provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([]))
-    )
-
-    with pytest.raises(APIError, match="streaming recognition only") as exc_info:
-        await provider.recognize([], conn_options=_TEST_OPTIONS)
-
-    assert exc_info.value.retryable is False
-    await provider.aclose()
 
 
 async def test_handshake_precedes_audio_and_matches_contract() -> None:

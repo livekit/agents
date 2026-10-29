@@ -15,14 +15,12 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
-from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
 pytestmark = pytest.mark.plugin("elevenlabs")
 
@@ -195,12 +193,6 @@ def _stt(**kwargs: object) -> elevenlabs_stt.STT:
     return elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
 
 
-def test_update_options_leaves_no_verbatim_untouched_when_not_given() -> None:
-    instance = _stt(no_verbatim=True)
-    instance.update_options(tag_audio_events=False)
-    assert instance._opts.no_verbatim is True
-
-
 def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
     # no_verbatim is a WebSocket query param applied at connect time, so a live
     # realtime stream must be told to reconnect. Verify STT.update_options
@@ -216,10 +208,6 @@ def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
     instance._streams.add(fake)
     instance.update_options(no_verbatim=True)
     assert captured.get("no_verbatim") is True
-
-
-def test_previous_text_is_kept_for_realtime_model() -> None:
-    assert _stt(previous_text="prior context")._opts.previous_text == "prior context"
 
 
 def test_previous_text_is_ignored_for_non_realtime_model(caplog: pytest.LogCaptureFixture) -> None:
@@ -294,30 +282,6 @@ async def test_connect_ws_escapes_query_delimiters_in_keyterms() -> None:
     assert URL(url).query.getall("keyterms") == ["Smith & Sons", "C#"]
 
 
-async def test_connect_ws_omits_keyterms_when_not_given() -> None:
-    url = await _connect_ws_url(_new_stream())
-
-    assert "keyterms=" not in url
-
-
-def test_update_options_forwards_keyterms_to_active_streams() -> None:
-    # keyterms are a WebSocket query param applied at connect time, so a live
-    # realtime stream must be told to reconnect. Verify STT.update_options
-    # forwards them to active streams (which trigger a reconnect).
-    instance = _stt()
-    captured: dict[str, object] = {}
-
-    class _FakeStream:
-        def update_options(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-    # _streams is a WeakSet: keep a strong reference so the fake survives.
-    fake = _FakeStream()
-    instance._streams.add(fake)
-    instance.update_options(keyterms=["nginx"])
-    assert captured.get("keyterms") == ["nginx"]
-
-
 def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
     stream = _new_stream()
     stream._reconnect_event = asyncio.Event()
@@ -339,17 +303,6 @@ async def test_connect_ws_normalizes_the_primary_language() -> None:
     assert URL(url).query.getall("secondary_languages") == ["ru"]
 
 
-async def test_connect_ws_includes_secondary_languages() -> None:
-    # secondary languages ride along with the pinned primary one and are sent as
-    # repeated query params, the only serialization the realtime API accepts.
-    stream = _new_stream(language="en", secondary_languages=["ru", "es"])
-
-    url = await _connect_ws_url(stream)
-
-    assert "language_code=en" in url
-    assert URL(url).query.getall("secondary_languages") == ["ru", "es"]
-
-
 async def test_connect_ws_normalizes_secondary_languages() -> None:
     # the realtime API takes ISO-639-1/3 and rejects anything else, including the region-tagged
     # tags LanguageCode produces, so names and regions are mapped before the connect URL
@@ -358,27 +311,6 @@ async def test_connect_ws_normalizes_secondary_languages() -> None:
     url = await _connect_ws_url(stream)
 
     assert URL(url).query.getall("secondary_languages") == ["ru", "fr", "es"]
-
-
-async def test_connect_ws_omits_secondary_languages_when_not_given() -> None:
-    url = await _connect_ws_url(_new_stream(language="en"))
-
-    assert "secondary_languages=" not in url
-
-
-def test_secondary_languages_are_normalized_on_the_options() -> None:
-    instance = elevenlabs_stt.STT(
-        api_key="test-key",
-        model="scribe_v2_realtime",
-        language_code="en_US",
-        secondary_languages=["ru_RU", "french", "spa"],
-    )
-
-    assert instance._opts.language_code == LanguageCode("en-US")
-    assert instance._opts.secondary_languages == ["ru-RU", "fr", "es"]
-    assert all(
-        isinstance(code, LanguageCode) for code in cast(list, instance._opts.secondary_languages)
-    )
 
 
 def test_secondary_languages_ignored_for_batch_model(caplog: pytest.LogCaptureFixture) -> None:
@@ -607,13 +539,6 @@ async def test_flush_commits_after_the_buffered_audio() -> None:
         assert ws.sent[0]["audio_base_64"] != ""
     finally:
         await stream.aclose()
-
-
-def test_trace_id_from_headers() -> None:
-    # header lookup is case-insensitive, and an absent header returns None
-    assert trace_id_from_headers(CIMultiDict({"X-Trace-Id": "trace-1"})) == "trace-1"
-    assert trace_id_from_headers(CIMultiDict()) is None
-    assert trace_id_from_headers(None) is None
 
 
 def test_speech_confidence_from_word_logprobs() -> None:

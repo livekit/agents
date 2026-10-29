@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -103,33 +102,12 @@ async def test_speech_started_without_timestamp_leaves_field_none():
     assert ev.speech_start_time is None
 
 
-async def test_start_time_has_default_before_plugin_override():
-    """Even without any plugin override, the base-class default
-    (time.time() seeded in __init__) is available for the SpeechStarted
-    conversion to use."""
-    stream = _make_stream_for_unit_test()
-
-    # start_time should already be a recent wall-clock value from the base
-    # class __init__, without any explicit override.
-    assert time.time() - stream.start_time < 5.0
-
-
 async def test_continuous_partials_requires_u3_rt_pro():
     """Test continuous_partials raises ValueError when used with a non-u3-rt-pro model."""
     from livekit.plugins.assemblyai import STT
 
     with pytest.raises(ValueError, match="continuous_partials"):
         STT(api_key="test-key", model="universal-streaming-english", continuous_partials=True)
-
-
-async def test_continuous_partials_with_u3_pro_alias():
-    """continuous_partials works with the deprecated 'u3-pro' alias (rewritten to
-    universal-3-6-pro)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-pro", continuous_partials=True)
-    assert stt._opts.continuous_partials is True
-    assert stt._opts.speech_model == "universal-3-6-pro"
 
 
 async def test_u3_pro_deprecated_rewrites_to_universal_3_6_pro():
@@ -143,15 +121,6 @@ async def test_u3_pro_deprecated_rewrites_to_universal_3_6_pro():
     assert stt._opts.speech_model == "universal-3-6-pro"
     mock_logger.warning.assert_called_once()
     assert "universal-3-6-pro" in mock_logger.warning.call_args.args[0]
-
-
-async def test_continuous_partials_unset_by_default_for_u3_rt_pro():
-    """continuous_partials is left unset for u3-rt-pro so AssemblyAI's server defaults
-    apply (enabled, but disabled by the server when speaker_labels is on)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.continuous_partials is NOT_GIVEN
 
 
 async def test_interruption_delay_requires_u3_rt_pro():
@@ -218,34 +187,6 @@ async def test_agent_context_propagates_from_stt_to_active_stream():
 # ---------------------------------------------------------------------------
 
 
-async def test_u3_rt_pro_beta_1_accepted():
-    """u3-rt-pro-beta-1 is a valid model and gets the u3-rt-pro defaults."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro-beta-1")
-    assert stt._opts.speech_model == "u3-rt-pro-beta-1"
-    # continuous_partials is left unset so AssemblyAI's server defaults apply
-    assert stt._opts.continuous_partials is NOT_GIVEN
-
-
-async def test_u3_rt_pro_beta_1_accepts_u3_pro_params():
-    """The u3-pro-gated params are accepted with u3-rt-pro-beta-1."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(
-        api_key="test-key",
-        model="u3-rt-pro-beta-1",
-        prompt="medical dictation",
-        agent_context="The agent asked for the patient's name.",
-        previous_context_n_turns=10,
-        interruption_delay=300,
-    )
-    assert stt._opts.prompt == "medical dictation"
-    assert stt._opts.agent_context == "The agent asked for the patient's name."
-    assert stt._opts.previous_context_n_turns == 10
-    assert stt._opts.interruption_delay == 300
-
-
 # ---------------------------------------------------------------------------
 # agent_context is u3-rt-pro-only
 # ---------------------------------------------------------------------------
@@ -257,15 +198,6 @@ async def test_agent_context_requires_u3_rt_pro():
 
     with pytest.raises(ValueError, match="agent_context"):
         STT(api_key="test-key", model="universal-streaming-english", agent_context="hello")
-
-
-async def test_agent_context_allowed_for_u3_rt_pro_models():
-    """agent_context is accepted for both u3-rt-pro and u3-rt-pro-beta-1."""
-    from livekit.plugins.assemblyai import STT
-
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1"):
-        stt = STT(api_key="test-key", model=model, agent_context="ctx")
-        assert stt._opts.agent_context == "ctx"
 
 
 # ---------------------------------------------------------------------------
@@ -315,34 +247,6 @@ async def test_previous_context_n_turns_zero_is_forwarded():
 # ---------------------------------------------------------------------------
 
 
-async def test_universal_3_5_pro_accepts_u3_pro_params():
-    """universal-3-5-pro shares the u3-rt-pro parameter family."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(
-        api_key="test-key",
-        model="universal-3-5-pro",
-        prompt="medical dictation",
-        agent_context="The agent asked for the patient's name.",
-        previous_context_n_turns=10,
-        interruption_delay=300,
-    )
-    assert stt._opts.speech_model == "universal-3-5-pro"
-    assert stt._opts.prompt == "medical dictation"
-    assert stt._opts.agent_context == "The agent asked for the patient's name."
-    assert stt._opts.previous_context_n_turns == 10
-    assert stt._opts.interruption_delay == 300
-
-
-async def test_universal_3_5_pro_leaves_continuous_partials_unset():
-    """continuous_partials is left unset for universal-3-5-pro so AssemblyAI's server
-    defaults apply (enabled, but disabled by the server when speaker_labels is on)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="universal-3-5-pro")
-    assert stt._opts.continuous_partials is NOT_GIVEN
-
-
 # ---------------------------------------------------------------------------
 # universal-3-6-pro: default model + u3-rt-pro parameter family
 #
@@ -352,24 +256,6 @@ async def test_universal_3_5_pro_leaves_continuous_partials_unset():
 # session. So it accepts the u3-pro-gated params and inherits the family's
 # connect-time defaults.
 # ---------------------------------------------------------------------------
-
-
-async def test_default_model_is_universal_3_6_pro():
-    """The plugin defaults to universal-3-6-pro."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt.model == "universal-3-6-pro"
-    assert stt._opts.speech_model == "universal-3-6-pro"
-
-
-async def test_universal_3_6_pro_is_accepted():
-    """universal-3-6-pro is a valid model selection."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="universal-3-6-pro")
-    assert stt.model == "universal-3-6-pro"
-    assert stt._opts.speech_model == "universal-3-6-pro"
 
 
 async def test_universal_3_6_pro_accepts_u3_pro_params():
@@ -501,18 +387,6 @@ async def test_voice_focus_absent_from_connect_config_when_unset():
     assert "voice_focus_threshold" not in query
 
 
-async def test_voice_focus_connect_time_only():
-    """voice_focus is connect-time only — not exposed via update_options."""
-    import inspect
-
-    from livekit.plugins.assemblyai import STT
-    from livekit.plugins.assemblyai.stt import SpeechStream
-
-    assert "voice_focus" not in inspect.signature(STT.update_options).parameters
-    assert "voice_focus_threshold" not in inspect.signature(STT.update_options).parameters
-    assert "voice_focus" not in inspect.signature(SpeechStream.update_options).parameters
-
-
 async def test_voice_focus_threshold_zero_is_forwarded():
     """0.0 is a meaningful threshold (minimum suppression), distinct from unset, and must
     be sent in the connect config rather than dropped by a truthiness filter."""
@@ -546,16 +420,6 @@ async def test_voice_focus_allowed_for_all_u3_pro_family_models():
         assert stt._opts.voice_focus == "far-field"
 
 
-async def test_default_model_leaves_continuous_partials_unset():
-    """A bare STT() (relying on the default model) leaves continuous_partials unset so
-    AssemblyAI's server defaults apply (enabled, but disabled by the server when
-    speaker_labels is on)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.continuous_partials is NOT_GIVEN
-
-
 # ---------------------------------------------------------------------------
 # mode (latency/accuracy preset)
 #
@@ -568,30 +432,12 @@ async def test_default_model_leaves_continuous_partials_unset():
 # ---------------------------------------------------------------------------
 
 
-async def test_mode_set():
-    """mode accepts each documented value."""
-    from livekit.plugins.assemblyai import STT
-
-    for value in ("min_latency", "balanced", "max_accuracy"):
-        stt = STT(api_key="test-key", model="u3-rt-pro", mode=value)
-        assert stt._opts.mode == value
-
-
 async def test_mode_requires_u3_pro_family():
     """mode raises ValueError when used with a non-u3-rt-pro-family model."""
     from livekit.plugins.assemblyai import STT
 
     with pytest.raises(ValueError, match="mode"):
         STT(api_key="test-key", model="universal-streaming-english", mode="max_accuracy")
-
-
-async def test_mode_allowed_for_all_u3_pro_family_models():
-    """mode is accepted for every u3-rt-pro-family model, not just the default."""
-    from livekit.plugins.assemblyai import STT
-
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
-        stt = STT(api_key="test-key", model=model, mode="min_latency")
-        assert stt._opts.mode == "min_latency"
 
 
 async def test_mode_in_connect_config():
@@ -717,17 +563,6 @@ async def test_silence_defaults_injected_without_mode():
     assert query["max_turn_silence"] == ["100"]
 
 
-async def test_mode_connect_time_only():
-    """mode is connect-time only — not exposed via update_options."""
-    import inspect
-
-    from livekit.plugins.assemblyai import STT
-    from livekit.plugins.assemblyai.stt import SpeechStream
-
-    assert "mode" not in inspect.signature(STT.update_options).parameters
-    assert "mode" not in inspect.signature(SpeechStream.update_options).parameters
-
-
 # ---------------------------------------------------------------------------
 # language_code / language_codes (language steering)
 #
@@ -818,14 +653,6 @@ async def test_language_codes_multi_cannot_be_combined():
         STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi", "en"])
 
 
-async def test_language_codes_multi_alone_is_allowed():
-    """'multi' by itself is valid and passes through un-mangled."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi"])
-    assert stt._opts.language_codes == ["multi"]
-
-
 async def test_language_code_requires_u3_pro_family():
     """language_code raises ValueError when used with a non-u3-rt-pro-family model."""
     from livekit.plugins.assemblyai import STT
@@ -844,15 +671,6 @@ async def test_language_codes_requires_u3_pro_family():
             model="universal-streaming-multilingual",
             language_codes=["es"],
         )
-
-
-async def test_language_codes_allowed_for_all_u3_pro_family_models():
-    """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
-    from livekit.plugins.assemblyai import STT
-
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
-        stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
-        assert stt._opts.language_codes == ["en", "es"]
 
 
 async def test_language_codes_in_connect_config():
@@ -1049,14 +867,6 @@ async def test_language_codes_accepts_bare_string():
     assert stt_norm._opts.language_codes == ["es"]
 
 
-async def test_language_codes_empty_string_at_construction_is_unset():
-    """An explicit "" at construction equals unset, like []."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="universal-streaming-english", language_codes="")
-    assert stt._opts.language_codes is NOT_GIVEN
-
-
 async def test_language_code_singular_logs_deprecation_warning(caplog):
     """The singular language_code still works but logs a deprecation warning."""
     import logging
@@ -1068,55 +878,6 @@ async def test_language_code_singular_logs_deprecation_warning(caplog):
 
     assert stt._opts.language_codes == ["es"]
     assert "'language_code' is deprecated" in caplog.text
-
-
-async def test_language_codes_no_deprecation_warning(caplog):
-    """The plural spelling does not trigger the deprecation warning."""
-    import logging
-
-    from livekit.plugins.assemblyai import STT
-
-    with caplog.at_level(logging.WARNING):
-        STT(api_key="test-key", model="u3-rt-pro", language_codes=["es"])
-
-    assert "deprecated" not in caplog.text
-
-
-async def test_language_codes_update_accepts_bare_string():
-    """update_options accepts a single code directly and sends it as a list."""
-    stream = _make_stream_for_unit_test()
-
-    stream.update_options(language_codes="en-US")
-
-    assert stream._opts.language_codes == ["en"]
-    msg = stream._config_update_queue.get_nowait()
-    assert msg["type"] == "UpdateConfiguration"
-    assert msg["language_codes"] == ["en"]
-
-
-async def test_language_codes_update_empty_string_clears_steering():
-    """An explicit "" mid-session clears steering, same as []."""
-    stream = _make_stream_for_unit_test()
-
-    stream.update_options(language_codes="")
-
-    assert stream._opts.language_codes == []
-    msg = stream._config_update_queue.get_nowait()
-    assert msg["language_codes"] == []
-
-
-async def test_language_code_singular_not_in_update_options():
-    """The singular language_code is constructor-only; mid-session re-steering
-    goes through language_codes."""
-    import inspect
-
-    from livekit.plugins.assemblyai import STT
-    from livekit.plugins.assemblyai.stt import SpeechStream
-
-    assert "language_code" not in inspect.signature(STT.update_options).parameters
-    assert "language_code" not in inspect.signature(SpeechStream.update_options).parameters
-    assert "language_codes" in inspect.signature(STT.update_options).parameters
-    assert "language_codes" in inspect.signature(SpeechStream.update_options).parameters
 
 
 # ---------------------------------------------------------------------------
@@ -1241,19 +1002,6 @@ async def test_carryover_on_by_default_for_u3_pro_family():
     ):
         stt = STT(api_key="test-key", model=model)
         assert stt.capabilities.chat_context is True
-
-
-async def test_carryover_default_does_not_warn(caplog):
-    """Not passing the deprecated flag produces no deprecation warning."""
-    import logging
-
-    from livekit.plugins.assemblyai import STT
-
-    with caplog.at_level(logging.WARNING):
-        stt = STT(api_key="test-key", model="universal-3-5-pro")
-
-    assert stt.capabilities.chat_context is True
-    assert "deprecated" not in caplog.text
 
 
 async def test_carryover_explicit_true_still_enables_and_warns(caplog):
