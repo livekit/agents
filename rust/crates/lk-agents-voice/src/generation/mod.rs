@@ -5,7 +5,6 @@ use crate::tts::markup::MarkupExt;
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::tool_executor::Toolset;
-use lk_agents_abi::Modality;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 pub use lk_agents_abi::voice::session_options::Instructions;
@@ -938,6 +937,7 @@ pub enum GenEvent {
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
+    use lk_agents_abi::Modality;
     use crate::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
     use lk_agents_abi::resources::{ResourceId, TtsRef};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
