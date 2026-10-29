@@ -6,7 +6,10 @@ use crate::transcription::{Visible, VisibleStream};
 use crate::tts::markup::expression_attribute;
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};
-use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TimedString};
+use lk_agents_abi::{
+    ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
+    ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TimedString,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The microphone view observed by the performer when a transcript's subject changes.
@@ -302,6 +305,13 @@ impl Subject {
         subject
     }
 
+    /// Who and on which track [`WriterEffect::PublishLegacy`] publishes: the representing
+    /// participant, else the subject itself.
+    pub fn legacy_target(&self) -> Option<(ParticipantIdentity, TrackSid)> {
+        let identity = self.represented_by.clone().or_else(|| self.participant.clone())?;
+        Some((identity, self.legacy_track.clone()?))
+    }
+
     pub fn on_track_published(
         &mut self,
         owner: &ParticipantIdentity,
@@ -339,11 +349,40 @@ impl Subject {
     }
 }
 
-pub fn stream_attributes(is_final: bool, track: Option<&TrackSid>) -> BTreeMap<String, String> {
+fn stream_attributes(is_final: bool, track: Option<&TrackSid>) -> BTreeMap<String, String> {
     let mut attributes = BTreeMap::new();
     attributes.insert(ATTRIBUTE_TRANSCRIPTION_FINAL.to_owned(), is_final.to_string());
     if let Some(tid) = track {
         attributes.insert(ATTRIBUTE_TRANSCRIPTION_TRACK_ID.to_owned(), tid.to_string());
+    }
+    attributes
+}
+
+/// The header of [`WriterEffect::OpenStream`]: its segment id, and the leading expression.
+pub fn open_attributes(
+    segment: String,
+    is_final: bool,
+    expression: Option<(&'static str, String)>,
+    track: Option<&TrackSid>,
+) -> BTreeMap<String, String> {
+    let mut attributes = stream_attributes(is_final, track);
+    attributes.insert(ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID.to_owned(), segment);
+    if let Some((key, value)) = expression {
+        attributes.insert(key.to_owned(), value);
+    }
+    attributes
+}
+
+/// The trailer of [`WriterEffect::CloseStream`], with `track` as the stream opened with it; the
+/// expression never overrides the stream's own attributes.
+pub fn close_attributes(
+    is_final: bool,
+    expression: Option<(&'static str, String)>,
+    track: Option<&TrackSid>,
+) -> BTreeMap<String, String> {
+    let mut attributes = stream_attributes(is_final, track);
+    if let Some((key, value)) = expression {
+        attributes.entry(key.to_owned()).or_insert(value);
     }
     attributes
 }

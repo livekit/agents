@@ -11,12 +11,12 @@ use lk_agents_abi::voice::rtc::{
     TrackSource, Transcription, TranscriptionSegment,
 };
 use lk_agents_abi::{
-    ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, Clock, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner,
-    SpawnerExt, TOPIC_TRANSCRIPTION, TimedString, Ts,
+    Clock, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TimedString,
+    Ts,
 };
 use lk_agents_voice::room_io::transcription::{
     Admission, Batch, ParticipantTracks, Subject, Writer, WriterEffect, cancellable,
-    stream_attributes,
+    close_attributes, open_attributes,
 };
 
 use std::collections::BTreeMap;
@@ -82,11 +82,8 @@ impl Performer {
                 if !self.room.connection_state()?.is_connected() {
                     return Ok(());
                 }
-                let mut attributes = stream_attributes(is_final, subject.stream_track.as_ref());
-                attributes.insert(ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID.to_owned(), segment);
-                if let Some((key, value)) = expression {
-                    attributes.insert(key.to_owned(), value);
-                }
+                let attributes =
+                    open_attributes(segment, is_final, expression, subject.stream_track.as_ref());
                 let writer = self
                     .room
                     .local()
@@ -105,18 +102,12 @@ impl Performer {
             }
             WriterEffect::CloseStream { is_final, expression } => {
                 if let Some(open) = self.writer.take() {
-                    let mut attributes = stream_attributes(is_final, open.track.as_ref());
-                    if let Some((key, value)) = expression {
-                        attributes.entry(key.to_owned()).or_insert(value);
-                    }
+                    let attributes = close_attributes(is_final, expression, open.track.as_ref());
                     open.writer.close(attributes).await?;
                 }
             }
             WriterEffect::PublishLegacy { segment, text, is_final } => {
-                let identity = subject.represented_by.clone().or(subject.participant.clone());
-                let (Some(identity), Some(track)) = (identity, subject.legacy_track.clone()) else {
-                    return Ok(());
-                };
+                let Some((identity, track)) = subject.legacy_target() else { return Ok(()) };
                 if !self.room.connection_state()?.is_connected() {
                     return Ok(());
                 }
@@ -142,7 +133,7 @@ impl Performer {
 
     async fn close(&mut self) -> Result<()> {
         if let Some(open) = self.writer.take() {
-            open.writer.close(stream_attributes(true, open.track.as_ref())).await?;
+            open.writer.close(close_attributes(true, None, open.track.as_ref())).await?;
         }
         Ok(())
     }
