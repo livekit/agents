@@ -43,8 +43,10 @@ impl Socket {
                     // Cancelled before creation: cancelled by id, its end told to nobody.
                     st.server.cancel(now, Some(&id));
                     let error = RealtimeError::new("generate_reply cancelled");
-                    st.events
-                        .push_back(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+                    st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed {
+                        req_id,
+                        error,
+                    }));
                     return;
                 }
                 st.server.told_created(r, now);
@@ -63,10 +65,7 @@ impl Socket {
                 }));
             }
             Happening::MessageAdded { r, previous } => {
-                let item = st.server.responses[r as usize]
-                    .item
-                    .clone()
-                    .unwrap_or_default();
+                let item = st.server.responses[r as usize].item.clone().unwrap_or_default();
                 let added =
                     stamped(message(&item, lk_agents_abi::Role::Assistant), self.clock.wall());
                 if let Some(g) = st.generation.as_mut().filter(|g| g.r == r) {

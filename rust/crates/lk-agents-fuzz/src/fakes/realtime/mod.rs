@@ -531,8 +531,8 @@ impl Socket {
                     self.registry.record_forwarded(*slot, tags);
                 }
                 if frame.sample_rate > 0 {
-                    let ms = u64::from(frame.samples_per_channel) * 1000
-                        / u64::from(frame.sample_rate);
+                    let ms =
+                        u64::from(frame.samples_per_channel) * 1000 / u64::from(frame.sample_rate);
                     st.server.append_audio(ms);
                 }
             }
