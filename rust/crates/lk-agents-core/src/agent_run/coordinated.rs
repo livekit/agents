@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use lk_agents_abi::{ChatMessage, Ts};
 
-use super::{AgentRun, Effect, Next, Output, Phase, StepId};
+use super::{AgentRun, Effect, Next, Phase, StepId};
 
 /// How an invocation opens, and who owns its record and its requests.
 #[derive(Debug, Clone)]
