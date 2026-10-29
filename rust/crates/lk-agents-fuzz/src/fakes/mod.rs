@@ -57,7 +57,7 @@ pub use output::{
 };
 pub use realtime::{FakeDuplex, FakeRealtime, FallbackRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;
-pub use tools::{FakeTools, completion_value, frame};
+pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::FakeTts;
 pub use vad::FakeVad;
 

@@ -87,6 +87,7 @@ mod stt_swapped_mid_utterance;
 mod switch_at_receipt;
 mod switch_races_frames;
 mod tool_awaits_own_speech;
+mod tool_reply_renders_its_template;
 mod tool_reply_scheduled_at_once;
 mod tool_started_then_interrupted;
 mod tool_update_before_detach_heard;

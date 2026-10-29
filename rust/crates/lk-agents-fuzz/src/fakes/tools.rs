@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::agent::{
     AgentDefinition, AgentFrame, AgentHost, ArgumentIdentity, FunctionToolInfo, Invocation,
     OutputCandidate, OutputSpec, PreparedArguments, ReadBack, ReadBackAnswer, ToolArgumentError,
-    ValidatedOutput, VoiceAgent,
+    ToolTemplate, ValidatedOutput, VoiceAgent,
 };
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
@@ -23,6 +23,13 @@ use crate::{
 
 /// The tool the runs declare with `needs_approval=True`.
 pub const APPROVAL_TOOL: &str = "transfer";
+
+/// The tool whose toolset sets `tool_handling` templates: its deferred replies are told
+/// [`TEMPLATED_REPLY`] and the updates' ids.
+pub const TEMPLATED_TOOL: &str = "notify";
+
+/// What [`TEMPLATED_TOOL`]'s deferred reply instructions start with.
+pub const TEMPLATED_REPLY: &str = "Tell the person what changed: ";
 
 /// A fixture tool as the model sees it.
 pub fn tool_spec(name: &str) -> ToolSpec {
@@ -226,6 +233,26 @@ impl AgentHost for FakeTools {
             });
             Ok((ToolReport { outcome, transition }, call.extra))
         })
+    }
+
+    /// [`TEMPLATED_TOOL`]'s toolset renders its deferred replies; every other template keeps
+    /// the framework's text.
+    fn render_template<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+        template: ToolTemplate,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<String>, HostError>> {
+        let templated = invocation.function_call.as_ref().is_some_and(|c| c.name == TEMPLATED_TOOL);
+        let text = match template {
+            ToolTemplate::ReplyAtTail { call_ids }
+            | ToolTemplate::ReplyMaybeCovered { call_ids }
+                if templated =>
+            {
+                Some(format!("{TEMPLATED_REPLY}{}", call_ids.join(", ")))
+            }
+            _ => None,
+        };
+        Box::pin(async move { Ok(text) })
     }
 
     fn validate_output<'a>(

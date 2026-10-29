@@ -375,10 +375,12 @@ pub enum ToolStep {
     SessionToolsExtended {
         added: Vec<String>,
     },
+    /// The deferred reply was scheduled with `instructions`, as the agent's templates rendered.
     ReplyScheduled {
         speech: SpeechId,
         update_ids: Vec<String>,
         at_tail: bool,
+        instructions: String,
     },
     /// The deferred reply's speech ended, and how the reference reports it.
     ReplyDone {

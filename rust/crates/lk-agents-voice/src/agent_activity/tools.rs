@@ -644,8 +644,9 @@ impl Driver {
             ctx
         });
         // The summary must not start another round of tool calls.
+        let instructions = text.clone();
         let Some(speech) = self.reply_with_instructions(now, text, chat_ctx, out) else { return };
-        self.tool_reply_scheduled(speech, update_ids, at_tail, out);
+        self.tool_reply_scheduled(speech, update_ids, at_tail, instructions, out);
     }
 
     fn tool_reply_scheduled(
@@ -653,12 +654,14 @@ impl Driver {
         speech: SpeechId,
         update_ids: Vec<String>,
         at_tail: bool,
+        instructions: String,
         out: &mut Out,
     ) {
         out.trace(TraceToolStep::ReplyScheduled {
             speech,
             update_ids: update_ids.clone(),
             at_tail,
+            instructions,
         });
         out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
             update_ids: update_ids.clone(),
