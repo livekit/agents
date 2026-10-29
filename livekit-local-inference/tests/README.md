@@ -14,6 +14,7 @@ Run the public facade probes from the package root in an isolated environment wi
 ```sh
 .host-venv/bin/python -I -B tests/probe_boundary.py
 .host-venv/bin/python -I -B tests/probe_transport.py
+.host-venv/bin/python -I -B tests/probe_cold_retirement.py
 LIVEKIT_BOUNDARY_NATIVE_DIR="$PWD/.fake-native" .host-venv/bin/python -I -B tests/probe_lifecycle.py
 ```
 
@@ -30,3 +31,7 @@ The separate `probe_sdk_cleanup.py` runs checked native close subclasses through
 None of these results establishes genuine model quality. Keep real-engine parity, SDK workflows, per-platform packaging and paired latency evidence separate.
 
 `probe_restart.py` checks explicit startup, closed admission and retry after failed retirement. `probe_fork.py` holds parent locks across a real fork, checks copied descriptors and reused descriptor numbers, and verifies that foreign lifecycle calls and finalizers leave the parent workers alone.
+
+`probe_cold_retirement.py` pauses real admitted startup and socket reads to check borrowed-handle lifetime and shutdown races. It also interrupts settlement, repeats transport-close failures, checks public cleanup retry and prevents an undelivered VAD reply from leaving reusable recurrent state.
+
+Its report includes the interpreter's `HAVE_POLL` and `HAVE_BROKEN_POLL` values, rendered with `repr`, plus whether `select.poll` is available. Those diagnostics describe the tested runtime; they do not attribute a failure to its compiler.

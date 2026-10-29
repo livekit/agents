@@ -97,3 +97,4 @@ jobs:
             .host-venv/bin/python -I -B livekit-local-inference/tests/probe_lifecycle.py
           .host-venv/bin/python -I -B livekit-local-inference/tests/probe_restart.py
           .host-venv/bin/python -I -B livekit-local-inference/tests/probe_fork.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_cold_retirement.py

@@ -40,6 +40,8 @@ Call `start()` when opening an application lifetime and join `shutdown()` before
 
 Each model has explicit `close()` ownership and supports a context manager. VAD state stays with its worker generation; lost state requires a fresh VAD instance.
 
+Shutdown wakes admitted callers and reaps their peers, then waits for each caller to release its socket before closing transport handles. An admission retired before startup cannot create a worker; interrupted settlement preserves both errors, quarantines affected VAD state and retains failed cleanup for retry.
+
 EOT prewarming retains one worker. A second starts on parallel demand and pays its model load cost once; closing the last EOT model retires that second worker and preserves only an explicitly warmed primary.
 
 The backend declares `FORK_SAFE_PREWARM = False`, so the SDK skips automatic import-time model warmup. A job creates its own pool; a forked child closes copied IPC handles and rejects inherited model operations before taking their locks.

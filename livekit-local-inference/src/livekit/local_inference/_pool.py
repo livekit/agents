@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 import io
 import math
@@ -34,7 +34,7 @@ from ._worker import (
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Generator, Mapping, Sequence
 
 
 # Fork never copies an FD transfer halfway through publication or closure.
@@ -85,9 +85,12 @@ class Owner:
     release_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+type Stage = Literal["spawned", "published", "closing_fds", "before_reap", "closing_transport"]
+
+
 @dataclass(frozen=True, slots=True)
 class SpawnEvent:
-    stage: Literal["spawned", "published", "closing_fds", "before_reap"]
+    stage: Stage
     pid: int
     descriptors: tuple[int, int, int, int]
 
@@ -101,6 +104,15 @@ class _Session:
     connection: socket.socket
     lifeline: io.FileIO
     descriptors: tuple[int, int, int, int]
+    borrowed: bool = False
+    retired: bool = False
+
+
+@dataclass(slots=True)
+class _Admission:
+    lane: _Lane
+    generation: int
+    session: _Session | None = None
 
 
 class _Lane:
@@ -142,17 +154,24 @@ class _Lane:
 
     def _observe(
         self,
-        stage: Literal["spawned", "published", "closing_fds", "before_reap"],
+        stage: Stage,
         session: _Session,
     ) -> None:
         if self._observer is not None:
             self._observer(SpawnEvent(stage, session.process.pid, session.descriptors))
 
     def start(
-        self, deadline: float, expected_generation: int | None = None
+        self,
+        deadline: float,
+        expected_generation: int | None = None,
+        *,
+        admission: _Admission | None = None,
     ) -> tuple[socket.socket, int]:
         self.ensure_owner()
         with self._lifetime:
+            if admission is not None and admission.generation != self.generation:
+                message = "native inference admission was retired"
+                raise StateLostError(message)
             current = self._session
             if expected_generation is not None and (
                 expected_generation != self.generation
@@ -162,6 +181,9 @@ class _Lane:
                 message = "native VAD state was lost; create a new VAD instance"
                 raise StateLostError(message)
             if current is not None and current.process.poll() is None:
+                if admission is not None:
+                    admission.session = current
+                current.borrowed = True
                 return current.connection, self.generation
             self.retire()
             try:
@@ -174,12 +196,7 @@ class _Lane:
                     session: _Session | None = None
                     try:
                         process = OwnedProcess(
-                            [
-                                *self.command,
-                                str(child.fileno()),
-                                self.kind,
-                                str(reader.fileno()),
-                            ],
+                            [*self.command, str(child.fileno()), self.kind, str(reader.fileno())],
                             pass_fds=(child.fileno(), reader.fileno()),
                             env=self.environment,
                         )
@@ -187,13 +204,11 @@ class _Lane:
                             process,
                             parent,
                             writer,
-                            (
-                                parent.fileno(),
-                                child.fileno(),
-                                reader.fileno(),
-                                writer.fileno(),
-                            ),
+                            (parent.fileno(), child.fileno(), reader.fileno(), writer.fileno()),
                         )
+                        if admission is not None:
+                            admission.session = session
+                        session.borrowed = True
                         self._observe("spawned", session)
                         # One assignment transfers the complete process/socket/lifeline.
                         self._session = session
@@ -262,7 +277,7 @@ class _Lane:
                 self.retiring = False
                 return
             with suppress(OSError):
-                session.connection.shutdown(socket.SHUT_WR)
+                session.connection.shutdown(socket.SHUT_RDWR)
             try:
                 session.process.wait(timeout=0.05)
             except subprocess.TimeoutExpired:
@@ -277,11 +292,23 @@ class _Lane:
                     session.process.wait(timeout=2.0)
             # Reap the peer before closing a socket another thread may select.
             # Failed waits retain this session and keep admission quarantined.
-            with _fork_gate:
-                session.connection.close()
-                session.lifeline.close()
-                self._session = None
-            self.retiring = False
+            session.retired = True
+            if not session.borrowed or not self.busy:
+                self._close_session(session)
+
+    def _close_session(self, session: _Session) -> None:
+        self._observe("closing_transport", session)
+        with _fork_gate:
+            session.connection.close()
+            session.lifeline.close()
+            self._session = None
+        self.retiring = False
+
+    def finish(self, session: _Session) -> None:
+        self.ensure_owner()
+        with self._lifetime:
+            if self._session is session and session.retired:
+                self._close_session(session)
 
     def pid(self) -> int | None:
         self.ensure_owner()
@@ -400,13 +427,14 @@ class Pool:
             msg = "native inference pool is closed"
             raise RuntimeError(msg)
 
+    @contextmanager
     def _admit(
         self,
         kind: Kind,
         deadline: float,
         preferred: _Lane | None = None,
         owner: Owner | None = None,
-    ) -> _Lane:
+    ) -> Generator[_Admission]:
         self.ensure_owner()
         with self._condition:
             while True:
@@ -416,18 +444,50 @@ class Pool:
                     raise ValueError(message)
                 candidates = (preferred,) if preferred is not None else self._lanes[kind]
                 available = next(
-                    (lane for lane in candidates if not lane.busy and not lane.retiring),
-                    None,
+                    (lane for lane in candidates if not lane.busy and not lane.retiring), None
                 )
                 if available is not None:
                     available.busy = True
                     available.active_owner = owner
-                    return available
+                    admission = _Admission(available, available.generation)
+                    break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     msg = "native inference admission deadline exceeded"
                     raise TimeoutError(msg)
                 self._condition.wait(remaining)
+
+        lane = admission.lane
+        operation_error: BaseException | None = None
+        try:
+            yield admission
+        except BaseException as error:
+            operation_error = error
+            raise
+        finally:
+            try:
+                self.ensure_owner()
+                session = admission.session
+                if session is not None:
+                    # No socket access remains after this owned lease release.
+                    session.borrowed = False
+                    lane.finish(session)
+            except BaseException as cleanup:  # noqa: BLE001 -- Preserve both failures.
+                settlement_error: BaseException = cleanup
+                if operation_error is not None:
+                    message = "native inference operation and settlement failed"
+                    settlement_error = BaseExceptionGroup(message, [operation_error, cleanup])
+                # A completed reply can still be lost to settlement interruption;
+                # quarantine its recurrent state before another caller can enter.
+                lane.retiring = True
+                lane.retire_after_failure(settlement_error)
+                raise settlement_error from None
+            finally:
+                self.ensure_owner()
+                with self._condition:
+                    lane.busy = False
+                    lane.active_owner = None
+                    self._condition.notify_all()
 
     def _exchange[T](
         self,
@@ -448,19 +508,18 @@ class Pool:
         request_owner = (
             context.owner if context is not None and operation != Operation.DROP else owner
         )
-        lane = self._admit(
-            kind,
-            deadline,
-            context.lane if context is not None else preferred,
-            request_owner,
-        )
-        try:
+        with self._admit(
+            kind, deadline, context.lane if context is not None else preferred, request_owner
+        ) as admission:
+            lane = admission.lane
             if context is not None and context.generation != lane.generation:
                 msg = "native VAD state was lost; create a new VAD instance"
                 raise StateLostError(msg)
             try:
                 connection, generation = lane.start(
-                    deadline, context.generation if context is not None else None
+                    deadline,
+                    context.generation if context is not None else None,
+                    admission=admission,
                 )
             except (OSError, EOFError, UnicodeError, RuntimeError) as error:
                 msg = "native inference startup failed; create a fresh context"
@@ -490,12 +549,6 @@ class Pool:
             if status == 1:
                 raise ValueError(message)
             raise TypeError(message)
-        finally:
-            self.ensure_owner()
-            with self._condition:
-                lane.busy = False
-                lane.active_owner = None
-                self._condition.notify_all()
 
     def warm(self, kind: Kind, *, retain: bool = True) -> None:
         self.ensure_owner()
@@ -678,6 +731,9 @@ class Pool:
                     msg = "native inference callers did not settle after worker retirement"
                     raise RuntimeError(msg)
                 self._condition.wait(remaining)
+        # The borrower may have failed while releasing its FD lease. Retry only
+        # after every admitted caller has relinquished socket access.
+        self._retire_lanes(lanes)
 
 
 def _before_fork() -> None:
