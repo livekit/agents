@@ -1,0 +1,63 @@
+tests/test_stt_stream_timing.py
+  s_bcd3e70328118e::t_ff4d4884ea6475 84-86,90,92,100,110,113-114,127,134-190
+  s_bcd3e70328118e::t_50c9d237569caf 1-45,51-83,87-89,91,93-99,102-109,111-112,115-126,128-133,191-220
+  s_bcd3e70328118e::t_5f6772b1e37cec 46-50,101
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/stt.py
+  s_bcd3e70328118e::t_608484ddc0450e 264,365,411,423,440-451,458
+  s_bcd3e70328118e::t_c9ac90b7e66f9f 34,231
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_bcd3e70328118e::t_ae00afdc243933 333
+livekit-agents/livekit/agents/inference/stt.py
+  s_bcd3e70328118e::t_d1d46a893ed73a 1430-1431,1448-1451
+  s_bcd3e70328118e::t_36426770b7f95d 1452
+tests/test_plugin_azure_stt.py
+  s_bcd3e70328118e::t_37832fd8d357af 17,61-103,107,109
+  s_bcd3e70328118e::t_e6f2a28147092e 104-106,108,110-111
+tests/test_plugin_rtzr_stt.py
+  s_bcd3e70328118e::t_7906a352cf39e4 14,26-48
+  s_bcd3e70328118e::t_3a902af7f6e252 88-95,111-118
+tests/test_inference_stt_start_of_speech.py
+  s_bcd3e70328118e::t_f165435f0c6983 109-141
+tests/test_stt.py
+  s_bcd3e70328118e::t_f82f6218384200 110,115-116
+  s_bcd3e70328118e::t_4fd8a86b82f79c 122,125-129
+  s_bcd3e70328118e::t_6c2b24f55d8d62 117-121
+  s_bcd3e70328118e::t_a273748fef28ba 288,290-291
+  s_bcd3e70328118e::t_acac4482048a4f 95
+  s_bcd3e70328118e::t_a6a2eb2bdb109a 97-99,123-124,243,245-250,252,267-287,292-306,309-312,314
+  s_bcd3e70328118e::t_ae00afdc243933 63,113-114,289,307-308
+  s_bcd3e70328118e::t_0b21bd90902a8a 15,28,32-33,35-36,39-40,44,53-58,60,62,64,111-112,130
+  s_bcd3e70328118e::t_b075e3d32c790f 61,96
+  s_bcd3e70328118e::t_57359db6c2d1bc 59
+tests/utils/stt.py
+  s_bcd3e70328118e::t_50c9d237569caf 9,51-53
+  s_bcd3e70328118e::t_5f6772b1e37cec 66-73
+  s_bcd3e70328118e::t_220b44e3f13514 1-8,10-12,17,19-24,26-39,49,54-65,74-88
+  s_bcd3e70328118e::t_a6a2eb2bdb109a 13-16,18,25,40-48,50
+tests/test_plugin_aws_stt.py
+  s_bcd3e70328118e::t_f7c7e1364a4d96 277
+  s_bcd3e70328118e::t_bc960f02f342dc 275-276,278-318
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_bcd3e70328118e::t_c19f9f0fbc0300 20,271,276,278,316-318,346,357-365,370
+  s_bcd3e70328118e::t_de24656aa5c866 366
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/qwen3_stt.py
+  s_bcd3e70328118e::t_011d3cdaac7182 381
+livekit-plugins/livekit-plugins-microsoft-ai/livekit/plugins/microsoft_ai/stt.py
+  s_bcd3e70328118e::t_8c47f0a3d9cf24 413,553,670
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "893b44d1aaaf2ab24dc4cc2d36db9e10758efe91",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
