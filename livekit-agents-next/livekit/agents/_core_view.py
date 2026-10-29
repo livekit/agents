@@ -31,8 +31,9 @@ from .llm.tool_context import (
     ToolFlag,
     Toolset,
 )
-from .types import NOT_GIVEN
+from .types import NOT_GIVEN, NotGivenOr, TimedString
 from .voice import io
+from .voice.turn import _StreamingTurnDetector
 
 
 def duck(obj: Any, cls: type) -> Any:
@@ -85,7 +86,10 @@ def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool |
     return model._core_with_tools(tools)
 
 
-def _forward_session_events(session: Any, put: Callable[[dict[str, Any]], None]) -> None:
+def _forward_session_events(
+    session: llm.RealtimeSession | llm.DuplexSession,
+    put: Callable[[dict[str, object]], None],
+) -> None:
     """A realtime or duplex session's caller events, reconnects and errors, as kind-tagged dicts."""
     session.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
     session.on(
@@ -144,7 +148,7 @@ class Duplex:
             **dataclasses.asdict(self._adapter.duplex_model.capabilities)
         )
 
-    def _core_gate(self) -> Any:
+    def _core_gate(self) -> llm.AudioGate | None:
         """The gate the adapter or the model declares; ``None``: the adaptive gate."""
         return (
             self._adapter._gate()
@@ -201,7 +205,9 @@ class _DuplexSession:
     async def _core_update_tools(self, names: list[str]) -> None:
         await self._session._update_tools(offered_tools(self._tools(), names))
 
-    async def _core_generate(self, instructions: str | None, tool_choice: Any) -> None:
+    async def _core_generate(
+        self, instructions: str | None, tool_choice: llm.ToolChoice | None
+    ) -> None:
         self._session._generate_reply(
             instructions=instructions or NOT_GIVEN,
             tool_choice=NOT_GIVEN if tool_choice is None else tool_choice,
@@ -225,7 +231,7 @@ class _DuplexSession:
         self._events.put_nowait(None)
 
 
-def _chat_ctx(items: list[_core.ChatItem] | None) -> Any:
+def _chat_ctx(items: list[_core.ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
     return NOT_GIVEN if items is None else llm.ChatContext([from_core_item(i) for i in items])
 
 
@@ -242,7 +248,7 @@ class TurnDetector:
     """A ``turn_detection`` object as the core's end-of-turn detector: its ``stream()`` hears
     the user's audio and predicts the end of their turn."""
 
-    def __init__(self, detector: Any) -> None:
+    def __init__(self, detector: _StreamingTurnDetector) -> None:
         if not hasattr(detector, "stream"):
             raise TypeError(
                 f"turn_detection={detector!r} is not an audio turn detector (one with stream()); "
@@ -256,7 +262,7 @@ class TurnDetector:
         label = f"{cls.__module__}.{cls.__name__}"
         return {"label": label, "model": self._detector.model, "provider": self._detector.provider}
 
-    def _core_push_audio(self, frame: Any) -> None:
+    def _core_push_audio(self, frame: rtc.AudioFrame) -> None:
         self._stream.push_audio(frame)
 
     def _core_cancel(self, timed_out: bool) -> None:
@@ -332,7 +338,7 @@ class _AudioOutput:
     def _core_begin_segment(self, segment: io.PlaybackSegment) -> None:
         self._obj.begin_segment(segment)
 
-    async def _core_capture(self, frame: Any) -> None:
+    async def _core_capture(self, frame: rtc.AudioFrame) -> None:
         await self._obj.capture_frame(frame)
 
     def _core_flush_segment(self) -> None:
@@ -385,7 +391,7 @@ class _TextOutput:
     def _core_label(self) -> str:
         return self._obj.label
 
-    async def _core_capture_timed(self, text: Any) -> None:
+    async def _core_capture_timed(self, text: TimedString) -> None:
         await self._obj.capture_text(text)
 
     async def _core_capture_text(self, text: str) -> None:
@@ -454,7 +460,7 @@ def offered_tools(pool: Sequence[Tool | Toolset], names: Sequence[str]) -> list[
 
 # --- chat items -------------------------------------------------------------------------------
 
-_ITEM = TypeAdapter(ChatItem)
+_ITEM: TypeAdapter[ChatItem] = TypeAdapter(ChatItem)
 
 
 def to_core_item(item: ChatItem, *, content: Sequence[ChatContent] | None = None) -> _core.ChatItem:
@@ -488,22 +494,23 @@ def from_core_item(item: _core.ChatItem | dict[str, Any]) -> ChatItem:
     return _ITEM.validate_python(fields)
 
 
-def _to_core_content(content: Any) -> _core.ChatContent:
+def _to_core_content(content: ChatContent) -> _core.ChatContent:
     if isinstance(content, str):
         return _core.ChatContent.text(content)
     if isinstance(content, AudioContent):
         return _core.ChatContent.audio(frames=content.frame, transcript=content.transcript)
     assert isinstance(content, ImageContent)
-    shape = {
-        "id": content.id,
-        "inference_width": content.inference_width,
-        "inference_height": content.inference_height,
-        "inference_detail": content.inference_detail,
-        "mime_type": content.mime_type,
-    }
     if isinstance(content.image, str):
-        return _core.ChatContent.image_url(url=content.image, **shape)
-    return _core.ChatContent.image_frame(frame=content.image, **shape)
+        image = functools.partial(_core.ChatContent.image_url, url=content.image)
+    else:
+        image = functools.partial(_core.ChatContent.image_frame, frame=content.image)
+    return image(
+        id=content.id,
+        inference_width=content.inference_width,
+        inference_height=content.inference_height,
+        inference_detail=content.inference_detail,
+        mime_type=content.mime_type,
+    )
 
 
 def _from_core_content(content: _core.ChatContent) -> Any:
