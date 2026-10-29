@@ -125,7 +125,8 @@ class Lane:
 class CallThreadEntrypoint:
     """The ``rtc_session`` entrypoint of a server with storage: the call's thread is resolved
     first, the ``thread_id`` of the dispatch metadata, else a new thread, as ``ctx.thread``.
-    A storage failure is logged and the call runs with no thread."""
+    An unknown or deleted id, or a storage failure, is logged and the call runs with no
+    thread."""
 
     entrypoint: Callable[[JobContext], Awaitable[None]]
     storage: Storage
@@ -136,9 +137,10 @@ class CallThreadEntrypoint:
         except ValueError:
             metadata = None
         thread_id = metadata.get("thread_id") if isinstance(metadata, dict) else None
+        if not isinstance(thread_id, str):
+            thread_id = None
         try:
-            if not isinstance(thread_id, str) or not thread_id:
-                thread_id = (await resolve_thread(self.storage.threads)).id
+            thread_id = (await resolve_thread(self.storage.threads, context_id=thread_id)).id
             ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
         except StorageError as e:
             logger.warning(
@@ -148,10 +150,4 @@ class CallThreadEntrypoint:
         await self.entrypoint(ctx)
 
 
-__all__ = [
-    "CallThreadEntrypoint",
-    "Lane",
-    "ResolvedThread",
-    "Thread",
-    "resolve_thread",
-]
+__all__ = ["Lane", "Thread"]

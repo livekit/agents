@@ -753,11 +753,14 @@ async def test_the_rtc_door_resolves_the_call_thread(thread_storage: Storage) ->
 
     door = _CallThreadEntrypoint(entrypoint, thread_storage)
     sid = await new_session(thread_storage, "desk")
-    for metadata in (json.dumps({"thread_id": sid}), ""):
+    unknown = json.dumps({"thread_id": "AT_unknown"})
+    for metadata in (json.dumps({"thread_id": sid}), "", unknown):
         job = SimpleNamespace(metadata=metadata, agent_name="desk")
         await door(SimpleNamespace(worker_id="w", job=job, _thread=None))  # type: ignore[arg-type]
 
-    named, fresh = seen
+    named, fresh, refused = seen
+    # an unknown id is refused: the call runs in memory, not on a handle to no thread
+    assert refused is None
     assert named is not None and named.id == sid and named._agent_name == "desk"
     assert fresh is not None and fresh.id != sid
     assert (await fresh.info()).thread_id == fresh.id
