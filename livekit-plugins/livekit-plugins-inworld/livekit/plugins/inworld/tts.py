@@ -30,7 +30,7 @@ from urllib.parse import urljoin
 import aiohttp
 from pydantic import TypeAdapter
 
-from livekit.agents import tokenize, tts, utils
+from livekit.agents import _bindings, tokenize, tts, utils
 from livekit.agents._exceptions import (
     APIConnectionError,
     APIError,
@@ -130,7 +130,7 @@ class _ContextState(Enum):
 class _ContextInfo:
     context_id: str
     state: _ContextState
-    read_deadline: tts.StreamReadDeadline
+    read_deadline: _bindings.Attempts
     emitter: tts.AudioEmitter | None = None
     waiter: asyncio.Future[None] | None = None
     input_sent: bool = False
@@ -291,6 +291,7 @@ class _InworldConnection:
         timeout: float | None,
         *,
         conn_options: APIConnectOptions,
+        read_deadline: _bindings.Attempts,
     ) -> tuple[str, asyncio.Future[None]]:
         """Acquire a new context for TTS synthesis.
 
@@ -323,7 +324,7 @@ class _InworldConnection:
                     ctx_info = _ContextInfo(
                         context_id=ctx_id,
                         state=_ContextState.CREATING,
-                        read_deadline=tts.StreamReadDeadline(conn_options),
+                        read_deadline=read_deadline,
                         emitter=emitter,
                         waiter=waiter,
                         flush_after_push=opts.encoding == "PCM",
@@ -710,6 +711,7 @@ class _ConnectionPool:
         timeout: float | None,
         *,
         conn_options: APIConnectOptions,
+        read_deadline: _bindings.Attempts,
     ) -> tuple[str, asyncio.Future[None], _InworldConnection]:
         """Acquire a context from the pool, creating new connections as needed.
 
@@ -765,7 +767,11 @@ class _ConnectionPool:
             if conn:
                 try:
                     ctx_id, waiter = await conn.acquire_context(
-                        emitter, opts, remaining_timeout, conn_options=conn_options
+                        emitter,
+                        opts,
+                        remaining_timeout,
+                        conn_options=conn_options,
+                        read_deadline=read_deadline,
                     )
                 except BaseException:
                     # Release reservation since we didn't get a context
@@ -1354,6 +1360,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             opts=self._opts,
             timeout=self._conn_options.pool_timeout,
             conn_options=self._conn_options,
+            read_deadline=self._core_attempts,
         )
 
         async def _input_task() -> None:
@@ -1380,8 +1387,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
 
         try:
-            async with connection._contexts[context_id].read_deadline.watch():
-                await waiter
+            await waiter
         except asyncio.TimeoutError:
             connection.close_context(context_id)
             raise APITimeoutError() from None

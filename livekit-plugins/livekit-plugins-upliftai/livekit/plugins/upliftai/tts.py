@@ -469,17 +469,16 @@ class ChunkedStream(tts.ChunkedStream):
 
             audio_queue = await self._synthesize_request(self._input_text, request_id)
 
-            read_deadline = tts.StreamReadDeadline(self._conn_options)
+            read_deadline = self._core_attempts
             read_deadline.expect_response(final=True)
-            async with read_deadline.watch():
-                while True:
-                    audio_data = await audio_queue.get()
-                    if audio_data is None:
-                        break
-                    if isinstance(audio_data, APIError):
-                        raise audio_data
-                    read_deadline.progress()
-                    output_emitter.push(audio_data)
+            while True:
+                audio_data = await audio_queue.get()
+                if audio_data is None:
+                    break
+                if isinstance(audio_data, APIError):
+                    raise audio_data
+                read_deadline.progress()
+                output_emitter.push(audio_data)
 
             output_emitter.flush()
 
@@ -589,17 +588,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Synthesize
             audio_queue = await self._synthesize_request(full_text, segment_id)
 
-            read_deadline = tts.StreamReadDeadline(self._conn_options)
+            read_deadline = self._core_attempts
             read_deadline.expect_response(final=True)
-            async with read_deadline.watch():
-                while True:
-                    audio_data = await audio_queue.get()
-                    if audio_data is None:
-                        break
-                    if isinstance(audio_data, APIError):
-                        raise audio_data
-                    read_deadline.progress()
-                    output_emitter.push(audio_data)
+            while True:
+                audio_data = await audio_queue.get()
+                if audio_data is None:
+                    break
+                if isinstance(audio_data, APIError):
+                    raise audio_data
+                read_deadline.progress()
+                output_emitter.push(audio_data)
 
             output_emitter.end_input()
 

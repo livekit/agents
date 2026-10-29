@@ -360,7 +360,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         last_index = 0
         input_ended = False
 
-        read_deadline = tts.StreamReadDeadline(self._conn_options)
+        read_deadline = self._core_attempts
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal input_ended, last_index
@@ -383,45 +383,44 @@ class SynthesizeStream(tts.SynthesizeStream):
             input_ended = True
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async with read_deadline.watch():
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise APIStatusError(
-                            "Resemble connection closed unexpectedly",
-                            status_code=ws.close_code or -1,
-                            body=f"{msg.data=} {msg.extra=}",
-                        )
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError(
+                        "Resemble connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("Unexpected Resemble message type %s", msg.type)
-                        continue
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("Unexpected Resemble message type %s", msg.type)
+                    continue
 
-                    data = _WebSocketMessage.model_validate_json(msg.data)
-                    if data.type == "audio":
-                        if data.audio_content:
-                            b64data = base64.b64decode(data.audio_content)
-                            read_deadline.progress()
-                            output_emitter.push(b64data)
+                data = _WebSocketMessage.model_validate_json(msg.data)
+                if data.type == "audio":
+                    if data.audio_content:
+                        b64data = base64.b64decode(data.audio_content)
+                        read_deadline.progress()
+                        output_emitter.push(b64data)
 
-                    elif data.type == "audio_end":
-                        index = data.request_id
-                        if index is None:
-                            raise APIConnectionError("Resemble completion omitted request identity")
-                        if index == last_index:
-                            read_deadline.complete_response()
-                        if index == last_index and input_ended:
-                            output_emitter.end_segment()
-                            break
-                    else:
-                        logger.error(
-                            "Unexpected Resemble message",
-                            extra={"lk.pii.data": data.model_dump(mode="json")},
-                        )
+                elif data.type == "audio_end":
+                    index = data.request_id
+                    if index is None:
+                        raise APIConnectionError("Resemble completion omitted request identity")
+                    if index == last_index:
+                        read_deadline.complete_response()
+                    if index == last_index and input_ended:
+                        output_emitter.end_segment()
+                        break
+                else:
+                    logger.error(
+                        "Unexpected Resemble message",
+                        extra={"lk.pii.data": data.model_dump(mode="json")},
+                    )
 
         async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [

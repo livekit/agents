@@ -143,12 +143,32 @@ class Attempts:
         finally:
             self._changed.set()
 
-    def expect_response(self) -> None:
-        self._request.expect_response(_now_ns())
+    def expect_response(self, *, final: bool = False) -> None:
+        """A request was written and owes a response; ``final``: the last input was sent."""
+        if final:
+            self._request.input_ended(_now_ns())
+        else:
+            self._request.expect_response(_now_ns())
         self._changed.set()
 
     def input_ended(self) -> None:
         self._request.input_ended(_now_ns())
+        self._changed.set()
+
+    def progress(self) -> None:
+        """Response data arrived; heartbeats are not progress."""
+        self._observe_synthesis("progress")
+
+    def audio_received(self) -> None:
+        """Audio settles a protocol's first response; after the final input it is progress."""
+        self._observe_synthesis("audio")
+
+    def complete_response(self) -> None:
+        """No response remains outstanding."""
+        self._observe_synthesis("complete")
+
+    def _observe_synthesis(self, observation: str) -> None:
+        self._request.observe_synthesis(observation, _now_ns())
         self._changed.set()
 
     def observe(self, event: SpeechEvent) -> None:

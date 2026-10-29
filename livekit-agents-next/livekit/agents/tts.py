@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +18,6 @@ from opentelemetry import trace
 from livekit import rtc
 
 from . import _bindings, _core, tokenize, utils
-from ._exceptions import APITimeoutError
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.tts import (
     TTS,
@@ -60,7 +58,6 @@ __all__ = [
     "AudioEmitter",
     "TTSError",
     "SentenceStreamPacer",
-    "StreamReadDeadline",
 ]
 
 
@@ -106,67 +103,6 @@ class _EmitterOutput:
 
     def closed(self) -> bool:
         return self._ch.closed
-
-
-class StreamReadDeadline:
-    """A provider response's inactivity deadline, using the resolved read policy.
-
-    Watch the receiver task (or a multiplexed request's waiter). The sender calls
-    ``expect_response`` after writing a request; the receiver calls ``progress`` on
-    response data and ``complete_response`` when no response remains outstanding.
-    Application input pauses must leave the deadline disarmed. Heartbeats do not
-    constitute response progress. Use one instance per independently completed request.
-    """
-
-    def __init__(self, conn_options: APIConnectOptions) -> None:
-        self._limit = conn_options.read_timeout
-        self._expected = False
-        self._final = False
-        self._deadline: asyncio.Timeout | None = None
-
-    def expect_response(self, *, final: bool = False) -> None:
-        self._final |= final
-        if not self._expected:
-            self._expected = True
-            self.progress()
-
-    def progress(self) -> None:
-        if self._expected and self._deadline is not None and not self._deadline.expired():
-            self._deadline.reschedule(
-                None if self._limit is None else asyncio.get_running_loop().time() + self._limit
-            )
-
-    def audio_received(self) -> None:
-        """For protocols without text acknowledgements, audio settles the first response.
-
-        After the final input marker, further audio restarts the deadline until completion.
-        """
-        if self._final:
-            self.progress()
-        else:
-            self.complete_response()
-
-    def complete_response(self) -> None:
-        self._expected = False
-        self._final = False
-        if self._deadline is not None and not self._deadline.expired():
-            self._deadline.reschedule(None)
-
-    @contextlib.asynccontextmanager
-    async def watch(self) -> AsyncIterator[None]:
-        """Raise ``APITimeoutError(phase="read")`` if an expected response stalls."""
-        try:
-            async with asyncio.timeout(None) as deadline:
-                self._deadline = deadline
-                self.progress()
-                try:
-                    yield
-                finally:
-                    self._deadline = None
-        except TimeoutError as error:
-            if not deadline.expired():
-                raise
-            raise APITimeoutError("TTS response exceeded read_timeout", phase="read") from error
 
 
 class ExpressiveTag(TypedDict):

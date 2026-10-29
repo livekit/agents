@@ -5,6 +5,19 @@ use crate::errors::{ApiError, ProviderError};
 use crate::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use crate::types::retry::{RequestKind, RetryDecision};
 
+/// What a host synthesis's response did, for its read deadline.
+#[crate::host(string)]
+#[crate::host(wire_strs(msg = format!("unknown synthesis observation {s:?}")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SynthesisObservation {
+    /// Response data: the deadline restarts.
+    Progress,
+    /// Audio settles a protocol's first response; after the final input it is progress.
+    Audio,
+    /// No response is outstanding: the deadline disarms.
+    Complete,
+}
+
 /// Host callbacks execute attempts authorized by the shared inference request machine.
 #[crate::host(class(name = "_core_ProviderAttempts"))]
 pub trait ProviderAttempts: Send + Sync + Sized + 'static {
@@ -35,6 +48,8 @@ pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     fn input_ended(&mut self, now_ns: u64);
     #[host(call)]
     fn observe(&mut self, event: SpeechEvent, now_ns: u64);
+    #[host(call)]
+    fn observe_synthesis(&mut self, observation: SynthesisObservation, now_ns: u64);
     #[host(call)]
     fn succeeded(&mut self, now_ns: u64) -> Result<(), ApiError>;
     #[host(getter)]

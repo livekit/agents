@@ -134,21 +134,42 @@ async def test_batch_over_stream_uses_one_retry_budget() -> None:
         await provider.aclose()
 
 
+class _StalledResponse(tts.ChunkedStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id="r", sample_rate=24000, num_channels=1, mime_type="audio/pcm"
+        )
+        deadline = self._core_attempts
+        # No provider response is owed while the application is idle.
+        await asyncio.sleep(0.04)
+        deadline.expect_response()
+        await asyncio.sleep(0.01)
+        deadline.progress()
+        await asyncio.sleep(0.01)
+        deadline.complete_response()
+        await asyncio.sleep(0.04)
+        deadline.expect_response()
+        await asyncio.Future()
+
+
+class _StallingTTS(_BatchTTS):
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    ) -> tts.ChunkedStream:
+        return _StalledResponse(tts=self, input_text=text, conn_options=conn_options)
+
+
 async def test_stalled_provider_response_expires_in_the_read_phase() -> None:
     from livekit.agents import APITimeoutError
 
-    deadline = tts.StreamReadDeadline(APIConnectOptions(read_timeout=0.02))
-    async with asyncio.timeout(1):
-        with pytest.raises(APITimeoutError) as failure:
-            async with deadline.watch():
-                # No provider response is owed while the application is idle.
-                await asyncio.sleep(0.04)
-                deadline.expect_response()
-                await asyncio.sleep(0.01)
-                deadline.progress()
-                await asyncio.sleep(0.01)
-                deadline.complete_response()
-                await asyncio.sleep(0.04)
-                deadline.expect_response()
-                await asyncio.Future()
-    assert failure.value.phase == "read"
+    provider = _StallingTTS()
+    options = APIConnectOptions(read_timeout=0.02, max_retry=0)
+    try:
+        async with asyncio.timeout(1):
+            with pytest.raises(APITimeoutError) as failure:
+                async with provider.synthesize("hello", conn_options=options) as stream:
+                    async for _ in stream:
+                        pytest.fail("the provider never answered")
+        assert failure.value.phase == "read"
+    finally:
+        await provider.aclose()

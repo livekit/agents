@@ -446,7 +446,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         task_started = asyncio.Future[None]()
 
-        read_deadline = tts.StreamReadDeadline(self._conn_options)
+        read_deadline = self._core_attempts
 
         async def _input_task() -> None:
             async for data in self.input:
@@ -475,91 +475,88 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Initialize trace_id to ensure it's available in all code paths
-            async with read_deadline.watch():
-                current_trace_id = trace_id
+            current_trace_id = trace_id
 
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        error_msg = (
-                            f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
-                        )
-                        logger.error(error_msg)
-                        raise APIStatusError(
-                            error_msg,
-                            request_id=current_trace_id,
-                            status_code=ws.close_code or -1,
-                            body=f"{msg.data=} {msg.extra=}",
-                        )
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    error_msg = (
+                        f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
+                    )
+                    logger.error(error_msg)
+                    raise APIStatusError(
+                        error_msg,
+                        request_id=current_trace_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("unexpected Minimax message type %s", msg.type)
-                        continue
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected Minimax message type %s", msg.type)
+                    continue
 
-                    data: dict[str, Any] = json.loads(msg.data)
+                data: dict[str, Any] = json.loads(msg.data)
 
-                    # Extract trace_id (priority: root.trace_id > base_resp.trace_id)
-                    # api.minimax.io returns trace_id in root.trace_id, api.minimaxi.com may return in base_resp.trace_id
-                    msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
-                    if msg_trace_id and msg_trace_id != current_trace_id:
-                        current_trace_id = msg_trace_id
-                        logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
+                # Extract trace_id (priority: root.trace_id > base_resp.trace_id)
+                # api.minimax.io returns trace_id in root.trace_id, api.minimaxi.com may return in base_resp.trace_id
+                msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
+                if msg_trace_id and msg_trace_id != current_trace_id:
+                    current_trace_id = msg_trace_id
+                    logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
 
-                    base_resp = data.get("base_resp", {})
-                    status_code = base_resp.get("status_code", 0)
-                    if status_code != 0:
-                        status_msg = base_resp.get("status_msg", "Unknown error")
-                        error_trace_id = msg_trace_id or current_trace_id
+                base_resp = data.get("base_resp", {})
+                status_code = base_resp.get("status_code", 0)
+                if status_code != 0:
+                    status_msg = base_resp.get("status_msg", "Unknown error")
+                    error_trace_id = msg_trace_id or current_trace_id
 
-                        logger.error(
-                            f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                            extra={"request_id": request_id, "lk.pii.full_response": data},
-                        )
+                    logger.error(
+                        f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
+                        extra={"request_id": request_id, "lk.pii.full_response": data},
+                    )
 
-                        raise APIStatusError(
-                            f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
-                            request_id=error_trace_id,
-                            status_code=status_code,
-                            body=data,
-                        )
+                    raise APIStatusError(
+                        f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
+                        request_id=error_trace_id,
+                        status_code=status_code,
+                        body=data,
+                    )
 
-                    if data.get("event") == "connected_success":
-                        logger.debug(f"MiniMax WebSocket connected, trace_id={current_trace_id}")
+                if data.get("event") == "connected_success":
+                    logger.debug(f"MiniMax WebSocket connected, trace_id={current_trace_id}")
 
-                    elif data.get("event") == "task_started":
-                        read_deadline.complete_response()
-                        task_started.set_result(None)
-                        session_id = data.get("session_id", "")
-                        logger.debug(
-                            f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={current_trace_id}"
-                        )
-                        output_emitter.start_segment(segment_id=session_id)
+                elif data.get("event") == "task_started":
+                    read_deadline.complete_response()
+                    task_started.set_result(None)
+                    session_id = data.get("session_id", "")
+                    logger.debug(
+                        f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={current_trace_id}"
+                    )
+                    output_emitter.start_segment(segment_id=session_id)
 
-                    elif data.get("event") == "task_continued":
-                        audio = data.get("data", {}).get("audio")
-                        if audio:
-                            read_deadline.audio_received()
-                            output_emitter.push(bytes.fromhex(audio))
-                        if data.get("is_final"):
-                            output_emitter.flush()
+                elif data.get("event") == "task_continued":
+                    audio = data.get("data", {}).get("audio")
+                    if audio:
+                        read_deadline.audio_received()
+                        output_emitter.push(bytes.fromhex(audio))
+                    if data.get("is_final"):
+                        output_emitter.flush()
 
-                    elif data.get("event") == "task_finished":
-                        output_emitter.end_input()
-                        break
+                elif data.get("event") == "task_finished":
+                    output_emitter.end_input()
+                    break
 
-                    elif data.get("event") == "task_failed":
-                        error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id})"
-                        logger.error(error_msg, extra={"lk.pii.data": msg.data})
-                        raise APIError(error_msg)
+                elif data.get("event") == "task_failed":
+                    error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id})"
+                    logger.error(error_msg, extra={"lk.pii.data": msg.data})
+                    raise APIError(error_msg)
 
-                    else:
-                        logger.warning(
-                            "unexpected Minimax message", extra={"lk.pii.data": msg.data}
-                        )
+                else:
+                    logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
 
         try:
             ws = await self._connect_ws(self._conn_options)

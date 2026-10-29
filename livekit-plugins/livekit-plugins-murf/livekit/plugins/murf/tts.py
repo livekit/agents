@@ -357,7 +357,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 audio_emitter=output_emitter,
             )
 
-        read_deadline = tts.StreamReadDeadline(self._conn_options)
+        read_deadline = self._core_attempts
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             context_id = utils.shortuuid()
@@ -389,39 +389,38 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async with read_deadline.watch():
-                current_segment_id: str | None = None
-                await input_sent_event.wait()
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise APIStatusError(
-                            "Murf AI connection closed unexpectedly", request_id=request_id
-                        )
+            current_segment_id: str | None = None
+            await input_sent_event.wait()
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError(
+                        "Murf AI connection closed unexpectedly", request_id=request_id
+                    )
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("unexpected Murf AI message type %s", msg.type)
-                        continue
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected Murf AI message type %s", msg.type)
+                    continue
 
-                    data = json.loads(msg.data)
-                    if current_segment_id is None:
-                        current_segment_id = request_id
-                        output_emitter.start_segment(segment_id=request_id)
-                    if data.get("audio"):
-                        b64data = base64.b64decode(data["audio"])
-                        read_deadline.audio_received()
-                        output_emitter.push(b64data)
-                    elif data.get("final"):
-                        if sent_tokenizer_stream.closed:
-                            # close only if the input stream is closed
-                            output_emitter.end_input()
-                            break
-                    else:
-                        logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
+                data = json.loads(msg.data)
+                if current_segment_id is None:
+                    current_segment_id = request_id
+                    output_emitter.start_segment(segment_id=request_id)
+                if data.get("audio"):
+                    b64data = base64.b64decode(data["audio"])
+                    read_deadline.audio_received()
+                    output_emitter.push(b64data)
+                elif data.get("final"):
+                    if sent_tokenizer_stream.closed:
+                        # close only if the input stream is closed
+                        output_emitter.end_input()
+                        break
+                else:
+                    logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:

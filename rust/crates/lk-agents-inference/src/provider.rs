@@ -2,7 +2,7 @@
 
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
-use lk_agents_abi::types::provider::ProviderAttempts as Port;
+use lk_agents_abi::types::provider::{ProviderAttempts as Port, SynthesisObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
 use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
@@ -33,7 +33,7 @@ impl Port for ProviderAttempts {
         // still covers those phases; read is observable only while a recognition awaits a result.
         policy.connect_timeout = None;
         policy.write_timeout = None;
-        if kind != RequestKind::SttStream {
+        if !matches!(kind, RequestKind::SttStream | RequestKind::TtsBatch | RequestKind::TtsStream) {
             policy.read_timeout = None;
         }
         let now = Ts::from_nanos(now_ns);
@@ -147,6 +147,16 @@ impl Port for ProviderAttempts {
         }
     }
 
+    fn observe_synthesis(&mut self, observation: SynthesisObservation, now_ns: u64) {
+        match observation {
+            SynthesisObservation::Audio if !self.input_ended => self.complete_response(),
+            SynthesisObservation::Progress | SynthesisObservation::Audio => {
+                self.response(false, now_ns);
+            }
+            SynthesisObservation::Complete => self.complete_response(),
+        }
+    }
+
     fn succeeded(&mut self, now_ns: u64) -> Result<(), ApiError> {
         let now = Ts::from_nanos(now_ns);
         self.poll(now)?;
@@ -175,6 +185,11 @@ impl Port for ProviderAttempts {
 }
 
 impl ProviderAttempts {
+    fn complete_response(&mut self) {
+        self.expecting = None;
+        self.input_ended = false;
+    }
+
     fn response(&mut self, final_response: bool, now_ns: u64) {
         let now = Ts::from_nanos(now_ns);
         if let Some(attempt) = self.attempts.current() {
@@ -226,7 +241,10 @@ impl ProviderAttempts {
                 // The provider consumed the whole input and never answered: a reconnect has
                 // nothing left to send, so the transcript is lost rather than retried.
                 AttemptStep::Retry { error, .. }
-                    if stopped && error.kind == ApiErrorKind::Timeout && self.input_ended =>
+                    if stopped
+                        && error.kind == ApiErrorKind::Timeout
+                        && self.input_ended
+                        && self.kind == RequestKind::SttStream =>
                 {
                     self.permit = false;
                     self.attempts.cancel(now, &mut Vec::new());
@@ -309,6 +327,31 @@ mod tests {
         operation.input_ended(at(300));
         let error = operation.ready(at(302)).unwrap_err();
         assert_eq!(error.phase, Some(TimeoutPhase::Read));
+    }
+
+    // Catches: a synthesis read deadline charging the application's input pauses, one that
+    // response data or a completed response does not restart or disarm, or audio before the final
+    // input keeping it armed (protocols with no per-text acknowledgement).
+    #[test]
+    fn a_synthesis_read_deadline_runs_only_while_a_response_is_owed() {
+        let options =
+            ApiConnectOptions { max_retry: 0, read_timeout: Some(2.0), ..Default::default() };
+        let mut operation = ProviderAttempts::new(RequestKind::TtsStream, options, 0).unwrap();
+        assert_eq!(operation.ready(0), Ok(true));
+        assert_eq!(operation.ready(at(10)), Ok(false), "idle input owes no response");
+        operation.expect_response(at(10));
+        operation.observe_synthesis(SynthesisObservation::Progress, at(11));
+        assert_eq!(operation.ready(at(12)), Ok(false), "progress restarted the deadline");
+        operation.observe_synthesis(SynthesisObservation::Complete, at(12));
+        assert_eq!(operation.ready(at(20)), Ok(false), "a completed response disarms it");
+        operation.expect_response(at(20));
+        operation.observe_synthesis(SynthesisObservation::Audio, at(21));
+        assert_eq!(operation.ready(at(30)), Ok(false), "audio settles a non-final request");
+        operation.input_ended(at(30));
+        operation.observe_synthesis(SynthesisObservation::Audio, at(31));
+        assert_eq!(operation.ready(at(32)), Ok(false), "after the final input, audio is progress");
+        let error = operation.ready(at(33)).unwrap_err();
+        assert_eq!((error.kind, error.phase), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read)));
     }
 
     #[test]

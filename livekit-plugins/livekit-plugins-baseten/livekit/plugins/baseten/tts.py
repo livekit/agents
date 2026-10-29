@@ -370,7 +370,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        read_deadline = tts.StreamReadDeadline(self._conn_options)
+        read_deadline = self._core_attempts
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for data in self.input:
@@ -383,21 +383,20 @@ class SynthesizeStream(tts.SynthesizeStream):
             read_deadline.expect_response(final=True)
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async with read_deadline.watch():
-                output_emitter.start_segment(segment_id=request_id)
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        read_deadline.audio_received()
-                        output_emitter.push(msg.data)
-                    elif msg.type in (
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        break
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        raise APIConnectionError()
-                output_emitter.end_input()
+            output_emitter.start_segment(segment_id=request_id)
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    read_deadline.audio_received()
+                    output_emitter.push(msg.data)
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    break
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError()
+            output_emitter.end_input()
 
         try:
             async with await utils.http_context.ws_connect(

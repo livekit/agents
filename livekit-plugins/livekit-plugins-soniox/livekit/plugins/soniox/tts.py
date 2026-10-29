@@ -32,6 +32,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    _bindings,
     tokenize,
     tts,
     utils,
@@ -390,7 +391,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=utils.shortuuid())
 
         sent_stream = self._sentence_tokenizer.stream()
-        self._read_deadline = tts.StreamReadDeadline(self._conn_options)
 
         async def _input_task() -> None:
             async for data in self.input:
@@ -410,61 +410,60 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_iter = sent_stream.__aiter__()
 
         try:
-            async with self._read_deadline.watch():
-                while not self._cancelled.is_set():
-                    if next_task is None:
-                        next_task = asyncio.ensure_future(sent_iter.__anext__())
+            while not self._cancelled.is_set():
+                if next_task is None:
+                    next_task = asyncio.ensure_future(sent_iter.__anext__())
 
-                    waiters: set[asyncio.Future[tokenize.TokenData] | asyncio.Future[None]] = {
-                        next_task
-                    }
+                waiters: set[asyncio.Future[tokenize.TokenData] | asyncio.Future[None]] = {
+                    next_task
+                }
+                if active is not None:
+                    waiters.add(active.waiter)
+                await asyncio.wait(
+                    waiters,
+                    timeout=self._idle_timeout() if active is not None else None,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if active is not None and active.waiter.done():
+                    failure = await self._settle_stream(active, output_emitter) or failure
+                    active = None
+                    continue
+
+                if not next_task.done():
+                    # LLM stalled: finalize before the server times the stream out
                     if active is not None:
-                        waiters.add(active.waiter)
-                    await asyncio.wait(
-                        waiters,
-                        timeout=self._idle_timeout() if active is not None else None,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    if active is not None and active.waiter.done():
-                        failure = await self._settle_stream(active, output_emitter) or failure
-                        active = None
-                        continue
-
-                    if not next_task.done():
-                        # LLM stalled: finalize before the server times the stream out
-                        if active is not None:
-                            failure = await self._finalize_stream(active, output_emitter) or failure
-                            active = None
-                        continue
-
-                    try:
-                        ev = next_task.result()
-                    except StopAsyncIteration:
-                        break
-                    finally:
-                        next_task = None
-
-                    if not ev.token.strip():
-                        continue
-
-                    self.mark_started()
-
-                    # rotate to a new stream before the fixed 2-minute stream lifespan
-                    if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
                         failure = await self._finalize_stream(active, output_emitter) or failure
                         active = None
+                    continue
 
-                    if active is None:
-                        active = await self._open_stream(output_emitter, request_id)
+                try:
+                    ev = next_task.result()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    next_task = None
 
-                    active.connection.send_text(active.stream_id, ev.token, text_end=False)
+                if not ev.token.strip():
+                    continue
 
-                if active is not None and not self._cancelled.is_set():
+                self.mark_started()
+
+                # rotate to a new stream before the fixed 2-minute stream lifespan
+                if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
                     failure = await self._finalize_stream(active, output_emitter) or failure
                     active = None
-                if failure is not None:
-                    raise failure
+
+                if active is None:
+                    active = await self._open_stream(output_emitter, request_id)
+
+                active.connection.send_text(active.stream_id, ev.token, text_end=False)
+
+            if active is not None and not self._cancelled.is_set():
+                failure = await self._finalize_stream(active, output_emitter) or failure
+                active = None
+            if failure is not None:
+                raise failure
         finally:
             if next_task is not None:
                 await utils.aio.gracefully_cancel(next_task)
@@ -496,7 +495,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(
-            stream_id, output_emitter, waiter, opts=self._opts, read_deadline=self._read_deadline
+            stream_id, output_emitter, waiter, opts=self._opts, read_deadline=self._core_attempts
         )
         return _ActiveStream(
             connection=connection,
@@ -528,7 +527,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             return error
         finally:
             active.connection.unregister_stream(active.stream_id)
-            self._read_deadline.complete_response()
+            self._core_attempts.complete_response()
         return None
 
 
@@ -573,7 +572,7 @@ class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
     opts: _TTSOptions
-    read_deadline: tts.StreamReadDeadline
+    read_deadline: _bindings.Attempts
     audio_ended: bool = False
     # Client cancel and server abort produce identical `terminated` messages.
     # This flag is how recv loop tells them apart.
@@ -671,7 +670,7 @@ class _Connection:
         waiter: asyncio.Future[None],
         *,
         opts: _TTSOptions,
-        read_deadline: tts.StreamReadDeadline,
+        read_deadline: _bindings.Attempts,
     ) -> None:
         """Register a new stream and queue its config message."""
         if self._closed or self._error is not None:

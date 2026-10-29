@@ -139,7 +139,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_tokenizer_stream = self._opts.word_tokenizer.stream()
         token_q: queue.Queue[tokenize.TokenData | None] = queue.Queue()
         event_loop = asyncio.get_running_loop()
-        read_deadline = tts.StreamReadDeadline(self._conn_options)
+        read_deadline = self._core_attempts
         stopped = threading.Event()
         active_call: grpc.Call | None = None
 
@@ -228,8 +228,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
 
         try:
-            async with read_deadline.watch():
-                await asyncio.gather(*tasks, asyncio.shield(done_fut))
+            await asyncio.gather(*tasks, asyncio.shield(done_fut))
             output_emitter.end_segment()
         except APITimeoutError:
             raise
