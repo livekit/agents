@@ -179,6 +179,21 @@ pub fn frame(response: JsonRpcResponse, cursor: Option<&str>) -> DoorFrame {
     DoorFrame { json, sse, is_error }
 }
 
+/// A stored stream event replayed to a resubscribe, under the cursor after it: `offset` in
+/// `stream_id` of `task_id`.
+pub fn replayed(
+    request_id: JsonRpcId,
+    task_id: &str,
+    stream_id: &str,
+    offset: String,
+    stored: &[u8],
+) -> Result<DoorFrame, StorageError> {
+    let event: StreamResponse = serde_json::from_slice(stored)
+        .map_err(|e| StorageError::Unavailable(format!("stored A2A event: {e}")))?;
+    let cursor = Cursor { task_id: task_id.into(), stream_id: stream_id.into(), offset };
+    Ok(success(request_id, event, Some(&cursor.encode())))
+}
+
 /// What a live observer is sent of one stream event.
 #[derive(Debug, Clone)]
 pub enum Delivery {

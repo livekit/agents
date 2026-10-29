@@ -463,14 +463,9 @@ impl Inner {
                     next = reader.next() => next?,
                 };
                 let Some(bytes) = next else { break };
-                let event: a2a::StreamResponse = serde_json::from_slice(&bytes)
-                    .map_err(|e| StorageError::Unavailable(format!("stored A2A event: {e}")))?;
-                let cursor = wire::Cursor {
-                    task_id: task.id.clone(),
-                    stream_id: stream.stream_id.clone(),
-                    offset: reader.next_offset().into(),
-                };
-                let frame = wire::success(id.clone(), event, Some(&cursor.encode()));
+                let offset = reader.next_offset().into();
+                let frame =
+                    wire::replayed(id.clone(), &task.id, &stream.stream_id, offset, &bytes)?;
                 if sender.send(Ok(frame)).await.is_err() {
                     return Ok(());
                 }
