@@ -4,6 +4,7 @@
 //! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
 //! makes the LiveKit and Twilio requests.
 
+use crate::process::Process;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
@@ -714,12 +715,9 @@ mod tests {
     }
 }
 
-pub struct WarmTransfer<E: Env = crate::process::Process>(
-    Arc<HostWarmTransfer>,
-    std::marker::PhantomData<fn() -> E>,
-);
+pub struct WarmTransfer(Arc<HostWarmTransfer>);
 
-impl<E: Env> lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransfer<E> {
+impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransfer {
     fn new(
         sip_call_to: Option<String>,
         sip_trunk_id: Maybe<Option<String>>,
@@ -748,9 +746,9 @@ impl<E: Env> lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for Wa
             env_sip_number,
             twilio,
         })?;
-        let clock = E::clock();
-        let spawner = E::spawner().map_err(HostError::new)?;
-        Ok(Self(Arc::new(HostWarmTransfer::new(plan, clock, spawner)), std::marker::PhantomData))
+        let clock = Process::clock();
+        let spawner = Process::spawner().map_err(HostError::new)?;
+        Ok(Self(Arc::new(HostWarmTransfer::new(plan, clock, spawner))))
     }
 
     fn instructions(&self) -> String {
