@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias, TypeVar
+from typing import Literal, TypeAlias, TypeVar
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
@@ -75,7 +75,7 @@ class NotGiven:
 
     @classmethod
     def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
+        cls, source_type: object, handler: GetCoreSchemaHandler
     ) -> CoreSchema:
         return core_schema.is_instance_schema(cls)
 
