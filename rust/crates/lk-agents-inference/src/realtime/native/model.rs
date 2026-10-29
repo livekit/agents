@@ -12,7 +12,7 @@ use lk_agents_abi::llm::realtime::{
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
 
-use super::session::{Auth, Connect, WebSocketRealtime};
+use super::session::{Auth, Connect, NativeRealtime};
 use super::wire::Azure;
 use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
@@ -53,7 +53,7 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl NativeRealtimeModel for WebSocketRealtime {
+impl NativeRealtimeModel for NativeRealtime {
     type Env = ProcessEnv;
 
     fn new(
@@ -132,7 +132,7 @@ impl NativeRealtimeModel for WebSocketRealtime {
         };
         let runtime =
             (env.runtime)().map_err(|error| ApiError::new(error).with_retryable(false))?;
-        let mut native = WebSocketRealtime::new(
+        let mut native = NativeRealtime::new(
             dialect,
             "",
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),

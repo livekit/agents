@@ -98,7 +98,7 @@ impl Connect {
 }
 
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
-pub struct WebSocketRealtime {
+pub struct NativeRealtime {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.
     opts: std::sync::Mutex<SessionOptions>,
@@ -118,7 +118,7 @@ pub struct WebSocketRealtime {
     sessions: std::sync::Mutex<Vec<Weak<super::queue::Ingress>>>,
 }
 
-impl WebSocketRealtime {
+impl NativeRealtime {
     pub fn new(
         dialect: Dialect,
         api_key: impl Into<String>,
@@ -130,7 +130,7 @@ impl WebSocketRealtime {
     ) -> Self {
         let opts = SessionOptions::from_dialect(&dialect, false);
         let connect = Connect::openai(api_key, dialect.default_base_url);
-        WebSocketRealtime {
+        NativeRealtime {
             dialect,
             opts: std::sync::Mutex::new(opts),
             connect: Arc::new(connect),
@@ -226,7 +226,7 @@ pub(crate) enum Cmd {
     Close,
 }
 
-impl WebSocketRealtime {
+impl NativeRealtime {
     /// `provider`: `urlparse(base_url).netloc`.
     pub fn provider(&self) -> String {
         let url = &self.connect.base_url;
@@ -268,7 +268,7 @@ impl WebSocketRealtime {
 
     /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
     /// model stays reusable.
-    pub async fn session(&self, turn_detection_disabled: bool) -> WebSocketRealtimeSession {
+    pub async fn session(&self, turn_detection_disabled: bool) -> NativeRealtimeSession {
         let mut opts = self.options().clone();
         if turn_detection_disabled && self.dialect.supports_turn_detection_disabled {
             opts.turn_detection = None;
@@ -328,7 +328,7 @@ impl WebSocketRealtime {
         };
         let pump = self.spawner.spawn(pump.run(cmd_rx));
 
-        WebSocketRealtimeSession {
+        NativeRealtimeSession {
             shared,
             commands,
             events: Mutex::new(ev_rx),
@@ -380,9 +380,9 @@ impl Shared {
     }
 }
 
-/// A live session. Cheap to clone the way the swapper needs (`Arc<WebSocketRealtimeSession>`), and every
+/// A live session. Cheap to clone the way the swapper needs (`Arc<NativeRealtimeSession>`), and every
 /// mutating method takes `&self`.
-pub struct WebSocketRealtimeSession {
+pub struct NativeRealtimeSession {
     shared: Arc<Shared>,
     commands: Arc<super::queue::Ingress>,
     /// One consumer is the contract.
@@ -393,7 +393,7 @@ pub struct WebSocketRealtimeSession {
     ids: Arc<dyn IdGen>,
 }
 
-impl WebSocketRealtimeSession {
+impl NativeRealtimeSession {
     pub fn capabilities(&self) -> RealtimeCapabilities {
         *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -873,13 +873,13 @@ enum Outcome {
 // The `lk-agents-abi` seam
 // =============================================================================================
 
-impl lk_agents_abi::Realtime for WebSocketRealtime {
+impl lk_agents_abi::Realtime for NativeRealtime {
     fn label(&self) -> String {
-        WebSocketRealtime::label(self)
+        NativeRealtime::label(self)
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {
-        WebSocketRealtime::capabilities(self)
+        NativeRealtime::capabilities(self)
     }
 
     fn session(
@@ -891,31 +891,31 @@ impl lk_agents_abi::Realtime for WebSocketRealtime {
     > {
         Box::pin(async move {
             // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
-            Ok(Arc::new(WebSocketRealtime::session(self, turn_detection_disabled).await)
+            Ok(Arc::new(NativeRealtime::session(self, turn_detection_disabled).await)
                 as Arc<dyn lk_agents_abi::RealtimeSession>)
         })
     }
 }
 
-impl lk_agents_abi::RealtimeSession for WebSocketRealtimeSession {
+impl lk_agents_abi::RealtimeSession for NativeRealtimeSession {
     fn capabilities(&self) -> RealtimeCapabilities {
-        WebSocketRealtimeSession::capabilities(self)
+        NativeRealtimeSession::capabilities(self)
     }
 
     fn send(&self, cmd: lk_agents_abi::RealtimeCommand) {
-        WebSocketRealtimeSession::send(self, cmd);
+        NativeRealtimeSession::send(self, cmd);
     }
 
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
-        Box::pin(async move { WebSocketRealtimeSession::next_event(self).await })
+        Box::pin(async move { NativeRealtimeSession::next_event(self).await })
     }
 
     fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
-        Box::pin(async move { WebSocketRealtimeSession::chat_ctx(self).await })
+        Box::pin(async move { NativeRealtimeSession::chat_ctx(self).await })
     }
 
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(async move { WebSocketRealtimeSession::aclose(self).await })
+        Box::pin(async move { NativeRealtimeSession::aclose(self).await })
     }
 }
 

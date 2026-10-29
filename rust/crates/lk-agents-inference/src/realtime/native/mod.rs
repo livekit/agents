@@ -13,5 +13,5 @@ mod writer;
 
 pub use super::{Dialect, INFERENCE, OPENAI, OptionsPatch, SessionOptions, XAI};
 pub use lk_agents_abi::llm::realtime::{AudioDelta, Event, GenerationCreated};
-pub use session::{Auth, Connect, WebSocketRealtime, WebSocketRealtimeSession};
+pub use session::{Auth, Connect, NativeRealtime, NativeRealtimeSession};
 pub use wire::{Azure, RandomIds, SeqIds};

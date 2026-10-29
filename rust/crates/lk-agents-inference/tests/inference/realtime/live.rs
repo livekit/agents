@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lk_agents_abi::llm::realtime::GenerationDone;
 use lk_agents_inference::realtime::native::{
-    AudioDelta, Event, GenerationCreated, OPENAI, WebSocketRealtime,
+    AudioDelta, Event, GenerationCreated, OPENAI, NativeRealtime,
 };
 use lk_agents_inference::testkit::NoImages;
 use lk_agents_net::clock::RealClock;
@@ -20,7 +20,7 @@ async fn a_real_session_accepts_our_opening_update_and_answers() {
         return;
     };
 
-    let session = <WebSocketRealtime>::new(
+    let session = <NativeRealtime>::new(
         OPENAI,
         api_key,
         Arc::new(TungsteniteTransport),
