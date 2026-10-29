@@ -55,7 +55,7 @@ pub use output::{
     FakeAudioInput, FakeAudioOutput, FakeRecorder, FakeSoundStream, FakeTextOutput, FakeVideoInput,
     HALF, room_camera,
 };
-pub use realtime::{FakeDuplex, FakeRealtime, FallbackRealtime, ServerSetup, Vad as RealtimeVad};
+pub use realtime::{FakeDuplex, FakeRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::FakeTts;

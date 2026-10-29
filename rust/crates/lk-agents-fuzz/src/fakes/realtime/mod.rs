@@ -46,12 +46,10 @@ use crate::{
 
 pub mod duplex;
 mod events;
-pub mod fallback;
 pub mod server;
 
 pub use duplex::FakeDuplex;
 use events::{message_done, modalities};
-pub use fallback::FallbackRealtime;
 pub use server::{Exo, Server, Vad};
 
 /// The model a session names in its metrics.

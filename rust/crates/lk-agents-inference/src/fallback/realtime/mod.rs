@@ -105,7 +105,7 @@ impl RealtimeFallbackModel {
         cooldown: f64,
         regenerate_on_swap: bool,
         observer: Arc<dyn ChainObserver>,
-        anchor: WallAnchor,
+        clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Result<Self, String> {
         if children.is_empty() {
             return Err("at least one RealtimeModel instance must be provided.".to_owned());
@@ -126,8 +126,8 @@ impl RealtimeFallbackModel {
             cooldown,
             regenerate_on_swap,
             observer,
-            anchor,
-            clock: Arc::new(lk_agents_abi::RealClock::new()),
+            anchor: WallAnchor::of(&*clock),
+            clock,
             sessions: Mutex::new(Vec::new()),
             active: Arc::default(),
         })

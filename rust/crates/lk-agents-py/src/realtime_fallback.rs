@@ -7,7 +7,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
 use lk_agents_abi::python::native;
-use lk_agents_abi::{HostRef, Realtime, RealtimeSession, WallAnchor};
+use lk_agents_abi::{HostRef, Realtime, RealtimeSession};
 use lk_agents_runtime::inference::fallback::realtime::{RealtimeChild, RealtimeFallbackModel};
 use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
 use lk_agents_runtime::net::env::ProcessEnv;
@@ -48,14 +48,7 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
             Ok((children, observer))
         })
         .map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))?;
-        let clock = env.clock.clone();
-        RealtimeFallbackModel::new(
-            children,
-            cooldown,
-            regenerate_on_swap,
-            observer,
-            WallAnchor::of(&*clock),
-        )
+        RealtimeFallbackModel::new(children, cooldown, regenerate_on_swap, observer, env.clock.clone())
         .map(RealtimeFallback)
         .map_err(RealtimeConfigurationError::Invalid)
     }

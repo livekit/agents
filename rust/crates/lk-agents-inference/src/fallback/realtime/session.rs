@@ -360,8 +360,8 @@ impl RealtimeSession for FallbackSession {
                 };
                 let mut restart_rx = self.restart_rx.lock().await;
                 let ev = tokio::select! {
+                    biased;
                     () = self.changed.notified() => continue,
-                    ev = active.next_event() => ev,
                     changed = restart_rx.changed() => {
                         if changed.is_err() { continue; }
                         let switch_model = *restart_rx.borrow_and_update();
@@ -378,6 +378,7 @@ impl RealtimeSession for FallbackSession {
                         self.swap(target).await;
                         continue;
                     }
+                    ev = active.next_event() => ev,
                 };
                 match ev {
                     None => {
