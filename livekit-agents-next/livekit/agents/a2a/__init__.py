@@ -17,20 +17,14 @@ from .._generated.a2a_client import (
 from ..storage.context import A2ASessionContext
 from .auth import AgentThreadGrant, Credentials, Forbidden, Principal, Unauthorized
 from .client import AgentClient, Reply
-from .codec import updates_from_events
-from .endpoint import AGENT_CARD_PATH, RPC_PATH, A2AEndpoint, a2a_session
-from .extension import EXTENSION_URI, EXTENSIONS_HEADER, Extensions, agent_card
-from .methods import A2AService
+from .endpoint import A2AEndpoint, a2a_session
 from .remote import RemoteAgent
 
+# the documented surface (docs/clients.md, docs/server.md, docs/tools.md): the endpoint, card and
+# wire codec modules are the framework's own
 __all__ = [
     "a2a_session",
-    "AGENT_CARD_PATH",
-    "EXTENSIONS_HEADER",
-    "EXTENSION_URI",
-    "RPC_PATH",
     "A2AEndpoint",
-    "A2AService",
     "A2ASessionContext",
     "AgentClient",
     "Artifact",
@@ -42,12 +36,9 @@ __all__ = [
     "TextPart",
     "AgentThreadGrant",
     "Credentials",
-    "Extensions",
     "Forbidden",
     "Principal",
     "Reply",
     "TaskUpdate",
     "Unauthorized",
-    "agent_card",
-    "updates_from_events",
 ]

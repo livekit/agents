@@ -20,8 +20,6 @@ from a2a.utils.constants import TransportProtocol
 from livekit.agents import Agent, AgentServer, RunContext
 from livekit.agents._generated.storage_class import ThreadInfo
 from livekit.agents.a2a import (
-    AGENT_CARD_PATH,
-    EXTENSION_URI,
     A2AEndpoint,
     A2ASessionContext,
     AgentThreadGrant,
@@ -30,8 +28,10 @@ from livekit.agents.a2a import (
     Unauthorized,
 )
 from livekit.agents.a2a.codec import TaskUpdate, metadata_from_wire, updates_from_events
+from livekit.agents.a2a.endpoint import AGENT_CARD_PATH
 from livekit.agents.a2a.extension import (
     CHANNEL,
+    EXTENSION_URI,
     INTERRUPTED,
     INTERRUPTION_REASON,
     KIND,
