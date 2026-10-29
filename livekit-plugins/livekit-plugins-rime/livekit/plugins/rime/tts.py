@@ -370,7 +370,9 @@ class TTS(tts.TTS):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 speed_alpha=speed_alpha,
-                custom_lexicon=list(custom_lexicon) if is_given(custom_lexicon) else None,
+                custom_lexicon=(
+                    copy.deepcopy(list(custom_lexicon)) if is_given(custom_lexicon) else None
+                ),
             )
         elif is_mist_model(resolved_model):
             self._opts.mist_options = _MistOptions(
@@ -634,7 +636,7 @@ class TTS(tts.TTS):
             if is_given(speed_alpha):
                 self._opts.coda_options.speed_alpha = speed_alpha
             if is_given(custom_lexicon):
-                self._opts.coda_options.custom_lexicon = list(custom_lexicon)
+                self._opts.coda_options.custom_lexicon = copy.deepcopy(list(custom_lexicon))
 
         elif is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(speed_alpha):

@@ -1411,6 +1411,23 @@ async def test_v1_sends_coda_custom_lexicon_in_start() -> None:
     assert server.requests[0]["start"]["customLexicon"] == _LEXICON
 
 
+async def test_v1_stream_keeps_lexicon_after_caller_mutates_entry() -> None:
+    entry = {"spelling": "Acme", "pronunciation": '" { k . m i'}
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, custom_lexicon=[entry])
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        entry["pronunciation"] = '" A k . m i'
+        stream.push_text("Acme")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert server.requests[0]["start"]["customLexicon"] == [
+        {"spelling": "Acme", "pronunciation": '" { k . m i'}
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "expected_sample_rate"),
     [("coda", 24000), ("mistv3", 24000), ("mistv2", 22050), ("future-model", 22050)],
