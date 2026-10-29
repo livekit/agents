@@ -83,27 +83,17 @@ pub struct NativeRealtimeConfig {
     pub label: Option<String>,
 }
 
-#[crate::host(error(with = crate::llm::realtime_native::configuration_error_to_py))]
+#[crate::host(error(kind = "ValueError"))]
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RealtimeConfigurationError {
     #[error("{0}")]
     Invalid(String),
     #[error(transparent)]
+    #[host(delegate)]
     Api(#[from] ApiError),
     #[error(transparent)]
+    #[host(delegate)]
     Host(#[from] HostError),
-}
-
-#[cfg(feature = "python")]
-pub fn configuration_error_to_py(error: RealtimeConfigurationError) -> pyo3::PyErr {
-    use crate::python::HostException as _;
-    match error {
-        RealtimeConfigurationError::Invalid(message) => {
-            pyo3::exceptions::PyValueError::new_err(message)
-        }
-        RealtimeConfigurationError::Api(error) => error.to_py_err(),
-        RealtimeConfigurationError::Host(error) => error.to_py_err(),
-    }
 }
 
 #[crate::host(class(name = "NativeRealtimeModel", native = crate::llm::realtime::Realtime))]
