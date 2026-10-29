@@ -111,7 +111,7 @@ async fn endpoint_resource_profile() {
         let running = Arc::new(AtomicBool::new(true));
         let monitor = {
             let running = running.clone();
-            tokio::spawn(async move {
+            TokioSpawner::current().spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_millis(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut lags = Vec::new();

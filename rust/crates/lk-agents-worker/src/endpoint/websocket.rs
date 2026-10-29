@@ -408,8 +408,10 @@ pub(super) async fn serve_ws(
     let guard = {
         let ex = ex.clone();
         OnCancel(Some(Box::new(move || {
+            // Detached: the exchange's owner is being dropped, and the close must still go out.
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                rt.spawn(async move { ex.close(1001, "worker stopped").await });
+                TokioSpawner::new(rt)
+                    .spawn_detached(async move { ex.close(1001, "worker stopped").await });
             }
         })))
     };

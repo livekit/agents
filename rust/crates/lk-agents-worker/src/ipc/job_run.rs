@@ -15,7 +15,7 @@ use lk_agents_abi::worker::ipc_host::{
 };
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef, lock};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{oneshot, watch};
 
 use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
@@ -89,6 +89,8 @@ struct Inner {
     connecting: tokio::sync::Mutex<()>,
     /// Set once the job ends: the application calls still running are cancelled.
     tasks_closed: watch::Sender<bool>,
+    /// The participant entrypoints, which run to their own end.
+    participants: Arc<TaskSet>,
 }
 
 impl JobExecution for JobRun {}
@@ -367,6 +369,7 @@ impl WorkerJobRun for JobRun {
                 ended: watch::channel(false).0,
                 connecting: tokio::sync::Mutex::new(()),
                 tasks_closed: watch::channel(false).0,
+                participants: Arc::default(),
             }),
         })
     }
@@ -463,11 +466,11 @@ impl WorkerJobRun for JobRun {
         if overlapping {
             self.inner.log(Level::Warning, &format!("a participant has joined before a prior participant task matching the same identity has finished: '{identity}'"), None, Vec::new());
         }
-        let runtime = self.inner.io.runtime_handle();
+        let spawner = TokioSpawner::new(self.inner.io.runtime_handle());
         for (key, run, entry, name) in starts {
             let inner = self.inner.clone();
             let (job, participant, context) = (job.clone(), participant.clone(), context.clone());
-            runtime.spawn(async move {
+            self.inner.participants.spawn(&spawner, "participant entrypoint", async move {
                 let ran = entry.run(&context, job, participant).await;
                 {
                     let mut st = lock(&inner.state);

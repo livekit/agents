@@ -2,6 +2,7 @@
 //! launch the host performs, then initialization, supervision, exit observation and reaping,
 //! which continue whether or not the host still awaits them.
 
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,6 +41,9 @@ pub struct ProcessOwner {
     ran: watch::Sender<Option<bool>>,
     killable: bool,
     process: watch::Sender<Option<Arc<ProcessControl>>>,
+    /// The launch and the ownership loop `run()` starts; each ends with the process, and
+    /// dropping this object does not cancel them.
+    tasks: Arc<TaskSet>,
 }
 
 impl SupervisedProcess for ProcessOwner {}
@@ -111,6 +115,7 @@ impl WorkerProcSupervisor for ProcessOwner {
             ran: watch::channel(None).0,
             killable,
             process,
+            tasks: Arc::default(),
         })
     }
 
@@ -164,22 +169,25 @@ impl WorkerProcSupervisor for ProcessOwner {
         let Some(host) = lock(&self.host).take() else {
             return self.wait_ran().await;
         };
-        let runtime = self.io.runtime_handle();
-        runtime.spawn(launch(
-            host.clone(),
-            self.context.clone(),
-            self.sup.clone(),
-            self.launch.clone(),
-        ));
-        runtime.spawn(own(
-            host,
-            self.context.clone(),
-            self.sup.clone(),
-            self.launch.clone(),
-            self.process.clone(),
-            self.initialized.subscribe(),
-            self.ran.clone(),
-        ));
+        let spawner = TokioSpawner::new(self.io.runtime_handle());
+        self.tasks.spawn(
+            &spawner,
+            "process launch",
+            launch(host.clone(), self.context.clone(), self.sup.clone(), self.launch.clone()),
+        );
+        self.tasks.spawn(
+            &spawner,
+            "process ownership",
+            own(
+                host,
+                self.context.clone(),
+                self.sup.clone(),
+                self.launch.clone(),
+                self.process.clone(),
+                self.initialized.subscribe(),
+                self.ran.clone(),
+            ),
+        );
         self.wait_ran().await
     }
 

@@ -1,5 +1,7 @@
 //! One HTTP/1.1 exchange: request bytes in, ASGI `http` events to the app, response bytes out.
 
+use lk_agents_abi::SpawnerExt;
+use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -365,10 +367,11 @@ pub(super) async fn serve_http(
     let guard = {
         let ex = ex.clone();
         OnCancel(Some(Box::new(move || {
+            // Detached: the exchange's owner is being dropped, and the reset must still go out.
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                rt.spawn(
-                    async move { ex.fail("canceled", "worker stopped", Reset::HsrAbort).await },
-                );
+                TokioSpawner::new(rt).spawn_detached(async move {
+                    ex.fail("canceled", "worker stopped", Reset::HsrAbort).await
+                });
             }
         })))
     };
