@@ -40,6 +40,12 @@ from .log import logger
 
 NUM_CHANNELS = 1
 
+# Rime closes a WS3 socket that goes about 30s without a request, and the client only finds
+# out on its next write and read. The pool clock is refreshed on every acquire, so this expires
+# a socket that has sat unused across a long conversational gap rather than handing back one the
+# server already dropped.
+_MAX_SESSION_DURATION = 20
+
 _Pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse]
 
 
@@ -76,7 +82,7 @@ class LegacyWebSocketAdapter:
         return utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=_connect,
             close_cb=self._close,
-            max_session_duration=300,
+            max_session_duration=_MAX_SESSION_DURATION,
             mark_refreshed_on_get=True,
         )
 
