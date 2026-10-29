@@ -13,7 +13,7 @@ from typing_extensions import TypedDict
 from .. import _bindings, _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
-from ..llm.chat_context import ChatContext
+from ..llm.chat_context import ChatContext, ProviderFormat
 from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -359,13 +359,13 @@ class LLMStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
-        provider_fmt: str = "openai",
+        provider_fmt: ProviderFormat = "openai",
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._inference_class = inference_class
-        self._provider_fmt = provider_fmt
+        self._provider_fmt: ProviderFormat = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs, tools=tools)

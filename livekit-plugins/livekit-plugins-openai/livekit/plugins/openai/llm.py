@@ -29,6 +29,7 @@ from livekit.agents.llm import (
     ToolChoice,
     utils as llm_utils,
 )
+from livekit.agents.llm.chat_context import ProviderFormat
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -113,7 +114,7 @@ class LLM(llm.LLM):
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
-        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
+        _provider_fmt: NotGivenOr[ProviderFormat] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
         """
@@ -165,7 +166,7 @@ class LLM(llm.LLM):
                 " OPENAI_API_KEY environment variable"
             )
 
-        self._provider_fmt = _provider_fmt or "openai"
+        self._provider_fmt: ProviderFormat = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
         self._owns_client = client is None
         self._client = client or openai.AsyncClient(
@@ -1058,7 +1059,7 @@ class LLMStream(_LLMStream):
         llm: LLM,
         *,
         model: str | ChatModels,
-        provider_fmt: str,
+        provider_fmt: ProviderFormat,
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,

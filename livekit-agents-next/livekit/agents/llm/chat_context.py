@@ -113,6 +113,9 @@ class AudioContent(BaseModel):
 
 
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
+ProviderFormat: TypeAlias = Literal[
+    "openai", "openai.responses", "google", "aws", "anthropic", "mistralai"
+]
 
 
 # The metrics are stored in a dict, since some fields may not be relevant
@@ -554,7 +557,7 @@ class ChatContext:
 
     async def to_provider_format(
         self,
-        format: Literal["openai", "openai.responses", "google", "aws", "anthropic", "mistralai"],
+        format: ProviderFormat,
         *,
         inject_dummy_user_message: bool = True,
         inject_trailing_user_message: bool = False,
