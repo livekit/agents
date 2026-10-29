@@ -321,7 +321,9 @@ fn expand(
         (I::Impl(imp), Some("export")) => lk_agents_bindgen::export_impl(attr, imp),
         (I::Enum(e), Some("wire_enum")) => Ok(lk_agents_bindgen::wire_enum(&e.ident)),
         // A refusal the host raises (`error(raised = "..")`) is read by the generated proxy.
-        (I::Enum(_) | I::Struct(_), Some("error")) if raised(&attr) => Ok(proc_macro2::TokenStream::new()),
+        (I::Enum(_) | I::Struct(_), Some("error")) if raised(&attr) => {
+            Ok(proc_macro2::TokenStream::new())
+        }
         (I::Enum(_) | I::Struct(_), Some("error")) => lk_agents_bindgen::error(attr, parsed),
         (I::Enum(e), Some("string")) => Ok(lk_agents_bindgen::string(&e.ident)),
         (I::Struct(st), Some("string")) => Ok(lk_agents_bindgen::string(&st.ident)),
@@ -368,7 +370,8 @@ fn is_maybe(ty: &syn::Type) -> bool {
 
 /// `error(raised = "..")`.
 fn raised(attr: &proc_macro2::TokenStream) -> bool {
-    lk_agents_bindgen::Metas::parse(attr.clone()).is_ok_and(|m| m.0.iter().any(|x| x.key == "error.raised"))
+    lk_agents_bindgen::Metas::parse(attr.clone())
+        .is_ok_and(|m| m.0.iter().any(|x| x.key == "error.raised"))
 }
 
 /// The method keys of a declared proxy (`lk-agents-codegen`'s `decl::vocabulary`).
@@ -378,18 +381,20 @@ const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 fn declared_proxy(t: &syn::ItemTrait) -> bool {
     t.items.iter().any(|item| {
         let syn::TraitItem::Fn(f) = item else { return false };
-        f.attrs.iter().filter(|a| a.path().segments.last().is_some_and(|s| s.ident == "host")).any(|a| {
-            let mut declared = false;
-            // `await` is a keyword: read the keys as `parse_nested_meta` does.
-            let _ = a.parse_nested_meta(|m| {
-                declared |= PROXY_CALLS.iter().any(|k| m.path.is_ident(k));
-                if !m.input.is_empty() && !m.input.peek(syn::Token![,]) {
-                    m.input.parse::<proc_macro2::TokenStream>()?;
-                }
-                Ok(())
-            });
-            declared
-        })
+        f.attrs.iter().filter(|a| a.path().segments.last().is_some_and(|s| s.ident == "host")).any(
+            |a| {
+                let mut declared = false;
+                // `await` is a keyword: read the keys as `parse_nested_meta` does.
+                let _ = a.parse_nested_meta(|m| {
+                    declared |= PROXY_CALLS.iter().any(|k| m.path.is_ident(k));
+                    if !m.input.is_empty() && !m.input.peek(syn::Token![,]) {
+                        m.input.parse::<proc_macro2::TokenStream>()?;
+                    }
+                    Ok(())
+                });
+                declared
+            },
+        )
     })
 }
 
@@ -586,7 +591,10 @@ mod tests {
             true,
         )
         .to_string();
-        assert!(!out.contains("impl") && !out.contains("host") && out.contains("async fn f"), "{out}");
+        assert!(
+            !out.contains("impl") && !out.contains("host") && out.contains("async fn f"),
+            "{out}"
+        );
         let out = super::expand_host(
             quote!(error(raised = "a.Refused")),
             quote! { pub struct Refused { pub message: String } },
