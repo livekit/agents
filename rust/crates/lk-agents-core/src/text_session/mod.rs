@@ -563,6 +563,7 @@ impl TextSession {
                     call,
                     prepared,
                     function_call,
+                    ..
                 } if invocation.children.contains_key(&call) => {
                     let child = invocation.children.get_mut(&call).unwrap();
                     child.function_call = function_call;

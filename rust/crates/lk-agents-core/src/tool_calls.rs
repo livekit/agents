@@ -37,11 +37,13 @@ pub enum Effect {
         tool: String,
         prepared: ResourceId,
     },
-    /// Run the body with the prepared arguments; `function_call` carries its approval marks.
+    /// Run the body with the prepared arguments; `function_call` carries its approval marks and
+    /// `approval` is the scope the body runs under.
     Execute {
         call: CallId,
         prepared: ResourceId,
         function_call: FunctionCall,
+        approval: Option<Approval>,
     },
     /// Cancel whatever host work the call has in flight.
     Cancel {
@@ -527,7 +529,13 @@ impl ToolCalls {
             .into(),
         );
         fx.push(
-            Effect::Execute { call: call.id, prepared, function_call: call.item.clone() }.into(),
+            Effect::Execute {
+                call: call.id,
+                prepared,
+                function_call: call.item.clone(),
+                approval: approval::mark(&call.item),
+            }
+            .into(),
         );
         call.phase = Phase::Running { identity: canonical };
     }

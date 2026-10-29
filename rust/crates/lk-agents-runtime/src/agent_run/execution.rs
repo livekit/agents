@@ -219,12 +219,12 @@ impl Execution {
                 call,
                 prepared,
                 function_call,
+                approval,
             } => {
                 let Some(args) = self.prepared.remove(&prepared) else {
                     return None;
                 };
                 let host = self.ports.host.clone();
-                let approval = approval::mark(&function_call);
                 self.invoke(
                     Work::Call(call),
                     Some(function_call),

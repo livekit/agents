@@ -186,11 +186,13 @@ pub enum Effect {
         tool: String,
         prepared: ResourceId,
     },
-    /// Run the body with the prepared arguments; `function_call` carries its approval marks.
+    /// Run the body with the prepared arguments; `function_call` carries its approval marks and
+    /// `approval` is the scope the body runs under.
     ToolExecute {
         call: CallId,
         prepared: ResourceId,
         function_call: FunctionCall,
+        approval: Option<Approval>,
     },
     /// Cancel whatever host work the call has in flight.
     ToolCancel {
@@ -231,8 +233,8 @@ impl From<tool_calls::Effect> for Effect {
             tool_calls::Effect::ReadBack { call, tool, prepared } => {
                 Effect::ReadBackRender { call, tool, prepared }
             }
-            tool_calls::Effect::Execute { call, prepared, function_call } => {
-                Effect::ToolExecute { call, prepared, function_call }
+            tool_calls::Effect::Execute { call, prepared, function_call, approval } => {
+                Effect::ToolExecute { call, prepared, function_call, approval }
             }
             tool_calls::Effect::Cancel { call } => Effect::ToolCancel { call },
             tool_calls::Effect::ReleaseArguments { prepared } => {

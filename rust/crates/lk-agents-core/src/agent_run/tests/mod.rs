@@ -180,7 +180,7 @@ impl Driver {
         self.effects
             .iter()
             .filter_map(|e| match e {
-                Effect::ToolExecute { call, prepared, function_call } => {
+                Effect::ToolExecute { call, prepared, function_call, .. } => {
                     Some((*call, *prepared, function_call.clone()))
                 }
                 _ => None,

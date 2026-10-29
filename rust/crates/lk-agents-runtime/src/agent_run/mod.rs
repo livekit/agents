@@ -19,7 +19,7 @@ use lk_agents_core::agent_run::{
     CallId, CheckpointId, Effect, Event, OutputVerdict, RenderId, RequestId,
 };
 use lk_agents_core::tool_calls::PrepareFailure;
-use lk_agents_core::{AgentError, AgentRun, RunInput, approval};
+use lk_agents_core::{AgentError, AgentRun, RunInput};
 use tokio::sync::{mpsc, oneshot};
 
 pub(crate) mod execution;
