@@ -21,15 +21,31 @@ pub struct ProviderId {
 impl ProviderId {
     /// The reference's base-class defaults for a provider that only knows its label.
     pub fn of_label(label: impl Into<String>) -> Self {
-        ProviderId { label: label.into(), model: "unknown".to_owned(), provider: "unknown".to_owned() }
+        ProviderId {
+            label: label.into(),
+            model: "unknown".to_owned(),
+            provider: "unknown".to_owned(),
+        }
     }
 
     pub fn metadata(&self) -> crate::metrics::base::Metadata {
-        crate::metrics::base::Metadata { model_name: Some(self.model.clone()), model_provider: Some(self.provider.clone()) }
+        crate::metrics::base::Metadata {
+            model_name: Some(self.model.clone()),
+            model_provider: Some(self.provider.clone()),
+        }
     }
 
     /// `metrics_metadata`: the turn metrics' `{stt,llm,tts}_metadata` on a chat item.
     pub fn metrics_metadata(&self) -> crate::MetricsMetadata {
-        crate::MetricsMetadata { model_name: Some(self.model.clone()), model_provider: Some(self.provider.clone()) }
+        crate::MetricsMetadata {
+            model_name: Some(self.model.clone()),
+            model_provider: Some(self.provider.clone()),
+        }
     }
+}
+
+/// Identity of a retained native provider object. Host proxies retain their originating
+/// object's identity instead, so rebinding options never creates another backend.
+pub fn provider_instance<T: ?Sized>(provider: &T) -> usize {
+    std::ptr::from_ref(provider).cast::<()>() as usize
 }

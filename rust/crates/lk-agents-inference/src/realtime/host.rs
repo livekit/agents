@@ -52,6 +52,10 @@ impl<E> HostRealtimeModel<E> {
 }
 
 impl<E: Send + 'static> Realtime for HostRealtimeModel<E> {
+    fn instance_id(&self) -> usize {
+        self.host.instance_id()
+    }
+
     fn label(&self) -> String {
         self.label.clone()
     }

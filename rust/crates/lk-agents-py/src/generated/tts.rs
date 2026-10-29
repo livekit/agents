@@ -345,6 +345,7 @@ pub struct TtsProxy {
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
     notifier: crate::host::Notifier,
+    instance_id: usize,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::TtsCapabilities,
     id: ::lk_agents_abi::ProviderId,
@@ -383,6 +384,10 @@ impl TtsProxy {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::host::capture_context(obj.py())?,
         };
+        let instance_id = {
+            let v = crate::host::read(obj, "_core_instance_id")?;
+            ::lk_agents_abi::python::number_from_py::<usize>(&v, "Tts._core_instance_id")?
+        };
         let label = {
             let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
@@ -411,7 +416,7 @@ impl TtsProxy {
             let v = crate::host::read(obj, "_core_lowers_markup")?;
             v.extract::<bool>()?
         };
-        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
+        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
     }
 }
 
@@ -420,6 +425,10 @@ impl TtsProxy {
 }
 
 impl ::lk_agents_abi::Tts for TtsProxy {
+    fn instance_id(&self) -> usize {
+        ::std::clone::Clone::clone(&self.instance_id)
+    }
+
     fn label(&self) -> ::std::string::String {
         ::std::clone::Clone::clone(&self.label)
     }

@@ -1554,6 +1554,7 @@ pub struct LlmProxy {
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
     notifier: crate::host::Notifier,
+    instance_id: usize,
     label: ::std::string::String,
     model: ::std::string::String,
     id: ::lk_agents_abi::ProviderId,
@@ -1588,6 +1589,10 @@ impl LlmProxy {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::host::capture_context(obj.py())?,
         };
+        let instance_id = {
+            let v = crate::host::read(obj, "_core_instance_id")?;
+            ::lk_agents_abi::python::number_from_py::<usize>(&v, "Llm._core_instance_id")?
+        };
         let label = {
             let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
@@ -1600,7 +1605,7 @@ impl LlmProxy {
             let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label, model, id, conn: None })
+        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, model, id, conn: None })
     }
 }
 
@@ -1609,6 +1614,10 @@ impl LlmProxy {
 }
 
 impl ::lk_agents_abi::Llm for LlmProxy {
+    fn instance_id(&self) -> usize {
+        ::std::clone::Clone::clone(&self.instance_id)
+    }
+
     fn label(&self) -> ::std::string::String {
         ::std::clone::Clone::clone(&self.label)
     }
@@ -1892,6 +1901,7 @@ pub struct HostRealtimeProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
+    instance_id: usize,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::llm::realtime::RealtimeCapabilities,
     id: ::lk_agents_abi::ProviderId,
@@ -1924,6 +1934,10 @@ impl HostRealtimeProxy {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::host::capture_context(obj.py())?,
         };
+        let instance_id = {
+            let v = crate::host::read(obj, "_core_instance_id")?;
+            ::lk_agents_abi::python::number_from_py::<usize>(&v, "HostRealtime._core_instance_id")?
+        };
         let label = {
             let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
@@ -1936,7 +1950,7 @@ impl HostRealtimeProxy {
             let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(HostRealtimeProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, label, capabilities, id })
+        Ok(HostRealtimeProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, instance_id, label, capabilities, id })
     }
 }
 
@@ -1945,6 +1959,10 @@ impl HostRealtimeProxy {
 }
 
 impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
+    fn instance_id(&self) -> usize {
+        ::std::clone::Clone::clone(&self.instance_id)
+    }
+
     fn label(&self) -> ::std::string::String {
         ::std::clone::Clone::clone(&self.label)
     }

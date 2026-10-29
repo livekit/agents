@@ -180,6 +180,13 @@ pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
     error(name = "TTSError", kind = "tts_error")
 ))]
 pub trait Tts: Send + Sync {
+    /// Stable object identity, independent of proxy instances and bound connection options.
+    #[python(value = "id(self)")]
+    #[host(read_once, name = "_core_instance_id")]
+    fn instance_id(&self) -> usize {
+        crate::types::identity::provider_instance(self)
+    }
+
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
     #[host(read_once, name = "_core_label")]

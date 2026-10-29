@@ -101,7 +101,16 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
                     "Provide a VAD to enable stt.StreamAdapter automatically "
                     "or wrap them with stt.StreamAdapter before using this adapter."
                 )
-            stt = [t if t.capabilities.streaming else StreamAdapter(stt=t, vad=vad) for t in stt]
+            adapted: dict[int, STT] = {}
+            for recognizer in stt:
+                identity = id(recognizer)
+                if identity not in adapted:
+                    adapted[identity] = (
+                        recognizer
+                        if recognizer.capabilities.streaming
+                        else StreamAdapter(stt=recognizer, vad=vad)
+                    )
+            stt = [adapted[id(recognizer)] for recognizer in stt]
         self._stt_instances = stt
         self._opts = {
             "attempt_timeout": attempt_timeout,
@@ -219,9 +228,7 @@ class StreamAdapterWrapper(RecognizeStream):
         await _bindings.pump(
             native,
             self.input,
-            lambda item: (
-                native.flush() if isinstance(item, self.Flush) else native.push(item)
-            ),
+            lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
             lambda ev: self.send(_speech_event_from_core(ev)),
         )
 

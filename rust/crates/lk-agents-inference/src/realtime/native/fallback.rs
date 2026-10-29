@@ -32,10 +32,11 @@ pub enum RealtimeChild {
 
 impl RealtimeChild {
     fn resource_id(&self) -> ResourceId {
-        match self {
-            Self::Native(model) => crate::fallback::backend_resource(model.as_ref()),
-            Self::Host(model, _) => crate::fallback::backend_resource(model.as_ref()),
-        }
+        let instance = match self {
+            Self::Native(model) => model.instance_id(),
+            Self::Host(model, _) => model.instance_id(),
+        };
+        ResourceId(instance as u64)
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

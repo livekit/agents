@@ -86,8 +86,3 @@ mod resampling_tests {
         assert_eq!(resampling_plan(&[22_050], None), (22_050, vec![false]));
     }
 }
-
-/// The allocation stays alive for the chain's lifetime; clones retain the provider's identity.
-pub(crate) fn backend_resource<T: ?Sized>(backend: &T) -> lk_agents_abi::resources::ResourceId {
-    lk_agents_abi::resources::ResourceId(std::ptr::from_ref(backend).cast::<()>() as usize as u64)
-}

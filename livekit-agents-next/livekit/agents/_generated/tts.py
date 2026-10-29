@@ -240,6 +240,9 @@ class TTS(
     ) -> None:
         await self.aclose()
 
+    def _core_instance_id(self) -> int:
+        return id(self)
+
     def _core_label(self) -> str:
         return self.label
 

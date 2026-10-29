@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents import APIError
 from livekit.agents.llm import ChatChunk, ChatContext, ChoiceDelta, FallbackAdapter, LLMStream, Tool
+from livekit.agents.llm.fallback_adapter import AvailabilityChangedEvent
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM
@@ -70,3 +71,21 @@ async def test_failure_after_output_does_not_open_a_fallback_or_duplicate_the_te
         assert primary.requests == 1 and backup.requests == 0
     finally:
         await adapter.aclose()
+
+
+async def test_repeated_plugin_entries_share_one_health_transition() -> None:
+    primary, backup = ScriptedLLM(None, fail=True), ScriptedLLM("Recovered.")
+    adapter = FallbackAdapter([primary, primary, backup], retry_interval=0, sticky=True)
+    changes: list[tuple[object, bool]] = []
+
+    @adapter.on("llm_availability_changed")
+    def changed(event: AvailabilityChangedEvent) -> None:
+        changes.append((event.llm, event.available))
+
+    try:
+        async with adapter.chat(chat_ctx=ChatContext.empty()) as stream:
+            response = await stream.collect()
+        assert response.text == "Recovered."
+    finally:
+        await adapter.aclose()
+    assert changes == [(primary, False)], "repeated references must share the provider's health"
