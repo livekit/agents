@@ -195,6 +195,65 @@ replacement, and generated or accepted audio is not counted as heard audio.
 Recording and transcript accounting retain the same session timeline across
 the change.
 
+## Answering machine detection
+
+`AMD(session, ...)` classifies who answered an outbound call. Start it before
+dialing so no audio is missed:
+
+```python
+from livekit.agents import AMD, AMDCategory
+
+async with AMD(session) as detector:
+    await ctx.api.sip.create_sip_participant(...)  # wait_until_answered=True
+    result = await detector.execute()
+
+if result.category == AMDCategory.MACHINE_VM:
+    await session.say("Hi, this is the clinic calling about your appointment.")
+```
+
+`execute()` returns an `AMDPredictionEvent`: `category` (`human`,
+`machine-ivr`, `machine-vm`, `machine-unavailable` or `uncertain`), `reason`,
+`transcript`, `speech_duration` and `delay`, with `is_human` and `is_machine`.
+Until the verdict the agent's speech is held. On a machine the current speech
+is interrupted (`interrupt_on_machine=True`), and a `machine-ivr` verdict
+starts IVR navigation (`ivr_detection=True`).
+
+| Parameter | What |
+| --- | --- |
+| `llm`, `stt` | the classifier's models; by default LiveKit inference with Cloud credentials, else the session's. `None` reuses the session's |
+| `interrupt_on_machine`, `ivr_detection` | what a machine verdict does, both on by default |
+| `participant_identity` | listen to this participant only |
+| `detection_options` | a `DetectionOptions`: the silence and speech thresholds, `timeout` and the classification `prompt` |
+| `wait_until_finished` | once speech is heard, wait for the greeting to end rather than answer at `timeout` |
+
+## Background audio
+
+`BackgroundAudioPlayer` publishes a second audio track for ambient sound and a
+"thinking" sound played while the agent is in the `thinking` state:
+
+```python
+from livekit.agents import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
+
+background = BackgroundAudioPlayer(
+    ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.6),
+    thinking_sound=[
+        AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.8, probability=0.7),
+        AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.7, probability=0.3),
+    ],
+)
+await background.start(room=ctx.room, agent_session=session)
+
+handle = background.play("assets/hold.ogg", loop=True)  # a PlayHandle
+handle.stop()
+```
+
+A sound is a `BuiltinAudioClip`, a file path, or an async iterator of
+`rtc.AudioFrame`, optionally wrapped in an `AudioConfig` with `volume`,
+`probability`, `fade_in` and `fade_out`. From a list, one sound is picked by
+probability; a total below 1 can pick silence. `play()` returns a `PlayHandle`
+to `stop()`, check `done()` or await until it finishes. `aclose()` stops every
+sound and unpublishes the track.
+
 ## The call's thread
 
 On a server with storage, the door resolves the call's thread before the

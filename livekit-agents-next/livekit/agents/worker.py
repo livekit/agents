@@ -171,6 +171,7 @@ class AgentServer(AgentHandler):
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
         drain_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
+        prometheus_port: NotGivenOr[int] = NOT_GIVEN,
         preload_modules: Sequence[str] = (),
         setup_fnc: Callable[[JobProcess], None] | None = None,
         _load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
@@ -195,6 +196,20 @@ class AgentServer(AgentHandler):
     def storage(self) -> Storage | None:
         """The session storage every door of this server opens its lane with."""
         return self._storage
+
+    @property
+    def http(self) -> AgentRoutes:
+        """HTTP routes served alongside the agent, as a Starlette application::
+
+            @server.http.get("/token")
+            async def token(request: Request) -> Response:
+                return JSONResponse({"ok": True})
+
+        Routes are served through the LiveKit server at
+        ``/agents/{agent_name}/{deployment}/{path}``; no local listener exposes them. The handler
+        reads the request's preamble as ``request.state.lk_request``.
+        """
+        return self._http
 
     def add(
         self, *doors: AgentHandler | RtcSession | A2AEndpoint

@@ -4,6 +4,8 @@ from .agent_session import (
     VoiceSession,
     VoiceTask,
 )
+from .amd import AMD, AMDCategory, AMDPredictionEvent, DetectionOptions
+from .background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .events import (
     AgentStateChangedEvent,
     CloseEvent,
@@ -36,6 +38,14 @@ __all__ = [
     "UserStateChangedEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
+    "AMD",
+    "AMDCategory",
+    "AMDPredictionEvent",
+    "DetectionOptions",
+    "BackgroundAudioPlayer",
+    "AudioConfig",
+    "BuiltinAudioClip",
+    "PlayHandle",
     "io",
     "room_io",
 ]

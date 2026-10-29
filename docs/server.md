@@ -120,6 +120,7 @@ if __name__ == "__main__":
 | `load_threshold` | the load (0 to 1) above which the worker stops taking jobs |
 | `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
 | `drain_timeout` | how long a draining worker waits for its running jobs |
+| `prometheus_port` | serve the worker's Prometheus metrics on this local port; off when not given |
 
 The agent is named once, `AgentServer(agent_name=)`: the lane every door of
 the server writes, and the first segment of every door's address,
@@ -140,6 +141,26 @@ required.
 The endpoint serves the conversation and nothing else. A thread's history
 and tasks are read from outside through the platform's threads service;
 see [clients.md](clients.md).
+
+## HTTP routes
+
+`server.http` is a Starlette application for routes served alongside the
+agent, such as a token endpoint for a web client:
+
+```python
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+
+@server.http.get("/token")
+async def token(request: Request) -> Response:
+    return JSONResponse({"token": await mint_browser_token(request)})
+```
+
+`get`, `post`, `put`, `patch`, `delete`, `route` and `websocket` register
+handlers, and `mount(path, app)` mounts any ASGI application. Routes are served
+through the LiveKit server at `/agents/{agent_name}/{deployment}/{path}`, never
+on a local listener; a handler reads the request's LiveKit preamble as
+`request.state.lk_request`.
 
 ## Voice entrypoints
 
