@@ -43,6 +43,7 @@ from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.keyterms import KeytermDetectionOptions, STTContextOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
+from .._generated.session_options import SessionKwargs
 from .._generated.session_wire import (
     CloseWire,
     DeleteRoomRequested,
@@ -154,16 +155,15 @@ _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
 # on_user_turn_completed is awaited until it returns
 _HOOK_BOUND = 15.0
 
-# the session options and their defaults; the core resolves them (`_core.SessionOptions`)
+# the session option keywords (`SessionKwargs` less `conn_options`, a parameter of its own) and
+# the required ones' defaults; the core resolves them (`_core.SessionOptions`). An unsaid
+# `NotRequired` key stays absent.
+_OPTION_KEYS = frozenset(SessionKwargs.__annotations__) - {"conn_options"}
 _OPTION_DEFAULTS: dict[str, Any] = {
-    "turn_handling": NOT_GIVEN,
-    "stt_context_options": NOT_GIVEN,
+    "stt_context_options": None,
     "max_tool_steps": 3,
-    "use_tts_aligned_transcript": NOT_GIVEN,
-    "tts_text_transforms": NOT_GIVEN,
     "min_consecutive_speech_delay": 0.0,
     "expressive": False,
-    "aec_warmup_duration": NOT_GIVEN,
     "ivr_detection": False,
     "user_away_timeout": 15.0,
     "transcription_timeout": None,
@@ -239,7 +239,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 ``transcription_timeout``, ``session_close_transcript_timeout``.
         """
         super().__init__()
-        if unknown := options.keys() - _OPTION_DEFAULTS.keys():
+        if unknown := options.keys() - _OPTION_KEYS:
             raise TypeError(f"unexpected VoiceSession options: {sorted(unknown)}")
         listening = dict(options.get("turn_handling") or {})
         if is_given(turn_detection):
@@ -250,7 +250,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             options["turn_handling"] = listening
         self._conn_options = conn_options or SessionConnectOptions()
         self._options = _core.SessionOptions(
-            {**_OPTION_DEFAULTS, **options, "conn_options": conn_options}
+            {**_OPTION_DEFAULTS, **_given(**options), "conn_options": self._conn_options}
         )
         stt_context = options.get("stt_context_options", NOT_GIVEN)
         self._stt_context = stt_context if is_given(stt_context) else None
