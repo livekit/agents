@@ -49,6 +49,8 @@ pub struct Playout {
     pub batch: u64,
     /// The tracker's number for this forwarding's first segment, once a frame opened it.
     first_segment: Option<PlaybackSegment>,
+    /// Every segment this forwarding's audio went to: the first, and one per sink reset.
+    segments: Vec<PlaybackSegment>,
     /// The sink reported one of this forwarding's segments cut under it (a reset): not all of
     /// it played, whatever the last segment reports.
     pub cut_below: bool,
@@ -69,6 +71,7 @@ impl Playout {
             reported: 0,
             batch: 0,
             first_segment: None,
+            segments: segment_key.into_iter().collect(),
             cut_below: false,
         }
     }
@@ -79,9 +82,12 @@ impl Playout {
             self.first_segment = key;
         }
         // The segment the audio went to: after a sink reset the rest of this forwarding's audio
-        // plays as a segment of its own, whose reports are this forwarding's.
-        if key.is_some() {
-            self.segment_key = key;
+        // plays as a segment of its own. Every one's reports are this forwarding's.
+        if let Some(key) = key {
+            self.segment_key = Some(key);
+            if !self.segments.contains(&key) {
+                self.segments.push(key);
+            }
         }
         self.pushed += 1;
         self.pushed_len += duration;
@@ -113,7 +119,7 @@ impl Playout {
         match report {
             // Words a late report of another forwarding's playback released are not this one's.
             SinkReport::Shown(segment, word) => {
-                if segment.is_some() && self.segment_key.is_some_and(|key| Some(key) != segment) {
+                if segment.is_some_and(|segment| !self.owns(segment)) {
                     return effects;
                 }
                 effects.push(PlayoutEffect::Trace(PlayoutStep::TranscriptShown {
@@ -130,7 +136,7 @@ impl Playout {
                 effects.push(PlayoutEffect::Trace(PlayoutStep::SinkReset { speech }));
             }
             SinkReport::Playback(PlaybackEvent::Started(s)) => {
-                if self.segment_key.is_some_and(|key| key != s.segment) {
+                if !self.owns(s.segment) {
                     return effects;
                 }
                 let at = lk_agents_abi::unix_secs(now.wall)
@@ -138,7 +144,7 @@ impl Playout {
                 self.start(at, &mut effects);
             }
             SinkReport::Playback(PlaybackEvent::Progressed(p)) => {
-                if self.segment_key.is_some_and(|key| key != p.segment) {
+                if !self.owns(p.segment) {
                     return effects;
                 }
                 let (offset, duration) = (p.offset, p.duration);
@@ -153,7 +159,7 @@ impl Playout {
             // Started/progressed only: a tracker reports finishes with their segment.
             SinkReport::Playback(PlaybackEvent::Finished { .. }) => {}
             SinkReport::Finished { segment, ev: f } => {
-                if self.segment_key.is_some_and(|key| key != segment) {
+                if !self.owns(segment) {
                     return effects;
                 }
                 if f.interrupted && self.first_segment.is_some_and(|first| segment == first) {
@@ -171,6 +177,11 @@ impl Playout {
             }
         }
         effects
+    }
+
+    /// Whether `segment` is one of this forwarding's playbacks; any is, before it has one.
+    fn owns(&self, segment: PlaybackSegment) -> bool {
+        self.segments.is_empty() || self.segments.contains(&segment)
     }
 
     fn start(&mut self, at: f64, effects: &mut Vec<PlayoutEffect>) {
@@ -579,5 +590,33 @@ pub fn drained(end: SegmentEnd, text: String) -> Result<crate::transcription::He
             complete: matches!(end, SegmentEnd::Audio),
             ..crate::transcription::Heard::default()
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(segment: u64) -> PlaybackSegment {
+        PlaybackSegment { attachment: 0, segment }
+    }
+
+    fn now() -> Now {
+        Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH }
+    }
+
+    // Catches: after a sink reset the playout kept only the rest's key, so the first segment's
+    // cut, reported after the rest's first capture, was dropped and the forwarding read as
+    // played whole.
+    #[test]
+    fn the_first_segments_late_cut_counts_after_a_reset() {
+        let frame = Duration::from_millis(20);
+        let mut playout = Playout::new(SpeechId(1), None);
+        playout.captured(Some(segment(1)), frame);
+        playout.handle(SinkReport::Reset, now());
+        playout.captured(Some(segment(2)), frame);
+        let cut = PlaybackFinished { interrupted: true, ..PlaybackFinished::default() };
+        playout.handle(SinkReport::Finished { segment: segment(1), ev: cut }, now());
+        assert!(playout.cut_below, "the first segment's cut was dropped");
     }
 }
