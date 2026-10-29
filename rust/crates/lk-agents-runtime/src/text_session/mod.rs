@@ -32,11 +32,6 @@ pub(super) struct Release {
     delivered: BTreeMap<String, String>,
 }
 
-struct PendingDelivery {
-    history: Vec<lk_agents_abi::ChatItem>,
-    output: Option<ValidationId>,
-}
-
 pub(super) struct Driver {
     session: TextSession,
     agents: BTreeMap<String, TextSessionAgent>,
@@ -46,7 +41,8 @@ pub(super) struct Driver {
     events_tx: mpsc::Sender<(String, Report)>,
     updates: mpsc::Sender<Result<TextSessionUpdate, ProviderError>>,
     work: BTreeMap<String, Execution>,
-    pending: BTreeMap<String, PendingDelivery>,
+    /// Settled or parked invocations awaiting release, with their accepted output.
+    pending: BTreeMap<String, Option<ValidationId>>,
     releases: VecDeque<Release>,
     output: Option<HostRef>,
     finished: bool,
@@ -208,13 +204,7 @@ impl Driver {
                     } => Some(id),
                     _ => None,
                 };
-                self.pending.insert(
-                    invocation_id.clone(),
-                    PendingDelivery {
-                        history: result.new_messages,
-                        output,
-                    },
-                );
+                self.pending.insert(invocation_id.clone(), output);
                 let _ = self
                     .updates
                     .send(Ok(TextSessionUpdate::InvocationSettled {
@@ -226,16 +216,9 @@ impl Driver {
             Effect::InvocationParked {
                 invocation_id,
                 usage,
-                history,
                 ..
             } => {
-                self.pending.insert(
-                    invocation_id.clone(),
-                    PendingDelivery {
-                        history,
-                        output: None,
-                    },
-                );
+                self.pending.insert(invocation_id.clone(), None);
                 let _ = self
                     .updates
                     .send(Ok(TextSessionUpdate::Parked {
@@ -268,39 +251,21 @@ impl Driver {
     }
 
     fn release(&mut self, release: Release) -> Vec<Effect> {
-        let Some(pending) = self.pending.remove(&release.invocation_id) else {
+        let Some(output) = self.pending.remove(&release.invocation_id) else {
             return Vec::new();
         };
-        let now = self.clock.now();
-        let mut effects = Vec::new();
-        for item in &pending.history {
-            if let lk_agents_abi::ChatItem::Message(message) = item
-                && let Some(text) = release.delivered.get(&message.id)
-            {
-                let mut message = message.clone();
-                message.interrupted |= message.raw_text_content().as_deref() != Some(text.as_str());
-                message.content = vec![lk_agents_abi::ChatContent::Text(text.clone())];
-                effects.extend(self.session.handle(
-                    Event::DialogueDelivered {
-                        invocation_id: release.invocation_id.clone(),
-                        message,
-                    },
-                    now,
-                ));
-            }
-        }
-        self.output = pending.output.and_then(|id| {
+        self.output = output.and_then(|id| {
             self.work
                 .get_mut(&release.invocation_id)
                 .and_then(|w| w.outputs.remove(&id))
         });
-        effects.extend(self.session.handle(
+        self.session.handle(
             Event::InvocationReleased {
                 invocation_id: release.invocation_id,
+                delivered: release.delivered,
             },
-            now,
-        ));
-        effects
+            self.clock.now(),
+        )
     }
 }
 

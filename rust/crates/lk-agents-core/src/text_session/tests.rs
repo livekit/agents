@@ -109,7 +109,8 @@ impl Driver {
                 | Effect::InvocationParked { invocation_id, .. } => Some(invocation_id.clone()),
                 _ => None,
             }) {
-                self.send(Event::InvocationReleased { invocation_id });
+                let delivered = Default::default();
+                self.send(Event::InvocationReleased { invocation_id, delivered });
             }
         }
         effects
@@ -271,7 +272,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
         invocation_id: invocation_id.clone(),
         message: question_message.clone(),
     });
-    second.send(Event::InvocationReleased { invocation_id });
+    second.send(Event::InvocationReleased { invocation_id, delivered: Default::default() });
     let mut third = Driver::new(second.config.clone(), Some(second.turn().state), "Friday");
     assert_eq!(third.session.state.active_frame_id, child_id);
     assert_eq!(
@@ -657,7 +658,8 @@ fn child_completion_waits_for_delivery_receipts_before_merging_and_starting_pare
         invocation_id: child_invocation.clone(),
         message: message("late-delivery", Role::Assistant, "A quiet room is available"),
     });
-    driver.send(Event::InvocationReleased { invocation_id: child_invocation });
+    let delivered = Default::default();
+    driver.send(Event::InvocationReleased { invocation_id: child_invocation, delivered });
     assert_eq!(driver.request().1.items.iter().filter(|i| i.id() == "late-delivery").count(), 1);
     assert_ne!(driver.session.state.active_frame_id, child_frame);
 }
@@ -795,7 +797,8 @@ fn cancellation_after_generation_settlement_still_returns_no_envelope() {
         ))
     );
     assert!(!driver.effects.iter().any(|e| matches!(e, Effect::Finished(Ok(_)))));
-    assert!(driver.send(Event::InvocationReleased { invocation_id }).is_empty());
+    let delivered = Default::default();
+    assert!(driver.send(Event::InvocationReleased { invocation_id, delivered }).is_empty());
 }
 
 #[test]

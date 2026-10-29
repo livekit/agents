@@ -68,9 +68,11 @@ pub enum Event {
         message: ChatMessage,
     },
     /// All delivery receipts and invocation cleanup have been reported. A non-presenting
-    /// consumer acknowledges immediately; opening a stream does not imply delivery.
+    /// consumer acknowledges immediately; opening a stream does not imply delivery. `delivered`:
+    /// the text of each of the invocation's dialogue messages that reached the person, by id.
     InvocationReleased {
         invocation_id: String,
+        delivered: BTreeMap<String, String>,
     },
     /// Return from a direct execution of the active frame, preserving its original parent call.
     /// As with AgentRun, the result must already have passed the agent's output validators.
@@ -106,7 +108,6 @@ pub enum Effect {
         frame_id: FrameId,
         invocation_id: String,
         usage: RunUsage,
-        history: Vec<ChatItem>,
     },
     Run {
         invocation_id: String,
@@ -335,7 +336,11 @@ impl TextSession {
                     .unwrap();
                 history::delivered(frame, message);
             }
-            Event::InvocationReleased { invocation_id } if self.is_current(&invocation_id) => {
+            Event::InvocationReleased {
+                invocation_id,
+                delivered,
+            } if self.is_current(&invocation_id) => {
+                self.receipts(&delivered);
                 match self.invocation.as_mut().unwrap().release.take() {
                     Some(InvocationRelease::Settled(result, output, approvals)) => {
                         self.invocation = None;
@@ -730,9 +735,33 @@ impl TextSession {
             frame_id: invocation.frame_id.clone(),
             invocation_id: invocation.id.clone(),
             usage,
-            history: frame.history.clone(),
         });
         self.invocation.as_mut().unwrap().release = Some(InvocationRelease::Parked);
+    }
+
+    /// The released invocation's dialogue as the person received it: a message cut short reads
+    /// as interrupted, with the text that reached them.
+    fn receipts(&mut self, delivered: &BTreeMap<String, String>) {
+        let Some(invocation) = &self.invocation else { return };
+        let items = match &invocation.release {
+            Some(InvocationRelease::Settled(result, ..)) => &result.new_messages,
+            Some(InvocationRelease::Parked) => &self.state.frames[&invocation.frame_id].history,
+            None => return,
+        };
+        let received: Vec<ChatMessage> = (items.iter())
+            .filter_map(|item| {
+                let ChatItem::Message(message) = item else { return None };
+                let text = delivered.get(&message.id)?;
+                let mut message = message.clone();
+                message.interrupted |= message.raw_text_content().as_deref() != Some(text.as_str());
+                message.content = vec![lk_agents_abi::ChatContent::Text(text.clone())];
+                Some(message)
+            })
+            .collect();
+        let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
+        for message in received {
+            history::delivered(frame, message);
+        }
     }
 
     fn finish(

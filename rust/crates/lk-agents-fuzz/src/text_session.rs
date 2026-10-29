@@ -293,12 +293,18 @@ impl World {
                         }
                     }
                     let release =
-                        Event::InvocationReleased { invocation_id: invocation_id.clone() };
+                        Event::InvocationReleased {
+                        invocation_id: invocation_id.clone(),
+                        delivered: Default::default(),
+                    };
                     timeline.at(at + self.rng.u64(0..50), Src::Delivery, release);
                 }
                 Effect::InvocationParked { invocation_id, .. } => {
                     let release =
-                        Event::InvocationReleased { invocation_id: invocation_id.clone() };
+                        Event::InvocationReleased {
+                        invocation_id: invocation_id.clone(),
+                        delivered: Default::default(),
+                    };
                     timeline.at(now + self.rng.u64(0..50), Src::Delivery, release);
                 }
                 _ => {}
