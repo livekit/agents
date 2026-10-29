@@ -5,10 +5,17 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .. import _core
-from .._generated.storage_class import EventRow, TaskRecord, TaskState, ThreadInfo
+from .._generated.storage_class import (
+    EventRow,
+    TaskPage,
+    TaskRecord,
+    TaskState,
+    ThreadInfo,
+    ThreadItemPage,
+)
 from ..llm import ChatContext
 from ..log import logger
 from .backends import Storage
@@ -74,6 +81,44 @@ class Thread:
         """This agent's history, or another agent's."""
         return await self.lane(agent or self._agent_name).history()
 
+    async def list_items(
+        self, *, agent: str | None = None, after: str | None = None, limit: int = 100
+    ) -> ThreadItemPage:
+        """One page of the thread's committed chat items in insertion order, every lane's or
+        ``agent``'s; pass the page's ``after`` to read the next (empty on the last page). The
+        same records Cloud's threads API answers, for an application's own read routes."""
+        core = await self._open()
+        try:
+            return await core.list_items(agent, after, limit)
+        finally:
+            core.close()
+
+    async def list_tasks(
+        self,
+        *,
+        agent: str | None = None,
+        status: TaskState | None = None,
+        order: Literal["inserted", "updated"] = "inserted",
+        page_token: str | None = None,
+        limit: int = 50,
+    ) -> TaskPage:
+        """One page of the thread's A2A task records: in insertion order, or last updated first
+        as A2A ``tasks/list`` lists them; of ``agent``'s lane and ``status`` when given. Pass
+        the page's ``next_page_token`` to read the next; a token is bound to its listing."""
+        core = await self._open()
+        try:
+            return await core.list_tasks(agent, status, order, limit, page_token)
+        finally:
+            core.close()
+
+    async def task(self, task_id: str) -> TaskRecord | None:
+        """One task record, ``None`` when this thread has none of that id."""
+        core = await self._open()
+        try:
+            return await core.task(task_id)
+        finally:
+            core.close()
+
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
         """One page of the journal (docs/internals/storage.md#journal), every lane, in order;
         pass the last ``id`` to read the next."""
@@ -108,15 +153,8 @@ class Lane:
         try:
             if status is None:
                 return await core.tasks(self._agent, limit=limit)
-            records: list[TaskRecord] = []
-            page_token = None
-            while len(records) < limit:
-                page = await core.list_tasks(status, 0, limit, page_token)
-                records += [r for r in page.tasks if r.lane == self._agent]
-                if not page.next_page_token:
-                    break
-                page_token = page.next_page_token
-            return records[:limit]
+            page = await core.list_tasks(self._agent, status, "updated", limit)
+            return page.tasks
         finally:
             core.close()
 

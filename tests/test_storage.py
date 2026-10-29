@@ -862,3 +862,31 @@ async def test_create_thread_creates_the_database(thread_storage: Storage) -> No
     tasks = await core.tasks("front")
     assert len(tasks) == 2 and all(t.status == "completed" for t in tasks)
     core.close()
+
+
+async def test_the_thread_handle_pages_items_and_tasks(thread_storage: Storage) -> None:
+    """``ctx.thread`` pages committed items and task records without a lease
+    (docs/internals/storage.md#reading-thread-items-and-tasks)."""
+    storage = thread_storage
+    thread_id = (await storage.threads.create_thread()).thread_id
+    for lane, text, message_id in [("front", "a", "m1"), ("back", "b", "m2"), ("front", "c", "m3")]:
+        await run_turn(storage, thread_id, lane, a2a(text, message_id), "queue", echo)
+    thread = Thread(storage, thread_id, agent_name="front")
+
+    texts: list[str] = []
+    after: str | None = None
+    while True:
+        items = await thread.list_items(agent="front", after=after, limit=3)
+        texts += [payload_to_item(i.item).text_content or "" for i in items.items]
+        if not items.after:
+            break
+        after = items.after
+    assert texts == ["a", "reply to: a", "c", "reply to: c"]
+
+    first = await thread.list_tasks(agent="front", limit=1)
+    second = await thread.list_tasks(agent="front", page_token=first.next_page_token, limit=1)
+    assert first.total_size == 2 and not second.next_page_token
+    ids = [first.tasks[0].task_id, second.tasks[0].task_id]
+    assert [t.message_id for t in first.tasks + second.tasks] == ["m1", "m3"], "oldest first"
+    assert (await thread.task(ids[1])) == second.tasks[0]
+    assert await thread.task("AST_missing") is None

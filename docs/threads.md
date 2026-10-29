@@ -106,6 +106,9 @@ with the same API and no persistence; see [storage.md](internals/storage.md).
 | `lane(agent).history()`                        | another agent's history in this thread                                        |
 | `chat_history(agent=None)`                     | this agent's history, or another agent's                                      |
 | `lane(agent).tasks(status=, limit=)` | A2A task records for the selected lane |
+| `list_items(agent=None, after=None, limit=100)` | one page of committed chat items in insertion order; the page's `after` reads the next |
+| `list_tasks(agent=None, status=None, order="inserted", page_token=None, limit=50)` | one page of task records, in insertion order or last updated first (`order="updated"`) |
+| `task(task_id)` | one task record, `None` when the thread has none of that id |
 | `journal(after_id=0, limit=100)`               | the journal, one page in order                                                |
 
 ## Lifecycle
