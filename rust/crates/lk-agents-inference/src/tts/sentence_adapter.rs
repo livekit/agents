@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::TimedString;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_abi::tts::stream_adapter::{
     SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
@@ -17,6 +16,7 @@ use lk_agents_abi::tts::tts::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, T
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
+use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_net::strings::shortuuid;
 use tokio::sync::mpsc;
 

@@ -6,8 +6,8 @@ use crate::transcription::Visible;
 use crate::transcription::VisibleStream;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::LlmMetrics;
-use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
 use lk_agents_abi::{Extra, LlmChunk, Ts};
+use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
 
 pub enum WordEffect {
     Chunk(Visible),
