@@ -1,11 +1,12 @@
 Reverted by known_bugs.sh to reintroduce the bug fixed by 643e1bed9:
 voice core: a host interrupt() that races the speech's end lands, as the reference's does
+Re-cut against the declared SpeechHandle state machine (speech_handle/state.rs).
 
 diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-index 0e93c33..f8a9270 100644
+index 614145732..74c3a9a8f 100644
 --- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
 +++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-@@ -1010,6 +1010,11 @@ impl Driver {
+@@ -1092,6 +1092,11 @@ impl Driver {
              if !h.done() {
                  h.mark_done(None);
              }
@@ -18,39 +19,36 @@ index 0e93c33..f8a9270 100644
              // The run that owned it lets it go, and its verdict moves to this speech.
              let h = Arc::clone(h);
 diff --git a/rust/crates/lk-agents-voice/src/speech_handle.rs b/rust/crates/lk-agents-voice/src/speech_handle.rs
-index 230c11f..fedb266 100644
+index d44cb7b16..581b33e58 100644
 --- a/rust/crates/lk-agents-voice/src/speech_handle.rs
 +++ b/rust/crates/lk-agents-voice/src/speech_handle.rs
-@@ -184,6 +184,8 @@ struct Inner {
-     host: Option<lk_agents_abi::HostRef>,
-     /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
-     blocking_tools: Vec<(String, String)>,
-+    /// A host `interrupt()` landed in [`SpeechHandle::mark_done`], not yet journalled.
-+    interrupted_at_done: bool,
- }
- 
- /// `SpeechHandle`: one speech's id, state and outcome, shared by the loop that runs the speech and
-@@ -270,6 +272,7 @@ impl SpeechHandle {
-                 user_metrics: None,
-                 host: None,
-                 blocking_tools: Vec::new(),
-+                interrupted_at_done: false,
-             }),
-         }
-     }
-@@ -369,6 +372,11 @@ impl SpeechHandle {
-         self.interrupt_requested.store(false, Ordering::Release);
+@@ -210,7 +210,10 @@ impl SpeechHandle {
+             let mut inner = lock(&self.inner);
+             let input = match input {
+                 HandleInput::Accepted(input) => input,
+-                HandleInput::Complete(error) => StateInput::Complete { error },
++                HandleInput::Complete(error) => StateInput::Complete {
++                    error,
++                    interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
++                },
+                 HandleInput::HostRequest { force, created } => StateInput::HostRequest {
+                     force,
+                     created,
+@@ -384,6 +387,13 @@ impl SpeechHandle {
+             .expect("clearing a refused request cannot refuse");
      }
  
 +    /// A host `interrupt()` landed as the speech was marked done, once: the loop journals it.
 +    pub(crate) fn take_interrupted_at_done(&self) -> bool {
-+        std::mem::take(&mut lock(&self.inner).interrupted_at_done)
++        self.transition(HandleInput::Accepted(StateInput::TakeInterruptedAtDone))
++            .expect("reading the completion indication cannot refuse")
++            .flag()
 +    }
 +
      /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
      pub fn mark_scheduled(&self) {
          self.scheduled.set(true);
-@@ -576,13 +584,25 @@ impl SpeechHandle {
+@@ -521,6 +531,10 @@ impl SpeechHandle {
  
      /// `_mark_done`. The error is kept out of the completion signal so awaiting never raises; see
      /// [`exception`](Self::exception).
@@ -59,69 +57,96 @@ index 230c11f..fedb266 100644
 +    /// reference's handle (`interrupt()` before done is an interruption); see
 +    /// [`take_interrupted_at_done`](Self::take_interrupted_at_done).
      pub fn mark_done(&self, error: Option<ProviderError>) {
--        let newly_done = !self.done();
--        if newly_done {
--            if let Some(err) = error {
--                self.inner.lock().unwrap().error = Some(err);
-+        {
-+            // Under the lock the host's `interrupt()` checks `done` in, so a request is either
-+            // refused as too late or seen here.
-+            let mut inner = lock(&self.inner);
-+            if !self.done() {
-+                if self.interrupt_requested.load(Ordering::Acquire) && !self.interrupted() {
-+                    self.interrupted.set(true);
-+                    inner.interrupted_at_done = true;
-+                }
-+                if let Some(err) = error {
-+                    inner.error = Some(err);
-+                }
-+                self.done.set(true);
-             }
--            self.done.set(true);
-         }
- 
-         // Both run on every call; with no generation the mark refuses, which is fine here.
-@@ -598,13 +618,12 @@ impl SpeechHandle {
-         Ok(self.inner.lock().unwrap().error.clone())
+         self.transition(HandleInput::Complete(error)).expect("completing a speech cannot refuse");
+     }
+@@ -530,16 +544,9 @@ impl SpeechHandle {
+         lock(&self.inner).state.exception()
      }
  
 -    /// How a done speech ended, as `SpeechDone` reports it: as the host reads the handle, so an
 -    /// `interrupt()` that raced the speech's end is not reported completed.
 +    /// How a done speech ended, as `SpeechDone` reports it.
      pub fn outcome(&self) -> crate::events::SpeechOutcome {
-         use crate::events::SpeechOutcome;
-         if matches!(self.exception(), Ok(Some(_))) {
-             SpeechOutcome::Failed
--        } else if self.interrupted_for_host() {
-+        } else if self.interrupted() {
-             SpeechOutcome::Interrupted
-         } else {
-             SpeechOutcome::Completed
-@@ -783,15 +802,20 @@ impl SpeechHandle {
-         #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
-     ) -> Result<(), SpeechRefused> {
-         let created = self.created();
--        if self.interrupt_requested.load(Ordering::Acquire)
--            || (created.is_some() && (self.interrupted() || self.done()))
-         {
--            return Ok(());
+-        use crate::events::SpeechOutcome;
+-        match lock(&self.inner).state.outcome() {
+-            SpeechOutcome::Completed if self.interrupt_requested.load(Ordering::Acquire) => {
+-                SpeechOutcome::Interrupted
+-            }
+-            outcome => outcome,
 -        }
--        if !force && !self.allow_interruptions_for_host() {
--            return Err(SpeechError::InterruptionsNotAllowed.into());
-+            // Checked and recorded under the lock `mark_done` takes: a request it does not see
-+            // is refused as too late.
-+            let _inner = lock(&self.inner);
-+            if self.interrupt_requested.load(Ordering::Acquire)
-+                || (created.is_some() && (self.interrupted() || self.done()))
-+            {
-+                return Ok(());
++        lock(&self.inner).state.outcome()
+     }
+ 
+     /// `wait_for_playout()`, and so `__await__`; the host's call adds the self-wait guard.
+diff --git a/rust/crates/lk-agents-voice/src/speech_handle/state.rs b/rust/crates/lk-agents-voice/src/speech_handle/state.rs
+index 358f7943e..a383cfa6c 100644
+--- a/rust/crates/lk-agents-voice/src/speech_handle/state.rs
++++ b/rust/crates/lk-agents-voice/src/speech_handle/state.rs
+@@ -66,6 +66,7 @@ pub struct SpeechState {
+     holds: u32,
+     restore: bool,
+     watchdog_armed: bool,
++    interrupted_at_done: bool,
+     authorized: bool,
+     num_steps: u32,
+     generations: Vec<bool>,
+@@ -81,12 +82,13 @@ pub enum Input {
+     SetAllowInterruptions { allow: bool },
+     HoldInterruptions,
+     ReleaseInterruptions,
+-    Complete { error: Option<ProviderError> },
++    Complete { error: Option<ProviderError>, interrupt_requested: bool },
+     HostRequest { force: bool, created: bool, already_requested: bool },
+     ValidateHostSetter { allow: bool, interrupt_requested: bool },
+     ValidateHostHold,
+     InterruptRefused,
+     TakeWatchdog,
++    TakeInterruptedAtDone,
+ }
+ 
+ pub enum Effect {
+@@ -137,6 +139,7 @@ impl SpeechState {
+             holds: 0,
+             restore: allow,
+             watchdog_armed: false,
++            interrupted_at_done: false,
+             authorized: false,
+             num_steps: 1,
+             generations: Vec::new(),
+@@ -211,7 +214,9 @@ impl SpeechState {
+                     effects.push(self.publish());
+                 }
+             }
+-            Input::Complete { error } => self.complete(error, &mut effects),
++            Input::Complete { error, interrupt_requested } => {
++                self.complete(error, interrupt_requested, &mut effects);
 +            }
-+            if !force && !self.allow_interruptions_for_host() {
-+                return Err(SpeechError::InterruptionsNotAllowed.into());
+             Input::HostRequest { force, created, already_requested } => {
+                 let requested =
+                     !(already_requested || (created && (self.view.interrupted || self.view.done)));
+@@ -235,12 +240,24 @@ impl SpeechState {
+             }
+             Input::InterruptRefused => effects.push(Effect::PublishRequestFlag(false)),
+             Input::TakeWatchdog => reply = Reply::Flag(std::mem::take(&mut self.watchdog_armed)),
++            Input::TakeInterruptedAtDone => {
++                reply = Reply::Flag(std::mem::take(&mut self.interrupted_at_done))
 +            }
-+            self.interrupt_requested.store(true, Ordering::Release);
          }
--        self.interrupt_requested.store(true, Ordering::Release);
-         let interrupt = move |api: &Api, speech| {
-             // A closed loop has nothing left to interrupt.
-             let _ = api.send(crate::agent_session::Command::from(
+         Ok(Transition { reply, effects })
+     }
+ 
+-    fn complete(&mut self, error: Option<ProviderError>, effects: &mut Vec<Effect>) {
++    fn complete(
++        &mut self,
++        error: Option<ProviderError>,
++        interrupt_requested: bool,
++        effects: &mut Vec<Effect>,
++    ) {
+         if !self.view.done {
++            if interrupt_requested && !self.view.interrupted {
++                self.view.interrupted = true;
++                self.interrupted_at_done = true;
++            }
+             if error.is_some() {
+                 self.view.error = error;
+             }
