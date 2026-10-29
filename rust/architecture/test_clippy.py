@@ -368,5 +368,38 @@ class ClippyContracts(unittest.TestCase):
         self.assertFalse(ratchet(sites, sites))
 
 
+class CompilerLocationContracts(unittest.TestCase):
+    def test_worker_exemption_keeps_other_primary_spans_visible(self):
+        def span(path, expansion=None):
+            return {
+                "is_primary": True,
+                "file_name": path,
+                "line_start": 1,
+                "column_start": 1,
+                "expansion": expansion,
+            }
+
+        worker = span("crates/lk-agents-media/src/workers.rs")
+        core = span("crates/lk-agents-core/src/lib.rs")
+        message = {
+            "code": {"code": "clippy::disallowed_types"},
+            "message": "banned type",
+            "spans": [worker, span("unmapped.rs")],
+        }
+        with self.assertRaisesRegex(ValueError, "unmapped core policy"):
+            clippy.compiler_locations([message], ROOT)
+        expected = [
+            (
+                "rust/crates/lk-agents-core/src/lib.rs",
+                1,
+                1,
+                "clippy::disallowed_types",
+                "banned type",
+            )
+        ]
+        message["spans"] = [worker, core]
+        self.assertEqual(clippy.compiler_locations([message], ROOT), expected)
+
+
 if __name__ == "__main__":
     unittest.main()
