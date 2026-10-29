@@ -284,7 +284,8 @@ enum Phase {
     Idle,
     Checkpoint(checkpoint::Pending),
     Rendering(RenderId),
-    Requesting(ModelStep),
+    /// The model streams its step; the calls it makes run as they arrive.
+    Requesting(ModelStep, Acting),
     Acting(Acting),
     ValidatingText {
         validation: ValidationId,
@@ -305,6 +306,37 @@ struct Acting {
     finals: BTreeMap<ValidationId, CallId>,
     /// Accepted candidates; the first in model order (the lowest id) is the output.
     accepted: BTreeMap<CallId, ValidationId>,
+}
+
+impl Acting {
+    fn new(approval_answers: &BTreeSet<String>) -> Self {
+        Acting {
+            calls: ToolCalls::new(approval_answers.clone()),
+            finals: BTreeMap::new(),
+            accepted: BTreeMap::new(),
+        }
+    }
+}
+
+impl Acting {
+    /// Cancels every call and validation still in flight; their settlement is owed.
+    fn cancel(mut self, owed: &mut Owed, fx: &mut Vec<Effect>) {
+        owed.calls.extend(self.calls.cancel(fx));
+        for validation in self.finals.into_keys() {
+            fx.push(Effect::OutputValidateCancel { validation });
+            owed.validations.insert(validation);
+        }
+    }
+}
+
+impl Phase {
+    /// The step's calls, while the model streams them or once it is done.
+    fn acting(&mut self) -> Option<&mut Acting> {
+        match self {
+            Phase::Requesting(_, acting) | Phase::Acting(acting) => Some(acting),
+            _ => None,
+        }
+    }
 }
 
 /// Cancelled work whose settlement is still owed.
@@ -387,30 +419,25 @@ impl AgentRun {
                 },
                 _ => {}
             },
-            Event::LlmChunk { request, chunk } => {
-                if let Phase::Requesting(step) = &mut self.phase
-                    && step.request == request
-                    && let Some(delta) = step.chunk(chunk)
-                {
-                    let message_id = step.message_id.clone();
-                    fx.push(Effect::Emit(StreamEvent::TextDelta { message_id, delta }));
-                }
-            }
+            Event::LlmChunk { request, chunk } => self.chunk(request, chunk, now, &mut fx),
             Event::LlmEnded { request } => self.response(request, now, &mut fx),
             Event::LlmFailed { request, error } => {
-                if matches!(&self.phase, Phase::Requesting(s) if s.request == request) {
-                    // The provider already recovered what it could; nothing is outstanding.
-                    let Phase::Requesting(step) = std::mem::replace(&mut self.phase, Phase::Idle)
+                if matches!(&self.phase, Phase::Requesting(s, _) if s.request == request) {
+                    // The provider already recovered what it could; the calls the response made
+                    // so far are cancelled.
+                    let Phase::Requesting(step, acting) =
+                        std::mem::replace(&mut self.phase, Phase::Idle)
                     else {
                         unreachable!()
                     };
                     end_text(&step, true, &mut fx);
-                    self.finish(Err(RunError::Model(error)), &mut fx);
+                    self.phase = Phase::Acting(acting);
+                    self.abort(RunError::Model(error), now, &mut fx);
                 }
             }
             Event::ToolPrepared { call, prepared, identity } => {
-                let held = match &mut self.phase {
-                    Phase::Acting(a) => a.calls.prepared(
+                let held = match self.phase.acting() {
+                    Some(a) => a.calls.prepared(
                         call,
                         prepared,
                         identity,
@@ -418,7 +445,7 @@ impl AgentRun {
                         self.history.iter(),
                         &mut fx,
                     ),
-                    _ => false,
+                    None => false,
                 };
                 if !held {
                     fx.push(Effect::ToolArgumentsRelease { prepared });
@@ -426,7 +453,7 @@ impl AgentRun {
                 self.step_settled(now, &mut fx);
             }
             Event::ToolPrepareFailed { call, failure } => {
-                if let Phase::Acting(a) = &mut self.phase {
+                if let Some(a) = self.phase.acting() {
                     a.calls.prepare_failed(
                         call,
                         failure,
@@ -438,7 +465,7 @@ impl AgentRun {
                 self.step_settled(now, &mut fx);
             }
             Event::ReadBackRendered { call, result } => {
-                if let Phase::Acting(a) = &mut self.phase {
+                if let Some(a) = self.phase.acting() {
                     a.calls.read_back(
                         call,
                         result,
@@ -450,17 +477,17 @@ impl AgentRun {
                 self.step_settled(now, &mut fx);
             }
             Event::ToolProgress { call, message } => {
-                if let Phase::Acting(a) = &mut self.phase {
+                if let Some(a) = self.phase.acting() {
                     a.calls.progress(call, message, &mut fx);
                 }
             }
             Event::ToolCallUpdated { call, extra } => {
-                if let Phase::Acting(a) = &mut self.phase {
+                if let Some(a) = self.phase.acting() {
                     a.calls.update_extra(call, extra);
                 }
             }
             Event::ToolSettled { call, outcome } => {
-                let cancelled = if let Phase::Acting(a) = &mut self.phase {
+                let cancelled = if let Some(a) = self.phase.acting() {
                     a.calls.body_settled(call, outcome, &mut fx)
                 } else {
                     false
@@ -472,7 +499,7 @@ impl AgentRun {
                 }
             }
             Event::ToolLaunchFailed { call, .. } => {
-                if let Phase::Acting(a) = &mut self.phase {
+                if let Some(a) = self.phase.acting() {
                     a.calls.body_settled(call, ToolOutcome::Internal, &mut fx);
                 }
                 self.step_settled(now, &mut fx);
@@ -541,7 +568,9 @@ impl AgentRun {
                     extra: Default::default(),
                     group_id: None,
                 };
-                self.act(vec![call], now, fx);
+                self.phase = Phase::Acting(Acting::new(&self.approval_answers));
+                self.admit(call, fx);
+                self.step_settled(now, fx);
             }
             None => self.next_step(now, fx),
         }
@@ -610,14 +639,65 @@ impl AgentRun {
             chat_ctx: planned.chat_ctx,
             tools: planned.tools,
         });
-        self.phase = Phase::Requesting(ModelStep::new(request, purpose, message_id));
+        let step = ModelStep::new(request, purpose, message_id);
+        self.phase = Phase::Requesting(step, Acting::new(&self.approval_answers));
+    }
+
+    /// A chunk of the step's response: its text streams, and each call it makes starts at once
+    /// (voice dispatches before the model's end of stream).
+    fn chunk(&mut self, request: RequestId, chunk: LlmChunk, now: Ts, fx: &mut Vec<Effect>) {
+        let Phase::Requesting(step, _) = &mut self.phase else { return };
+        if step.request != request {
+            return;
+        }
+        let added = step.chunk(chunk);
+        let message_id = step.message_id.clone();
+        if let Some(delta) = added.text {
+            let message_id = message_id.clone();
+            fx.push(Effect::Emit(StreamEvent::TextDelta { message_id, delta }));
+        }
+        for (i, c) in added.calls {
+            let call = FunctionCall {
+                id: format!("{message_id}/fnc_{i}"),
+                call_id: c.call_id,
+                arguments: c.arguments,
+                name: c.name,
+                created_at: self.stamp(now),
+                extra: c.extra.unwrap_or_default(),
+                group_id: None,
+            };
+            self.admit(call, fx);
+        }
+    }
+
+    /// Starts one call of the step: a `final_result` candidate goes to output validation.
+    fn admit(&mut self, call: FunctionCall, fx: &mut Vec<Effect>) {
+        self.usage.tool_calls += 1;
+        let id = CallId(self.mint());
+        let Some(acting) = self.phase.acting() else { return };
+        let Some(FinalCandidate { call, value }) =
+            acting.calls.add_step_call(id, call, &self.agent, fx)
+        else {
+            return;
+        };
+        let value = match value {
+            Ok(value) => value,
+            Err(reason) => return acting.calls.final_settled(call, Some(reason), fx),
+        };
+        let validation = ValidationId(self.mint());
+        let candidate = OutputCandidate::Value(value);
+        fx.push(Effect::OutputValidate { validation, candidate });
+        if let Some(acting) = self.phase.acting() {
+            acting.finals.insert(validation, call);
+        }
     }
 
     fn response(&mut self, request: RequestId, now: Ts, fx: &mut Vec<Effect>) {
-        if !matches!(&self.phase, Phase::Requesting(s) if s.request == request) {
+        if !matches!(&self.phase, Phase::Requesting(s, _) if s.request == request) {
             return;
         }
-        let Phase::Requesting(step) = std::mem::replace(&mut self.phase, Phase::Idle) else {
+        let Phase::Requesting(step, acting) = std::mem::replace(&mut self.phase, Phase::Idle)
+        else {
             unreachable!()
         };
         end_text(&step, false, fx);
@@ -643,43 +723,8 @@ impl AgentRun {
                 .into(),
             );
         }
-        if response.calls.is_empty() {
+        if acting.calls.is_empty() {
             return self.text_output(response.text, now, fx);
-        }
-        let calls = response
-            .calls
-            .into_iter()
-            .enumerate()
-            .map(|(i, c)| FunctionCall {
-                id: format!("{message_id}/fnc_{i}"),
-                call_id: c.call_id,
-                arguments: c.arguments,
-                name: c.name,
-                created_at: self.stamp(now),
-                extra: c.extra.unwrap_or_default(),
-                group_id: None,
-            })
-            .collect();
-        self.act(calls, now, fx);
-    }
-
-    fn act(&mut self, calls: Vec<FunctionCall>, now: Ts, fx: &mut Vec<Effect>) {
-        self.usage.tool_calls += calls.len() as u32;
-        let calls = calls.into_iter().map(|c| (CallId(self.mint()), c)).collect();
-        let (calls, candidates) = ToolCalls::begin(calls, &self.agent, &self.approval_answers, fx);
-        let mut acting = Acting { calls, finals: BTreeMap::new(), accepted: BTreeMap::new() };
-        for FinalCandidate { call, value } in candidates {
-            match value {
-                Ok(value) => {
-                    let validation = ValidationId(self.mint());
-                    fx.push(Effect::OutputValidate {
-                        validation,
-                        candidate: OutputCandidate::Value(value),
-                    });
-                    acting.finals.insert(validation, call);
-                }
-                Err(reason) => acting.calls.final_settled(call, Some(reason), fx),
-            }
         }
         self.phase = Phase::Acting(acting);
         self.step_settled(now, fx);
@@ -716,11 +761,11 @@ impl AgentRun {
         if let OutputVerdict::Failed(error) = verdict {
             let ours = match &self.phase {
                 Phase::ValidatingText { validation: v, .. } => *v == validation,
-                Phase::Acting(a) => a.finals.contains_key(&validation),
+                Phase::Requesting(_, a) | Phase::Acting(a) => a.finals.contains_key(&validation),
                 _ => false,
             };
             if ours {
-                if let Phase::Acting(a) = &mut self.phase {
+                if let Some(a) = self.phase.acting() {
                     a.finals.remove(&validation);
                 }
                 self.abort(RunError::Host(error), now, fx);
@@ -740,7 +785,7 @@ impl AgentRun {
                     OutputVerdict::Failed(_) => unreachable!(),
                 }
             }
-            Phase::Acting(acting) => {
+            Phase::Requesting(_, acting) | Phase::Acting(acting) => {
                 let Some(call) = acting.finals.remove(&validation) else { return };
                 let rejection = match verdict {
                     OutputVerdict::Accepted { .. } => {
@@ -981,18 +1026,13 @@ impl AgentRun {
                 fx.push(Effect::InstructionsCancel { render });
                 owed.render = Some(render);
             }
-            Phase::Requesting(step) => {
+            Phase::Requesting(step, acting) => {
                 end_text(&step, true, fx);
                 fx.push(Effect::LlmRequestCancel { request: step.request });
                 owed.request = Some(step.request);
+                acting.cancel(&mut owed, fx);
             }
-            Phase::Acting(mut acting) => {
-                owed.calls.extend(acting.calls.cancel(fx));
-                for validation in acting.finals.into_keys() {
-                    fx.push(Effect::OutputValidateCancel { validation });
-                    owed.validations.insert(validation);
-                }
-            }
+            Phase::Acting(acting) => acting.cancel(&mut owed, fx),
             Phase::ValidatingText { validation, .. } => {
                 fx.push(Effect::OutputValidateCancel { validation });
                 owed.validations.insert(validation);

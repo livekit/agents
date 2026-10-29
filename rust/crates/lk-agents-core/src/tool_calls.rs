@@ -147,33 +147,28 @@ pub struct Recorded {
 }
 
 impl ToolCalls {
-    /// Starts every call of an `AgentRun` step. A call that cannot run settles at once; a
-    /// `final_result` call is returned as a candidate for the parent's output acceptance.
-    pub(crate) fn begin<E: From<Effect>>(
-        calls: Vec<(CallId, FunctionCall)>,
+    /// Starts one call of an `AgentRun` step as the model makes it. A call that cannot run
+    /// settles at once; a `final_result` call is returned as a candidate for the parent's output
+    /// acceptance.
+    pub(crate) fn add_step_call<E: From<Effect>>(
+        &mut self,
+        id: CallId,
+        item: FunctionCall,
         agent: &AgentDefinition,
-        approval_answers: &BTreeSet<String>,
         fx: &mut Vec<E>,
-    ) -> (ToolCalls, Vec<FinalCandidate>) {
-        let mut this = ToolCalls::new(approval_answers.clone());
-        let mut finals = Vec::new();
-        for (id, item) in calls {
-            if item.name == FINAL_RESULT_TOOL
-                && matches!(agent.output, OutputSpec::Structured { .. })
-            {
-                finals
-                    .push(FinalCandidate { call: id, value: final_value(agent, &item.arguments) });
-                this.calls.push(Call {
-                    id,
-                    item,
-                    phase: Phase::Validating,
-                    cancellation_requested: false,
-                });
-            } else {
-                this.add(id, item, &agent.tools, fx);
-            }
+    ) -> Option<FinalCandidate> {
+        if item.name == FINAL_RESULT_TOOL && matches!(agent.output, OutputSpec::Structured { .. }) {
+            let candidate = FinalCandidate { call: id, value: final_value(agent, &item.arguments) };
+            let phase = Phase::Validating;
+            self.calls.push(Call { id, item, phase, cancellation_requested: false });
+            return Some(candidate);
         }
-        (this, finals)
+        self.add(id, item, &agent.tools, fx);
+        None
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.calls.is_empty()
     }
 
     /// A step whose calls may consume the read-backs answered by `approval_answers`.
