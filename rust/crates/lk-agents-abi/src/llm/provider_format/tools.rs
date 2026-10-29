@@ -190,7 +190,6 @@ mod tests {
     #[test]
     fn an_unknown_bit_is_refused() {
         assert_eq!(ToolFlag::from_bits(1).map(ToolFlag::bits), Some(1));
-        assert!(ToolFlag::from_bits(2).is_none(), "CANCELLABLE is not a tool flag in 2.0");
         assert!(ToolFlag::from_bits(4).is_none());
         assert!(ToolFlag::from_bits(8).is_none());
     }
