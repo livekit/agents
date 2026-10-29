@@ -851,6 +851,20 @@ class TestNoParametersSchema:
         assert params["properties"] == {}
         assert "required" not in params
 
+    def test_raw_tool_with_empty_parameters_gets_an_object_schema(self):
+        """Anthropic and Bedrock reject a tool input schema without a type."""
+
+        @function_tool(raw_schema={"name": "hang_up", "description": "", "parameters": {}})
+        async def hang_up(raw_arguments: dict[str, object]) -> None:
+            pass
+
+        ctx = ToolContext([hang_up])
+        empty_object = {"type": "object", "properties": {}}
+
+        assert ctx.parse_function_tools("anthropic")[0]["input_schema"] == empty_object
+        assert ctx.parse_function_tools("aws")[0]["toolSpec"]["inputSchema"]["json"] == empty_object
+        assert hang_up.info.raw_schema["parameters"] == {}
+
 
 class _NullableEnumModel(BaseModel):
     status: Literal["active", "inactive"] | None = Field(None)
