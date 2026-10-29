@@ -21,7 +21,7 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::schema::TaskRow;
-use lk_agents_storage::{Storage, Thread, shortuuid};
+use lk_agents_storage::{Thread, shortuuid};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -207,17 +207,13 @@ impl Drop for Response {
 }
 
 impl Inner {
-    async fn storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
-        self.namespace.shared_storage().await
-    }
-
     async fn thread(
         &self,
         principal: &AuthPrincipal,
         id: &str,
         operation: AuthOperation,
     ) -> Result<Thread, DoorError> {
-        let storage = self.storage().await?;
+        let storage = self.namespace.storage().await?;
         let info = storage.get_thread(id).await?;
         authorize(principal, operation, id, Some(&info.scope))?;
         Ok(storage.open(id, &self.holder).await?)
@@ -310,10 +306,10 @@ impl Inner {
                     scope: first_message_scope(principal)?.to_owned(),
                     ..Default::default()
                 };
-                let info = self.storage().await?.create_thread(request).await?;
+                let info = self.namespace.storage().await?.create_thread(request).await?;
                 (info.thread_id, Some(info.scope))
             }
-            Some(context) => match self.storage().await?.get_thread(context).await {
+            Some(context) => match self.namespace.storage().await?.get_thread(context).await {
                 Ok(info) => (context.to_owned(), Some(info.scope)),
                 Err(StorageError::NotFound(_)) => (context.to_owned(), None),
                 Err(error) => return Err(error.into()),
@@ -347,7 +343,7 @@ impl Inner {
             }
         };
         message.context_id = Some(context.clone());
-        let thread = self.storage().await?.open(&context, &self.holder).await?;
+        let thread = self.namespace.storage().await?.open(&context, &self.holder).await?;
         let continuing = match message.task_id.clone() {
             None => None,
             Some(task_id) => {
@@ -362,7 +358,7 @@ impl Inner {
                 }
             }
         };
-        let streams = self.storage().await?.response_streams();
+        let streams = self.namespace.storage().await?.response_streams();
         let created = streams.create(None).await?;
         let publisher = Arc::new(stream::Publisher::new(
             streams.clone(),
@@ -421,7 +417,7 @@ impl Inner {
         if sender.send(Ok(wire::success(id.clone(), current, None))).await.is_err() {
             return Ok(());
         }
-        let streams = self.storage().await?.response_streams();
+        let streams = self.namespace.storage().await?.response_streams();
         for rpc::Replay { stream, after, follow } in rpc::resume(&task, &row, offset.as_deref())? {
             let mut reader = streams.read(&stream.stream_id, after.as_deref(), follow);
             loop {

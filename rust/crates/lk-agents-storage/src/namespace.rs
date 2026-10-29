@@ -43,14 +43,7 @@ enum Backend {
 }
 
 impl Backend {
-    fn storage(&self) -> &dyn Storage {
-        match self {
-            Backend::Local(s) => s.as_ref(),
-            Backend::Cloud(s) => s.as_ref(),
-        }
-    }
-
-    fn shared_storage(&self) -> Arc<dyn Storage> {
+    fn storage(&self) -> Arc<dyn Storage> {
         match self {
             Backend::Local(s) => s.clone(),
             Backend::Cloud(s) => s.clone(),
@@ -90,13 +83,9 @@ impl Namespace {
             .await
     }
 
-    async fn storage(&self) -> Result<&dyn Storage, StorageError> {
-        Ok(self.backend().await?.storage())
-    }
-
     /// The namespace's backend, opened on first use.
-    pub async fn shared_storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
-        Ok(self.backend().await?.shared_storage())
+    pub async fn storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
+        Ok(self.backend().await?.storage())
     }
 
     /// The A2A work accepted over this namespace, which [`aclose`](HostStorageClass::aclose)
@@ -247,8 +236,7 @@ impl HostStorageClass for Namespace {
         lane: String,
         initial_history: Option<Vec<lk_agents_abi::ChatItem>>,
     ) -> Result<Self::VoiceStore, StorageError> {
-        VoiceStore::bound(self.shared_storage().await?.clone(), thread_id, lane, initial_history)
-            .await
+        VoiceStore::bound(self.storage().await?, thread_id, lane, initial_history).await
     }
 
     fn new(
@@ -420,7 +408,7 @@ impl HostStorageClass for Namespace {
         thread_id: String,
         lane: String,
     ) -> Result<Self::ContextActivation, StorageError> {
-        ContextStore::bound(self.backend().await?.shared_storage(), thread_id, lane).await
+        ContextStore::bound(self.storage().await?, thread_id, lane).await
     }
 
     async fn _core_turn_store(
@@ -431,7 +419,7 @@ impl HostStorageClass for Namespace {
         routing_state: Option<Value>,
         read_only: bool,
     ) -> Result<Self::ContextActivation, StorageError> {
-        let storage = self.backend().await?.shared_storage();
+        let storage = self.storage().await?;
         ContextStore::turn(storage, thread_id, lane, scopes, routing_state, read_only).await
     }
 

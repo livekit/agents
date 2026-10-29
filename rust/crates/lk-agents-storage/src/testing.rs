@@ -75,7 +75,7 @@ impl Backend {
             }
         };
         let namespace = Arc::new(namespace.unwrap());
-        let storage = namespace.shared_storage().await.unwrap();
+        let storage = namespace.storage().await.unwrap();
         Store { namespace, storage, dir }
     }
 
