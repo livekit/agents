@@ -1,152 +1,24 @@
 Reverted by known_bugs.sh to reintroduce the bug fixed by 643e1bed9:
 voice core: a host interrupt() that races the speech's end lands, as the reference's does
-Re-cut against the declared SpeechHandle state machine (speech_handle/state.rs).
+Re-cut against option B (decision 116): the speech task's end report carries the host's request
+(SpeechHandle::report_end) and the core lands it (Driver::land_host_interrupt).
 
 diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-index 614145732..74c3a9a8f 100644
 --- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
 +++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-@@ -1092,6 +1092,11 @@ impl Driver {
-             if !h.done() {
-                 h.mark_done(None);
+@@ -742,6 +742,7 @@ impl Driver {
+             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
+ 
+             GenEvent::Done { speech, outcome, interrupted, host_interrupt } => {
++                self.land_host_interrupt(speech, host_interrupt, out);
+                 if self.session.storage.enabled {
+                     self.storage_settle(speech, *outcome, interrupted, out);
+                 } else {
+@@ -805,6 +806,7 @@ impl Driver {
              }
-+            // A host `interrupt()` still on its way when the speech ended landed on the handle.
-+            if h.take_interrupted_at_done() {
-+                let cause = InterruptCause::Host;
-+                out.trace(InterruptStep::Interrupted { speech, cause, force: false });
-+            }
-             out.machine().emit(SessionEvent::SpeechDone { speech, outcome: h.outcome() });
-             // The run that owned it lets it go, and its verdict moves to this speech.
-             let h = Arc::clone(h);
-diff --git a/rust/crates/lk-agents-voice/src/speech_handle.rs b/rust/crates/lk-agents-voice/src/speech_handle.rs
-index d44cb7b16..581b33e58 100644
---- a/rust/crates/lk-agents-voice/src/speech_handle.rs
-+++ b/rust/crates/lk-agents-voice/src/speech_handle.rs
-@@ -210,7 +210,10 @@ impl SpeechHandle {
-             let mut inner = lock(&self.inner);
-             let input = match input {
-                 HandleInput::Accepted(input) => input,
--                HandleInput::Complete(error) => StateInput::Complete { error },
-+                HandleInput::Complete(error) => StateInput::Complete {
-+                    error,
-+                    interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
-+                },
-                 HandleInput::HostRequest { force, created } => StateInput::HostRequest {
-                     force,
-                     created,
-@@ -384,6 +387,13 @@ impl SpeechHandle {
-             .expect("clearing a refused request cannot refuse");
-     }
  
-+    /// A host `interrupt()` landed as the speech was marked done, once: the loop journals it.
-+    pub(crate) fn take_interrupted_at_done(&self) -> bool {
-+        self.transition(HandleInput::Accepted(StateInput::TakeInterruptedAtDone))
-+            .expect("reading the completion indication cannot refuse")
-+            .flag()
-+    }
-+
-     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
-     pub fn mark_scheduled(&self) {
-         self.scheduled.set(true);
-@@ -521,6 +531,10 @@ impl SpeechHandle {
- 
-     /// `_mark_done`. The error is kept out of the completion signal so awaiting never raises; see
-     /// [`exception`](Self::exception).
-+    ///
-+    /// A host `interrupt()` the loop has not acted on yet lands here, as it would have on the
-+    /// reference's handle (`interrupt()` before done is an interruption); see
-+    /// [`take_interrupted_at_done`](Self::take_interrupted_at_done).
-     pub fn mark_done(&self, error: Option<ProviderError>) {
-         self.transition(HandleInput::Complete(error)).expect("completing a speech cannot refuse");
-     }
-@@ -530,16 +544,9 @@ impl SpeechHandle {
-         lock(&self.inner).state.exception()
-     }
- 
--    /// How a done speech ended, as `SpeechDone` reports it: as the host reads the handle, so an
--    /// `interrupt()` that raced the speech's end is not reported completed.
-+    /// How a done speech ended, as `SpeechDone` reports it.
-     pub fn outcome(&self) -> crate::events::SpeechOutcome {
--        use crate::events::SpeechOutcome;
--        match lock(&self.inner).state.outcome() {
--            SpeechOutcome::Completed if self.interrupt_requested.load(Ordering::Acquire) => {
--                SpeechOutcome::Interrupted
--            }
--            outcome => outcome,
--        }
-+        lock(&self.inner).state.outcome()
-     }
- 
-     /// `wait_for_playout()`, and so `__await__`; the host's call adds the self-wait guard.
-diff --git a/rust/crates/lk-agents-voice/src/speech_handle/state.rs b/rust/crates/lk-agents-voice/src/speech_handle/state.rs
-index 358f7943e..a383cfa6c 100644
---- a/rust/crates/lk-agents-voice/src/speech_handle/state.rs
-+++ b/rust/crates/lk-agents-voice/src/speech_handle/state.rs
-@@ -66,6 +66,7 @@ pub struct SpeechState {
-     holds: u32,
-     restore: bool,
-     watchdog_armed: bool,
-+    interrupted_at_done: bool,
-     authorized: bool,
-     num_steps: u32,
-     generations: Vec<bool>,
-@@ -81,12 +82,13 @@ pub enum Input {
-     SetAllowInterruptions { allow: bool },
-     HoldInterruptions,
-     ReleaseInterruptions,
--    Complete { error: Option<ProviderError> },
-+    Complete { error: Option<ProviderError>, interrupt_requested: bool },
-     HostRequest { force: bool, created: bool, already_requested: bool },
-     ValidateHostSetter { allow: bool, interrupt_requested: bool },
-     ValidateHostHold,
-     InterruptRefused,
-     TakeWatchdog,
-+    TakeInterruptedAtDone,
- }
- 
- pub enum Effect {
-@@ -137,6 +139,7 @@ impl SpeechState {
-             holds: 0,
-             restore: allow,
-             watchdog_armed: false,
-+            interrupted_at_done: false,
-             authorized: false,
-             num_steps: 1,
-             generations: Vec::new(),
-@@ -211,7 +214,9 @@ impl SpeechState {
-                     effects.push(self.publish());
-                 }
-             }
--            Input::Complete { error } => self.complete(error, &mut effects),
-+            Input::Complete { error, interrupt_requested } => {
-+                self.complete(error, interrupt_requested, &mut effects);
-+            }
-             Input::HostRequest { force, created, already_requested } => {
-                 let requested =
-                     !(already_requested || (created && (self.view.interrupted || self.view.done)));
-@@ -235,12 +240,24 @@ impl SpeechState {
-             }
-             Input::InterruptRefused => effects.push(Effect::PublishRequestFlag(false)),
-             Input::TakeWatchdog => reply = Reply::Flag(std::mem::take(&mut self.watchdog_armed)),
-+            Input::TakeInterruptedAtDone => {
-+                reply = Reply::Flag(std::mem::take(&mut self.interrupted_at_done))
-+            }
-         }
-         Ok(Transition { reply, effects })
-     }
- 
--    fn complete(&mut self, error: Option<ProviderError>, effects: &mut Vec<Effect>) {
-+    fn complete(
-+        &mut self,
-+        error: Option<ProviderError>,
-+        interrupt_requested: bool,
-+        effects: &mut Vec<Effect>,
-+    ) {
-         if !self.view.done {
-+            if interrupt_requested && !self.view.interrupted {
-+                self.view.interrupted = true;
-+                self.interrupted_at_done = true;
-+            }
-             if error.is_some() {
-                 self.view.error = error;
-             }
+             GenEvent::Failed { speech, error, host_interrupt } => {
++                self.land_host_interrupt(speech, host_interrupt, out);
+                 if self.session.storage.enabled {
+                     self.storage_abandon(speech, error, out);
+                 } else {

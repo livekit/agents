@@ -7,6 +7,7 @@ use super::tools::run_tools;
 use crate::voice::SpeechTasks;
 use crate::voice::generation::realtime_generation::realtime_generation_task;
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::ChatMessage;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_voice::agent_session::DriverError;
@@ -16,7 +17,6 @@ use lk_agents_voice::generation::pipeline::{
 };
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{NextReply, StepNext};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -34,7 +34,10 @@ pub(crate) async fn pipeline_reply_task(
     let speech = handle.id();
     let error = match run(&shared, &handle, ctx, player, &speeches).await {
         Ok(Finished { outcome, interrupted }) => {
-            shared.report(GenEvent::Done { speech, outcome: Box::new(outcome), interrupted });
+            let outcome = Box::new(outcome);
+            let done =
+                |host_interrupt| GenEvent::Done { speech, outcome, interrupted, host_interrupt };
+            handle.report_end(&shared.queue, done);
             return;
         }
         Err(DriverError::Provider(error)) => error,
@@ -49,7 +52,12 @@ pub(crate) async fn pipeline_reply_task(
     };
     // **Moved, never formatted**: only the binding can release a `ProviderError::Host`'s side-table
     // entry. Not marked here: the loop's `Failed` arm moves the error onto the handle.
-    shared.report(GenEvent::Failed { speech, error: Box::new(error) });
+    let error = Box::new(error);
+    handle.report_end(&shared.queue, |host_interrupt| GenEvent::Failed {
+        speech,
+        error,
+        host_interrupt,
+    });
 }
 
 fn step_spoken(

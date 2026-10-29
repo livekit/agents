@@ -8,9 +8,9 @@ use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport, lock};
 use lk_agents_net::monotone::Monotone;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, SpeechCommand};
+use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{mpsc, watch};
 
@@ -78,6 +78,11 @@ pub enum SayStream {
 struct Inner {
     /// The core's last published view.
     view: SpeechView,
+    /// `interrupt()` was called from the host and the loop has not refused it.
+    requested: bool,
+    /// The speech's task reported its end: a host `interrupt()` from here on is queued behind the
+    /// input that ends the speech, so it lands on a done speech and changes nothing.
+    ended: bool,
     chat_items: Vec<ChatItem>,
     user_metrics: Option<MetricsReport>,
     /// The host's own object for the speech (its `SpeechHandle`), so every event, tool and hook
@@ -100,9 +105,6 @@ pub struct SpeechHandle {
     creation: watch::Sender<Creation>,
     /// The loop, for what the host asks of the speech.
     api: Tx,
-    /// `interrupt()` was called from the host and the loop has not refused it: `interrupted`
-    /// reads `true` from this tick until the speech is done.
-    interrupt_requested: AtomicBool,
     scheduled: Monotone<bool>,
     /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
     interrupted: Monotone<bool>,
@@ -134,7 +136,6 @@ impl SpeechHandle {
             speech_id: OnceLock::new(),
             creation: watch::Sender::new(creation),
             api,
-            interrupt_requested: AtomicBool::new(false),
             scheduled: Monotone::new(false),
             interrupted: Monotone::new(false),
             done: Monotone::new(false),
@@ -142,6 +143,8 @@ impl SpeechHandle {
             generations: Mutex::new(Vec::new()),
             inner: Mutex::new(Inner {
                 view: SpeechView::new(allow),
+                requested: false,
+                ended: false,
                 chat_items: Vec::new(),
                 user_metrics: None,
                 host: None,
@@ -208,9 +211,7 @@ impl SpeechHandle {
             SpeechUpdate::View(view) => self.publish(view),
             SpeechUpdate::ItemAdded(item) => lock(&self.inner).chat_items.push(item),
             SpeechUpdate::UserMetrics(metrics) => lock(&self.inner).user_metrics = Some(metrics),
-            SpeechUpdate::InterruptRefused => {
-                self.interrupt_requested.store(false, Ordering::Release);
-            }
+            SpeechUpdate::InterruptRefused => lock(&self.inner).requested = false,
             SpeechUpdate::Released => lock(&self.inner).say = None,
         }
     }
@@ -258,6 +259,15 @@ impl SpeechHandle {
         if let (Some(force), Some(speech)) = (pending, self.created()) {
             self.send_interrupt(speech, force);
         }
+    }
+
+    /// The speech's task reports its end, `report(asked)` naming whether the host asked to
+    /// interrupt it first: under this handle's lock, so a request lands with the end however the
+    /// queue orders the two, and one after it is a no-op the host sees as such.
+    pub fn report_end(&self, queue: &Tx, report: impl FnOnce(bool) -> GenEvent) {
+        let mut inner = lock(&self.inner);
+        inner.ended = true;
+        let _ = queue.send(report(inner.requested));
     }
 
     fn send_interrupt(&self, speech: SpeechId, force: bool) {
@@ -505,12 +515,11 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         SpeechHandle::scheduled(self)
     }
 
-    /// From the tick `interrupt()` was called until the speech is done, and once the loop has
-    /// interrupted the speech for any reason (an interruption, a supersede, the close). A done
-    /// speech reads the loop's verdict: a request that arrived after its end changed nothing.
+    /// From the tick `interrupt()` was called, and once the loop has interrupted the speech for
+    /// any reason (an interruption, a supersede, the close).
     fn interrupted(&self) -> bool {
-        let requested = self.interrupt_requested.load(Ordering::Acquire);
-        lock(&self.inner).view.host_interrupted(requested)
+        let inner = lock(&self.inner);
+        inner.view.host_interrupted(inner.requested)
     }
 
     fn done(&self) -> bool {
@@ -523,8 +532,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
 
     fn set_allow_interruptions(&self, value: bool) -> Result<(), HostRefused> {
         let mut inner = lock(&self.inner);
-        let requested = self.interrupt_requested.load(Ordering::Acquire);
-        inner.view.host_set_allow_interruptions(value, requested).map_err(refused)?;
+        inner.view.host_set_allow_interruptions(value, inner.requested).map_err(refused)?;
         // A detached handle's setter is its own, with no loop to tell.
         if *self.creation.borrow() == Creation::Detached {
             inner.view.allow_interruptions = value;
@@ -551,12 +559,12 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     fn interrupt(&self, force: bool) -> Result<(), HostRefused> {
         // Under the lock `answered` takes, so a creation racing this call sends it once.
         let mut inner = lock(&self.inner);
-        let requested = self.interrupt_requested.load(Ordering::Acquire);
-        if !inner.view.host_interrupt(requested, force).map_err(refused)? {
+        // Behind the speech's end: it lands on a done speech.
+        if inner.ended || !inner.view.host_interrupt(inner.requested, force).map_err(refused)? {
             return Ok(());
         }
         let created = self.created();
-        self.interrupt_requested.store(true, Ordering::Release);
+        inner.requested = true;
         match (created, *self.creation.borrow()) {
             (Some(speech), _) => self.send_interrupt(speech, force),
             (None, Creation::Detached) => {}

@@ -162,10 +162,11 @@ impl SpeechView {
         Ok(())
     }
 
-    /// `interrupted` as the host reads it: from its own request until the speech is done, and
-    /// once the core interrupted the speech.
+    /// `interrupted` as the host reads it: from its own request on, and once the core interrupted
+    /// the speech. Forward-only, like the reference's `_interrupt_fut`: a request is only dropped
+    /// when the core refuses it.
     pub fn host_interrupted(&self, requested: bool) -> bool {
-        self.interrupted || (requested && !self.done)
+        self.interrupted || requested
     }
 
     /// The user may cut it now: not interrupted already, and interruptions allowed.
@@ -336,6 +337,16 @@ impl SpeechState {
         self.change().interrupted = true;
         self.watchdog_armed = true;
         Ok(true)
+    }
+
+    /// A host request that arrived with the speech's end: the speech is interrupted, with no
+    /// cut left to make. `true` when it landed now.
+    pub fn land_interrupt(&mut self) -> bool {
+        if self.view.interrupted || self.view.done {
+            return false;
+        }
+        self.change().interrupted = true;
+        true
     }
 
     /// The loop refused the host's `interrupt()` (the speech disallowed it by then).
