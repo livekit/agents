@@ -77,7 +77,7 @@ def diagnostics() -> dict[str, int]:
 def attribute_bytes(value: object, *, depth: int = 0) -> int:
     """Read bounded SDK object shape; native policy owns every retention charge."""
     native = policy()
-    if depth > native.max_depth:
+    if depth > _core.TELEMETRY_MAX_DEPTH:
         return native.value_bytes("unsupported", 0, depth, [])
     if value is None or isinstance(value, (bool, float)):
         return native.value_bytes("scalar", 0, depth, [])
@@ -100,7 +100,10 @@ def attribute_bytes(value: object, *, depth: int = 0) -> int:
         storage = getattr(value, "__dict__", {})
         if not isinstance(storage, Mapping):
             return native.value_bytes("unsupported", 0, depth, [])
-        if len(record_fields) > native.max_collection or len(storage) > native.max_collection:
+        if (
+            len(record_fields) > _core.TELEMETRY_MAX_COLLECTION
+            or len(storage) > _core.TELEMETRY_MAX_COLLECTION
+        ):
             return native.value_bytes("mapping", max(len(record_fields), len(storage)), depth, [])
         slots = tuple(field for field in record_fields if field.name not in storage)
         mappings = (
@@ -111,7 +114,7 @@ def attribute_bytes(value: object, *, depth: int = 0) -> int:
         mappings = ((len(value), value.items()),)
     if mappings is not None:
         length = sum(size for size, _ in mappings)
-        if length <= native.max_collection:
+        if length <= _core.TELEMETRY_MAX_COLLECTION:
             for _, entries in mappings:
                 for key, item in entries:
                     children.extend(
@@ -122,17 +125,17 @@ def attribute_bytes(value: object, *, depth: int = 0) -> int:
                     )
                     if (
                         native.value_bytes("mapping", length, depth, children)
-                        > native.max_record_bytes
+                        > _core.SDK_RECORD_BYTES
                     ):
                         return native.value_bytes("mapping", length, depth, children)
         return native.value_bytes("mapping", length, depth, children)
     if isinstance(value, Sequence):
-        if len(value) <= native.max_collection:
+        if len(value) <= _core.TELEMETRY_MAX_COLLECTION:
             for item in value:
                 children.append(attribute_bytes(item, depth=depth + 1))
                 if (
                     native.value_bytes("sequence", len(value), depth, children)
-                    > native.max_record_bytes
+                    > _core.SDK_RECORD_BYTES
                 ):
                     break
         return native.value_bytes("sequence", len(value), depth, children)
@@ -157,7 +160,10 @@ def scope_bytes(scope: InstrumentationScope | None) -> int:
 
 def span_bytes(span: ReadableSpan) -> int:
     native = policy()
-    if len(span.events) > native.max_events or len(span.links) > native.max_events:
+    if (
+        len(span.events) > _core.TELEMETRY_MAX_EVENTS
+        or len(span.links) > _core.TELEMETRY_MAX_EVENTS
+    ):
         return native.record_bytes("span", [], len(span.events), len(span.links))
     fields = [
         attribute_bytes(span.name),
@@ -236,14 +242,14 @@ class BoundedSpanProcessor(SpanProcessor):
     def __init__(self, exporter: SpanExporter) -> None:
         self._processor = BatchSpanProcessor(
             _GuardedSpanExporter(exporter),
-            max_queue_size=policy().max_records,
-            max_export_batch_size=policy().batch_items,
-            schedule_delay_millis=policy().schedule_delay_millis,
-            export_timeout_millis=policy().export_timeout_millis,
+            max_queue_size=_core.SDK_PENDING_RECORDS,
+            max_export_batch_size=_core.SDK_BATCH_ITEMS,
+            schedule_delay_millis=_core.SDK_SCHEDULE_DELAY_MILLIS,
+            export_timeout_millis=_core.SDK_EXPORT_TIMEOUT_MILLIS,
         )
 
     def on_end(self, span: ReadableSpan) -> None:
-        if span_bytes(span) > policy().max_record_bytes:
+        if span_bytes(span) > _core.SDK_RECORD_BYTES:
             record("dropped")
             return
         self._processor.on_end(span)
@@ -315,10 +321,10 @@ class BoundedLogRecordProcessor(LogRecordProcessor):
     def __init__(self, exporter: LogRecordExporter) -> None:
         self._processor = BatchLogRecordProcessor(
             _GuardedLogExporter(exporter),
-            max_queue_size=policy().max_records,
-            max_export_batch_size=policy().batch_items,
-            schedule_delay_millis=policy().schedule_delay_millis,
-            export_timeout_millis=policy().export_timeout_millis,
+            max_queue_size=_core.SDK_PENDING_RECORDS,
+            max_export_batch_size=_core.SDK_BATCH_ITEMS,
+            schedule_delay_millis=_core.SDK_SCHEDULE_DELAY_MILLIS,
+            export_timeout_millis=_core.SDK_EXPORT_TIMEOUT_MILLIS,
         )
 
     def on_emit(self, log_record: ReadWriteLogRecord) -> None:
@@ -328,8 +334,8 @@ class BoundedLogRecordProcessor(LogRecordProcessor):
         # Admission examines the original object before copying; a refused body never crosses
         # into the SDK queue, and an admitted body cannot grow through a caller's mutable alias.
         if (
-            attribute_bytes(data.body) > policy().max_record_bytes
-            or attribute_bytes(data.attributes) > policy().max_record_bytes
+            attribute_bytes(data.body) > _core.SDK_RECORD_BYTES
+            or attribute_bytes(data.attributes) > _core.SDK_RECORD_BYTES
         ):
             record("dropped")
             return
@@ -338,7 +344,7 @@ class BoundedLogRecordProcessor(LogRecordProcessor):
         assert isinstance(attributes, dict)
         data.attributes = attributes
         snapshot = replace(log_record, log_record=data)
-        if log_bytes(snapshot) > policy().max_record_bytes:
+        if log_bytes(snapshot) > _core.SDK_RECORD_BYTES:
             record("dropped")
             return
         self._processor.on_emit(snapshot)

@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
 
+from livekit.agents import _core
 from livekit.agents.telemetry import _context, _destination, _export, _redaction
 
 pytestmark = pytest.mark.unit
@@ -60,9 +61,7 @@ def test_early_log_arguments_are_captured_before_application_mutation(
 
 
 def test_arbitrary_precision_integer_cannot_bypass_record_byte_admission() -> None:
-    assert _export.attribute_bytes(1 << (_export.policy().max_record_bytes * 8)) > (
-        _export.policy().max_record_bytes
-    )
+    assert _export.attribute_bytes(1 << (_core.SDK_RECORD_BYTES * 8)) > (_core.SDK_RECORD_BYTES)
 
 
 def test_destination_refuses_oversized_event_sets_instead_of_silently_truncating() -> None:
@@ -73,7 +72,7 @@ def test_destination_refuses_oversized_event_sets_instead_of_silently_truncating
         resource=Resource({}),
         status=Status(StatusCode.UNSET),
         events=[
-            Event("work", {"sequence": index}) for index in range(_export.policy().max_events + 1)
+            Event("work", {"sequence": index}) for index in range(_core.TELEMETRY_MAX_EVENTS + 1)
         ],
     )
     before = _export.diagnostics()["dropped"]

@@ -391,7 +391,8 @@ def test_broken_exporter_reports_once_without_recursive_logging(caplog):
 def test_preinitialization_logs_keep_the_most_recent_bounded_window_for_replay():
     import logging
 
-    from livekit.agents.telemetry._export import diagnostics, policy
+    from livekit.agents import _core
+    from livekit.agents.telemetry._export import diagnostics
 
     before = diagnostics()
     handler = _destination._BufferingHandler()
@@ -400,9 +401,9 @@ def test_preinitialization_logs_keep_the_most_recent_bounded_window_for_replay()
             handler.handle(
                 logging.LogRecord("application", logging.INFO, __file__, index, "log", (), None)
             )
-        assert diagnostics()["dropped"] == before["dropped"] + 256 - policy().max_records
+        assert diagnostics()["dropped"] == before["dropped"] + 256 - _core.SDK_PENDING_RECORDS
         replayed = [record.lineno for record in handler.buffer]
-        assert replayed == list(range(256 - policy().max_records, 256))
+        assert replayed == list(range(256 - _core.SDK_PENDING_RECORDS, 256))
         assert list(handler.buffer) == []
     finally:
         handler.close()

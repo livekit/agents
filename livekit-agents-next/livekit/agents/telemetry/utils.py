@@ -12,10 +12,7 @@ from .. import _core
 from ..types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
 from . import trace_types
 
-_, REDACTED_EXCEPTION_MESSAGE = _core._core_TelemetryPolicy(False, False, False).attribute_action(
-    None, "exception.message", True
-)
-assert isinstance(REDACTED_EXCEPTION_MESSAGE, str)
+REDACTED_EXCEPTION_MESSAGE = _core.REDACTED_EXCEPTION
 
 _ALLOW_PII_ENV_VAR = "LIVEKIT_TELEMETRY_ALLOW_PII"
 _FALSY = ("0", "false", "no", "off")

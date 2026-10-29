@@ -52,7 +52,6 @@ from ._redaction import (
     RedactingLogExporter as RedactingLogExporter,
     RedactingSpanExporter as RedactingSpanExporter,
     filter_attributes as filter_attributes,
-    is_pii_attribute as is_pii_attribute,
     redact as redact,
 )
 
@@ -109,7 +108,7 @@ def _serialize_option_value(value: object, *, depth: int = 0) -> tuple[JsonValue
     native = policy()
 
     def checked(charge: int) -> int:
-        if charge > native.max_record_bytes:
+        if charge > _core.SDK_RECORD_BYTES:
             raise ValueError("session report options exceed the native input budget")
         return charge
 
@@ -192,11 +191,11 @@ async def _upload_session_report(
     """Project host objects off the event loop; the native client uploads the recording."""
     from .._core_view import from_core_item
     from . import _export
-    from ._export import attribute_bytes, policy
+    from ._export import attribute_bytes
 
-    if attribute_bytes(metadata) > policy().max_record_bytes:
+    if attribute_bytes(metadata) > _core.SDK_RECORD_BYTES:
         raise ValueError("session report metadata exceeds the native input budget")
-    if attribute_bytes(agent_name) > policy().max_record_bytes:
+    if attribute_bytes(agent_name) > _core.SDK_RECORD_BYTES:
         raise ValueError("session report summary exceeds the native input budget")
     metadata = dict(metadata or {})
     emission_context = otel_context.get_current()
@@ -204,7 +203,7 @@ async def _upload_session_report(
 
     credentials = _server_credentials()[1:]
     credential_bytes = attribute_bytes(credentials)
-    if credential_bytes > policy().max_record_bytes:
+    if credential_bytes > _core.SDK_RECORD_BYTES:
         raise ValueError("session report credentials exceed the native input budget")
     uploader = _core._core_SessionReportUpload(*credentials)
     options = report._recording_options
@@ -301,7 +300,7 @@ async def _upload_session_report(
                 emit(record)
 
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + policy().upload_timeout_seconds
+    deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
     async with asyncio.timeout_at(deadline):
         snapshot, events = await report._snapshot(projection, deadline=deadline)
         await asyncio.to_thread(start)

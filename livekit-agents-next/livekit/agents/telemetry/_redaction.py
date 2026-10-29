@@ -24,7 +24,7 @@ from opentelemetry.util.types import AnyValue, AttributeValue
 from .. import _core
 from ..types import ATTRIBUTE_REDACTION_ENABLED
 from . import _export
-from ._export import log_bytes, policy as admission_policy, span_bytes
+from ._export import log_bytes, span_bytes
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import Event
@@ -39,10 +39,6 @@ def _policy(
         attrs.get("lk.telemetry.capture_content") is True,
         project_redaction or bool(attrs.get(ATTRIBUTE_REDACTION_ENABLED)),
     )
-
-
-def is_pii_attribute(key: str) -> bool:
-    return _core._core_TelemetryPolicy(False, False, False).is_pii_attribute(key)
 
 
 def filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -63,10 +59,10 @@ def _filter_attribute_value(
     destination: bool = True,
     parent: str | None = None,
 ) -> AnyValue:
-    if depth > policy.max_depth:
+    if depth > _core.TELEMETRY_MAX_DEPTH:
         return None
     if isinstance(value, Mapping):
-        if len(value) > policy.max_collection:
+        if len(value) > _core.TELEMETRY_MAX_COLLECTION:
             return None
         filtered: dict[str, AnyValue] = {}
         for key, item in value.items():
@@ -83,7 +79,7 @@ def _filter_attribute_value(
                 )
         return filtered
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        if len(value) > policy.max_collection:
+        if len(value) > _core.TELEMETRY_MAX_COLLECTION:
             return None
         return [
             _filter_attribute_value(
@@ -149,7 +145,7 @@ class RedactingLogExporter(LogRecordExporter):
         snapshots: list[ReadableLogRecord] = []
         refused = False
         for record in batch:
-            if log_bytes(record) > admission_policy().max_record_bytes:
+            if log_bytes(record) > _core.SDK_RECORD_BYTES:
                 _export.record("dropped")
                 refused = True
             else:
@@ -232,7 +228,7 @@ class RedactingSpanExporter(SpanExporter):
         snapshots: list[ReadableSpan] = []
         refused = False
         for span in spans:
-            if span_bytes(span) > admission_policy().max_record_bytes:
+            if span_bytes(span) > _core.SDK_RECORD_BYTES:
                 _export.record("dropped")
                 refused = True
             else:

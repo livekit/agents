@@ -62,110 +62,12 @@ impl _core_TelemetryPolicy {
         Ok(out)
     }
 
-    #[getter]
-    fn max_depth(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_depth(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn max_collection(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_collection(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn max_events(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_events(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn max_record_bytes(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_record_bytes(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn max_pending(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_pending(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn max_records(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_records(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn batch_items(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::batch_items(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn schedule_delay_millis(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::schedule_delay_millis(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn export_timeout_millis(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::export_timeout_millis(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn max_providers(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::max_providers(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn shutdown_timeout_seconds(&self) -> PyResult<f64> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::shutdown_timeout_seconds(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn report_retained_bytes(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::report_retained_bytes(&self.0);
-        Ok(out)
-    }
-
-    #[getter]
-    fn upload_timeout_seconds(&self) -> PyResult<f64> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::upload_timeout_seconds(&self.0);
-        Ok(out)
-    }
-
     /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
     #[pyo3(signature = (registered, signal_enabled, job_open, held_count, recording_disabled))]
     fn export_action<'py>(&self, py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, #[pyo3(from_py_with = _extract_telemetry_policy_export_action_held_count)] held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::export_action(&self.0, registered, signal_enabled, job_open, held_count, recording_disabled);
         Ok(crate::generated::records::telemetry::telemetry_export_action_to_py(py, out)?)
-    }
-
-    #[pyo3(signature = (key))]
-    fn is_pii_attribute(&self, key: ::std::string::String) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::is_pii_attribute(&self.0, key);
-        Ok(out)
     }
 
     /// Whether to keep the field and, if present, the replacement for its value.

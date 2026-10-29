@@ -30,7 +30,7 @@ from .. import _core
 from ..log import TRACE_LEVEL
 from ..types import ATTRIBUTE_REDACTION_ENABLED
 from . import _context as tracing, _export, utils as telemetry_utils
-from ._export import attribute_bytes, exporting, policy
+from ._export import attribute_bytes, exporting
 from ._redaction import (
     _log_snapshot,
     _redact_content,
@@ -267,12 +267,12 @@ class _BufferingHandler(logging.Handler):
 
     def __init__(self) -> None:
         super().__init__()
-        self._records: deque[logging.LogRecord] = deque(maxlen=policy().max_records)
+        self._records: deque[logging.LogRecord] = deque(maxlen=_core.SDK_PENDING_RECORDS)
 
     def emit(self, record: logging.LogRecord) -> None:
         if exporting():
             return
-        if attribute_bytes(record.__dict__) > policy().max_record_bytes:
+        if attribute_bytes(record.__dict__) > _core.SDK_RECORD_BYTES:
             _export.record("dropped")
             return
         record = copy(record)
@@ -293,7 +293,7 @@ class _BufferingHandler(logging.Handler):
             for key in record.__dict__.keys() - _LOG_RECORD_FIELDS:
                 del record.__dict__[key]
             record.__dict__.update(extras)
-            record.msg = _core._core_TelemetryPolicy(False, False, False).log_body(False, None)
+            record.msg = _core.REDACTED_LOG_BODY
             record.args = ()
             record.exc_info = None
             record.exc_text = None
@@ -301,7 +301,7 @@ class _BufferingHandler(logging.Handler):
             identity = filter_attributes(identity)
         record.__dict__.update(identity)
         record.__dict__["lk.telemetry.capture_content"] = captured
-        if attribute_bytes(record.__dict__) > policy().max_record_bytes:
+        if attribute_bytes(record.__dict__) > _core.SDK_RECORD_BYTES:
             _export.record("dropped")
             return
         snapshot = _source_snapshot(record.__dict__)

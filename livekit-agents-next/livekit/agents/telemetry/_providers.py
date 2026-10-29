@@ -57,7 +57,6 @@ from ._export import (
     BoundedSpanProcessor,
     GuardedMetricExporter,
     attribute_bytes,
-    policy,
     record,
     run_bounded,
 )
@@ -208,7 +207,7 @@ class _AuthHeaderProvider:
         return {"Authorization": f"Bearer {self._uploader.bearer()}"}
 
 
-_TELEMETRY_SHUTDOWN_TIMEOUT = policy().shutdown_timeout_seconds
+_TELEMETRY_SHUTDOWN_TIMEOUT = _core.SDK_SHUTDOWN_TIMEOUT_SECONDS
 
 
 def _report_configuration_conflicts(messages: Sequence[str]) -> None:
@@ -362,14 +361,14 @@ class _CloudTelemetry:
             base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
         if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
             base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
-        base_valid = attribute_bytes(base_metadata) <= policy().max_record_bytes
+        base_valid = attribute_bytes(base_metadata) <= _core.SDK_RECORD_BYTES
         if not base_valid:
             base_metadata = {}
-        metadata_valid = base_valid and attribute_bytes(metadata) <= policy().max_record_bytes
+        metadata_valid = base_valid and attribute_bytes(metadata) <= _core.SDK_RECORD_BYTES
         session_metadata = dict(base_metadata)
         if metadata_valid and metadata:
             session_metadata.update(metadata)
-        if attribute_bytes(session_metadata) > policy().max_record_bytes:
+        if attribute_bytes(session_metadata) > _core.SDK_RECORD_BYTES:
             metadata_valid = False
             session_metadata = dict(base_metadata)
         if not metadata_valid:
@@ -471,7 +470,7 @@ class _CloudTelemetry:
             self._trace_provider_attached = provider
             return None
 
-        if len(self._span_batch_processors) >= policy().max_providers:
+        if len(self._span_batch_processors) >= _core.SDK_MAX_PROVIDERS:
             record("conflicts")
             return (
                 "Cloud tracing is limited to four provider registrations per process; "

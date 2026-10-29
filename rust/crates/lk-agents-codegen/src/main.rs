@@ -116,6 +116,7 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/media/images.rs",
     "rust/crates/lk-agents-voice/src/agent_session/commands.rs",
     "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
+    "rust/crates/lk-agents-abi/src/telemetry/policy.rs",
 ];
 
 /// The authoritative v2 Python project. Generation must not recreate the retired v1 package.

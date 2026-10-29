@@ -1,15 +1,12 @@
 //! Shared content filtering and conservative SDK retention accounting. No host objects cross here.
 
 use lk_agents_abi::telemetry::policy::{
-    self as policy, SDK_PENDING_RECORDS as MAX_PENDING, SDK_RECORD_BYTES as MAX_RECORD_BYTES,
+    MAX_COLLECTION, MAX_DEPTH, MAX_EVENTS, REDACTED_EXCEPTION, REDACTED_LOG_BODY,
+    SDK_PENDING_RECORDS as MAX_PENDING, SDK_RECORD_BYTES as MAX_RECORD_BYTES,
     TelemetryExportAction, TelemetryPolicy, TelemetryRecordKind, TelemetryValueKind,
 };
 
-const MAX_COLLECTION: usize = 128;
-const MAX_EVENTS: usize = 32;
-const MAX_DEPTH: usize = 4;
 const REFUSED_BYTES: usize = MAX_RECORD_BYTES + 1;
-const REDACTED_EXCEPTION: &str = "exception details redacted";
 
 /// Does `key` carry the dot-delimited `pii` segment the Cloud collector strips? Not a substring:
 /// `lk.piiuser_input` is not marked.
@@ -70,58 +67,6 @@ impl TelemetryPolicy for DestinationPolicy {
         self.redacted
     }
 
-    fn max_depth(&self) -> usize {
-        MAX_DEPTH
-    }
-
-    fn max_collection(&self) -> usize {
-        MAX_COLLECTION
-    }
-
-    fn max_events(&self) -> usize {
-        MAX_EVENTS
-    }
-
-    fn max_record_bytes(&self) -> usize {
-        MAX_RECORD_BYTES
-    }
-
-    fn max_pending(&self) -> usize {
-        MAX_PENDING
-    }
-
-    fn max_records(&self) -> usize {
-        policy::SDK_PENDING_RECORDS
-    }
-
-    fn batch_items(&self) -> usize {
-        policy::SDK_BATCH_ITEMS
-    }
-
-    fn schedule_delay_millis(&self) -> usize {
-        policy::SDK_SCHEDULE_DELAY_MILLIS
-    }
-
-    fn export_timeout_millis(&self) -> usize {
-        policy::SDK_EXPORT_TIMEOUT_MILLIS
-    }
-
-    fn max_providers(&self) -> usize {
-        policy::SDK_MAX_PROVIDERS
-    }
-
-    fn shutdown_timeout_seconds(&self) -> f64 {
-        policy::SDK_SHUTDOWN_TIMEOUT_SECONDS
-    }
-
-    fn report_retained_bytes(&self) -> usize {
-        policy::REPORT_RETAINED_BYTES
-    }
-
-    fn upload_timeout_seconds(&self) -> f64 {
-        policy::UPLOAD_TIMEOUT_SECONDS as f64
-    }
-
     fn export_action(
         &self,
         registered: bool,
@@ -141,10 +86,6 @@ impl TelemetryPolicy for DestinationPolicy {
         } else {
             TelemetryExportAction::Capacity
         }
-    }
-
-    fn is_pii_attribute(&self, key: String) -> bool {
-        is_pii_attribute(&key)
     }
 
     fn attribute_action(
@@ -186,7 +127,7 @@ impl TelemetryPolicy for DestinationPolicy {
 
     fn log_body(&self, safe_body: bool, body: Option<String>) -> Option<String> {
         let safe_body = safe_body && body.as_deref().is_some_and(report_body_is_safe);
-        (self.redacted && !safe_body).then(|| "log body redacted".to_owned())
+        (self.redacted && !safe_body).then(|| REDACTED_LOG_BODY.to_owned())
     }
 
     fn status_description(&self, is_error: bool, description: Option<String>) -> Option<String> {
@@ -289,7 +230,7 @@ mod tests {
             policy.status_description(true, Some("secret".into())),
             Some(REDACTED_EXCEPTION.into())
         );
-        assert_eq!(policy.log_body(false, None), Some("log body redacted".into()));
+        assert_eq!(policy.log_body(false, None), Some(REDACTED_LOG_BODY.into()));
         assert_eq!(policy.log_body(true, Some("evaluation".into())), None);
         assert_eq!(
             policy.attribute_action(None, "lk.telemetry.safe_body".into(), true),
@@ -305,7 +246,7 @@ mod tests {
         let policy = DestinationPolicy::new(false, true, false);
         assert_eq!(
             policy.log_body(true, Some("customer secret".into())),
-            Some("log body redacted".into())
+            Some(REDACTED_LOG_BODY.into())
         );
         for key in ["chat.item", "session.options", "session.tags", "tag"] {
             assert_eq!(policy.attribute_action(None, key.into(), true), (false, None));
@@ -328,7 +269,7 @@ mod tests {
                 (true, None)
             );
         }
-        assert_eq!(policy.log_body(true, None), Some("log body redacted".into()));
+        assert_eq!(policy.log_body(true, None), Some(REDACTED_LOG_BODY.into()));
         assert_eq!(policy.log_body(true, Some("evaluation".into())), None);
         let opted_in = DestinationPolicy::new(true, true, false);
         assert_eq!(

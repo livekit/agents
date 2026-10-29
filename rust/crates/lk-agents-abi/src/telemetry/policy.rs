@@ -1,18 +1,57 @@
-//! Destination privacy and admission records and limits; the decisions are
-//! `lk_agents_core::telemetry::policy`'s.
+//! Destination privacy and admission limits and records; the decisions are
+//! `lk_agents_core::telemetry::policy`'s. The limits reach the host as generated constants.
 
+/// Nested SDK values deeper than this are refused.
+#[crate::host(export(name = "TELEMETRY_MAX_DEPTH"))]
+pub const MAX_DEPTH: usize = 4;
+
+/// SDK mappings and sequences longer than this are refused.
+#[crate::host(export(name = "TELEMETRY_MAX_COLLECTION"))]
+pub const MAX_COLLECTION: usize = 128;
+
+/// Spans with more events or links than this are refused.
+#[crate::host(export(name = "TELEMETRY_MAX_EVENTS"))]
+pub const MAX_EVENTS: usize = 32;
+
+/// Retained bytes one SDK record may charge.
+#[crate::host(export(name = "SDK_RECORD_BYTES"))]
 pub const SDK_RECORD_BYTES: usize = 64 * 1024;
+
+/// Records one framework export queue holds.
+#[crate::host(export(name = "SDK_PENDING_RECORDS"))]
+pub const SDK_PENDING_RECORDS: usize = 64;
+
+#[crate::host(export(name = "SDK_BATCH_ITEMS"))]
+pub const SDK_BATCH_ITEMS: usize = 16;
+
+#[crate::host(export(name = "SDK_SCHEDULE_DELAY_MILLIS"))]
+pub const SDK_SCHEDULE_DELAY_MILLIS: usize = 1000;
+
+#[crate::host(export(name = "SDK_EXPORT_TIMEOUT_MILLIS"))]
+pub const SDK_EXPORT_TIMEOUT_MILLIS: usize = 5000;
+
+/// Framework Cloud span pipelines one process keeps.
+#[crate::host(export(name = "SDK_MAX_PROVIDERS"))]
+pub const SDK_MAX_PROVIDERS: usize = 4;
+
+#[crate::host(export(name = "SDK_SHUTDOWN_TIMEOUT_SECONDS"))]
+pub const SDK_SHUTDOWN_TIMEOUT_SECONDS: f64 = 10.0;
+
+#[crate::host(export(name = "UPLOAD_TIMEOUT_SECONDS"))]
+pub const UPLOAD_TIMEOUT_SECONDS: u64 = 900;
+
+/// What a redacted destination sees in place of an exception message or error status.
+#[crate::host(export(name = "REDACTED_EXCEPTION"))]
+pub const REDACTED_EXCEPTION: &str = "exception details redacted";
+
+/// What a redacted destination sees in place of a log body that may carry content.
+#[crate::host(export(name = "REDACTED_LOG_BODY"))]
+pub const REDACTED_LOG_BODY: &str = "log body redacted";
+
 pub const REPORT_EVENT_ITEMS: usize = 1024;
 pub const REPORT_EVENT_BYTES: usize = 1024 * 1024;
 pub const REPORT_EVENT_RECORD_BYTES: usize = 64 * 1024;
-pub const SDK_PENDING_RECORDS: usize = 64;
-pub const SDK_BATCH_ITEMS: usize = 16;
-pub const SDK_SCHEDULE_DELAY_MILLIS: usize = 1000;
-pub const SDK_EXPORT_TIMEOUT_MILLIS: usize = 5000;
-pub const SDK_MAX_PROVIDERS: usize = 4;
-pub const SDK_SHUTDOWN_TIMEOUT_SECONDS: f64 = 10.0;
 pub const REPORT_RETAINED_BYTES: usize = 4 * 1024 * 1024;
-pub const UPLOAD_TIMEOUT_SECONDS: u64 = 900;
 
 #[crate::host(record(module = "telemetry", extract, emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,45 +95,6 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn redacted(&self) -> bool;
 
-    #[host(getter)]
-    fn max_depth(&self) -> usize;
-
-    #[host(getter)]
-    fn max_collection(&self) -> usize;
-
-    #[host(getter)]
-    fn max_events(&self) -> usize;
-
-    #[host(getter)]
-    fn max_record_bytes(&self) -> usize;
-
-    #[host(getter)]
-    fn max_pending(&self) -> usize;
-
-    #[host(getter)]
-    fn max_records(&self) -> usize;
-
-    #[host(getter)]
-    fn batch_items(&self) -> usize;
-
-    #[host(getter)]
-    fn schedule_delay_millis(&self) -> usize;
-
-    #[host(getter)]
-    fn export_timeout_millis(&self) -> usize;
-
-    #[host(getter)]
-    fn max_providers(&self) -> usize;
-
-    #[host(getter)]
-    fn shutdown_timeout_seconds(&self) -> f64;
-
-    #[host(getter)]
-    fn report_retained_bytes(&self) -> usize;
-
-    #[host(getter)]
-    fn upload_timeout_seconds(&self) -> f64;
-
     /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
     #[host(call)]
     fn export_action(
@@ -105,9 +105,6 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
         held_count: usize,
         recording_disabled: bool,
     ) -> TelemetryExportAction;
-
-    #[host(call)]
-    fn is_pii_attribute(&self, key: String) -> bool;
 
     /// Whether to keep the field and, if present, the replacement for its value.
     #[host(call)]

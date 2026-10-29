@@ -41,7 +41,7 @@ from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, Se
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry._destination import _BufferingHandler, _JobTelemetry
-from .telemetry._export import attribute_bytes, policy
+from .telemetry._export import attribute_bytes
 from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
     _cloud_log_handler,
@@ -339,7 +339,7 @@ class JobContext:
 
         session = self._report_session(session)
         loop = asyncio.get_running_loop()
-        preparation_deadline = loop.time() + policy().upload_timeout_seconds
+        preparation_deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
 
         def prepare_report() -> SessionReport:
             from .llm import ChatContext
@@ -1049,9 +1049,7 @@ class SessionReport:
         from .voice.events import event_dict
 
         loop = asyncio.get_running_loop()
-        deadline = (
-            deadline if deadline is not None else loop.time() + policy().upload_timeout_seconds
-        )
+        deadline = deadline if deadline is not None else loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
 
         event_limit = projection.event_limit(len(self.events))
 
@@ -1060,7 +1058,7 @@ class SessionReport:
                 attribute_bytes(
                     (self.job_id, self.room_id, self.room, self.sdk_version, self.model_usage)
                 )
-                > policy().max_record_bytes
+                > _core.SDK_RECORD_BYTES
             ):
                 raise ValueError("session report summary exceeds the native input budget")
             return projection.project(
