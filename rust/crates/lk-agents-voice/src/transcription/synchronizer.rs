@@ -1,4 +1,3 @@
-pub use super::lifecycle::SEGMENT_ACLOSE_TIMEOUT;
 use super::lifecycle::{SyncEffect, SyncEvent, SyncLifecycle, TranscriptOutput as Out};
 use crate::transcription::Heard;
 use crate::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
@@ -848,7 +847,7 @@ impl TranscriptSynchronizer {
         self.core.apply(SyncEvent::Rotate);
     }
 
-    /// Close: end the live segment and give the forwarder [`SEGMENT_ACLOSE_TIMEOUT`] to drain.
+    /// Close: end the live segment and give the forwarder [`lk_agents_abi::HOST_TEARDOWN_TIMEOUT`] to drain.
     /// `RoomIO.aclose` must close this before the transcription outputs it feeds.
     #[host(method)]
     pub async fn aclose(&self) {

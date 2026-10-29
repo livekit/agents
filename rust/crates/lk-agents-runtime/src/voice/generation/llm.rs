@@ -3,15 +3,14 @@
 use super::tools::ToolStep;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_core::telemetry::provider::Context;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
+use lk_agents_core::telemetry::provider::Context;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Attempt;
 pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
 use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read, retry_after};
-use lk_agents_voice::generation::pipeline::cleanup_deadline;
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
@@ -153,7 +152,9 @@ async fn perform_llm_inference(
                 report_llm_metrics(&data, ended.is_err(), shared, llm.as_ref(), handle);
                 // Always, on every path: dropping does not cancel a host stream, and `close`
                 // consumes it.
-                let _ = stream.close(cleanup_deadline(shared.time.now())).await;
+                let _ = stream
+                    .close(shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
+                    .await;
                 match ended {
                     Ok(()) => return Ok(data),
                     Err((error, produced)) => {

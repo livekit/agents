@@ -1,11 +1,10 @@
 //! Host methods assembling, opening, closing or commanding a VoiceSession.
 
 use super::{
-    CLOSE_TIMEOUT, Call, CommandRefused, HostParts, InterruptionPortFactory, ModelRefs,
-    NodeFactory, NotAnImage, NotInterruptible, OpenRefused, Ready, Reply, SessionApi,
-    SessionEvents, SessionJob, SessionRefused, SessionRoom, SessionRunner, Stage, StartFailed,
-    UnknownCloseReason, UpdateAgentArgs, host_toolset, llm_leg, origin_of, session_tools,
-    session_usage_updated,
+    Call, CommandRefused, HostParts, InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage,
+    NotInterruptible, OpenRefused, Ready, Reply, SessionApi, SessionEvents, SessionJob,
+    SessionRefused, SessionRoom, SessionRunner, Stage, StartFailed, UnknownCloseReason,
+    UpdateAgentArgs, host_toolset, llm_leg, origin_of, session_tools, session_usage_updated,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_session::commands::{
@@ -19,6 +18,7 @@ use crate::agent_session::{DriverBuilder, Timebase};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::{Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
@@ -903,7 +903,9 @@ impl SessionApi {
                     }
                     closing.await;
                     if let Some(eot) = eot {
-                        let _ = lk_agents_abi::timeout(&*clock, CLOSE_TIMEOUT, eot.aclose()).await;
+                        let _ =
+                            lk_agents_abi::timeout(&*clock, HOST_TEARDOWN_TIMEOUT, eot.aclose())
+                                .await;
                     }
                     if let Some(remote) = remote {
                         remote.aclose().await;

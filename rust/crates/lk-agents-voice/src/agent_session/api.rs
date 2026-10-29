@@ -20,6 +20,7 @@ use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{CoreStep, Step};
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::session_effects::StartPlan;
 use lk_agents_abi::{Clock, Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
@@ -441,7 +442,7 @@ impl SessionApi {
             }
             // Then the drain: the host's `close` is queued before this future completes.
             if let Some(drained) = drained {
-                let _ = time.timeout(CLOSE_TIMEOUT, drained).await;
+                let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, drained).await;
             }
             for task in tasks {
                 task.abort();
@@ -457,9 +458,9 @@ impl SessionApi {
         let time = self.time.clone();
         async move {
             if let Some(sync) = &synchronizer {
-                let _ = time.timeout(CLOSE_TIMEOUT, sync.aclose()).await;
+                let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, sync.aclose()).await;
             }
-            let _ = time.timeout(CLOSE_TIMEOUT, room_io.aclose()).await;
+            let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, room_io.aclose()).await;
         }
     }
 
@@ -695,8 +696,6 @@ pub type InterruptionPortFactory = Box<
         + Send,
 >;
 
-/// The loop's close watchdogs are 5 s; also the bound on every host teardown after the loop.
-pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The host's last line against a runtime that stopped ticking (above the close machine's bounds).
 const CLOSE_WATCHDOG: Duration = Duration::from_secs(30);
 /// One frame of virtual time per real millisecond while a virtual-clock close runs.

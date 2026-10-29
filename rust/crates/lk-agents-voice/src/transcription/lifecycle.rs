@@ -2,11 +2,8 @@
 
 use super::pacer::{PaceEffect, PacerOptions};
 use super::synchronizer::{SyncInput, SyncSegments};
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::{TimedString, Ts};
-use std::time::Duration;
-
-/// The forwarder may spend this long handing the last words to the text sink.
-pub const SEGMENT_ACLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub enum TranscriptOutput {
     Word(TimedString),
@@ -152,7 +149,7 @@ impl SyncLifecycle {
                     return Vec::new();
                 }
                 self.close = ClosePhase::Waiting;
-                vec![SyncEffect::WaitUntil(at.saturating_add(SEGMENT_ACLOSE_TIMEOUT))]
+                vec![SyncEffect::WaitUntil(at.saturating_add(HOST_TEARDOWN_TIMEOUT))]
             }
             SyncEvent::WaitFinished => {
                 self.close = ClosePhase::Closed;

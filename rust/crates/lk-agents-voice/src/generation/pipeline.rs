@@ -137,8 +137,3 @@ impl ReplySource {
         }
     }
 }
-
-/// Cleanup has one bounded interval from the supplied session instant.
-pub fn cleanup_deadline(now: lk_agents_abi::Ts) -> lk_agents_abi::Ts {
-    now.saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
-}

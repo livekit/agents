@@ -412,7 +412,7 @@ impl Generation<'_> {
         v.sink.end_input();
         let _ = v
             .source
-            .close(lk_agents_voice::generation::pipeline::cleanup_deadline(self.shared.time.now()))
+            .close(self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
             .await;
     }
 }

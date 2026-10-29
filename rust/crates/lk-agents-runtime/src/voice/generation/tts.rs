@@ -8,7 +8,6 @@ use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
-use lk_agents_voice::generation::pipeline::cleanup_deadline;
 pub(super) use lk_agents_voice::generation::tts::Lost;
 use lk_agents_voice::generation::tts::{
     AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics, TextEffect,
@@ -156,7 +155,8 @@ async fn synthesize(
     // Always: `end_input` before teardown (a second call is a no-op).
     sink.end_input();
     let fed = transformed(shared, &words.raw);
-    let _ = source.close(cleanup_deadline(shared.time.now())).await;
+    let _ =
+        source.close(shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)).await;
     let produced = tts_data.produced();
     match heard {
         Ok(mut heard) => {

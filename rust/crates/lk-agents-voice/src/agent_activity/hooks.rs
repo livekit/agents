@@ -8,13 +8,11 @@ use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, Host
 use crate::audio_recognition::PendingTurn;
 use crate::run_result::Owned;
 use crate::trace::{CoreStep, HandoffStep, HookEnd, TurnStep};
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
 use std::collections::BTreeMap;
 use std::time::Duration;
-
-/// How long the driver waits on a callback whose answer it needs when the host named no bound.
-pub const HOOK_BOUND: Duration = crate::speech_handle::INTERRUPTION_TIMEOUT;
 
 /// The callbacks in flight, by id.
 #[derive(Default)]
@@ -93,7 +91,7 @@ impl Driver {
     }
 
     pub(crate) fn hook_wait(&self) -> Duration {
-        self.activity.hook_bound.unwrap_or(HOOK_BOUND)
+        self.activity.hook_bound.unwrap_or(HOST_TEARDOWN_TIMEOUT)
     }
 
     /// Nothing waits on it.

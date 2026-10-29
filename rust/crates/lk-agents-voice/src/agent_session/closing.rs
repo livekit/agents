@@ -2,6 +2,7 @@
 //! `drain()` callers it answers, and the sequence: `on_exit`, drain, hard edge, trailing
 //! transcript, legs. Also the commands refused past the edge and the errors that close.
 
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::CloseReason;
 
@@ -31,15 +32,6 @@ const CLOSE_FLUSH: Duration = Duration::from_secs(2);
 
 /// The error output a tool still running at the close's bound is completed with.
 pub const SESSION_CLOSING: &str = "session closing";
-
-/// How long a close's drain waits for the speeches in flight before the hard edge.
-pub const DRAIN_BOUND: Duration = crate::speech_handle::INTERRUPTION_TIMEOUT;
-
-/// How long the legs' close is awaited; past it the leg is abandoned.
-pub const TEARDOWN_BOUND: Duration = Duration::from_secs(5);
-
-/// How long the edge waits for cut speeches to report their end before releasing them.
-pub const EDGE_BOUND: Duration = crate::speech_handle::INTERRUPTION_TIMEOUT;
 
 pub(crate) struct Closing {
     pub(crate) reason: CloseReason,
@@ -86,7 +78,7 @@ impl Driver {
         let Close { reason, drain, error } = close;
         if let Some(closing) = &self.session.closing {
             if drain && closing.phase == ClosePhase::Draining {
-                out.machine().arm(Timer::Close, now.saturating_add(DRAIN_BOUND));
+                out.machine().arm(Timer::Close, now.saturating_add(HOST_TEARDOWN_TIMEOUT));
             }
             return;
         }
@@ -169,10 +161,10 @@ impl Driver {
         }
     }
 
-    /// `PauseScheduling { cause: Close }`, bounded by [`DRAIN_BOUND`]; settled or refused, the hard
+    /// `PauseScheduling { cause: Close }`, bounded by [`HOST_TEARDOWN_TIMEOUT`]; settled or refused, the hard
     /// edge follows.
     fn close_drain(&mut self, now: Ts, out: &mut Out) {
-        self.enter_close_phase(ClosePhase::Draining, Some(DRAIN_BOUND), now, out);
+        self.enter_close_phase(ClosePhase::Draining, Some(HOST_TEARDOWN_TIMEOUT), now, out);
         // No reply plans a follow-up once the close began.
         out.machine().push(Effect::Draining);
         self.pause_scheduling(now, PauseCause::Close, out);
@@ -270,11 +262,11 @@ impl Driver {
     }
 
     /// Tell every leg to close. The realtime socket's `aclose` runs off the loop, bounded by
-    /// [`TEARDOWN_BOUND`]; its answer comes back as `RealtimeWake::Closed`.
+    /// [`HOST_TEARDOWN_TIMEOUT`]; its answer comes back as `RealtimeWake::Closed`.
     fn close_legs_begin(&mut self, now: Ts, out: &mut Out) {
         let rt = self.activity.rt_session.as_ref().map(|s| s.id);
         let phase = ClosePhase::ClosingActivity { closed: rt.is_none() };
-        self.enter_close_phase(phase, rt.map(|_| TEARDOWN_BOUND), now, out);
+        self.enter_close_phase(phase, rt.map(|_| HOST_TEARDOWN_TIMEOUT), now, out);
         out.signal(Signal::CloseProgress);
         self.answer_close_drains(out);
         // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
@@ -488,9 +480,9 @@ impl Driver {
     /// The hard edge: scheduling stopped, timers cancelled, countdown committed or torn down, what
     /// is open interrupted; after it only the close's own steps happen. The close moves on once
     /// every cut speech has reported `SpeechDone`, as the reference awaits `current_speech`, or
-    /// [`EDGE_BOUND`] releases them.
+    /// [`HOST_TEARDOWN_TIMEOUT`] releases them.
     pub(crate) fn close_edge(&mut self, now: Ts, out: &mut Out) {
-        self.enter_close_phase(ClosePhase::Edge, Some(EDGE_BOUND), now, out);
+        self.enter_close_phase(ClosePhase::Edge, Some(HOST_TEARDOWN_TIMEOUT), now, out);
         out.signal(Signal::CloseProgress);
         let reason =
             self.session.closing.as_ref().map(|c| c.reason).unwrap_or(CloseReason::UserInitiated);

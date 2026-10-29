@@ -9,10 +9,11 @@ use crate::agent_session::effects::{GateCause, GateOp, Timer};
 use crate::agent_session::{Answer, Driver, RequestId};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
-use crate::speech_handle::{INTERRUPTION_TIMEOUT, SpeechError};
+use crate::speech_handle::SpeechError;
 use crate::tokenize::{WordTokenizerOptions, count_words};
 use crate::trace::{InputStep, InterruptCause, InterruptStep, SpeechStep};
 use crate::turn::InterruptionOptions;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
@@ -299,7 +300,7 @@ impl Driver {
         let closing = self.session.closing_past_edge();
         let watchdog = Timer::InterruptionTimeout(speech);
         if !closing && !self.armed(watchdog, out) {
-            let at = now.saturating_add(INTERRUPTION_TIMEOUT);
+            let at = now.saturating_add(HOST_TEARDOWN_TIMEOUT);
             out.machine().arm(watchdog, at);
             out.trace(SpeechStep::WatchdogArmed { speech, at });
         }

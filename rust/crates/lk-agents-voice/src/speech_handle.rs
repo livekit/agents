@@ -1,4 +1,5 @@
 use crate::agent_activity::scheduling::SpeechId;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 
 pub mod state;
 use state::{Effect as StateEffect, Input as StateInput, Reply, SpeechState};
@@ -12,10 +13,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::watch;
 
-/// How long after an interruption the handle is force-completed (`SpeechHandle._cancel`). Without
-/// it a wedged generation leaves the handle un-done and every `wait_for_playout()` hangs.
-pub const INTERRUPTION_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// The `extra` key marking a call that detached (`RunContext.update()`): its speech no longer
 /// waits on it.
 pub const TOOL_NON_BLOCKING_EXTRA_KEY: &str = "__livekit_agents_tool_non_blocking";
@@ -28,10 +25,10 @@ pub fn speech_priorities() -> (i32, i32, i32) {
     (s::SPEECH_PRIORITY_LOW, s::SPEECH_PRIORITY_NORMAL, s::SPEECH_PRIORITY_HIGH)
 }
 
-/// `INTERRUPTION_TIMEOUT`, in seconds.
+/// `HOST_TEARDOWN_TIMEOUT`, in seconds.
 #[lk_agents_abi::host(export(pid = false))]
 pub fn interruption_timeout() -> Duration {
-    INTERRUPTION_TIMEOUT
+    HOST_TEARDOWN_TIMEOUT
 }
 
 /// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.
@@ -176,7 +173,7 @@ enum HandleInput {
 struct Inner {
     state: SpeechState,
     chat_items: Vec<ChatItem>,
-    /// What the [`INTERRUPTION_TIMEOUT`] watchdog cancels (`speech_handle._tasks`).
+    /// What the [`HOST_TEARDOWN_TIMEOUT`] watchdog cancels (`speech_handle._tasks`).
     tasks: Vec<lk_agents_abi::AbortHandle>,
     /// The metrics of the user turn a preemptive reply was adopted for.
     user_metrics: Option<lk_agents_abi::MetricsReport>,
@@ -488,7 +485,7 @@ impl SpeechHandle {
     // No `subscribe_allow_interruptions`: nothing in the reference awaits `allow_interruptions`.
 
     /// `interrupt(force=...)`. Returns whether it landed now; on `true` the driver arms
-    /// [`INTERRUPTION_TIMEOUT`] and calls [`on_interruption_timeout`](Self::on_interruption_timeout).
+    /// [`HOST_TEARDOWN_TIMEOUT`] and calls [`on_interruption_timeout`](Self::on_interruption_timeout).
     /// The guards, then `_cancel` (`speech_handle.SpeechHandle._cancel`).
     pub fn interrupt(&self, force: bool) -> Result<bool, SpeechError> {
         Ok(self.transition(HandleInput::Accepted(StateInput::Interrupt { force }))?.flag())
