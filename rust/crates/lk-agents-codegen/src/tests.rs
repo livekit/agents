@@ -71,8 +71,7 @@ fn a_typed_dict_says_total_false_only_when_declared() {
 // would generate a file that looks deliberate and matches nothing: `total` on a kind with no
 // `total=`; a Rust `false` for a Python bool (`walk` throws the parse error away, dropping every
 // later key too); a misspelt `typed_dict_from` (the other `TypedDict` class); `tag_after` naming
-// no emitted field (the tag silently leads); an `order` that is not a permutation of the fields;
-// a declaration in a path-less group (module "").
+// no emitted field (the tag silently leads); an `order` that is not a permutation of the fields.
 #[test]
 fn a_declaration_key_that_cannot_be_honoured_is_refused_by_name() {
     let opts = |attr: &str| {
@@ -88,7 +87,6 @@ fn a_declaration_key_that_cannot_be_honoured_is_refused_by_name() {
         (opts("typed_dict, order = \"a\""), &["leaves out `b`"]),
         (opts("typed_dict, order = \"a, b, a\""), &["twice"]),
         (opts("typed_dict, order = \"a, b, c\""), &["`c`"]),
-        ("#[crate::host(group(kind = \"typed_dict\"))]\npub mod m { pub struct Opts { pub a: Option<bool> } }".into(), &["module"]),
     ];
     for (src, words) in cases {
         let err = refuse_python(&src);
@@ -503,68 +501,6 @@ fn a_docstring_ending_in_a_quote_still_closes() {
         "#,
     );
     assert!(out.contains("    \"\"\"e.g. \"finance\\\"\"\"\"\n"), "{out}");
-}
-
-// --- host groups and literal consts ---------------------------------------------------------------
-
-const GROUP: &str = r#"
-    #[crate::host(group(kind = "typed_dict", typed_dict_from = "typing", total = "False"))]
-    pub mod gateway {
-        #[crate::host(group(path = "livekit.agents.inference.stt"))]
-        pub mod stt {
-            /// Doc of the literal.
-            pub const DEEPGRAM_MODELS: &[&str] = &["deepgram/nova-3", "deepgram/nova-2"];
-            #[host(name = "STTEncoding")]
-            pub const STT_ENCODING: &[&str] = &["pcm_s16le"];
-            #[host(name = "STTModels", union = "DeepgramModels, STTEncoding")]
-            pub const STT_MODELS: &[&str] = &["auto"];
-            #[host(union = "Opts, str")]
-            pub const OPTS_OR_NAME: &[&str] = &[];
-            pub const NOT_A_LITERAL: u32 = 3;
-
-            pub struct Opts {
-                pub interim: Option<bool>, // a comment, not a docstring
-                pub timeout: Option<Option<f64>>,
-                #[python(ty = "str | list[str]")]
-                pub keyterm: Option<Value>,
-            }
-        }
-    }
-"#;
-
-// Catches: a model vocabulary that costs more to declare than the Python it replaces. A string
-// slice is one line per name; its Python name comes from the const's words unless written, and a
-// union names its members and appends its own strings.
-#[test]
-fn a_string_slice_const_in_a_group_is_a_literal_and_a_union() {
-    let out = generate_python(GROUP);
-    assert!(out.contains("DeepgramModels = Literal[\"deepgram/nova-3\", \"deepgram/nova-2\"]\n\"\"\"Doc of the literal.\"\"\"\n"), "{out}");
-    assert!(out.contains("STTEncoding = Literal[\"pcm_s16le\"]\n"), "{out}");
-    assert!(
-        out.contains("STTModels = DeepgramModels | STTEncoding | Literal[\"auto\"]\n"),
-        "{out}"
-    );
-    assert!(out.contains("OptsOrName = Opts | str\n"), "{out}");
-    assert!(!out.contains("NotALiteral") && !out.contains("NOT_A_LITERAL"), "{out}");
-}
-
-// Catches: the group's defaults not reaching a declaration -- a struct with no attributes of its
-// own must still be a `typing` `total=False` `TypedDict` under the group's module and path, with
-// an outer `Option` read as absence (`Option<Option<f64>>` is `float | None`).
-#[test]
-fn a_group_gives_its_structs_kind_module_path_and_total() {
-    let decls = parse::file("test.rs", GROUP).expect("parses");
-    let py = python::emit_with(&decls, &[], &[]).expect("generates");
-    assert_eq!(py.len(), 1);
-    assert_eq!(py[0].path, "inference_stt.py");
-    let out = &py[0].text;
-    assert!(out.contains("from typing import Literal, TypedDict\n"), "{out}");
-    assert!(
-        out.contains("class Opts(TypedDict, total=False):\n    interim: bool\n    timeout: float | None\n    keyterm: str | list[str]\n"),
-        "{out}"
-    );
-    assert!(!out.contains("a comment"), "{out}");
-    assert!(out.contains("Opts.__module__ = \"livekit.agents.inference.stt\""), "{out}");
 }
 
 // --- host-stream dispatch -------------------------------------------------------------------------

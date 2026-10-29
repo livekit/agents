@@ -197,7 +197,6 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// | `wire_strs` | a unit enum | its wire strings only: it crosses by its own impls, or not at all |
 /// | `string` | a struct or enum with `Display`, `FromStr` and `as_str()` | the string both ways |
 /// | `file` | `const _: () = ();` | nothing: `lk-agents-codegen` reads its `module`/`path` as the default of every record in the file |
-/// | `group` | an inline `mod` of host records and literal consts | strips their markers; `lk-agents-codegen` reads each struct/enum as a declaration and each `const X: &[&str]` as a host `Literal`, with the group's defaults |
 ///
 /// Inside an `object`, a fn takes `new`, `method`, `getter` or `setter` (and an associated const
 /// `const`); a `method`'s kind is its signature's -- an `async fn` is awaitable, one without a
@@ -227,7 +226,7 @@ use lk_agents_bindgen::to_snake;
 /// What each item takes, for a head on the wrong item.
 const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `handwritten`/`record` on a type, \
     `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
-    `file` on `const _`, `constant` on a `pub const` (written into its file's Python module), or `group` on an inline mod";
+    `file` on `const _`, or `constant` on a `pub const` (written into its file's Python module)";
 
 fn expand_host(
     attr: proc_macro2::TokenStream,
@@ -249,7 +248,6 @@ fn expand_host(
             | (I::Struct(_), Some("client" | "kwargs"))
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
             | (I::Enum(_), Some("wire_enum" | "wire_strs"))
-            | (I::Mod(_), Some("group"))
             | (I::Const(_), Some("file" | "constant"))
     );
     if !fits {
@@ -296,7 +294,7 @@ fn expand_host(
         (I::Fn(f), Some("export")) => f.attrs.retain(|a| !a.path().is_ident("python")),
         _ => {}
     }
-    strip(&mut parsed, head.as_deref() == Some("group"));
+    strip(&mut parsed);
     quote::quote!(#parsed #extra)
 }
 
@@ -328,7 +326,6 @@ fn expand(
         (I::Trait(t), Some("native")) => lk_agents_bindgen::native(attr, t),
         (I::Struct(st), Some("client")) => lk_agents_bindgen::client(attr, st),
         (I::Struct(st), Some("kwargs")) => lk_agents_bindgen::kwargs(attr, st),
-        // A group's records are the codegen's (the pydantic modules); nothing crosses in Rust.
         _ => Ok(proc_macro2::TokenStream::new()),
     }
 }
@@ -361,14 +358,11 @@ fn declared_proxy(t: &syn::ItemTrait) -> bool {
 }
 
 /// Every marker inside the item that rustc does not know: `#[host(..)]` on a method, parameter,
-/// field, variant or associated const -- and, inside a `group`, the record helpers (`python`,
-/// `binding`) on each struct, enum and const directly in it (a nested group strips its
-/// own). A proxy trait's Python face (`#[python(..)]` on the trait, its methods and parameters,
+/// field, variant or associated const. A proxy trait's Python face (`#[python(..)]` on the trait, its methods and parameters,
 /// read by `lk-agents-codegen`) goes too. The item's other attributes are left alone: a second
 /// `#[host]` is its own call.
-fn strip(item: &mut syn::Item, group: bool) {
+fn strip(item: &mut syn::Item) {
     let words: &[&str] = match item {
-        _ if group => &["host", "python", "binding"],
         syn::Item::Trait(_) => &["host", "python"],
         _ => &["host"],
     };
@@ -420,22 +414,6 @@ fn strip(item: &mut syn::Item, group: bool) {
         }
         syn::Item::Struct(st) => fields(&mut st.fields),
         syn::Item::Enum(e) => variants(e),
-        syn::Item::Mod(m) => {
-            for inner in m.content.iter_mut().flat_map(|(_, items)| items) {
-                match inner {
-                    syn::Item::Const(c) => clean(&mut c.attrs),
-                    syn::Item::Struct(st) => {
-                        clean(&mut st.attrs);
-                        fields(&mut st.fields);
-                    }
-                    syn::Item::Enum(e) => {
-                        clean(&mut e.attrs);
-                        variants(e);
-                    }
-                    _ => {}
-                }
-            }
-        }
         _ => {}
     }
 }

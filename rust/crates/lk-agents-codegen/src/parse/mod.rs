@@ -29,7 +29,7 @@ pub fn file(label: &str, text: &str) -> Res<Vec<Decl>> {
     let consts = consts(&parsed);
     let mut out = Vec::new();
     let file = file_defaults(label, &parsed.items)?;
-    items(label, &marks, &consts, &parsed.items, None, file.as_ref(), &mut out)?;
+    items(label, &marks, &consts, &parsed.items, file.as_ref(), &mut out)?;
     link(&mut out)?;
     Ok(out)
 }
@@ -129,40 +129,25 @@ fn py_literal(at: &str, e: &syn::Expr) -> Res<String> {
     }
 }
 
-/// An inline `mod` with `#[crate::host(group(..))]` contributes its own, with the group's defaults;
-/// `file` ([`file_defaults`]) fills a record's `module`/`path` where no group does.
+/// Every declared record of `items`; `file` ([`file_defaults`]) fills a record's `module`/`path`.
 fn items(
     label: &str,
     marks: &[(usize, String)],
     consts: &[(String, String)],
     items: &[syn::Item],
-    group: Option<&Group>,
-    file: Option<&Group>,
+    file: Option<&FileDefaults>,
     out: &mut Vec<Decl>,
 ) -> Res<()> {
     for item in items {
         let at = |span: proc_macro2::Span| section_at(marks, span.start().line);
         match item {
-            // Inside a group the group's attribute is the marker for every struct and enum.
-            syn::Item::Struct(s) if group.is_some() || has_host_derive(&s.attrs) => {
-                out.push(strukt(label, at(s.span()), s, consts, group.or(file))?)
+            syn::Item::Struct(s) if has_host_derive(&s.attrs) => {
+                out.push(strukt(label, at(s.span()), s, consts, file)?)
             }
             // An untagged union is a crossing shape only: no host model, typed as its members.
             syn::Item::Enum(e) if flag(&e.attrs, "binding", "untagged") => {}
-            syn::Item::Enum(e) if group.is_some() || has_host_derive(&e.attrs) => {
-                out.push(enom(label, at(e.span()), e, group.or(file))?)
-            }
-            syn::Item::Const(c) if group.is_some_and(|g| !g.module.is_empty()) => {
-                if let Some(d) = literal(label, at(c.span()), c, group.expect("checked"))? {
-                    out.push(d);
-                }
-            }
-            syn::Item::Mod(m) => {
-                let Some(g) = group_of(label, &m.attrs, group)? else { continue };
-                let Some((_, inner)) = &m.content else {
-                    return Err(format!("{label}: a host group must be an inline `mod {{ .. }}`"));
-                };
-                self::items(label, marks, consts, inner, Some(&g), file, out)?;
+            syn::Item::Enum(e) if has_host_derive(&e.attrs) => {
+                out.push(enom(label, at(e.span()), e, file)?)
             }
             _ => {}
         }
@@ -170,78 +155,17 @@ fn items(
     Ok(())
 }
 
-/// `#[crate::host(group(path, kind, typed_dict_from, total))]` on an inline `mod`: shared
-/// defaults. `path` is the public module; the generated one is it under `livekit.agents.` with
-/// `.` -> `_`.
+/// A file's default Python `module` and `path` (`#[host(file(..))]`).
 #[derive(Debug, Clone, Default)]
-pub struct Group {
+pub struct FileDefaults {
     pub module: String,
     pub path: Option<String>,
-    pub kind: Option<Kind>,
-    pub typed_dict_from: Option<String>,
-    pub total: Option<bool>,
-}
-
-/// A nested group inherits every default it does not set; a `path` of its own also names its module.
-fn group_of(label: &str, attrs: &[syn::Attribute], parent: Option<&Group>) -> Res<Option<Group>> {
-    for a in attrs {
-        // By path: a bare `host` is ambiguous with the `#[derive(Host)]` helper.
-        if !a.path().segments.last().is_some_and(|s| s.ident == "host") {
-            continue;
-        }
-        let out = metas(std::slice::from_ref(a));
-        if !out.iter().any(|m| m.key.starts_with("group.")) {
-            continue;
-        }
-        let get = |k: &str| {
-            out.iter().find(|m| m.key == format!("group.{k}")).and_then(|m| m.value.clone())
-        };
-        let own_path = get("path");
-        let module = get("module")
-            .or_else(|| {
-                own_path
-                    .as_deref()
-                    .and_then(|p| p.strip_prefix("livekit.agents."))
-                    .map(|p| p.replace('.', "_"))
-            })
-            .or_else(|| parent.map(|p| p.module.clone()).filter(|m| !m.is_empty()))
-            .unwrap_or_default();
-        let path = own_path.or_else(|| parent.and_then(|p| p.path.clone()));
-        let kind =
-            match get("kind") {
-                None => parent.and_then(|p| p.kind),
-                Some(k) => Some(
-                    KIND_WORDS.iter().find(|(w, _)| *w == k).map(|(_, kind)| *kind).ok_or_else(
-                        || format!("{label}: group kind = \"{k}\" is not a kind word"),
-                    )?,
-                ),
-            };
-        let total = match get("total").as_deref() {
-            None => parent.and_then(|p| p.total),
-            Some("True") => Some(true),
-            Some("False") => Some(false),
-            Some(other) => {
-                return Err(format!(
-                    "{label}: group total = \"{other}\"; write \"True\" or \"False\""
-                ));
-            }
-        };
-        return Ok(Some(Group {
-            module,
-            path,
-            kind,
-            typed_dict_from: get("typed_dict_from")
-                .or_else(|| parent.and_then(|p| p.typed_dict_from.clone())),
-            total,
-        }));
-    }
-    Ok(None)
 }
 
 /// `#[crate::host(file(module = "..", path = ".."))] const _: () = ();`: the Python `module` and
-/// `path` of every record in the file that does not name its own. Unlike a group it declares
-/// nothing: a record still needs its own `#[derive(Host)]` and `#[python(<kind>)]`.
-fn file_defaults(label: &str, items: &[syn::Item]) -> Res<Option<Group>> {
+/// `path` of every record in the file that does not name its own. It declares nothing: a record
+/// still needs its own `#[derive(Host)]` and `#[python(<kind>)]`.
+fn file_defaults(label: &str, items: &[syn::Item]) -> Res<Option<FileDefaults>> {
     let mut found = None;
     for item in items {
         let syn::Item::Const(c) = item else { continue };
@@ -261,135 +185,9 @@ fn file_defaults(label: &str, items: &[syn::Item]) -> Res<Option<Group>> {
         }
         let module = meta_str(&m, "file.module")
             .ok_or_else(|| format!("{label}: #[host(file(..))] needs module = \"..\""))?;
-        found = Some(Group { module, path: meta_str(&m, "file.path"), ..Group::default() });
+        found = Some(FileDefaults { module, path: meta_str(&m, "file.path") });
     }
     Ok(found)
-}
-
-fn bare_target(host: Host, kind: Kind, module: &str, name: &str, path: Option<String>) -> Target {
-    Target {
-        host,
-        kind,
-        module: module.to_owned(),
-        name: name.to_owned(),
-        path,
-        total: true,
-        config: None,
-        validator: None,
-        tag: None,
-        host_fields: Vec::new(),
-        tag_after: None,
-        base: None,
-        nested_in: None,
-        post_init: None,
-        repr: None,
-        discriminator: None,
-        members: Vec::new(),
-        inline: false,
-        constructor: false,
-        order: Vec::new(),
-        typed_dict_from: None,
-        from_items: false,
-    }
-}
-
-/// `pub const DEEPGRAM_MODELS: &[&str] = &[..];` in a group: `DeepgramModels = Literal[..]`
-/// (or `#[host(name = "..")]`). With `#[host(union = "A, B")]`: `A | B | Literal[..]`.
-fn literal(
-    label: &str,
-    section: Option<String>,
-    c: &syn::ItemConst,
-    g: &Group,
-) -> Res<Option<Decl>> {
-    let meta = metas(&c.attrs);
-    let owner = c.ident.to_string();
-    let bad = || format!("{label}: {owner} must be a `&[&str]` of string literals");
-    // Any other const in a group is the module's own.
-    let is_str_slice = matches!(&*c.ty, syn::Type::Reference(r) if matches!(&*r.elem,
-        syn::Type::Slice(sl) if quote(&sl.elem).replace(' ', "") == "&str"));
-    if !is_str_slice {
-        return Ok(None);
-    }
-    let name =
-        meta.iter().find(|m| m.key == "name").and_then(|m| m.value.clone()).unwrap_or_else(|| {
-            owner
-                .split('_')
-                .filter(|w| !w.is_empty())
-                .map(|w| {
-                    let lower = w.to_lowercase();
-                    let mut cs = lower.chars();
-                    cs.next()
-                        .map(|c| c.to_uppercase().chain(cs).collect::<String>())
-                        .unwrap_or_default()
-                })
-                .collect()
-        });
-    let syn::Expr::Reference(r) = &*c.expr else { return Err(bad()) };
-    let syn::Expr::Array(arr) = &*r.expr else { return Err(bad()) };
-    let mut values = Vec::new();
-    for e in &arr.elems {
-        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(v), .. }) = e else {
-            return Err(bad());
-        };
-        values.push(v.value());
-    }
-    let key = |n: &str| format!("py:{}:{n}", g.module);
-    let (body, kind) = match meta.iter().find(|m| m.key == "union").and_then(|m| m.value.clone()) {
-        None => (
-            Body::Unit(
-                values.into_iter().map(|value| UnitVariant { value, doc: Vec::new() }).collect(),
-            ),
-            Kind::Literal,
-        ),
-        Some(members) => {
-            let mut out = Vec::new();
-            for m in members.split(',').map(str::trim).filter(|m| !m.is_empty()) {
-                let ty = match m {
-                    "str" | "int" | "float" | "bool" => foreign(m),
-                    _ => Ty::Declared(key(m)),
-                };
-                out.push(Variant {
-                    rust_name: m.to_owned(),
-                    ty,
-                    twin: None,
-                    dispatch: None,
-                    mirror: None,
-                    kind: None,
-                });
-            }
-            for v in values {
-                let ty = foreign(&format!("Literal[\"{v}\"]"));
-                out.push(Variant {
-                    rust_name: v,
-                    ty,
-                    twin: None,
-                    dispatch: None,
-                    mirror: None,
-                    kind: None,
-                });
-            }
-            (Body::Union(out), Kind::Union)
-        }
-    };
-    let targets = vec![bare_target(Host::Python, kind, &g.module, &name, None)];
-    Ok(Some(Decl {
-        rust_name: key(&name),
-        source: label.to_owned(),
-        doc: doc(&c.attrs),
-        section,
-        body,
-        targets,
-        dispatch: None,
-        dispatch_also: Vec::new(),
-    }))
-}
-
-fn foreign(python: &str) -> Ty {
-    Ty::Foreign(Foreign {
-        python: python.to_owned(),
-        python_from: Vec::new(),
-        python_type_from: Vec::new(),
-    })
 }
 
 /// Resolve `py:<module>:<Name>` union members to declarations. Run per file, then over all files.
@@ -459,7 +257,7 @@ fn strukt(
     section: Option<String>,
     s: &syn::ItemStruct,
     consts: &[(String, String)],
-    group: Option<&Group>,
+    file: Option<&FileDefaults>,
 ) -> Res<Decl> {
     let rust_name = s.ident.to_string();
     let named = match &s.fields {
@@ -477,7 +275,7 @@ fn strukt(
         fields.push(field(label, &rust_name, f, inherit)?);
     }
     Ok(Decl {
-        targets: targets(label, &rust_name, &s.attrs, consts, group)?,
+        targets: targets(label, &rust_name, &s.attrs, consts, file)?,
         rust_name,
         source: label.to_owned(),
         doc: doc(&s.attrs),
@@ -492,7 +290,7 @@ fn enom(
     label: &str,
     section: Option<String>,
     e: &syn::ItemEnum,
-    group: Option<&Group>,
+    file: Option<&FileDefaults>,
 ) -> Res<Decl> {
     let rust_name = e.ident.to_string();
     let all_unit = e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit));
@@ -572,7 +370,7 @@ fn enom(
         ));
     }
     Ok(Decl {
-        targets: targets(label, &rust_name, &e.attrs, &[], group)?,
+        targets: targets(label, &rust_name, &e.attrs, &[], file)?,
         rust_name,
         source: label.to_owned(),
         doc: doc(&e.attrs),
@@ -758,20 +556,16 @@ fn targets(
     rust_name: &str,
     attrs: &[syn::Attribute],
     consts: &[(String, String)],
-    group: Option<&Group>,
+    file: Option<&FileDefaults>,
 ) -> Res<Vec<Target>> {
     let mut out = Vec::new();
     for (host, outer) in [(Host::Python, "python"), (Host::Binding, "binding")] {
-        let mut kinds = kinds_of(attrs, outer);
-        if let (Host::Python, true, Some(k)) = (host, kinds.is_empty(), group.and_then(|g| g.kind))
-        {
-            kinds.push(k);
-        }
+        let kinds = kinds_of(attrs, outer);
         if kinds.is_empty() {
             continue;
         }
-        // Group defaults apply to the Python target.
-        let grouped = group.filter(|_| host == Host::Python);
+        // File defaults apply to the Python target.
+        let grouped = file.filter(|_| host == Host::Python);
         let module = match (str_arg(attrs, outer, "module")?, grouped) {
             (Some(m), _) => m,
             (None, Some(g)) if !g.module.is_empty() => g.module.clone(),
@@ -798,10 +592,7 @@ fn targets(
                 post_init: str_arg(attrs, outer, "post_init")?,
                 repr: str_arg(attrs, outer, "repr")?,
                 discriminator: str_arg(attrs, outer, "discriminator")?,
-                total: match (str_arg(attrs, outer, "total")?, grouped.and_then(|g| g.total)) {
-                    (None, Some(t)) if kind == Kind::TypedDict => t,
-                    _ => total(label, rust_name, attrs, outer, kind)?,
-                },
+                total: total(label, rust_name, attrs, outer, kind)?,
                 config: str_arg(attrs, outer, "config")?,
                 validator: str_arg(attrs, outer, "validator")?,
                 inline: flag(attrs, outer, "inline"),
@@ -816,8 +607,7 @@ fn targets(
                             .collect()
                     })
                     .unwrap_or_default(),
-                typed_dict_from: str_arg(attrs, outer, "typed_dict_from")?
-                    .or_else(|| grouped.and_then(|g| g.typed_dict_from.clone())),
+                typed_dict_from: str_arg(attrs, outer, "typed_dict_from")?,
                 from_items: flag(attrs, outer, "from_items"),
             });
         }
