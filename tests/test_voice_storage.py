@@ -38,7 +38,7 @@ class ObservedLLM(FakeLLM):
 
 
 async def replace_history(storage: Storage, thread_id: str, items: list[ChatMessage]) -> None:
-    core = await storage.open(thread_id)
+    core = await storage._open(thread_id)
     try:
         run = await core.open_run("desk", f"edit-{items[-1].id}", channel="sms")
         await run.commit(
@@ -163,7 +163,7 @@ async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
         await session.start(agent)
         await session.store.load_context(app)
         await session._run(user_input="save")
-        core = await thread_storage.open(thread_id)
+        core = await thread_storage._open(thread_id)
         try:
             lane = await core.lane_info("desk")
             assert lane is not None and lane.lease_until == 0

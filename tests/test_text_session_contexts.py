@@ -73,7 +73,7 @@ async def test_child_contexts_restore_their_own_drafts_without_serializing_servi
     assert child_frame.context_scope != "root"
     writes = [write.scope for write in store._scope_writes]
     restored = TextSessionState.from_json(first.state.to_json())
-    store.close()
+    store._close()
     store = ContextStore(scopes=writes)
     token = set_run_hooks(RunHooks(store=store))
     try:
@@ -84,7 +84,7 @@ async def test_child_contexts_restore_their_own_drafts_without_serializing_servi
         )
     finally:
         reset_run_hooks(token)
-        store.close()
+        store._close()
     assert second.result.status == "completed"
     assert scopes[0] == scopes[1] and scopes[2] != scopes[0]
     assert [draft.value for draft in constructed] == [1, 2, 1]
@@ -127,13 +127,13 @@ async def test_only_the_owner_closes_the_store_shared_with_child_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     closed: list[ContextStore] = []
-    original_close = ContextStore.close
+    original_close = ContextStore._close
 
     def close(store: ContextStore) -> None:
         closed.append(store)
         original_close(store)
 
-    monkeypatch.setattr(ContextStore, "close", close)
+    monkeypatch.setattr(ContextStore, "_close", close)
     child = Agent(name="child", instructions="Finish", output_type=str, llm=Script(Reply("OK")))
     parent = Agent(
         name="parent",
