@@ -874,7 +874,7 @@ impl HostRealtimeModel {
     fn new(model: Bound<'_, PyAny>) -> PyResult<HostRealtimeModel> {
         ::lk_agents_abi::python::check_pid()?;
         let model = crate::generated::llm::HostRealtimeProxy::from_host(&model)?;
-        let out = <HostRealtimeModelImpl as ::lk_agents_abi::llm::realtime::HostRealtimeModel>::new(model);
+        let out = <HostRealtimeModelImpl as ::lk_agents_abi::llm::realtime::HostRealtimeModel>::new(model).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(HostRealtimeModel(::std::sync::Arc::new(out)))
     }
 }

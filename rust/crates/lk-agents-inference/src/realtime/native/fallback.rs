@@ -59,8 +59,9 @@ impl RealtimeChild {
     ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         match self {
             RealtimeChild::Native(m) => m.session(turn_detection_disabled).await,
+            // Given its anchor and spawner, it needs no environment.
             RealtimeChild::Host(h, spawner) => {
-                HostRealtimeModel::new(Arc::clone(h), anchor, Arc::clone(spawner))
+                <HostRealtimeModel>::new(Arc::clone(h), anchor, Arc::clone(spawner))
                     .session(turn_detection_disabled)
                     .await
             }

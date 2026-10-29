@@ -2,25 +2,38 @@
 //! a reply is requested once the updates sent before it applied, and each generation is drained in
 //! its own task.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::realtime::{
     CancelReply, Event, GenerateReplyFailed, HostRealtime, HostRealtimeSession,
     RealtimeCapabilities,
 };
-use lk_agents_abi::{Realtime, RealtimeCommand, RealtimeSession};
+use lk_agents_abi::{Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
+
+use crate::env::{Env, Standalone};
 
 /// The plugin session opens only when the driver calls `session()`; asked again, it is the same.
-pub struct HostRealtimeModel {
+/// `E` lends the class constructor its clock and spawner (decision 89).
+pub struct HostRealtimeModel<E = Standalone> {
     host: Arc<dyn HostRealtime>,
     label: String,
     caps: RealtimeCapabilities,
     anchor: lk_agents_abi::WallAnchor,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
     session: tokio::sync::Mutex<Option<Arc<HostRealtimeLeg>>>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl HostRealtimeModel {
+impl<E: Env> lk_agents_abi::llm::realtime::HostRealtimeModel for HostRealtimeModel<E> {
+    fn new(model: Arc<dyn HostRealtime>) -> Result<Self, HostError> {
+        let spawner = E::spawner().map_err(HostError::new)?;
+        Ok(Self::new(model, WallAnchor::of(&*E::clock()), spawner))
+    }
+}
+
+impl<E> HostRealtimeModel<E> {
     pub fn new(
         host: Arc<dyn HostRealtime>,
         anchor: lk_agents_abi::WallAnchor,
@@ -33,11 +46,12 @@ impl HostRealtimeModel {
             anchor,
             spawner,
             session: Default::default(),
+            env: PhantomData,
         }
     }
 }
 
-impl Realtime for HostRealtimeModel {
+impl<E: Send + 'static> Realtime for HostRealtimeModel<E> {
     fn label(&self) -> String {
         self.label.clone()
     }
