@@ -1,5 +1,7 @@
 //! Awaiting answers and advancing the session scheduler to completion.
 
+use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
+
 use super::*;
 use crate::record::{Task, TaskEnd};
 
@@ -51,9 +53,10 @@ impl Run {
         if done.await.is_none() {
             return false;
         }
-        let _ = (handle.id_for_host(), handle.num_steps(), handle.chat_items(), handle.scheduled());
-        let _ = (handle.interrupted_for_host(), handle.allow_interruptions_for_host());
-        let _ = handle.exception_for_host();
+        let _ =
+            (HostSpeech::id(&*handle), handle.num_steps(), handle.chat_items(), handle.scheduled());
+        let _ = (HostSpeech::interrupted(&*handle), HostSpeech::allow_interruptions(&*handle));
+        let _ = HostSpeech::exception(&*handle);
 
         true
     }

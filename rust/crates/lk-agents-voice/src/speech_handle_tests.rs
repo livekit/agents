@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent_session::Tx;
+use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
 fn created(allow: bool) -> SpeechHandle {
     SpeechHandle::new(SpeechId(1), allow, Tx::disconnected())
@@ -9,10 +10,10 @@ fn created(allow: bool) -> SpeechHandle {
 #[test]
 fn attached_options_wait_for_core_acceptance() {
     let speech = created(true);
-    speech.set_allow_interruptions_for_host(false).unwrap();
-    assert!(speech.allow_interruptions_for_host(), "an undelivered setter changed the view");
-    speech.hold_interruptions_for_host().unwrap();
-    assert!(speech.allow_interruptions_for_host(), "an undelivered hold changed the view");
+    HostSpeech::set_allow_interruptions(&speech, false).unwrap();
+    assert!(HostSpeech::allow_interruptions(&speech), "an undelivered setter changed the view");
+    HostSpeech::hold_interruptions(&speech).unwrap();
+    assert!(HostSpeech::allow_interruptions(&speech), "an undelivered hold changed the view");
 }
 
 // Catches: a hold that is not counted, so one holder's release lifts another's, or a release that
@@ -69,8 +70,8 @@ async fn generation_waits_name_the_missing_step() {
     );
     speech.mark_generation_done().unwrap();
     speech.wait_for_generation(0).await.unwrap();
-    speech.wait_for_generation_for_host(Some(0)).await.unwrap();
-    speech.wait_for_generation_for_host(None).await.unwrap();
+    HostSpeech::wait_for_generation(&speech, Some(0)).await.unwrap();
+    HostSpeech::wait_for_generation(&speech, None).await.unwrap();
 }
 
 // Catches: a host wait on a handle no loop will ever create hanging instead of raising, and the
@@ -78,20 +79,23 @@ async fn generation_waits_name_the_missing_step() {
 #[tokio::test]
 async fn host_waits_on_a_speech_never_created_raise_why() {
     let detached = SpeechHandle::detached("mine".into(), true);
-    assert_eq!(detached.id_for_host(), "mine");
+    assert_eq!(HostSpeech::id(&detached), "mine");
     // Nothing to play: `wait_for_playout` returns rather than hang or raise.
-    assert_eq!(detached.wait_for_playout_for_host(None).await, Ok(()));
-    assert_eq!(detached.wait_until_created().await, Err(CreationError::Consumed.into()));
-    assert_eq!(detached.hold_interruptions_for_host(), Err(SpeechRefused::Detached));
-    assert_eq!(detached.release_interruptions_for_host(), Err(SpeechRefused::Detached));
+    assert_eq!(HostSpeech::wait_for_playout(&detached, None).await, Ok(()));
+    assert_eq!(
+        HostSpeech::wait_until_created(&detached).await,
+        Err(CreationError::Consumed.into())
+    );
+    assert_eq!(HostSpeech::hold_interruptions(&detached), Err(SpeechRefused::Detached.into()));
+    assert_eq!(HostSpeech::release_interruptions(&detached), Err(SpeechRefused::Detached.into()));
     // A detached handle's setter is its own, with no loop to tell.
-    detached.set_allow_interruptions_for_host(false).unwrap();
+    HostSpeech::set_allow_interruptions(&detached, false).unwrap();
     assert!(!detached.allow_interruptions());
-    assert!(matches!(detached.exception_for_host(), Ok(None)));
+    assert!(matches!(HostSpeech::exception(&detached), Ok(None)));
 
     // A setter before the loop created the speech is the value it is created with.
     let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(7), true);
-    pending.set_allow_interruptions_for_host(false).unwrap();
+    HostSpeech::set_allow_interruptions(&*pending, false).unwrap();
     assert!(pending.allow_interruptions(), "a queued setter is not yet accepted");
     pending.create(SpeechId(7), true);
     assert!(pending.allow_interruptions(), "creation uses its accepted options");
@@ -99,11 +103,14 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     assert!(!pending.allow_interruptions());
 
     let lost = SpeechHandle::pending(Tx::disconnected(), SpeechId(8), true);
-    lost.interrupt_for_host(false).unwrap();
-    assert!(lost.interrupted_for_host());
+    HostSpeech::interrupt(&*lost, false).unwrap();
+    assert!(HostSpeech::interrupted(&*lost));
     lost.answered(false);
-    assert_eq!(lost.wait_for_interrupted_for_host().await, Err(CreationError::Ended.into()));
-    assert_eq!(lost.wait_for_generation_for_host(None).await, Err(CreationError::Ended.into()));
+    assert_eq!(HostSpeech::wait_for_interrupted(&*lost).await, Err(CreationError::Ended.into()));
+    assert_eq!(
+        HostSpeech::wait_for_generation(&*lost, None).await,
+        Err(CreationError::Ended.into())
+    );
     tokio::task::yield_now().await;
 }
 
@@ -112,28 +119,28 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
 #[tokio::test]
 async fn host_calls_on_a_created_speech_reach_it() {
     let speech = created(true);
-    speech.hold_interruptions_for_host().unwrap();
+    HostSpeech::hold_interruptions(&speech).unwrap();
     assert!(speech.allow_interruptions(), "the hold is queued");
     speech.hold_interruptions().unwrap();
     assert!(!speech.allow_interruptions());
-    speech.release_interruptions_for_host().unwrap();
+    HostSpeech::release_interruptions(&speech).unwrap();
     assert!(!speech.allow_interruptions(), "the release is queued");
     speech.release_interruptions();
     assert!(speech.allow_interruptions());
-    assert!(matches!(
-        speech.exception_for_host(),
-        Err(SpeechRefused::Speech(SpeechError::NotDoneYet))
-    ));
+    assert_eq!(
+        HostSpeech::exception(&speech),
+        Err(SpeechRefused::Speech(SpeechError::NotDoneYet).into())
+    );
 
     speech.interrupt(false).unwrap();
-    speech.wait_for_interrupted_for_host().await.unwrap();
+    HostSpeech::wait_for_interrupted(&speech).await.unwrap();
     assert_eq!(
-        speech.set_allow_interruptions_for_host(false),
+        HostSpeech::set_allow_interruptions(&speech, false),
         Err(SpeechError::AlreadyInterrupted.into())
     );
     speech.mark_done(None);
-    speech.wait_for_playout_for_host(None).await.unwrap();
-    assert!(matches!(speech.exception_for_host(), Ok(None)));
+    HostSpeech::wait_for_playout(&speech, None).await.unwrap();
+    assert!(matches!(HostSpeech::exception(&speech), Ok(None)));
 }
 
 // Catches: two handles of one speech comparing unequal, or two pending handles comparing equal.
@@ -153,21 +160,21 @@ fn a_speech_is_itself_across_handles() {
 #[tokio::test]
 async fn a_refused_host_interrupt_leaves_the_speech_uninterrupted() {
     let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(3), false);
-    assert_eq!(pending.id_for_host(), "speech_3", "the id exists as the call returns");
-    assert!(pending.interrupt_for_host(false).is_err(), "disallowed at the call");
+    assert_eq!(HostSpeech::id(&*pending), "speech_3", "the id exists as the call returns");
+    assert!(HostSpeech::interrupt(&*pending, false).is_err(), "disallowed at the call");
 
     let speech = Arc::new(created(true));
-    speech.set_allow_interruptions_for_host(false).unwrap();
-    assert!(speech.allow_interruptions_for_host(), "the setter is queued");
+    HostSpeech::set_allow_interruptions(&*speech, false).unwrap();
+    assert!(HostSpeech::allow_interruptions(&*speech), "the setter is queued");
     speech.set_allow_interruptions(false).unwrap();
-    assert!(!speech.allow_interruptions_for_host(), "the accepted setter is visible");
-    assert!(speech.interrupt_for_host(false).is_err());
+    assert!(!HostSpeech::allow_interruptions(&*speech), "the accepted setter is visible");
+    assert!(HostSpeech::interrupt(&*speech, false).is_err());
 
     let speech = Arc::new(created(true));
-    speech.interrupt_for_host(false).unwrap();
-    assert!(speech.interrupted_for_host());
+    HostSpeech::interrupt(&*speech, false).unwrap();
+    assert!(HostSpeech::interrupted(&*speech));
     speech.interrupt_refused();
-    assert!(!speech.interrupted_for_host());
+    assert!(!HostSpeech::interrupted(&*speech));
     speech.mark_done(None);
     assert_eq!(speech.outcome(), crate::events::SpeechOutcome::Completed);
 }

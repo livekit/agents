@@ -5,6 +5,7 @@
 //! driver has forgotten, a hook already finished -- makes the input a refused attempt, and so does
 //! a call the API refuses. Nothing is invented to stand in for it, because a call carrying an id
 //! the driver never issued is a different test from the one the case asked for.
+use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::session::VoiceSession as _;
@@ -108,11 +109,11 @@ impl Pending {
         Pending(Box::pin(async move { Settled::of(answer(reply.await)) }))
     }
 
-    /// `await handle.wait_until_created()`: the speech, or the handle's refusal when the loop
+    /// `await HostSpeech::wait_until_created(&*handle)`: the speech, or the handle's refusal when the loop
     /// dropped it uncreated.
     fn speech(speech: Arc<SpeechHandle>) -> Self {
         Pending(Box::pin(async move {
-            match speech.wait_until_created().await {
+            match HostSpeech::wait_until_created(&*speech).await {
                 Ok(()) => Settled { answer: Answer::Speech(speech.id().0), handle: Some(speech) },
                 Err(_) => Settled::of(Answer::Lost),
             }
@@ -326,10 +327,12 @@ impl Run {
                 .is_ok(),
             Input::InterruptSpeech { speech, force } => self
                 .host_speech(*speech)
-                .is_some_and(|speech| speech.interrupt_for_host(*force).is_ok()),
-            Input::SetAllowInterruptions { speech, allow } => self
-                .host_speech(*speech)
-                .is_some_and(|speech| speech.set_allow_interruptions_for_host(*allow).is_ok()),
+                .is_some_and(|speech| HostSpeech::interrupt(&*speech, *force).is_ok()),
+            Input::SetAllowInterruptions { speech, allow } => {
+                self.host_speech(*speech).is_some_and(|speech| {
+                    HostSpeech::set_allow_interruptions(&*speech, *allow).is_ok()
+                })
+            }
             Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => api
                 .commit_user_turn(secs(*transcript_timeout), secs(*stt_flush), *skip_reply)
                 .map(|reply| {

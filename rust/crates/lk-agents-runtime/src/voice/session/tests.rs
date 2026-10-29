@@ -3,6 +3,8 @@
 mod hooks;
 mod playback;
 
+use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
+
 use super::*;
 use crate::room_io::FixedRoom;
 use crate::voice::{Executor, remote_session};
@@ -102,7 +104,9 @@ fn assembled(
         ..Default::default()
     };
     let env = lk_agents_net::env::ProcessEnv::current_runtime();
-    let api = <VoiceSession as lk_agents_abi::voice::session::VoiceSession>::new(&env, room, args, options);
+    let api = <VoiceSession as lk_agents_abi::voice::session::VoiceSession>::new(
+        &env, room, args, options,
+    );
     api.expect("valid native room ports")
 }
 
@@ -453,7 +457,7 @@ async fn a_host_say_during_a_handoff_is_spoken_by_the_arriving_agent_before_its_
 
     drop(words);
     assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
-    handle.wait_until_created().await.expect("created at the swap");
+    HostSpeech::wait_until_created(&*handle).await.expect("created at the swap");
     let speech = handle.id();
     settle().await;
     assert_eq!(rejected(&api, speech), None, "{:#?}", api.steps());
@@ -485,7 +489,7 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
     let (_words, _swap) = handoff_draining(&api, &mut exits).await;
     for origin in [Origin::Tool { call_id: "call_1".into() }, Origin::Hook] {
         let (_held, handle) = say_from(&api, origin.clone());
-        handle.wait_until_created().await.expect("created at once");
+        HostSpeech::wait_until_created(&*handle).await.expect("created at once");
         assert_eq!(
             rejected(&api, handle.id()),
             Some(lk_agents_voice::agent_activity::scheduling::Rejected::Draining),
@@ -505,8 +509,8 @@ async fn a_held_say_interrupted_before_the_swap_does_not_play() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
     let (_held, handle) = say_from(&api, Origin::Host);
-    handle.interrupt_for_host(false).expect("an interruptible say");
-    assert!(handle.interrupted_for_host(), "the interrupt is the handle's at once");
+    HostSpeech::interrupt(&*handle, false).expect("an interruptible say");
+    assert!(HostSpeech::interrupted(&*handle), "the interrupt is the handle's at once");
 
     drop(words);
     assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
@@ -535,7 +539,7 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
         api.send(Command::Close(close)).expect("the loop runs");
         settle().await;
         drop(words);
-        handle.wait_until_created().await.expect("created, not hung");
+        HostSpeech::wait_until_created(&*handle).await.expect("created, not hung");
 
         assert_eq!(swap.await.expect("answered"), Err(HandoffRefused::Closing), "drain={drain}");
         settle().await;
@@ -657,10 +661,10 @@ async fn rare_host_calls_reach_a_running_session() {
 
     let words = Items(["Hello ".to_owned(), "there.".to_owned()].into());
     let streamed = api.say_stream(Box::new(words), None, true, None).unwrap();
-    streamed.wait_until_created().await.unwrap();
+    HostSpeech::wait_until_created(&*streamed).await.unwrap();
     let frames = Items(Default::default());
     let recorded = api.say_audio("Hi.".into(), Box::new(frames), None, true, None).unwrap();
-    recorded.wait_until_created().await.unwrap();
+    HostSpeech::wait_until_created(&*recorded).await.unwrap();
     // Outside any speech: nothing to end.
     api.end_call(String::new()).unwrap();
 

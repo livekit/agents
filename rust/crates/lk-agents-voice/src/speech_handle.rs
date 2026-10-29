@@ -597,8 +597,6 @@ impl SpeechHandle {
     }
 }
 
-// What `voice/speech_handle.py`'s `SpeechHandle` wraps. Before the loop has created the speech
-// every read is a fresh handle's.
 impl SpeechHandle {
     /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
     /// behind it.
@@ -624,12 +622,6 @@ impl SpeechHandle {
         lock(&self.inner).host = Some(host);
     }
 
-    /// `speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
-    /// the id it was constructed with.
-    pub fn id_for_host(&self) -> String {
-        self.speech_id().to_owned()
-    }
-
     pub fn num_steps(&self) -> u32 {
         self.num_steps.load(Ordering::Acquire)
     }
@@ -644,29 +636,73 @@ impl SpeechHandle {
         self.scheduled.get()
     }
 
-    /// `True` from the tick `interrupt()` was called, and once the loop has interrupted the speech
-    /// for any reason (a interruption, a supersede, the close).
-    pub fn interrupted_for_host(&self) -> bool {
-        self.interrupt_requested.load(Ordering::Acquire) || self.interrupted()
-    }
-
     pub fn done(&self) -> bool {
         self.done.get()
     }
+}
 
-    /// The core's last accepted `allow_interruptions`.
-    pub fn allow_interruptions_for_host(&self) -> bool {
-        self.allow_interruptions()
+impl From<SpeechRefused> for lk_agents_abi::voice::speech_handle::SpeechRefused {
+    fn from(refused: SpeechRefused) -> Self {
+        Self(refused.to_string())
+    }
+}
+
+impl lk_agents_abi::voice::speech_handle::Speech for SpeechHandle {}
+
+/// `_core.SpeechHandle`: what `voice/speech_handle.py`'s `SpeechHandle` wraps. Before the loop has
+/// created the speech every read is a fresh handle's.
+impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
+    fn new(speech_id: String, allow_interruptions: bool) -> Self {
+        Self::detached(speech_id, allow_interruptions)
     }
 
-    /// Enqueue the setter; the accepted view changes when the loop applies it.
-    pub fn set_allow_interruptions_for_host(&self, value: bool) -> Result<(), SpeechRefused> {
+    fn host_object(&self) -> Option<lk_agents_abi::HostRef> {
+        self.host()
+    }
+
+    fn set_host_object(&self, host: lk_agents_abi::HostRef) {
+        self.set_host(host);
+    }
+
+    /// Empty until the loop has minted `speech_{n}`; a detached handle answers the id it was
+    /// constructed with.
+    fn id(&self) -> String {
+        self.speech_id().to_owned()
+    }
+
+    fn num_steps(&self) -> u32 {
+        SpeechHandle::num_steps(self)
+    }
+
+    fn chat_items(&self) -> Vec<ChatItem> {
+        SpeechHandle::chat_items(self)
+    }
+
+    fn scheduled(&self) -> bool {
+        SpeechHandle::scheduled(self)
+    }
+
+    /// From the tick `interrupt()` was called, and once the loop has interrupted the speech for
+    /// any reason (an interruption, a supersede, the close).
+    fn interrupted(&self) -> bool {
+        self.interrupt_requested.load(Ordering::Acquire) || SpeechHandle::interrupted(self)
+    }
+
+    fn done(&self) -> bool {
+        SpeechHandle::done(self)
+    }
+
+    fn allow_interruptions(&self) -> bool {
+        SpeechHandle::allow_interruptions(self)
+    }
+
+    fn set_allow_interruptions(&self, value: bool) -> Result<(), HostRefused> {
         self.transition(HandleInput::ValidateHostSetter { allow: value })?;
         if *self.creation.borrow() == Creation::Detached {
-            return Ok(self.set_allow_interruptions(value)?);
+            return Ok(SpeechHandle::set_allow_interruptions(self, value)?);
         }
         let Some(speech) = self.created().or(self.reserved) else {
-            return Err(SpeechRefused::Detached);
+            return Err(SpeechRefused::Detached.into());
         };
         let _ = self.api.send(crate::agent_session::Command::from(
             crate::agent_session::SpeechCommand::SetAllowInterruptions { speech, allow: value },
@@ -674,17 +710,15 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// The exception the speech failed with: the host's own object when a provider raised one.
-    pub fn exception_for_host(&self) -> Result<Option<ProviderError>, SpeechRefused> {
+    fn exception(&self) -> Result<Option<ProviderError>, HostRefused> {
         if self.created().is_none() {
             return Ok(None);
         }
-        Ok(self.exception()?)
+        Ok(SpeechHandle::exception(self)?)
     }
 
-    /// `interrupt(force=)` (`speech_handle.py:185`), synchronous and in the reference's order. If
-    /// the speech does not exist yet, the command is sent when the loop creates it.
-    pub fn interrupt_for_host(&self, force: bool) -> Result<(), SpeechRefused> {
+    /// Synchronous and in the reference's order (`speech_handle.py:185`).
+    fn interrupt(&self, force: bool) -> Result<(), HostRefused> {
         let created = self.created();
         if !self.transition(HandleInput::HostRequest { force, created: created.is_some() })?.flag()
         {
@@ -700,10 +734,7 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
-    /// the reference's `RuntimeError` when the speech is already interrupted, without counting the
-    /// attempt.
-    pub fn hold_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
+    fn hold_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached()?;
         self.transition(HandleInput::Accepted(StateInput::ValidateHostHold))?;
         let _ = self.api.send(crate::agent_session::Command::from(
@@ -712,8 +743,7 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// `_release_interruptions`. Idempotent past zero, like the reference's.
-    pub fn release_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
+    fn release_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached()?;
         let _ = self.api.send(crate::agent_session::Command::from(
             crate::agent_session::SpeechCommand::HoldInterruptions { speech, hold: false },
@@ -721,134 +751,43 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// `wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
-    /// tool). Raises the reference's `RuntimeError` from inside a tool this speech waits on;
-    /// otherwise never raises: a speech the session ended before creating, or a handle constructed
-    /// directly, has nothing to play.
-    pub async fn wait_for_playout_for_host(
-        &self,
-        origin: Option<String>,
-    ) -> Result<(), SpeechRefused> {
+    async fn wait_for_playout(&self, origin: Option<String>) -> Result<(), HostRefused> {
         self.self_wait(origin.as_deref())?;
         if self.wait_created().await.is_ok() {
-            self.wait_for_playout().await;
+            SpeechHandle::wait_for_playout(self).await;
         }
         Ok(())
     }
 
-    /// `_wait_for_generation(step_idx)`: wait for one step of the turn, not the whole thing.
-    /// `step=None` is the reference's `step_idx=-1`. No generation, no such step, and a
-    /// never-created speech are distinct errors.
-    pub async fn wait_for_generation_for_host(
-        &self,
-        step: Option<usize>,
-    ) -> Result<(), SpeechRefused> {
+    async fn wait_for_generation(&self, step: Option<usize>) -> Result<(), HostRefused> {
         self.wait_created().await?;
         match step {
-            Some(step) => self.wait_for_generation(step).await?,
+            Some(step) => SpeechHandle::wait_for_generation(self, step).await?,
             None => self.wait_for_latest_generation().await?,
         }
         Ok(())
     }
 
-    /// Resolve when the speech is interrupted, and only then: a speech that finishes normally never
-    /// resolves this, so `wait_if_not_interrupted` can race it.
-    pub async fn wait_for_interrupted_for_host(&self) -> Result<(), SpeechRefused> {
+    async fn wait_for_interrupted(&self) -> Result<(), HostRefused> {
         self.wait_created().await?;
-        self.wait_for_interrupted().await;
+        SpeechHandle::wait_for_interrupted(self).await;
         Ok(())
     }
 
-    /// Resolve once the loop has created the speech and put it in the queue.
-    pub async fn wait_until_created(&self) -> Result<(), SpeechRefused> {
+    async fn wait_until_created(&self) -> Result<(), HostRefused> {
         Ok(self.wait_created().await?)
     }
 }
 
-impl From<SpeechRefused> for lk_agents_abi::voice::speech_handle::SpeechRefused {
-    fn from(refused: SpeechRefused) -> Self {
-        Self(refused.to_string())
+impl From<SpeechError> for HostRefused {
+    fn from(error: SpeechError) -> Self {
+        SpeechRefused::from(error).into()
     }
 }
 
-impl lk_agents_abi::voice::speech_handle::Speech for SpeechHandle {}
-
-/// `_core.SpeechHandle`.
-impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
-    fn new(speech_id: String, allow_interruptions: bool) -> Self {
-        Self::detached(speech_id, allow_interruptions)
-    }
-
-    fn host_object(&self) -> Option<lk_agents_abi::HostRef> {
-        self.host()
-    }
-
-    fn set_host_object(&self, host: lk_agents_abi::HostRef) {
-        self.set_host(host);
-    }
-
-    fn id(&self) -> String {
-        self.id_for_host()
-    }
-
-    fn num_steps(&self) -> u32 {
-        SpeechHandle::num_steps(self)
-    }
-
-    fn chat_items(&self) -> Vec<ChatItem> {
-        SpeechHandle::chat_items(self)
-    }
-
-    fn scheduled(&self) -> bool {
-        SpeechHandle::scheduled(self)
-    }
-
-    fn interrupted(&self) -> bool {
-        self.interrupted_for_host()
-    }
-
-    fn done(&self) -> bool {
-        SpeechHandle::done(self)
-    }
-
-    fn allow_interruptions(&self) -> bool {
-        SpeechHandle::allow_interruptions(self)
-    }
-
-    fn set_allow_interruptions(&self, value: bool) -> Result<(), HostRefused> {
-        Ok(self.set_allow_interruptions_for_host(value)?)
-    }
-
-    fn exception(&self) -> Result<Option<ProviderError>, HostRefused> {
-        Ok(self.exception_for_host()?)
-    }
-
-    fn interrupt(&self, force: bool) -> Result<(), HostRefused> {
-        Ok(self.interrupt_for_host(force)?)
-    }
-
-    fn hold_interruptions(&self) -> Result<(), HostRefused> {
-        Ok(self.hold_interruptions_for_host()?)
-    }
-
-    fn release_interruptions(&self) -> Result<(), HostRefused> {
-        Ok(self.release_interruptions_for_host()?)
-    }
-
-    async fn wait_for_playout(&self, origin: Option<String>) -> Result<(), HostRefused> {
-        Ok(self.wait_for_playout_for_host(origin).await?)
-    }
-
-    async fn wait_for_generation(&self, step: Option<usize>) -> Result<(), HostRefused> {
-        Ok(self.wait_for_generation_for_host(step).await?)
-    }
-
-    async fn wait_for_interrupted(&self) -> Result<(), HostRefused> {
-        Ok(self.wait_for_interrupted_for_host().await?)
-    }
-
-    async fn wait_until_created(&self) -> Result<(), HostRefused> {
-        Ok(SpeechHandle::wait_until_created(self).await?)
+impl From<CreationError> for HostRefused {
+    fn from(error: CreationError) -> Self {
+        SpeechRefused::from(error).into()
     }
 }
 

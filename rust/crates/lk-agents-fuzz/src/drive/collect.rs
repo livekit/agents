@@ -5,6 +5,7 @@
 //! driver another turn.
 use super::apply::Settled;
 use super::*;
+use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
 impl Run {
     /// Everything that became true since the last input: answers, host events, what the fakes did,
@@ -60,7 +61,7 @@ impl Run {
                     kind: None,
                     done,
                     done_since: done.then_some(now),
-                    interrupted: handle.interrupted_for_host(),
+                    interrupted: HostSpeech::interrupted(&**handle),
                     scheduled: handle.scheduled(),
                     allow_interruptions: handle.allow_interruptions(),
                     error: if ended {

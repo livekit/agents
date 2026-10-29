@@ -1,6 +1,7 @@
 //! Tool bodies: every call the product hands to the runner is an invocation with the actual
 //! `call_id`, name, speech and step; the body waits for whatever the case delivers. The runner is
 //! the host's (`AgentHost`), classifying what the body did, as a Python agent's host does.
+use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -318,7 +319,7 @@ impl FakeTools {
             }
             Ok(Body::AwaitOwnSpeech(answer)) => {
                 let origin = format!("tool:{}", call.call_id);
-                let _ = handle.wait_for_playout_for_host(Some(origin)).await;
+                let _ = HostSpeech::wait_for_playout(&*handle, Some(origin)).await;
                 answer
             }
             Err(_) => ToolOutcome::Cancelled,
