@@ -23,8 +23,9 @@ pub struct Boundary {
 /// The voice campaigns (`tests/survey.rs`, `tests/soak.rs`, `tests/pos.rs`).
 pub const VOICE: Boundary = Boundary {
     cores: &[
-        "voice decision core (agent_session::Driver), stepped in the real runtime owner by the \
-         deterministic harness per delivered event, with effects performed against fake ports",
+        "voice decision core (agent_session::Driver), stepped by the runtime's real loop \
+         (lk_agents_runtime::voice::Runtime::serve, then ::close with its task drain) per event \
+         the deterministic harness delivers to its queue, with effects performed against fake ports",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
         "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
          over FakeRoom, on the run's injected scheduler and clock",
@@ -51,7 +52,6 @@ pub const VOICE: Boundary = Boundary {
          pool's turns, or one process each under the task bridge (E-1, E-3, E-13)",
     ],
     outside: &[
-        "the voice runtime arrival-order loop (the harness drives its same actor and effect execution)",
         "inference's realtime session (machine, pump, wire codec) and fallback adapter \
          (lk_agents_inference::realtime; its own tests over the simulated OpenAI Realtime server, \
          held to the corpus recordings and probes; the fakes mirror their outcomes)",

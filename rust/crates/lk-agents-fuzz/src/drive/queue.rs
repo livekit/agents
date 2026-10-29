@@ -4,9 +4,8 @@
 //! In production the queue is a channel and the order is arrival order. Here the case collects
 //! what reached the channel and picks what runs next, so an interleaving the channel would only
 //! produce under load is one a seed can choose. The choice is the shared scheduler's
-//! ([`crate::sched`]): each source keeps its own order, and BasicPOS samples the rest. A due wake
-//! goes before anything pending, as the production loop's biased `select!` takes it first. The
-//! microphone's frames are a source of their own: the frames that reached the run since its last
+//! ([`crate::sched`]): each source keeps its own order, and BasicPOS samples the rest. The loop
+//! takes its own due wakes, before anything handed to it. The microphone's frames are a source of their own: the frames that reached the run since its last
 //! step are one batch, delivered as one step in their order, racing the events under POS and
 //! ahead of them in arrival order (the production loop takes frames before its queue). The
 //! driver's ready tasks are a process of the scheduler, and so is each bridged task.
@@ -78,8 +77,6 @@ const POOL: u64 = u64::MAX;
 
 /// What runs next.
 pub enum Next {
-    /// The decision core's timer, due.
-    Wake,
     Event(Event),
     /// The microphone's frames that arrived since the last step, in order.
     Frames(Vec<AudioFrame>),
@@ -253,14 +250,9 @@ impl Queue {
         self.trail.lock().unwrap().pending.insert(arrival, "Frames");
     }
 
-    /// The next step: the wake when `wake_due`, else an event, a bridged task's turn (`ready`,
-    /// under [`Policy::TaskBridge`]), a turn for the pool when `tasks_ready`, or nothing.
-    pub fn next(&mut self, wake_due: bool, tasks_ready: bool, ready: &[u64]) -> Option<Next> {
-        if wake_due {
-            self.fold(0, 0);
-            self.note(None, "Wake");
-            return Some(Next::Wake);
-        }
+    /// The next step: an event, a bridged task's turn (`ready`, under [`Policy::TaskBridge`]), a
+    /// turn for the pool when `tasks_ready`, or nothing.
+    pub fn next(&mut self, tasks_ready: bool, ready: &[u64]) -> Option<Next> {
         let processes: Vec<u64> =
             tasks_ready.then_some(POOL).into_iter().chain(ready.iter().copied()).collect();
         match self.sched.next(&processes)? {
@@ -536,7 +528,6 @@ mod tests {
                 command: Command::SetStaticKeyterms(names),
                 ..
             }))) => names[0].clone(),
-            Next::Wake => "wake".into(),
             Next::Frames(frames) => {
                 let ids: Vec<String> =
                     frames.iter().map(|f| format!("f{}", f.samples_per_channel)).collect();
@@ -564,28 +555,13 @@ mod tests {
     /// Every event delivered, the pool offered `tasks` turns along the way.
     fn deliver_all(queue: &mut Queue, mut tasks: u32) -> Vec<String> {
         let mut out = Vec::new();
-        while let Some(next) = queue.next(false, tasks > 0, &[]) {
+        while let Some(next) = queue.next(tasks > 0, &[]) {
             if matches!(next, Next::Tasks) {
                 tasks -= 1;
             }
             out.push(name(&next));
         }
         out
-    }
-
-    /// A due wake runs before anything pending, under every policy.
-    #[test]
-    fn due_wake_goes_first() {
-        for policy in Policy::ALL {
-            for seed in 0..64 {
-                let mut queue = Queue::new(seed, policy);
-                two_by_two(&mut queue);
-                let first = queue.next(true, true, &[1, 2]).map(|n| name(&n));
-                assert_eq!(first.as_deref(), Some("wake"), "{policy:?} seed {seed}");
-                let then = queue.next(false, false, &[]).map(|n| name(&n)).unwrap();
-                assert!(then == "a1" || then == "b1", "{policy:?} seed {seed}: {then}");
-            }
-        }
     }
 
     /// A microphone frame, told apart by its sample count.
@@ -613,10 +589,10 @@ mod tests {
                 queue.push_frame(frame(2));
                 let mut order = Vec::new();
                 while order.len() < 3 {
-                    order.push(name(&queue.next(false, false, &[]).unwrap()));
+                    order.push(name(&queue.next(false, &[]).unwrap()));
                 }
                 queue.push_frame(frame(3));
-                order.push(name(&queue.next(false, false, &[]).unwrap()));
+                order.push(name(&queue.next(false, &[]).unwrap()));
                 assert!(order.contains(&"f1+f2".to_owned()), "{policy:?} seed {seed}: {order:?}");
                 assert_eq!(order[3], "f3", "{policy:?} seed {seed}: a later frame went first");
                 let at = order.iter().position(|o| o == "f1+f2").unwrap();
@@ -640,7 +616,7 @@ mod tests {
             let mut order = Vec::new();
             for step in 0..6 {
                 let ready: &[u64] = if step % 2 == 0 { &[1, 2] } else { &[] };
-                if let Some(next) = queue.next(false, step == 3, ready) {
+                if let Some(next) = queue.next(step == 3, ready) {
                     order.push(name(&next));
                 }
             }

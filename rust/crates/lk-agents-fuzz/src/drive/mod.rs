@@ -5,8 +5,8 @@
 //! and every call is the host method a Python `AgentSession` makes, with its argument shapes;
 //! people join and leave through the fake room, which the real room io watches. What the host
 //! cannot do it does not do: the test-only probe (the runtime's `dst` feature) only watches the journal and
-//! the host events, and hands the session's cores to the run, which steps them as its own queue
-//! while the real runtime owner performs their effects ([`executor`]).
+//! the host events, and hands the session's runtime to the run, which runs its real loop and chooses
+//! what reaches the loop's queue ([`executor`]).
 //! It decides nothing: rules read [`Recording`] and nothing else.
 //!
 //! **Each resource is opened by whoever mints it.** Speeches, holds, fillers and hook calls come
@@ -62,7 +62,7 @@ use lk_agents_voice::{
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        Event, HoldId, HookId, HostEvent, IoKind, Origin, SpeechCommand, Timebase, TurnCommand,
+        HoldId, HookId, HostEvent, IoKind, Origin, SpeechCommand, Timebase, TurnCommand,
         effects::Decision,
     },
     events::SessionEvent,
@@ -630,9 +630,9 @@ pub struct Run {
     room: Arc<FakeRoom>,
     /// `aclose()` then `close_io()`, once a case asked for the close, until they resolve.
     closing: Option<BoxFuture<'static, ()>>,
-    /// The real runtime owner, stepped over fake ports by the run's deterministic queue.
-    /// `None` once they finished, or panicked.
-    cores: Option<lk_agents_runtime::voice::Runtime>,
+    /// The session's real loop over fake ports, fed by the run's deterministic queue. `None` once
+    /// it closed, or panicked.
+    session: Option<executor::Session>,
     queue: queue::Queue,
     time: Timebase,
     tasks: Arc<Tasks>,

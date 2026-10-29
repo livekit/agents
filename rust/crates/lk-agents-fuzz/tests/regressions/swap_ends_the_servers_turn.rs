@@ -6,10 +6,11 @@ use lk_agents_fuzz::search;
 // Catches: the finish ended a person the realtime server had heard start, but read only a dropped
 // connection as taking that turn along; after a fatal error the fallback swapped in a fresh
 // session that never heard them, refused the stop every round, and the run hit its budget
-// (`session_settles`, survey seeds 21875, 26055, 31823).
+// (`session_settles`, survey seeds 21875, 26055, 31823). Seed 4500 draws the scenario since the
+// DST runs the runtime's real loop.
 #[test]
 fn a_swap_after_the_server_heard_the_person_lets_the_run_go_quiet() {
-    let seed = 21875;
+    let seed = 4500;
     let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
     let case = search::explore(setup, seed, 3_000).case;
     simulate_with(case.schedule, async {

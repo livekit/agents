@@ -667,6 +667,9 @@ pub struct Recording {
     livelock: Option<String>,
     /// Every task the session spawned, and how the end-of-run join found it.
     tasks: Vec<Task>,
+    /// The session's tasks its close cancelled at the cleanup bound (`Runtime::close`), by name,
+    /// and when.
+    late_tasks: Vec<(Observed, String)>,
     /// How many times the run's only thread went idle: each is a wake-up of the session's work
     /// on virtual time (a timer, a poll), the cost of a call that is doing nothing.
     parks: u64,
@@ -760,6 +763,10 @@ impl Recording {
 
     pub fn tasks(&self) -> &[Task] {
         &self.tasks
+    }
+
+    pub fn late_tasks(&self) -> &[(Observed, String)] {
+        &self.late_tasks
     }
 
     /// Every input the case sent, taken or refused, in order.
@@ -1050,6 +1057,10 @@ impl Recording {
 
     pub fn record_task(&mut self, task: Task) {
         self.tasks.push(task);
+    }
+
+    pub fn record_late_tasks(&mut self, at: Observed, names: Vec<String>) {
+        self.late_tasks.extend(names.into_iter().map(|name| (at, name)));
     }
 
     pub fn set_parks(&mut self, parks: u64) {

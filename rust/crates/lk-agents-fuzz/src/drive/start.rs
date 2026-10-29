@@ -235,7 +235,7 @@ impl Run {
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
         let host: Arc<Mutex<Vec<(Observed, Host)>>> = Arc::default();
         let livelock: Arc<Mutex<Option<String>>> = Arc::default();
-        let (cores_tx, cores_rx) = oneshot::channel();
+        let (runtime_tx, runtime_rx) = oneshot::channel();
         {
             let (steps, step_stamps, livelock) = (steps.clone(), stamps.clone(), livelock.clone());
             // A step that journals forever never returns to the run's loop, which counts its own
@@ -269,14 +269,14 @@ impl Run {
             api.probe(Probe { step, host_event });
         }
         api.start_with(Box::new(super::executor::Handover::new(
-            cores_tx,
+            runtime_tx,
             time.clone(),
             tasks.clone(),
         )))
         .expect("a new session starts")
         .await
         .expect("the session started");
-        let cores = cores_rx.await.expect("the probe takes the session's cores");
+        let runtime = runtime_rx.await.expect("the harness takes the session's runtime");
         // The session started its host on the console's socket, which then carries the microphone.
         let console = console.map(|(_, cli)| cli);
         let console_mic = console.as_ref().map(|cli| (registry.new_mic(), cli.clone()));
@@ -314,7 +314,7 @@ impl Run {
             room,
             closing: None,
             host,
-            cores: Some(cores),
+            session: Some(super::executor::Session::new(runtime)),
             queue: super::queue::Queue::new(schedule, policy),
             time,
             tasks,

@@ -347,6 +347,13 @@ impl Authored {
         self
     }
 
+    /// The session's close cancelled its task `name` at the cleanup bound.
+    pub fn late_task(mut self, name: &str) -> Self {
+        let at = self.next();
+        self.recording.record_late_tasks(at, vec![name.to_owned()]);
+        self
+    }
+
     /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
     pub fn breach(mut self, socket: u32, breach: Breach) -> Self {
         let at = self.next();

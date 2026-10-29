@@ -2,6 +2,7 @@
 
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
+use super::super::executor::Polled;
 use super::*;
 use crate::record::{Task, TaskEnd};
 
@@ -71,7 +72,7 @@ impl Run {
         let wait = if self.record.close_begun().is_some() { NEVER_MS } else { BUDGET_MS };
         let until = self.time.now().saturating_add(Duration::from_millis(wait));
         self.drive(Some(until), std::future::pending::<()>()).await;
-        let exited = self.cores.is_none();
+        let exited = self.session.is_none();
         // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
         if exited && let Some(player) = self.background.take() {
             player.0.close().await;
@@ -100,11 +101,13 @@ impl Run {
         self.time.now().saturating_add(Duration::from_millis(BUDGET_MS))
     }
 
-    /// Step the session until `done` resolves, virtual time reaches `until`, or the driver is gone.
-    /// What reached the queue is pending; a due wake is delivered before any same-instant input;
-    /// then the policy chooses between the next pending event and a scheduling round for the
-    /// driver's ready tasks. Once the driver stopped it finishes and is dropped, as a session's
-    /// loop is, so what waited on it is released. `None` unless `done` resolved.
+    /// Step the session until `done` resolves, virtual time reaches `until`, or the session is
+    /// gone. What its sources sent is pending; the loop is polled whenever it was woken, so a due
+    /// wake runs before any same-instant input; then the policy chooses between the next pending
+    /// event, handed to the loop and polled at once, and a scheduling round for the session's
+    /// ready tasks. Once the decision core stopped, what is pending goes to the loop's close, and
+    /// the session is dropped once that returned, so what waited on it is released. `None` unless
+    /// `done` resolved.
     pub(in crate::drive) async fn drive<T>(
         &mut self,
         until: Option<Ts>,
@@ -113,7 +116,7 @@ impl Run {
         let mut done = std::pin::pin!(done);
         let gate = self.tasks.gate.clone();
         let _shut = gate.as_ref().map(|gate| gate.shut());
-        // Iterations at one virtual instant: an event, a wake, frames or a task's turn each.
+        // Iterations at one virtual instant: a poll of the loop, a step or a task's turn each.
         let mut instant = (self.time.now(), 0u32);
         loop {
             tokio::select! {
@@ -133,11 +136,11 @@ impl Run {
             let observed = self.livelock.lock().unwrap().take();
             if let Some(detail) = observed.or(counted) {
                 self.record.set_livelock(detail);
-                self.drop_cores();
+                self.session = None;
             }
-            let Some(cores) = &mut self.cores else {
+            let Some(session) = &mut self.session else {
                 // The host's loop outlives the session's: what is ready still runs, so a task the
-                // driver cancelled on its way out is gone before the case sends anything else.
+                // session cancelled on its way out is gone before the case sends anything else.
                 // Bounded, as the session's own instants are: a task left spinning never stops.
                 if let Some(gate) = &gate {
                     gate.open();
@@ -150,47 +153,28 @@ impl Run {
                 }
                 return None;
             };
-            while let Ok(event) = cores.queue.try_recv() {
-                self.queue.push(event);
+            if session.serving() {
+                while let Ok(event) = session.intake.try_recv() {
+                    self.queue.push(event);
+                }
+                while let Ok(frame) = session.mic.try_recv() {
+                    self.queue.push_frame(frame);
+                }
             }
-            while let Ok(frame) = cores.frames.try_recv() {
-                self.queue.push_frame(frame);
-            }
-            if cores.driver.stopped() {
-                // The data plane still hears what reached it, then the core's queue is finished.
-                let (frames, undelivered) = self.queue.drain();
-                let now = self.time.read();
-                self.step(|cores| {
-                    for frame in frames {
-                        cores.on_frame(frame, now);
-                    }
-                    cores.finish(undelivered)
-                });
-                self.drop_cores();
+            if self.poll_session() {
                 continue;
             }
-            let now = self.time.now();
-            let wake_at = cores.driver.wake_at();
-            let wake_due = wake_at.is_some_and(|at| at <= now);
+            let Some(session) = &mut self.session else { continue };
             let ready = gate.as_ref().map(|gate| gate.ready()).unwrap_or_default();
-            match self.queue.next(wake_due, tasks_runnable(), &ready) {
-                Some(Next::Wake) => {
-                    let now = self.time.read();
-                    self.step(|cores| cores.handle(Event::Wake, now));
-                    continue;
-                }
+            match self.queue.next(tasks_runnable(), &ready) {
                 Some(Next::Event(event)) => {
-                    let now = self.time.read();
-                    self.step(|cores| cores.handle(event, now));
+                    session.deliver(event);
+                    self.poll_session();
                     continue;
                 }
                 Some(Next::Frames(frames)) => {
-                    let now = self.time.read();
-                    self.step(|cores| {
-                        for frame in frames {
-                            cores.on_frame(frame, now);
-                        }
-                    });
+                    session.deliver_frames(frames);
+                    self.poll_session();
                     continue;
                 }
                 Some(Next::Tasks) => {
@@ -199,14 +183,7 @@ impl Run {
                 }
                 Some(Next::Task(id)) => {
                     let gate = gate.as_ref().expect("a bridged task's turn has a gate");
-                    gate.grant(id);
-                    // Its tokio task is woken; the pool's spurious polls may come first.
-                    for _ in 0..GRANT_TURNS {
-                        one_task_turn().await;
-                        if !gate.granting() {
-                            break;
-                        }
-                    }
+                    self.grant(gate, id).await;
                     continue;
                 }
                 None => {}
@@ -214,45 +191,66 @@ impl Run {
             if until.is_some_and(|until| now >= until) {
                 return None;
             }
-            let next = [wake_at, until].into_iter().flatten().min();
             let woken = async {
                 match &gate {
                     Some(gate) => gate.woken().await,
                     None => std::future::pending().await,
                 }
             };
+            let (serving, loop_woken) = (session.serving(), session.woken());
             tokio::select! {
                 biased;
                 value = &mut done => return Some(value),
                 () = woken => {}
-                () = self.time.wait_until_opt(next) => {}
-                Some(frame) = cores.frames.recv() => self.queue.push_frame(frame),
-                event = cores.queue.recv() => match event {
-                    Some(event) => self.queue.push(event),
-                    None => return None,
-                },
+                () = loop_woken => {}
+                () = self.time.wait_until_opt(until) => {}
+                Some(frame) = session.mic.recv(), if serving => self.queue.push_frame(frame),
+                Some(event) = session.intake.recv(), if serving => self.queue.push(event),
             }
         }
     }
 
-    /// One call into the session's cores. A panic is a finding about them, recorded, and the end
-    /// of them: they are dropped.
-    fn step(&mut self, call: impl FnOnce(&mut lk_agents_runtime::voice::Runtime)) {
-        let Some(cores) = &mut self.cores else { return };
-        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(cores)));
-        // The observer unwound out of a livelocked step: the loop reports it, not as a panic.
-        if self.livelock.lock().unwrap().is_some() {
-            self.drop_cores();
-        } else if let Err(panic) = called {
-            self.record.set_driver_panic(panic_message(&*panic));
-            self.drop_cores();
+    /// A bridged task's turn: its tokio task is woken; the pool's spurious polls may come first.
+    async fn grant(&self, gate: &super::super::queue::Gate, id: u64) {
+        gate.grant(id);
+        for _ in 0..GRANT_TURNS {
+            one_task_turn().await;
+            if !gate.granting() {
+                break;
+            }
         }
     }
 
-    /// The cores are gone, as production drops them: the session's answer pump closes every
-    /// call never answered.
-    fn drop_cores(&mut self) {
-        self.cores = None;
+    /// One poll of the session's loop, when something woke it. A panic is a finding about the
+    /// session, recorded, and the end of it: it is dropped. The decision core's stop hands what is
+    /// still pending to the loop's close; the close's return records the tasks it had to cancel
+    /// and ends the session. `true` when the session moved to its close or ended.
+    fn poll_session(&mut self) -> bool {
+        let Some(session) = &mut self.session else { return false };
+        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.poll()));
+        // The observer unwound out of a livelocked step: the loop reports it, not as a panic.
+        if self.livelock.lock().unwrap().is_some() {
+            self.session = None;
+            return true;
+        }
+        match polled {
+            Err(panic) => {
+                self.record.set_driver_panic(panic_message(&*panic));
+                self.session = None;
+                true
+            }
+            Ok(Polled::Running) => false,
+            Ok(Polled::Stopped(runtime)) => {
+                let (_unread, held) = self.queue.drain();
+                session.close(runtime, held);
+                true
+            }
+            Ok(Polled::Closed(late)) => {
+                self.record.record_late_tasks(self.stamps.now(), late);
+                self.session = None;
+                true
+            }
+        }
     }
 
     /// Await every retained task, and record how each ended.
@@ -295,9 +293,8 @@ impl Run {
                     Some(_) => TaskEnd::Finished,
                     None => {
                         // Nothing left that could finish it: no step pending, no wake, no task.
-                        let enabled = !self.queue.idle()
-                            || self.cores.as_ref().is_some_and(|c| c.driver.wake_at().is_some())
-                            || tasks_runnable();
+                        let enabled =
+                            !self.queue.idle() || self.session.is_some() || tasks_runnable();
                         if !enabled && self.deadlock.is_none() {
                             self.deadlock = Some(format!(
                                 "the task spawned at {} ({site}) never finished, with nothing \

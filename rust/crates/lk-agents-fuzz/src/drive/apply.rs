@@ -263,7 +263,7 @@ impl Run {
 
     /// Whether the session's loop is still there to take a call that returns nothing.
     fn loop_runs(&self) -> bool {
-        self.cores.is_some()
+        self.session.is_some()
     }
 
     /// Make the host API call an input mirrors, with the arguments a host passes.

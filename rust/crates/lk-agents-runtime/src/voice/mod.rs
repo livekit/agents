@@ -1,7 +1,7 @@
 //! [`Runtime`]: the production [`QueueOwner`] of a session's two cores, the decision core
 //! ([`Driver`]) and the data plane ([`AudioForwarder`]): one loop steps them ([`Runtime::run`]) and
-//! performs every effect they return. A simulation steps this same owner over fake ports, choosing
-//! ready events and task turns with its deterministic scheduler.
+//! performs every effect they return. A simulation runs this same loop over fake ports, putting
+//! into its queue the events its deterministic scheduler chooses, one at a time.
 
 pub mod amd;
 pub mod audio;
@@ -44,7 +44,7 @@ pub use lk_agents_voice::workflows::WorkflowRules;
 pub use session::{SessionOptions, VoiceSession};
 
 pub struct Runtime {
-    pub driver: Driver,
+    driver: Driver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     shared: Arc<lk_agents_voice::agent_session::SessionShared>,
     /// Where host events and taps go.
@@ -54,7 +54,8 @@ pub struct Runtime {
     push_warned: std::collections::BTreeSet<ResourceId>,
     recorder_observers: recorder::RecorderOutputs,
 
-    /// Every source's events, in arrival order. Frames never come this way.
+    /// Every source's events, in arrival order. Frames never come this way. A simulation swaps in
+    /// the queue it delivers its chosen events on.
     pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
     /// The microphone's frames, straight from its reader: a second of audio. A full queue holds
     /// the reader back, as the reference's forwarding loop awaits each frame, so the loss falls to
@@ -212,9 +213,21 @@ impl Runtime {
         runtime
     }
 
-    /// Every event in arrival order, every frame as it comes, and a wake when
-    /// [`Driver::wake_at`] comes, a due wake before any same-instant event.
+    /// The session's loop: [`serve`](Self::serve) until the decision core stops, then
+    /// [`close`](Self::close).
     pub async fn run(&mut self) {
+        self.serve().await;
+        let late = self.close().await;
+        if !late.is_empty() {
+            log::error!(target: "livekit.agents", tasks = late.join(", ").as_str();
+                "voice session tasks missed the cleanup deadline and were cancelled");
+        }
+    }
+
+    /// Every event in arrival order, every frame as it comes, and a wake when
+    /// [`Driver::wake_at`] comes, a due wake before any same-instant event; until the decision
+    /// core stops.
+    pub async fn serve(&mut self) {
         let time = self.shared.time.clone();
         self.open(time.read());
         while !self.driver.stopped() {
@@ -233,27 +246,28 @@ impl Runtime {
                 Some(frame) = self.frames.recv() => self.on_frame(frame, time.read()),
             }
         }
+    }
+
+    /// The decision core stopped: the queue closes, what it still held is finished, and the
+    /// session's tasks, which end at `Closing`, are drained. Returns the names of those still
+    /// running at the cleanup bound, which are cancelled.
+    pub async fn close(&mut self) -> Vec<String> {
         // Closed first, so a command sent from now on is refused to its sender rather than lost.
         self.queue.close();
         let undelivered = std::iter::from_fn(|| self.queue.try_recv().ok()).collect();
         self.finish(undelivered);
-        // The session's tasks end at `Closing`; what is still running at the cleanup bound is
-        // cancelled and reported.
+        let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let late = self.tasks.drain(time.clock().as_ref(), deadline).await;
-        if !late.is_empty() {
-            log::error!(target: "livekit.agents", tasks = late.join(", ").as_str();
-                "voice session tasks missed the cleanup deadline and were cancelled");
-        }
+        self.tasks.drain(time.clock().as_ref(), deadline).await
     }
 
-    pub fn open(&mut self, now: Now) {
+    fn open(&mut self, now: Now) {
         let effects = self.driver.open(now);
         self.perform_voice(effects);
     }
 
     /// One event: an input or a wake to the decision core, a command to the data plane.
-    pub fn handle(&mut self, event: Event, now: Now) {
+    fn handle(&mut self, event: Event, now: Now) {
         match event {
             Event::Input(mut input) => {
                 if let lk_agents_voice::agent_session::Input::Stt(_, provider) = &mut input {
@@ -286,7 +300,7 @@ impl Runtime {
         }
     }
 
-    pub fn on_frame(&mut self, frame: AudioFrame, now: Now) {
+    fn on_frame(&mut self, frame: AudioFrame, now: Now) {
         // The session recorder hears every frame the forwarder does, muted ones excepted.
         if self.forwarder.input_enabled()
             && let Some(tap) = self.shared.recorder_tap()
@@ -299,7 +313,7 @@ impl Runtime {
 
     /// The decision core stopped. The data plane's commands still queued are applied, so every
     /// replaced sink is ended and the census is journalled; the decision core refuses the rest.
-    pub fn finish(&mut self, undelivered: Vec<Event>) {
+    fn finish(&mut self, undelivered: Vec<Event>) {
         let mut inputs = Vec::new();
         for event in undelivered {
             match event {
