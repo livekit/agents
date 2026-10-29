@@ -178,9 +178,10 @@ pub enum SegmentRoute {
     Text,
 }
 
+/// A synthesised segment's words always queue behind its activation, which attaches the
+/// transcription output: none reaches an output before its attach.
 #[derive(Clone, Copy)]
 pub struct TranscriptPlan {
-    pub deferred: bool,
     pub aligned: bool,
 }
 
@@ -197,7 +198,6 @@ impl SegmentPlan {
         kind: VoiceKind,
         audio_output: bool,
         text_output: bool,
-        authorized: bool,
         aligned_requested: bool,
         aligned_provider: bool,
     ) -> Self {
@@ -210,7 +210,6 @@ impl SegmentPlan {
         Self {
             route,
             transcript: (synthesis || text_output).then_some(TranscriptPlan {
-                deferred: synthesis && !authorized,
                 aligned: synthesis && aligned_requested && aligned_provider,
             }),
             audio_output,

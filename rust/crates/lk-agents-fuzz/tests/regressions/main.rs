@@ -87,6 +87,7 @@ mod tool_started_then_interrupted;
 mod tool_update_before_detach_heard;
 mod transcript_path_reopened;
 mod tts_first_byte_anchor;
+mod text_before_attach;
 mod tts_text_transforms;
 mod turn_hook_sees_agent_context;
 mod turn_metrics_name_models;

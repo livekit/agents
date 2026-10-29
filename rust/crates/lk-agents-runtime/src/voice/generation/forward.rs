@@ -221,7 +221,6 @@ impl Pump<'_> {
             kind,
             audio_out.is_some(),
             text.is_some(),
-            self.gate.state.at.is_some(),
             self.aligned_transcript,
             aligned_provider,
         );
@@ -231,9 +230,9 @@ impl Pump<'_> {
             return Ok(unheard());
         }
         // One transcript leg per segment: its flush is once-only and the next segment gets its own.
-        // Before authorization a synthesised segment's words queue behind its audio.
+        // A synthesised segment's words queue behind its audio, released once it is activated.
         let (tx, rx) = mpsc::unbounded_channel();
-        let deferred = plan.transcript.filter(|plan| plan.deferred).map(|_| &tx);
+        let deferred = synthesis.then_some(&tx);
         let leg =
             plan.transcript.map(|_| TextLeg::new(text.clone(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();
