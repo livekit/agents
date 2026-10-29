@@ -1,13 +1,16 @@
-//! Runtime avatar receiver execution over the pure receive state.
+//! The avatar worker's audio receiver (`DataStreamAudioReceiver`): executes the pure receive
+//! state's streams and reports, and implements its ABI class and host receiver directly.
 
+use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::utils::video::AudioReceiverFrame;
+use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
-use lk_agents_abi::{AbortHandle, Clock, Spawner, SpawnerExt};
-use lk_agents_voice::avatar::receiver::ReceiverState;
+use lk_agents_abi::{AbortHandle, BoxFuture, Clock, Spawner, SpawnerExt, TokioSpawner};
+use lk_agents_voice::avatar::receiver::{ReceiverState, frame_size};
 use lk_agents_voice::avatar::{
-    AUDIO_STREAM_TOPIC, FinishedPayload, RPC_CLEAR_BUFFER,
-    RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
-    playback_method,
+    AUDIO_STREAM_TOPIC, FinishedPayload, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED,
+    RPC_PLAYBACK_STARTED, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT, playback_method,
 };
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -202,9 +205,7 @@ pub struct DataStreamAudioReceiver {
 
 impl Drop for DataStreamAudioReceiver {
     fn drop(&mut self) {
-        for t in self.tasks.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
-            t.abort();
-        }
+        self.aclose();
     }
 }
 
@@ -401,6 +402,108 @@ impl DataStreamAudioReceiver {
         for t in self.tasks.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
             t.abort();
         }
+    }
+}
+
+type AudioReceipt = (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>);
+
+fn failure(error: ReceiverEnd) -> ProviderError {
+    ApiError::new(error.to_string()).into()
+}
+
+impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
+    fn new(
+        room: Arc<dyn RtcRoom>,
+        sender_identity: Option<String>,
+        frame_size_ms: u32,
+        rpc_max_retries: u32,
+        on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
+    ) -> Result<Self, ProviderError> {
+        let frame_size = frame_size(frame_size_ms).map_err(failure)?;
+        let handle = crate::process::handle().map_err(|error| ApiError::new(error.to_string()))?;
+        let on_clear = on_clear_buffer.map(|listener| {
+            Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
+        });
+        Ok(DataStreamAudioReceiver::new(
+            crate::rtc::room::Room::wrap(room),
+            sender_identity,
+            frame_size,
+            rpc_max_retries,
+            on_clear,
+            crate::process::host_clock(),
+            Arc::new(TokioSpawner::new(handle)),
+        ))
+    }
+
+    async fn start(&self) -> Result<(), ProviderError> {
+        DataStreamAudioReceiver::start(self).await.map_err(failure)
+    }
+
+    async fn next_audio(&self) -> Result<AudioReceipt, ProviderError> {
+        match self.recv().await {
+            Ok(receipt) => Ok(receipt),
+            Err(ReceiverEnd::Closed) => Ok((0, false, None, None)),
+            Err(error) => Err(failure(error)),
+        }
+    }
+
+    fn notify_playback_started(&self, segment: AvatarPlaybackSegment) -> Result<(), ProviderError> {
+        DataStreamAudioReceiver::notify_playback_started(self, segment).map_err(failure)
+    }
+
+    fn notify_playback_finished(
+        &self,
+        segment: AvatarPlaybackSegment,
+        playback_position: f64,
+        interrupted: bool,
+    ) -> Result<(), ProviderError> {
+        DataStreamAudioReceiver::notify_playback_finished(
+            self,
+            segment,
+            playback_position,
+            interrupted,
+        )
+        .map_err(failure)
+    }
+
+    fn aclose(&self) -> Result<(), ProviderError> {
+        DataStreamAudioReceiver::aclose(self);
+        Ok(())
+    }
+}
+
+impl AvatarAudioReceiver for DataStreamAudioReceiver {
+    fn open_audio(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(avatar::DataStreamAudioReceiver::start(self))
+    }
+    fn next_audio(&self) -> BoxFuture<'_, Result<AudioReceipt, ProviderError>> {
+        Box::pin(avatar::DataStreamAudioReceiver::next_audio(self))
+    }
+    fn notify_playback_started(
+        &self,
+        segment: AvatarPlaybackSegment,
+    ) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(
+            async move { avatar::DataStreamAudioReceiver::notify_playback_started(self, segment) },
+        )
+    }
+    fn notify_playback_finished(
+        &self,
+        segment: AvatarPlaybackSegment,
+        playback_position: f64,
+        interrupted: bool,
+    ) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            avatar::DataStreamAudioReceiver::notify_playback_finished(
+                self,
+                segment,
+                playback_position,
+                interrupted,
+            )
+        })
+    }
+    fn aclose(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { avatar::DataStreamAudioReceiver::aclose(self) })
     }
 }
 
