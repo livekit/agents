@@ -364,8 +364,8 @@ mod tests {
         assert_eq!((error.kind, error.phase), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read)));
     }
 
-    // Catches: a read deadline after delivered output replaying the request (decision 99), which
-    // would repeat text or audio the person already received. Recognition alone may reconnect.
+    // Catches: a read deadline after delivered output replaying the request, which would repeat
+    // text or audio the person already received. Recognition alone may reconnect.
     #[test]
     fn a_read_deadline_after_delivered_output_raises_except_for_recognition() {
         let options =

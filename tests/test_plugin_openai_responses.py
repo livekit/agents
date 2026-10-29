@@ -580,7 +580,7 @@ class _QuietWS(_RecordingWS):
 async def test_a_read_deadline_replays_only_a_request_with_no_delivered_output(
     frames: list[dict], requests: int
 ) -> None:
-    """Decision 99: the WebSocket read deadline runs in the attempt machine; once text was
+    """A read deadline after delivered output raises, except for recognition: once text was
     delivered, a quiet socket raises instead of regenerating the response."""
     llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
     assert llm_model._ws is not None
