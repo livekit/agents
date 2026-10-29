@@ -3,7 +3,7 @@
 use crate::AudioFrame;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[crate::host(error(with = recording_failure_to_py))]
+#[crate::host(error(kind = "RuntimeError"))]
 pub enum RecordingFailure {
     #[error("recording capacity exceeded: {0}")]
     Overflow(&'static str),
@@ -14,20 +14,12 @@ pub enum RecordingFailure {
     #[error("recording encoding failed: {0}")]
     Encode(String),
     #[error("recording write failed: {0}")]
+    #[host(kind = "OSError")]
     Io(String),
     #[error("recording worker failed: {0}")]
     Worker(String),
     #[error("recording cleanup deadline elapsed; worker remains owned")]
     IncompleteCleanup,
-}
-
-#[cfg(feature = "python")]
-pub fn recording_failure_to_py(error: RecordingFailure) -> pyo3::PyErr {
-    let message = error.to_string();
-    match error {
-        RecordingFailure::Io(_) => pyo3::exceptions::PyOSError::new_err(message),
-        _ => pyo3::exceptions::PyRuntimeError::new_err(message),
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
