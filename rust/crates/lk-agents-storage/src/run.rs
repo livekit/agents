@@ -147,11 +147,18 @@ impl RunSummary {
 
     /// In the order the runs started; a `run_ended` whose run was not started is ignored, and a
     /// second `run_started` of a run (a holder re-entering its lease) replaces the first in place.
-    pub fn from_events(events: &[EventRow]) -> Vec<RunSummary> {
+    /// A `run_started` or `run_ended` of the wrong shape is refused, never skipped.
+    pub fn from_events(events: &[EventRow]) -> Result<Vec<RunSummary>, StorageError> {
         let mut runs: Vec<RunSummary> = Vec::new();
         for ev in events {
-            match JournalEvent::from_row(&ev.r#type, ev.payload.clone()) {
-                Ok(JournalEvent::RunStarted(started)) => {
+            if !matches!(ev.r#type.as_str(), "run_started" | "run_ended") {
+                continue;
+            }
+            let event = JournalEvent::from_row(&ev.r#type, ev.payload.clone()).map_err(|e| {
+                StorageError::Invalid(format!("journal entry {} ({}): {e}", ev.id, ev.r#type))
+            })?;
+            match event {
+                JournalEvent::RunStarted(started) => {
                     let summary = RunSummary {
                         run_id: ev.run_id.clone(),
                         lane: ev.lane.clone(),
@@ -167,7 +174,7 @@ impl RunSummary {
                         None => runs.push(summary),
                     }
                 }
-                Ok(JournalEvent::RunEnded(ended)) => {
+                JournalEvent::RunEnded(ended) => {
                     if let Some(run) = runs.iter_mut().find(|r| r.run_id == ev.run_id) {
                         run.ended_at_ms = Some(ev.ts_ms);
                         run.outcome = Some(ended.outcome);
@@ -177,7 +184,7 @@ impl RunSummary {
                 _ => {}
             }
         }
-        runs
+        Ok(runs)
     }
 }
 
@@ -255,12 +262,15 @@ mod tests {
             ev(3, "r2", "run_started", json!({"task_id": "AST_2", "channel": null})),
             ev(4, "r9", "run_ended", json!({"outcome": "failed"})),
         ];
-        let runs = RunSummary::from_events(&events);
+        let runs = RunSummary::from_events(&events).unwrap();
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].outcome, Some(RunOutcome::Completed));
         assert_eq!(runs[0].ended_at_ms, Some(20));
         assert!(!runs[0].interrupted());
         assert_eq!(runs[1].channel, None);
         assert!(runs[1].interrupted());
+        // docs/internals/storage.md#journal: a malformed entry is refused, not skipped
+        let corrupt = [ev(5, "r3", "run_ended", json!({"outcome": "maybe"}))];
+        assert!(matches!(RunSummary::from_events(&corrupt), Err(StorageError::Invalid(_))));
     }
 }

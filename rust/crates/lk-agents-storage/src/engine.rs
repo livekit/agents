@@ -379,7 +379,7 @@ impl Lane {
     /// bookkeeping, not a turn.
     pub async fn runs(&self, limit: usize) -> Result<Vec<RunSummary>, StorageError> {
         let rows = self.journal(0).await?;
-        let mut runs: Vec<RunSummary> = RunSummary::from_events(&rows)
+        let mut runs: Vec<RunSummary> = RunSummary::from_events(&rows)?
             .into_iter()
             .filter(|r| r.channel.as_deref() != Some(SUBMIT_CHANNEL))
             .collect();
