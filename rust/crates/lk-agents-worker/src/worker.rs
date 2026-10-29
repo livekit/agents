@@ -472,14 +472,15 @@ enum Completion {
 }
 
 impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
-    /// Resolves omitted options from the environment; starts nothing. Subscribe through the handle
-    /// before awaiting [`Self::run`] to see registration.
+    /// Starts nothing. Subscribe through the handle before awaiting [`Self::run`] to see
+    /// registration.
     pub fn new(
-        options: crate::WorkerOptions,
+        config: crate::WorkerConfig,
+        connection: RuntimeConfig,
+        transport: crate::TransportConfig,
         host: P,
         workers: lk_agents_net::worker_io::WorkerIo,
     ) -> (Self, WorkerHandle) {
-        let (config, connection, transport) = options.resolve();
         Self::with_components(
             transport.build(),
             connection,

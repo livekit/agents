@@ -63,7 +63,7 @@ impl Default for WorkerOptions {
             transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
             headers: Vec::new(),
             max_retry: 16,
-            connection_timeout: Duration::from_secs(10),
+            connection_timeout: CONNECTION_TIMEOUT,
         }
     }
 }
@@ -157,7 +157,7 @@ impl Identity {
 }
 
 /// Must be unique across processes, not unpredictable: the clock and the pid suffice.
-fn new_instance_id() -> String {
+pub(crate) fn new_instance_id() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -310,6 +310,8 @@ pub const ASSIGNMENT_TIMEOUT: Duration = Duration::from_millis(7_500);
 pub const UPDATE_STATUS_INTERVAL: Duration = Duration::from_millis(2_500);
 /// How often the load function is re-invoked. Lives for the whole worker, connected or not.
 pub const UPDATE_LOAD_INTERVAL: Duration = Duration::from_millis(500);
+/// Bounds connection establishment, registration, writes, and transport shutdown.
+pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default `drain()` deadline.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(3600);
 pub const WORKER_PROTOCOL_VERSION: u32 = 1;

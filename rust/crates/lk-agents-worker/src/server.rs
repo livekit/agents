@@ -133,7 +133,6 @@ pub struct ServerStart {
     pub has_load_fnc: bool,
     pub endpoints: Vec<crate::protocol::AgentEndpoint>,
     pub transport: crate::TransportConfig,
-    pub worker_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -199,11 +198,8 @@ impl ServerRuntime {
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
         let process_cleanup = timeout * 3 + crate::ipc::supervisor::KILL_GRACE;
-        let connection_cleanup = if start.unregistered {
-            Duration::ZERO
-        } else {
-            crate::WorkerOptions::default().connection_timeout
-        };
+        let connection_cleanup =
+            if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
         let mut state = ServerLifecycle::new(process_cleanup.max(connection_cleanup));
         let effects = state.handle(ServerInput::Start, Duration::ZERO);
         self.publish(&state, effects);
@@ -519,20 +515,17 @@ impl ServerRuntime {
         }
         host.start(settings.clone(), start.devmode, start.has_rtc).await?;
         if !start.unregistered {
-            let options = settings.worker_options(
-                start.devmode,
-                start.endpoints.clone(),
-                match &start.transport {
-                    crate::TransportConfig::WebSocket { heartbeat } => {
-                        crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
-                    }
-                    crate::TransportConfig::WebTransport { insecure } => {
-                        crate::TransportConfig::WebTransport { insecure: *insecure }
-                    }
-                },
-                start.worker_url.clone(),
-            );
-            let (mut worker, handle) = Worker::new(options, host.clone(), workers.clone());
+            let (config, connection) = settings.worker(start.devmode, start.endpoints.clone());
+            let transport = match &start.transport {
+                crate::TransportConfig::WebSocket { heartbeat } => {
+                    crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
+                }
+                crate::TransportConfig::WebTransport { insecure } => {
+                    crate::TransportConfig::WebTransport { insecure: *insecure }
+                }
+            };
+            let (mut worker, handle) =
+                Worker::new(config, connection, transport, host.clone(), workers.clone());
             resources.worker = Some(handle.clone());
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();

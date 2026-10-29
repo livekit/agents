@@ -324,7 +324,6 @@ impl ServerRuntime for AgentRuntime {
             transport: transport_for(!routes.is_empty()),
             endpoints: routes,
             has_load_fnc,
-            worker_url: std::env::var("LIVEKIT_WORKER_URL").ok().filter(|url| !url.is_empty()),
         };
         self.running.store(true, Ordering::Release);
         let runtime = self.runtime.clone();

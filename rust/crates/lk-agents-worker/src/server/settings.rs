@@ -3,8 +3,7 @@
 
 use livekit_protocol as proto;
 
-use crate::config::Identity;
-use crate::{EnvOption, WorkerPermissions};
+use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
@@ -21,6 +20,10 @@ pub struct ServerSettings {
     pub api_secret: String,
     /// `LIVEKIT_WORKER_TOKEN`: set on a worker hosted on Cloud.
     pub worker_token: String,
+    /// `LIVEKIT_WORKER_URL`: the `/agent` address when it is not `ws_url`. A development
+    /// livekit-server serves WebTransport on its own UDP port (`webtransport.port`) while jobs
+    /// still join rooms at `ws_url`.
+    pub worker_url: String,
     pub deployment: String,
     pub agent_name: String,
     /// The health listener's interface; empty is every one.
@@ -58,6 +61,7 @@ impl Default for ServerSettings {
             api_key: String::new(),
             api_secret: String::new(),
             worker_token: String::new(),
+            worker_url: String::new(),
             deployment: String::new(),
             agent_name: String::new(),
             host: String::new(),
@@ -194,25 +198,27 @@ impl ServerSettings {
         Ok(())
     }
 
-    /// The environment read where `__init__` reads it, by [`Identity::resolve`]: an empty URL,
-    /// credential or name is unset; the worker token and the deployment are only the
+    /// The environment read where `__init__` reads it. An empty option or variable is unset;
+    /// `LIVEKIT_AGENT_NAME_OVERRIDE` wins over `agent_name`, which wins over
+    /// `LIVEKIT_AGENT_NAME`. The worker address, the worker token and the deployment are only the
     /// environment's.
-    pub fn with_env(mut self, mut read_env: impl FnMut(&str) -> Option<String>) -> Self {
-        let given = |value: String| Some(value).filter(|v| !v.is_empty());
-        let identity = Identity {
-            ws_url: given(self.ws_url),
-            api_key: given(self.api_key),
-            api_secret: given(self.api_secret),
-            agent_name: given(self.agent_name),
-            ..Identity::default()
+    pub fn with_env(mut self, read_env: impl Fn(&str) -> Option<String>) -> Self {
+        let env = |name: &str| read_env(name).filter(|value| !value.is_empty());
+        let or_env = |given: &mut String, name: &str| {
+            if given.is_empty() {
+                *given = env(name).unwrap_or_default();
+            }
+        };
+        or_env(&mut self.ws_url, "LIVEKIT_URL");
+        or_env(&mut self.api_key, "LIVEKIT_API_KEY");
+        or_env(&mut self.api_secret, "LIVEKIT_API_SECRET");
+        match env("LIVEKIT_AGENT_NAME_OVERRIDE") {
+            Some(name) => self.agent_name = name,
+            None => or_env(&mut self.agent_name, "LIVEKIT_AGENT_NAME"),
         }
-        .resolve(&mut read_env);
-        self.ws_url = identity.ws_url;
-        self.api_key = identity.api_key;
-        self.api_secret = identity.api_secret;
-        self.worker_token = identity.worker_token;
-        self.agent_name = identity.agent_name;
-        self.deployment = identity.deployment;
+        self.worker_token = env("LIVEKIT_WORKER_TOKEN").unwrap_or_default();
+        self.worker_url = env("LIVEKIT_WORKER_URL").unwrap_or_default();
+        self.deployment = env("LIVEKIT_AGENT_DEPLOYMENT").unwrap_or_default();
         self
     }
 
@@ -270,34 +276,37 @@ impl ServerSettings {
         env
     }
 
-    /// The worker connection's options; strings are passed explicitly, so it reads no environment.
-    pub fn worker_options(
+    /// The worker's registration and the connection it is made on.
+    pub(crate) fn worker(
         &self,
         devmode: bool,
         endpoints: Vec<proto::agent_http::AgentEndpoint>,
-        transport: crate::TransportConfig,
-        worker_url: Option<String>,
-    ) -> crate::WorkerOptions {
-        crate::WorkerOptions {
-            ws_url: Some(self.ws_url.clone()),
-            worker_url: Some(worker_url.unwrap_or_default()),
-            api_key: Some(self.api_key.clone()),
-            api_secret: Some(self.api_secret.clone()),
-            worker_token: Some(self.worker_token.clone()),
-            agent_name: Some(self.agent_name.clone()),
-            deployment: Some(self.deployment.clone()),
+    ) -> (WorkerConfig, RuntimeConfig) {
+        let worker = WorkerConfig {
+            agent_name: self.agent_name.clone(),
+            deployment: self.deployment.clone(),
             version: self.version.clone(),
             permissions: self.permissions.clone(),
             endpoints,
+            instance_id: crate::config::new_instance_id(),
+            ws_url: self.ws_url.clone(),
             load_threshold: EnvOption::Fixed(self.load_threshold.get(devmode)),
-            num_idle_processes: self.num_idle_processes,
+            num_idle_processes: self.num_idle_processes.unwrap_or(EnvOption::Fixed(0)),
             devmode,
             simulation: self.simulation,
             drain_timeout: std::time::Duration::try_from_secs_f64(self.drain_timeout).ok(),
-            transport,
+        };
+        let server_url = if self.worker_url.is_empty() { &self.ws_url } else { &self.worker_url };
+        let connection = RuntimeConfig {
+            server_url: server_url.clone(),
+            worker_token: Some(self.worker_token.clone()).filter(|token| !token.is_empty()),
+            headers: Vec::new(),
+            api_key: self.api_key.clone(),
+            api_secret: self.api_secret.clone(),
             max_retry: self.max_retry,
-            ..crate::WorkerOptions::default()
-        }
+            connection_timeout: crate::config::CONNECTION_TIMEOUT,
+        };
+        (worker, connection)
     }
 }
 
