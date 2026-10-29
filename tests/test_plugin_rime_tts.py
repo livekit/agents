@@ -631,7 +631,7 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
         await tts.aclose()
 
     _assert_exception_is_safe(exc_info.value)
-    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__cause__ is not None, "the cause is kept, redacted"
     assert len(errors) == 1
     assert errors[0].error is exc_info.value
     assert errors[0].label == tts.label
@@ -2176,7 +2176,7 @@ async def test_v1_connection_error_does_not_expose_transport_data(
             )
 
     _assert_exception_is_safe(exc_info.value)
-    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__cause__ is not None, "the cause is kept, redacted"
 
 
 async def test_v1_connect_rejects_untrusted_host_before_transport(
@@ -2232,7 +2232,7 @@ async def test_v1_wraps_write_failures_as_safe_api_errors(
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.retryable is True
-    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__cause__ is not None, "the cause is kept, redacted"
 
 
 async def test_v1_retries_after_write_failure_before_audio(
@@ -2316,7 +2316,7 @@ async def test_v1_invalid_json_does_not_retain_provider_frame() -> None:
         await _websocket_v1._receive_envelope(connection, timeout=1)
 
     _assert_exception_is_safe(exc_info.value)
-    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__cause__ is not None, "the cause is kept, redacted"
 
 
 @pytest.mark.parametrize(
@@ -2637,7 +2637,7 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     assert _SECRET not in "".join(
         traceback.format_exception(type(error), error, error.__traceback__)
     )
-    assert error.__cause__ is None
+    assert error.__cause__ is not None, "the cause is kept, redacted"
     assert _SECRET not in caplog.text
     retry_logs = [record for record in caplog.records if "retrying in" in record.getMessage()]
     assert len(retry_logs) == (1 if expected_retryable else 0)

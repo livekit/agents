@@ -27,6 +27,7 @@ from livekit.agents.utils import is_given
 from . import _websocket_v1
 from ._pool_manager import PoolManager
 from ._stream_tts import StreamTTS
+from .log import redacted
 
 _Pool = utils.ConnectionPool[_websocket_v1.Connection]
 
@@ -310,8 +311,10 @@ async def _sentence_tokenized_input_events(
 
             sentence_stream.end_input()
             await forward_task
-        except Exception:
-            raise APIError("Rime sentence tokenization failed", retryable=False) from None
+        except Exception as cause:
+            raise APIError("Rime sentence tokenization failed", retryable=False) from redacted(
+                cause
+            )
         finally:
             try:
                 if next_input_task is not None:

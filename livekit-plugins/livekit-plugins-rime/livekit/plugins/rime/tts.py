@@ -53,7 +53,7 @@ from ._websocket_v1 import (
 )
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
-from .log import logger
+from .log import logger, redacted
 from .models import (
     MODEL_CODA,
     MODEL_MIST_V3,
@@ -690,16 +690,16 @@ class ChunkedStream(tts.ChunkedStream):
                 async for data, _ in resp.content.iter_chunks():
                     output_emitter.push(data)
 
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
+        except asyncio.TimeoutError as cause:
+            raise APITimeoutError() from redacted(cause)
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message="Rime HTTP request failed",
                 status_code=e.status,
                 request_id=None,
                 body=None,
-            ) from None
+            ) from redacted(e)
         except APIError:
             raise
-        except Exception:
-            raise APIConnectionError("Rime HTTP request failed") from None
+        except Exception as cause:
+            raise APIConnectionError("Rime HTTP request failed") from redacted(cause)

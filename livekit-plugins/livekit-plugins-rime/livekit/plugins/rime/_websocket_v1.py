@@ -40,6 +40,7 @@ from livekit.agents import (
     utils,
 )
 
+from .log import redacted
 from .models import is_mist_model
 
 WebSocketProtocol = Literal["binary", "json"]
@@ -162,8 +163,8 @@ class _BinaryEnvelopeCodec:
         response = proto.WebSocketResponse()
         try:
             response.ParseFromString(message.data)
-        except (DecodeError, TypeError):
-            raise _ContaminatedConnection("Rime v1 sent invalid protobuf") from None
+        except (DecodeError, TypeError) as cause:
+            raise _ContaminatedConnection("Rime v1 sent invalid protobuf") from redacted(cause)
         return response
 
 
@@ -188,15 +189,15 @@ class _JsonEnvelopeCodec:
             )
         try:
             envelope = _JSON_OBJECT.validate_json(message.data)
-        except (ValidationError, TypeError):
-            raise _ContaminatedConnection("Rime v1 sent invalid JSON") from None
+        except (ValidationError, TypeError) as cause:
+            raise _ContaminatedConnection("Rime v1 sent invalid JSON") from redacted(cause)
         _validate_json_envelope(envelope)
 
         response = proto.WebSocketResponse()
         try:
             json_format.ParseDict(envelope, response, ignore_unknown_fields=True)
-        except (json_format.ParseError, TypeError):
-            raise _ContaminatedConnection("Rime v1 sent invalid JSON") from None
+        except (json_format.ParseError, TypeError) as cause:
+            raise _ContaminatedConnection("Rime v1 sent invalid JSON") from redacted(cause)
         return response
 
 
@@ -215,8 +216,8 @@ def _validate_json_envelope(envelope: dict[str, JsonValue]) -> None:
             raise _ContaminatedConnection("Rime v1 sent a non-string audio payload")
         try:
             base64.b64decode(value, validate=True)
-        except (binascii.Error, ValueError):
-            raise _ContaminatedConnection("Rime v1 sent invalid Base64 audio") from None
+        except (binascii.Error, ValueError) as cause:
+            raise _ContaminatedConnection("Rime v1 sent invalid Base64 audio") from redacted(cause)
     elif not isinstance(value, dict):
         raise _ContaminatedConnection(f"Rime v1 sent a malformed {payload} event")
 
@@ -349,19 +350,19 @@ async def connect(
             await ws.close()
             raise
         return connection
-    except asyncio.TimeoutError:
-        raise APITimeoutError("Timed out waiting for the Rime v1 ready event") from None
+    except asyncio.TimeoutError as cause:
+        raise APITimeoutError("Timed out waiting for the Rime v1 ready event") from redacted(cause)
     except aiohttp.ClientResponseError as e:
         raise APIStatusError(
             message="Rime v1 WebSocket handshake failed",
             status_code=e.status,
             request_id=None,
             body=None,
-        ) from None
+        ) from redacted(e)
     except APIError:
         raise
-    except Exception:
-        raise APIConnectionError("Failed to connect to Rime v1") from None
+    except Exception as cause:
+        raise APIConnectionError("Failed to connect to Rime v1") from redacted(cause)
 
 
 async def close(connection: Connection) -> None:
@@ -395,8 +396,8 @@ async def run_context(
             await asyncio.wait_for(
                 _send_envelope(connection, context_id, payload, value), timeout=write_timeout
             )
-        except asyncio.TimeoutError:
-            raise APITimeoutError("Timed out writing to the Rime v1 WebSocket") from None
+        except asyncio.TimeoutError as cause:
+            raise APITimeoutError("Timed out writing to the Rime v1 WebSocket") from redacted(cause)
 
     async def _send() -> None:
         async for event in input_events:
@@ -489,8 +490,10 @@ async def run_context(
             return
         try:
             await asyncio.wait_for(server_started.wait(), timeout=read_timeout)
-        except asyncio.TimeoutError:
-            raise APITimeoutError("Timed out waiting for the Rime v1 started event") from None
+        except asyncio.TimeoutError as cause:
+            raise APITimeoutError("Timed out waiting for the Rime v1 started event") from redacted(
+                cause
+            )
 
     async def _watch_terminal() -> None:
         await context_started.wait()
@@ -504,8 +507,10 @@ async def run_context(
                 return
             try:
                 await asyncio.wait_for(server_activity.wait(), timeout=read_timeout)
-            except asyncio.TimeoutError:
-                raise APITimeoutError("Timed out waiting for a Rime v1 event after end") from None
+            except asyncio.TimeoutError as cause:
+                raise APITimeoutError(
+                    "Timed out waiting for a Rime v1 event after end"
+                ) from redacted(cause)
 
     tasks = [
         asyncio.create_task(_send()),
@@ -594,8 +599,8 @@ async def _send_envelope(
         await connection.codec.send_request(connection.websocket, request)
     except asyncio.CancelledError:
         raise
-    except Exception:
-        raise APIConnectionError("Failed to write to the Rime v1 WebSocket") from None
+    except Exception as cause:
+        raise APIConnectionError("Failed to write to the Rime v1 WebSocket") from redacted(cause)
 
 
 async def _receive_envelope(
@@ -607,8 +612,8 @@ async def _receive_envelope(
             message = await websocket.receive()
         else:
             message = await websocket.receive(timeout=timeout)
-    except asyncio.TimeoutError:
-        raise APITimeoutError("Timed out waiting for a Rime v1 event") from None
+    except asyncio.TimeoutError as cause:
+        raise APITimeoutError("Timed out waiting for a Rime v1 event") from redacted(cause)
 
     if message.type in (
         aiohttp.WSMsgType.CLOSE,
