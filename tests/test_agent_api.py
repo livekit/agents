@@ -36,6 +36,7 @@ pytestmark = [pytest.mark.unit]
 
 
 module_agent = Agent(instructions="named after the variable")
+typed_agent = Agent[int](instructions="subscripted, still named after the variable")
 
 
 class RecordingLLM(FakeLLM):
@@ -59,6 +60,7 @@ class RecordingLLM(FakeLLM):
 
 def test_agent_name_inference() -> None:
     assert module_agent.name == "module_agent"
+    assert typed_agent.name == "typed_agent"
     assert Agent(instructions="x", name="named").name == "named"
     assert Agent(instructions="unassigned").name == "default_agent"
 

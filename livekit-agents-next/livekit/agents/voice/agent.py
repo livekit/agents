@@ -161,8 +161,11 @@ def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
     """The namespace a module-level ``Agent(...)`` is assigned into, or ``None``.
 
     Only a module (or an ``exec``) frame has a live namespace to scan later; a function frame's
-    locals are a snapshot, and holding its proxy would keep the frame alive.
+    locals are a snapshot, and holding its proxy would keep the frame alive. ``Agent[Ctx](...)``
+    constructs through ``typing``'s generic alias, whose frame is skipped.
     """
+    while frame is not None and frame.f_globals.get("__name__") in ("typing", "typing_extensions"):
+        frame = frame.f_back
     if frame is None or frame.f_locals is not frame.f_globals:
         return None
     namespace: dict[str, Any] = frame.f_locals
