@@ -11,6 +11,18 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/media/images.rs.
+type FrameReaderInstallImpl = <crate::Selected as super::Implementations>::FrameReaderInstall;
+
+/// Hands the runtime the host's frame reader; images of host frames need it.
+#[pyfunction]
+#[pyo3(signature = (reader))]
+pub fn _core_install_frame_reader(reader: Bound<'_, PyAny>) -> PyResult<()> {
+    let reader = crate::generated::media::FrameReaderProxy::from_host(&reader)?;
+    <FrameReaderInstallImpl as ::lk_agents_abi::media::images::FrameReaderInstall>::install_frame_reader(reader);
+    Ok(())
+}
+
+// Declared in rust/crates/lk-agents-abi/src/media/images.rs.
 type ImageFunctionsImpl = <crate::Selected as super::Implementations>::ImageFunctions;
 
 fn _extract_image_functions_encode_image_quality(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u8>> {
@@ -31,15 +43,6 @@ fn _extract_image_functions_serialize_image_frame_inference_width(obj: &Bound<'_
 
 fn _extract_image_functions_serialize_image_frame_inference_height(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
     if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_height")).map(Some) }
-}
-
-/// Hands the runtime the host's frame reader; images of host frames need it.
-#[pyfunction]
-#[pyo3(signature = (reader))]
-pub fn _core_install_frame_reader(reader: Bound<'_, PyAny>) -> PyResult<()> {
-    let reader = crate::generated::media::FrameReaderProxy::from_host(&reader)?;
-    <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::install_frame_reader(reader);
-    Ok(())
 }
 
 #[pyfunction]

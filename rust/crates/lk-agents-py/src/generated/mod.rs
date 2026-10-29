@@ -70,6 +70,7 @@ pub trait Implementations: 'static {
     type WebSocketRealtimeModel: ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
+    type FrameReaderInstall: ::lk_agents_abi::media::images::FrameReaderInstall;
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;

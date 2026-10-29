@@ -1,35 +1,20 @@
-//! The declared image functions: provider images prepared on the injected media pool, with the
-//! host's frame reader for host frames.
+//! The declared image functions: provider images prepared on the injected media pool by the
+//! process's image preparation (`ProcessEnv::images`).
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use lk_agents_abi::MediaRef;
-use lk_agents_abi::media::images::{
-    FrameReader, ImageEncodeOptions, ImageError, ImageInput, PreparedImage,
-};
+use lk_agents_abi::media::images::{ImageEncodeOptions, ImageError, ImageInput, PreparedImage};
 
-use lk_agents_media::images::Images;
 use lk_agents_media::pool::{JobClass, MediaPool};
 
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_net::env::ProcessEnv;
 
-/// The host's frame reader, installed once as the host starts; the first one stays.
-static FRAMES: OnceLock<Arc<dyn FrameReader>> = OnceLock::new();
-
-/// Image preparation with the host's frame reader, once the host installed one.
-pub fn resolver() -> Images {
-    Images::new(FRAMES.get().cloned())
-}
-
 pub struct ImageFunctions;
 
 impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     type Env = ProcessEnv;
-
-    fn install_frame_reader(reader: Arc<dyn FrameReader>) {
-        let _first_stays = FRAMES.set(reader);
-    }
 
     async fn encode_image(
         env: &ProcessEnv,
@@ -103,6 +88,7 @@ mod tests {
     use std::time::Duration;
 
     use lk_agents_abi::utils::video::VideoFrame;
+    use lk_agents_media::images::Images;
 
     use super::*;
 

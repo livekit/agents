@@ -71,6 +71,7 @@ impl generated::Implementations for Selected {
     type SentencePacer = lk_agents_runtime::inference::tts::pacer::SentencePacer;
     type SynthesisChecks = lk_agents_runtime::inference::tts::checks::SynthesisChecks;
     type ImageFunctions = lk_agents_runtime::inference::images::ImageFunctions;
+    type FrameReaderInstall = lk_agents_runtime::process::Process;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type TelemetryAdmission = lk_agents_runtime::cores::Admission;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;

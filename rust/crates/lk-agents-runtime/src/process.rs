@@ -3,6 +3,7 @@
 //! the process that started it and refuses to serve another. The host's ports (its time and frame
 //! reader) are installed here once.
 
+use lk_agents_abi::media::images::FrameReader;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
@@ -33,11 +34,13 @@ struct Started {
 /// The ports outlive a fork: the host objects are the child's too.
 struct State {
     started: Option<Started>,
+    /// The host's frame reader, installed once as the host starts.
+    frames: Option<Arc<dyn FrameReader>>,
     /// The host's time, installed once as the host loads.
     time: Option<Arc<dyn HostTime>>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, time: None });
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, time: None });
 
 /// The host's clock and executor. Each read resolves the caller's: a host whose
 /// running loop is on virtual time answers with that loop's.
@@ -152,7 +155,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
 /// Image preparation with the host's frame reader, once the host installed one.
 #[cfg(feature = "media-images")]
 fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    Arc::new(lk_agents_inference::images::resolver())
+    Arc::new(lk_agents_media::images::Images::new(state().frames.clone()))
 }
 
 #[cfg(not(feature = "media-images"))]
@@ -162,6 +165,13 @@ fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send
 
 /// The process the runtime owns: its host ports.
 pub struct Process;
+
+impl lk_agents_abi::media::images::FrameReaderInstall for Process {
+    /// The first one installed stays.
+    fn install_frame_reader(reader: Arc<dyn FrameReader>) {
+        state().frames.get_or_insert(reader);
+    }
+}
 
 impl Process {
     /// Takes the host's time as the host loads; the first one installed stays.

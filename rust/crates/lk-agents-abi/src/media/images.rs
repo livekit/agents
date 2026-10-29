@@ -40,16 +40,20 @@ pub trait FrameReader: Send + Sync {
     fn rgba(&self, frame: &MediaRef) -> Result<VideoFrame, crate::errors::HostError>;
 }
 
+/// The host hands the process its frame reader as it starts.
+#[crate::host(functions)]
+pub trait FrameReaderInstall {
+    /// Hands the runtime the host's frame reader; images of host frames need it.
+    #[host(function, name = "_core_install_frame_reader", pid = false)]
+    fn install_frame_reader(reader: std::sync::Arc<dyn FrameReader>);
+}
+
 /// Frames as portable images, encoded on an admitted image worker.
 #[crate::host(functions)]
 pub trait ImageFunctions {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
-
-    /// Hands the runtime the host's frame reader; images of host frames need it.
-    #[host(function, name = "_core_install_frame_reader", pid = false)]
-    fn install_frame_reader(reader: std::sync::Arc<dyn FrameReader>);
 
     #[host(function)]
     #[allow(clippy::too_many_arguments)]
