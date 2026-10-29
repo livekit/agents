@@ -454,14 +454,20 @@ pub mod gateway {
 /// (truthiness vs `is_given`) itself.
 #[crate::host(functions)]
 pub trait InferenceCredentials {
-    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
-    /// `LIVEKIT_INFERENCE_API_KEY` shadows `LIVEKIT_API_KEY` (`os.getenv(A, os.getenv(B, ""))`).
+    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server` (the running job's server
+    /// key), else `LIVEKIT_API_KEY`; a set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the rest.
     #[host(function)]
-    fn inference_resolve_api_key(#[host(default = None)] explicit: Option<String>) -> String;
+    fn inference_resolve_api_key(
+        #[host(default = None)] explicit: Option<String>,
+        #[host(default = None)] server: Option<String>,
+    ) -> String;
 
     /// The same ladder for the secret.
     #[host(function)]
-    fn inference_resolve_api_secret(#[host(default = None)] explicit: Option<String>) -> String;
+    fn inference_resolve_api_secret(
+        #[host(default = None)] explicit: Option<String>,
+        #[host(default = None)] server: Option<String>,
+    ) -> String;
 }
 /// The gateway's model tables, request headers and local model registry the host reads: pure
 /// lookups, safe in a forked child.
@@ -472,10 +478,10 @@ pub trait InferenceModels {
     #[host(function)]
     fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)>;
 
-    /// `LIVEKIT_INFERENCE_URL`, then staging if `LIVEKIT_URL` names the staging cloud, then
-    /// production.
+    /// `LIVEKIT_INFERENCE_URL`, then staging if the server URL names the staging cloud, then
+    /// production. `server_url` is the running job's (`AgentServer(ws_url=)`), else `LIVEKIT_URL`.
     #[host(function)]
-    fn inference_default_url() -> String;
+    fn inference_default_url(#[host(default = None)] server_url: Option<String>) -> String;
 
     /// Whether the build links a native provider of the local models.
     #[host(function)]

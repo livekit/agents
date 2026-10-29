@@ -10,6 +10,7 @@ from livekit import api
 
 from .. import _core
 from .._generated.inference_llm import InferenceClass
+from ..job import server_setting
 from ..types import NotGivenOr
 from ..utils import is_given
 from ..utils.misc import shortuuid
@@ -31,8 +32,8 @@ HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 
 def get_default_inference_url() -> str:
-    """``LIVEKIT_INFERENCE_URL``, else the staging or production gateway by ``LIVEKIT_URL``."""
-    return _core.inference_default_url()  # type: ignore[no-any-return]
+    """``LIVEKIT_INFERENCE_URL``, else the staging or production gateway by the server's URL."""
+    return _core.inference_default_url(server_setting("LIVEKIT_URL"))
 
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
@@ -40,31 +41,15 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
     return _core.inference_quota_usage(list(headers.items()))  # type: ignore[no-any-return]
 
 
-def _from_job(explicit: str | None, override: str, setting: str) -> str | None:
-    """``explicit``, else, unless ``override`` is set, the running job's server ``setting``."""
-    if explicit is not None or override in os.environ:
-        return explicit
-    from ..job import get_job_context
-
-    try:
-        return get_job_context()._server_env.get(setting)
-    except RuntimeError:
-        return None
-
-
 def default_api_key(explicit: str | None) -> str:
-    """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the job's server key, else
-    ``LIVEKIT_API_KEY``; ``""`` when nothing resolves."""
-    return _core.inference_resolve_api_key(
-        _from_job(explicit, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY")
-    )
+    """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the server's key; ``""`` when
+    nothing resolves."""
+    return _core.inference_resolve_api_key(explicit, server_setting("LIVEKIT_API_KEY"))
 
 
 def default_api_secret(explicit: str | None) -> str:
     """The same ladder for the secret."""
-    return _core.inference_resolve_api_secret(
-        _from_job(explicit, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET")
-    )
+    return _core.inference_resolve_api_secret(explicit, server_setting("LIVEKIT_API_SECRET"))
 
 
 def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:

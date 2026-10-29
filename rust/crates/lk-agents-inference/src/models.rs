@@ -47,8 +47,11 @@ impl InferenceModels for Models {
             .collect()
     }
 
-    fn inference_default_url() -> String {
-        crate::headers::default_inference_url_from_env()
+    fn inference_default_url(server_url: Option<String>) -> String {
+        crate::headers::default_inference_url(
+            std::env::var("LIVEKIT_INFERENCE_URL").ok().as_deref(),
+            server_url.or_else(|| std::env::var("LIVEKIT_URL").ok()).as_deref(),
+        )
     }
 
     fn local_models_native() -> bool {

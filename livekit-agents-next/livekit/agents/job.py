@@ -21,6 +21,7 @@ import functools
 import inspect
 import logging
 import multiprocessing as mp
+import os
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine
@@ -96,6 +97,16 @@ def get_job_context(*, required: bool = True) -> JobContext | None:
 
 
 get_current_job_context = get_job_context
+
+
+def server_setting(name: str) -> str | None:
+    """The server setting ``name`` (``LIVEKIT_URL``, ``LIVEKIT_API_KEY``, ...): in a job, the
+    value its ``AgentServer`` runs with (an option given in code, else the worker's environment);
+    elsewhere, the environment variable."""
+    ctx = get_job_context(required=False)
+    if ctx is not None:
+        return ctx._server_env.get(name)
+    return os.environ.get(name)
 
 
 def current_simulation() -> SimulationContext | None:
