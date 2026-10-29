@@ -5,61 +5,28 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
+use super::host::{DeclaredGate, HostSession, provider_error};
 pub use crate::duplex::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment, Segmenter, Step,
 };
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::llm::duplex::DuplexHost;
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
 use lk_agents_abi::{
-    ChatContext, ChatItem, Clock, Realtime, RealtimeCommand, RealtimeSession, WallAnchor,
+    ChatContext, ChatItem, Clock, Realtime, RealtimeCommand, RealtimeSession, Spawner, WallAnchor,
 };
-
-/// A plugin's `DuplexModel`.
-#[async_trait::async_trait]
-pub trait DuplexHost: Send + Sync {
-    fn label(&self) -> String;
-    fn capabilities(&self) -> DuplexCapabilities;
-    /// A new plugin session, and the gate the adapter or the model declares (`None`: the adaptive
-    /// gate).
-    async fn open(
-        &self,
-    ) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError>;
-}
-
-/// A plugin's `DuplexSession`.
-#[async_trait::async_trait]
-pub trait DuplexHostSession: Send + Sync {
-    /// Queued on the host, in order.
-    fn send(&self, cmd: DuplexCommand);
-    /// `None` once the session is closed.
-    async fn next_event(&self) -> Option<DuplexEvent>;
-    async fn aclose(&self);
-}
 
 /// `DuplexRealtimeAdapter`'s engine: the session's realtime model, its sessions on the clock
 /// and executor it was built with.
 pub struct DuplexAdapterModel {
-    host: Arc<dyn DuplexHost>,
-    label: String,
-    caps: RealtimeCapabilities,
-    audio_timeout: Duration,
-    clock: Arc<dyn Clock>,
-    anchor: WallAnchor,
-}
-
-impl DuplexAdapterModel {
-    pub fn new(host: Arc<dyn DuplexHost>, audio_timeout: Duration, clock: Arc<dyn Clock>) -> Self {
-        let anchor = WallAnchor::of(&*clock);
-        DuplexAdapterModel {
-            label: host.label(),
-            caps: crate::duplex::realtime_capabilities(host.capabilities()),
-            host,
-            audio_timeout,
-            clock,
-            anchor,
-        }
-    }
+    pub(super) host: Arc<dyn DuplexHost>,
+    pub(super) label: String,
+    pub(super) caps: RealtimeCapabilities,
+    pub(super) audio_timeout: Duration,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) anchor: WallAnchor,
+    pub(super) spawner: Arc<dyn Spawner>,
 }
 
 impl Realtime for DuplexAdapterModel {
@@ -77,8 +44,12 @@ impl Realtime for DuplexAdapterModel {
         _turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
-            let (host, gate) = self.host.open().await?;
-            let gate = gate.unwrap_or_else(|| Box::new(AdaptiveNoiseGate::default()));
+            let gate: Box<dyn AudioGate> = match self.host.gate().map_err(provider_error)? {
+                Some(gate) => Box::new(DeclaredGate(gate)),
+                None => Box::new(AdaptiveNoiseGate::default()),
+            };
+            let view = self.host.session().await.map_err(provider_error)?;
+            let host = HostSession::open(view, self.label.clone(), &self.spawner);
             let segmenter = Segmenter::new(
                 self.label.clone(),
                 self.audio_timeout,
@@ -119,7 +90,7 @@ struct State {
 }
 
 pub struct DuplexSession {
-    host: Arc<dyn DuplexHostSession>,
+    host: HostSession,
     label: String,
     delivery: Delivery,
     events: AsyncMutex<EventReceiver>,

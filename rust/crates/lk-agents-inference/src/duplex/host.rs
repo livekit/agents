@@ -12,14 +12,11 @@ use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, HostRealtimeError, RealtimeCapabilities, RealtimeError,
     RealtimeModelError,
 };
-use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt};
+use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt, WallAnchor};
 use tokio::sync::mpsc;
 
-use super::session::{DuplexHost, DuplexHostSession, DuplexAdapterModel};
-use super::{
-    AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
-    Fragment,
-};
+use super::session::DuplexAdapterModel;
+use super::{AdaptiveNoiseGate, AudioGate, DuplexCommand, DuplexEvent, FixedGate, Fragment};
 use lk_agents_net::env::ProcessEnv;
 
 // ------------------------------------------------------------------------------------ gates
@@ -91,7 +88,7 @@ impl abi::AdaptiveNoiseGate for GateClass<AdaptiveNoiseGate> {
 }
 
 /// The declared gate: one of the classes above as itself, any other host object behind its proxy.
-struct DeclaredGate(Arc<dyn abi::AudioGate>);
+pub(super) struct DeclaredGate(pub(super) Arc<dyn abi::AudioGate>);
 
 impl AudioGate for DeclaredGate {
     fn update(&mut self, frame: &AudioFrame) -> Result<bool, String> {
@@ -110,42 +107,14 @@ fn describe(e: &HostError) -> String {
     format!("{}: {}", e.kind, e.message)
 }
 
-fn provider_error(e: HostError) -> ProviderError {
+pub(super) fn provider_error(e: HostError) -> ProviderError {
     ProviderError::Local(lk_agents_abi::errors::ApiError::new(e.message))
 }
 
 // ------------------------------------------------------------------------------------ the host
 
-/// The adapter's model.
-struct HostModel {
-    host: Arc<dyn abi::DuplexHost>,
-    label: String,
-    caps: DuplexCapabilities,
-    spawner: Arc<dyn Spawner>,
-}
-
-#[async_trait::async_trait]
-impl DuplexHost for HostModel {
-    fn label(&self) -> String {
-        self.label.clone()
-    }
-
-    fn capabilities(&self) -> DuplexCapabilities {
-        self.caps
-    }
-
-    async fn open(
-        &self,
-    ) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError> {
-        let gate = self.host.gate().map_err(provider_error)?;
-        let session = self.host.session().await.map_err(provider_error)?;
-        let gate = gate.map(|gate| Box::new(DeclaredGate(gate)) as Box<dyn AudioGate>);
-        Ok((HostSession::open(session, self.label.clone(), &self.spawner), gate))
-    }
-}
-
 /// A plugin's session.
-struct HostSession {
+pub(super) struct HostSession {
     view: Arc<dyn abi::DuplexSession>,
     lane: mpsc::UnboundedSender<DuplexCommand>,
     /// Every event, the audio and the refused replies among them; `None` once the session closed.
@@ -156,21 +125,21 @@ struct HostSession {
 }
 
 impl HostSession {
-    fn open(
+    pub(super) fn open(
         view: Arc<dyn abi::DuplexSession>,
         label: String,
         spawner: &Arc<dyn Spawner>,
-    ) -> Arc<Self> {
+    ) -> Self {
         let (lane, lane_rx) = mpsc::unbounded_channel();
         let (tx, events) = mpsc::unbounded_channel();
-        let session = Arc::new(HostSession {
+        let session = HostSession {
             view: Arc::clone(&view),
             lane,
             events: tokio::sync::Mutex::new(events),
             tx: tx.clone(),
             spawner: Arc::clone(spawner),
             tasks: Mutex::new(Vec::new()),
-        });
+        };
         session.spawn(Self::forward(Arc::clone(&view), tx.clone()));
         session.spawn(Self::pump_audio(Arc::clone(&view), tx.clone()));
         session.spawn(Self::run_lane(view, lane_rx, label, tx));
@@ -285,11 +254,8 @@ impl HostSession {
             ))));
         }
     }
-}
-
-#[async_trait::async_trait]
-impl DuplexHostSession for HostSession {
-    fn send(&self, cmd: DuplexCommand) {
+    /// Queued on the host, in order.
+    pub(super) fn send(&self, cmd: DuplexCommand) {
         match cmd {
             DuplexCommand::PushAudio(frame) => self.view.push_audio(frame),
             DuplexCommand::GenerateReply { req_id, instructions, tool_choice } => {
@@ -311,11 +277,12 @@ impl DuplexHostSession for HostSession {
         }
     }
 
-    async fn next_event(&self) -> Option<DuplexEvent> {
+    /// `None` once the session is closed.
+    pub(super) async fn next_event(&self) -> Option<DuplexEvent> {
         self.events.lock().await.recv().await.flatten()
     }
 
-    async fn aclose(&self) {
+    pub(super) async fn aclose(&self) {
         // Cancelled, not awaited.
         drop(std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())));
         self.view.aclose().await;
@@ -332,12 +299,15 @@ impl abi::DuplexRealtimeModel for DuplexAdapterModel {
         host: Arc<dyn abi::DuplexHost>,
         audio_timeout: f64,
     ) -> Result<Self, HostError> {
-        let label = host.label()?;
-        let caps = host.capabilities()?;
-        let spawner = (env.spawner)().map_err(HostError::new)?;
-        let host = Arc::new(HostModel { host, label, caps, spawner });
-        let timeout = Duration::from_secs_f64(audio_timeout.max(0.0));
-        Ok(DuplexAdapterModel::new(host, timeout, env.clock.clone()))
+        Ok(DuplexAdapterModel {
+            label: host.label()?,
+            caps: super::realtime_capabilities(host.capabilities()?),
+            host,
+            audio_timeout: Duration::from_secs_f64(audio_timeout.max(0.0)),
+            clock: env.clock.clone(),
+            anchor: WallAnchor::of(&*env.clock),
+            spawner: (env.spawner)().map_err(HostError::new)?,
+        })
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

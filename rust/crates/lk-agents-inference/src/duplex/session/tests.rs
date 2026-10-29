@@ -1,40 +1,95 @@
 //! Duplex control outcomes must wake a parked reader and remain bounded without host output.
 
 use super::*;
-use lk_agents_abi::VirtualClock;
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::llm::duplex::{self as abi, DuplexAudio, DuplexTranscript};
 use lk_agents_abi::llm::realtime::GenerateReply;
+use lk_agents_abi::{AudioFrame, BoxFuture, ToolChoice, VirtualClock};
 
-struct SilentHost;
+/// A plugin's model and session over the declared views: `None` stays silent and open; a script
+/// is its transcript, then the end of the session.
+struct FakeHost(Arc<FakeSession>);
+struct FakeSession(Mutex<Option<Vec<DuplexTranscript>>>);
 
-#[async_trait::async_trait]
-impl DuplexHost for SilentHost {
-    fn label(&self) -> String {
-        "silent".into()
+impl DuplexHost for FakeHost {
+    fn label(&self) -> Result<String, HostError> {
+        Ok("fake".into())
     }
-    fn capabilities(&self) -> DuplexCapabilities {
-        DuplexCapabilities::default()
+    fn capabilities(&self) -> Result<DuplexCapabilities, HostError> {
+        Ok(DuplexCapabilities::default())
     }
-    async fn open(
+    fn gate(&self) -> Result<Option<Arc<dyn abi::AudioGate>>, HostError> {
+        Ok(None)
+    }
+    fn session(&self) -> BoxFuture<'_, Result<Arc<dyn abi::DuplexSession>, HostError>> {
+        Box::pin(async { Ok(self.0.clone() as Arc<dyn abi::DuplexSession>) })
+    }
+}
+
+fn applied<'a>() -> BoxFuture<'a, Result<(), HostError>> {
+    Box::pin(async { Ok(()) })
+}
+
+impl abi::DuplexSession for FakeSession {
+    fn push_audio(&self, _: AudioFrame) {}
+    fn configure(
         &self,
-    ) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError> {
-        Ok((Arc::new(SilentHost), None))
+        _: Option<String>,
+        _: Option<Vec<ChatItem>>,
+        _: Vec<String>,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
+        applied()
+    }
+    fn update_instructions(&self, _: String) -> BoxFuture<'_, Result<(), HostError>> {
+        applied()
+    }
+    fn append_items(&self, _: Vec<ChatItem>) -> BoxFuture<'_, Result<(), HostError>> {
+        applied()
+    }
+    fn update_tools(&self, _: Vec<String>) -> BoxFuture<'_, Result<(), HostError>> {
+        applied()
+    }
+    fn generate(
+        &self,
+        _: Option<String>,
+        _: Option<ToolChoice>,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
+        applied()
+    }
+    fn next_audio(&self) -> BoxFuture<'_, Result<Option<DuplexAudio>, HostError>> {
+        Box::pin(std::future::pending())
+    }
+    fn next_event(&self) -> BoxFuture<'_, Result<Option<abi::DuplexEvent>, HostError>> {
+        Box::pin(async move {
+            let next = self.0.lock().unwrap().as_mut().map(Vec::pop);
+            match next {
+                Some(transcript) => Ok(transcript.map(abi::DuplexEvent::Transcript)),
+                None => std::future::pending().await,
+            }
+        })
+    }
+    fn close_plugin(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn aclose(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
     }
 }
 
-#[async_trait::async_trait]
-impl DuplexHostSession for SilentHost {
-    fn send(&self, _: DuplexCommand) {}
-    async fn next_event(&self) -> Option<DuplexEvent> {
-        std::future::pending().await
-    }
-    async fn aclose(&self) {}
-}
-
-async fn session(clock: Arc<VirtualClock>) -> Arc<dyn RealtimeSession> {
-    DuplexAdapterModel::new(Arc::new(SilentHost), crate::duplex::AUDIO_TIMEOUT, clock)
-        .session(false)
-        .await
-        .unwrap()
+async fn session(
+    script: Option<Vec<DuplexTranscript>>,
+    clock: Arc<VirtualClock>,
+) -> Arc<dyn RealtimeSession> {
+    let model = DuplexAdapterModel {
+        host: Arc::new(FakeHost(Arc::new(FakeSession(Mutex::new(script))))),
+        label: "fake".into(),
+        caps: crate::duplex::realtime_capabilities(DuplexCapabilities::default()),
+        audio_timeout: crate::duplex::AUDIO_TIMEOUT,
+        anchor: WallAnchor::of(&*clock),
+        clock,
+        spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
+    };
+    model.session(false).await.unwrap()
 }
 
 fn reply(req_id: &str) -> RealtimeCommand {
@@ -49,7 +104,7 @@ fn reply(req_id: &str) -> RealtimeCommand {
 async fn duplex_command_outcome_wakes_a_reader_parked_without_host_output() {
     for supersede in [true, false] {
         let clock = Arc::new(VirtualClock::new());
-        let session = session(clock.clone()).await;
+        let session = session(None, clock.clone()).await;
         let next = session.next_event();
         tokio::pin!(next);
         tokio::select! {
@@ -75,7 +130,7 @@ async fn duplex_command_outcome_wakes_a_reader_parked_without_host_output() {
 
 #[tokio::test]
 async fn duplex_command_backlog_preserves_a_terminal_overload_outcome() {
-    let session = session(Arc::new(VirtualClock::new())).await;
+    let session = session(None, Arc::new(VirtualClock::new())).await;
     let capacity = crate::realtime::native::queue::EVENT_BACKLOG;
     for index in 0..capacity + 2 {
         session.send(reply(&format!("request_{index}")));
@@ -98,50 +153,14 @@ async fn duplex_command_backlog_preserves_a_terminal_overload_outcome() {
     session.aclose().await;
 }
 
-struct EndingHost;
-struct EndingSession(Mutex<Option<Fragment>>);
-
-#[async_trait::async_trait]
-impl DuplexHost for EndingHost {
-    fn label(&self) -> String {
-        "ending".into()
-    }
-    fn capabilities(&self) -> DuplexCapabilities {
-        DuplexCapabilities::default()
-    }
-    async fn open(
-        &self,
-    ) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError> {
-        Ok((
-            Arc::new(EndingSession(Mutex::new(Some(Fragment {
-                text: "Final text".into(),
-                start_ms: Some(10_000),
-                end_ms: Some(10_200),
-            })))),
-            None,
-        ))
-    }
-}
-
-#[async_trait::async_trait]
-impl DuplexHostSession for EndingSession {
-    fn send(&self, _: DuplexCommand) {}
-    async fn next_event(&self) -> Option<DuplexEvent> {
-        self.0.lock().unwrap().take().map(DuplexEvent::Transcript)
-    }
-    async fn aclose(&self) {}
-}
-
 #[tokio::test]
 async fn duplex_host_eof_delivers_unclaimed_final_text_before_stream_end() {
-    let session = DuplexAdapterModel::new(
-        Arc::new(EndingHost),
-        crate::duplex::AUDIO_TIMEOUT,
-        Arc::new(VirtualClock::new()),
-    )
-    .session(false)
-    .await
-    .unwrap();
+    let fragment = DuplexTranscript {
+        text: "Final text".into(),
+        start_ms: Some(10_000),
+        end_ms: Some(10_200),
+    };
+    let session = session(Some(vec![fragment]), Arc::new(VirtualClock::new())).await;
     let mut text = String::new();
     let mut completed = false;
     while let Some(event) = session.next_event().await {
