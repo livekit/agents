@@ -8,7 +8,9 @@ import pytest
 from livekit.agents import Agent, AgentSession, AgentTask, CloseEvent, RunContext, function_tool
 from livekit.agents.llm import ChatMessage, FunctionToolCall, ToolError
 from livekit.agents.stt import STTCapabilities
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import ConversationItemAddedEvent
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
 from .fake_stt import FakeSTT
@@ -404,6 +406,166 @@ async def test_detached_close_keeps_keyterm_detection_on_replacement() -> None:
         await asyncio.gather(detector._detect_task, return_exceptions=True)
     finally:
         await asyncio.wait_for(session.aclose(), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_second_agent_task_in_tool_after_update_agent_does_not_deadlock() -> None:
+    """A tool that awaits a second AgentTask after update_agent() superseded the first
+    must not resume the old activity while its detached close holds the lock that close
+    waits on the tool task for: the second await fails instead of deadlocking."""
+    tool_started = asyncio.Event()
+    first_entered = asyncio.Event()
+    target_entered = asyncio.Event()
+    after_first = asyncio.Event()
+    second_failed = asyncio.Event()
+    tool_returned = asyncio.Event()
+    close_events: list[CloseEvent] = []
+
+    class InlineTask(AgentTask[str]):
+        def __init__(self, entered: asyncio.Event) -> None:
+            super().__init__(instructions="Run an inline task")
+            self._entered = entered
+
+        async def on_enter(self) -> None:
+            self._entered.set()
+
+    class Target(Agent):
+        async def on_enter(self) -> None:
+            target_entered.set()
+
+    first = InlineTask(first_entered)
+    second = InlineTask(asyncio.Event())
+
+    class Source(Agent):
+        @function_tool
+        async def start_task(self, ctx: RunContext) -> str:
+            """Run two inline tasks."""
+            ctx.speech_handle.allow_interruptions = False
+            tool_started.set()
+            first_result = await first
+            after_first.set()
+            try:
+                await second
+            except ToolError:
+                second_failed.set()
+            tool_returned.set()
+            return first_result
+
+    session = AgentSession(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start_task",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="start_task", arguments="{}", call_id="task")
+                    ],
+                )
+            ]
+        )
+    )
+    session.on("close", close_events.append)
+    target = Target(instructions="Target agent")
+
+    await session.start(Source(instructions="Source agent"))
+    session.generate_reply(user_input="start_task")
+    await asyncio.wait_for(tool_started.wait(), timeout=5.0)
+    await asyncio.wait_for(first_entered.wait(), timeout=5.0)
+
+    session.update_agent(target)
+    await asyncio.wait_for(target_entered.wait(), timeout=5.0)
+
+    first.complete("one")
+    await asyncio.wait_for(after_first.wait(), timeout=5.0)
+    # `first` handed the tool's activity to a detached close; resuming it for `second`
+    # would wait on the close's lock while that close waits for this very tool task
+    await asyncio.wait_for(second_failed.wait(), timeout=5.0)
+    await asyncio.wait_for(tool_returned.wait(), timeout=5.0)
+
+    # the stale tool did not take the session over: the replacement agent is still current
+    assert session.current_agent is target
+
+    await asyncio.wait_for(session.aclose(), timeout=5.0)
+    assert len(close_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_late_agent_task_unwind_after_aclose_closes_superseded_activity() -> None:
+    """A superseded AgentTask that completes after session.aclose() must still close the
+    activity that owns the tool: the close path already finished and never reaches it."""
+    tool_started = asyncio.Event()
+    task_entered = asyncio.Event()
+    target_entered = asyncio.Event()
+    tool_returned = asyncio.Event()
+    close_events: list[CloseEvent] = []
+
+    class InlineTask(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Run an inline task")
+
+        async def on_enter(self) -> None:
+            task_entered.set()
+
+    class Target(Agent):
+        async def on_enter(self) -> None:
+            target_entered.set()
+
+    inline_task = InlineTask()
+    source_activity: list[AgentActivity] = []
+    source_speech: list[SpeechHandle] = []
+
+    class Source(Agent):
+        @function_tool
+        async def start_task(self, ctx: RunContext) -> str:
+            """Run an inline task."""
+            source_activity.append(ctx.session._activity)
+            source_speech.append(ctx.speech_handle)
+            ctx.speech_handle.allow_interruptions = False
+            tool_started.set()
+            result = await inline_task
+            tool_returned.set()
+            return result
+
+    session = AgentSession(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start_task",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="start_task", arguments="{}", call_id="task")
+                    ],
+                )
+            ]
+        )
+    )
+    session.on("close", close_events.append)
+
+    await session.start(Source(instructions="Source agent"))
+    session.generate_reply(user_input="start_task")
+    await asyncio.wait_for(tool_started.wait(), timeout=5.0)
+    await asyncio.wait_for(task_entered.wait(), timeout=5.0)
+
+    session.update_agent(Target(instructions="Target agent"))
+    await asyncio.wait_for(target_entered.wait(), timeout=5.0)
+    await asyncio.wait_for(session.aclose(), timeout=5.0)
+    assert len(close_events) == 1
+
+    # the superseded task is not cancelled by the close; completing it unwinds afterwards
+    old_activity = source_activity[0]
+    assert not old_activity._closed
+    inline_task.complete("done")
+    await asyncio.wait_for(tool_returned.wait(), timeout=5.0)
+    while session._detached_activity_close_tasks:
+        await asyncio.gather(*session._detached_activity_close_tasks, return_exceptions=True)
+
+    assert old_activity._closed
+    # the tool's result lands on a closed activity: let its speech wind down
+    await asyncio.wait_for(source_speech[0], timeout=5.0)
 
 
 @pytest.mark.asyncio

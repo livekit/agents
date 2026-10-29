@@ -352,6 +352,9 @@ class AgentActivity(RecognitionHooks):
 
         self._started = False
         self._closed = False
+        # set when a superseded AgentTask hands this activity to a detached close; the
+        # activity can no longer be resumed or host another inline task
+        self._detached_close_started = False
         self._scheduling_paused = True
         # set while scheduling runs, and once the activity has closed
         self._scheduling_resumed = asyncio.Event()
@@ -1486,7 +1489,7 @@ class AgentActivity(RecognitionHooks):
             self._add_drain_blocked_tasks(blocked_tasks)
 
             async with self._inline_task_lock:
-                if self._closed or self._session._closing:
+                if self._closed or self._detached_close_started or self._session._closing:
                     # reported to the model as a tool failure, the way a tool awaiting an
                     # inline task through a session close has always been
                     raise ToolError("the activity that awaited the inline task is closing")

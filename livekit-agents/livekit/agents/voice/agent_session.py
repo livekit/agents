@@ -1292,9 +1292,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             except Exception:
                 logger.exception("error closing the previous agent's activity")
 
+        # the close owns the activity from now on: it can no longer be resumed, and a
+        # later inline task in the same tool is refused instead of racing the close
+        activity._detached_close_started = True
         task = asyncio.create_task(_aclose(), name="detached_activity_close")
         self._detached_activity_close_tasks.add(task)
         task.add_done_callback(self._detached_activity_close_tasks.discard)
+
+    def _will_close_activity(self, activity: AgentActivity) -> bool:
+        """Whether the in-flight close reaches ``activity`` from the current one.
+
+        ``_teardown_activity`` walks from ``_activity`` through each ``AgentTask`` it
+        cancels to the activity that task paused; an activity outside that walk is
+        never drained by the close path.
+        """
+        current = self._activity
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            if current is activity:
+                return True
+            seen.add(id(current))
+            agent = current.agent
+            if not isinstance(agent, AgentTask):
+                return False
+            old_agent = agent._old_agent
+            current = old_agent._activity if old_agent is not None else None
+        return False
 
     def _is_closing(self) -> bool:
         # _closing_task is set synchronously when close begins, earlier than _closing
