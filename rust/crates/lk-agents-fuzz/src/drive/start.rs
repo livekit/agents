@@ -163,7 +163,7 @@ impl Run {
                     as Arc<dyn InterruptionSource>
             }),
             room_io_config: Some(room_io),
-            tools: Some(tool_specs(&setup.tools)),
+            tools: Some(fakes::tools::tool_infos(&setup.tools)),
             voice_agent: Some(fakes::frame(&registry, OPENING_AGENT, &setup.tools)),
             transcription_node: nodes.transcription,
             realtime_audio_output_node: nodes.realtime_audio,

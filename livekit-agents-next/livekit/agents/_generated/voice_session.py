@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from .._core import ChatItem
     from ..types import NotGivenOr
+    from .agent_run import FunctionToolInfo
     from .keyterms import STTContextOptions
     from .turn import TurnHandlingOptions
 
@@ -119,7 +120,8 @@ class VoiceSessionArgs:
     text_output: bool = True
     room_io_config: dict[str, object] | None = None
     """`RoomOptions._to_core()`, resolved per leg; without it the scalars above."""
-    tools: list[dict[str, object]] | None = None
+    tools: list[FunctionToolInfo] | None = None
+    """Every tool of the first agent and the session, as `_core_setup_tools` reported them."""
     tools_host: object | None = None
     voice_agent: VoiceAgent | None = None
     """The first agent as its tools are hosted: its definition and its `AgentHost`."""

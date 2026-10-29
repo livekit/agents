@@ -738,7 +738,6 @@ impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
         Box::pin(async { Ok(()) })
     }
 
-    fn send_message_nowait(&self, _message: &livekit_protocol::agent::AgentSessionMessage) {}
 
     fn recv(
         &self,

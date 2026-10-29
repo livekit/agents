@@ -214,11 +214,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.audio_out = audio_out;
         builder.text_out = text_out;
         builder.room_link = Some(room_link);
-        builder.toolset = Toolset {
-            specs: args.tools.unwrap_or_default(),
-            host: args.tools_host,
-            agent: args.voice_agent,
-        };
+        builder.toolset =
+            Toolset::set_up(args.tools.unwrap_or_default(), args.tools_host, args.voice_agent);
 
         Ok(VoiceSession {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {

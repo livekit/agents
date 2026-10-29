@@ -129,11 +129,6 @@ async def test_a_duplicate_call_on_a_call_is_refused_with_the_agents_template() 
     assert outputs == {"c0": "checked", "c1": "check runs"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the voice frame's definition is built before the agent's toolsets set up: tools a "
-    "toolset lists in setup() (MCP, RemoteAgent) lose their policies and expert identity",
-)
 async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call() -> None:
     runs: list[str] = []
 

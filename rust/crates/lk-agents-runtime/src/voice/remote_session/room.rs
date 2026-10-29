@@ -110,13 +110,6 @@ impl SessionTransport for RoomTransport {
         Box::pin(async move { self.0.send(msg).await })
     }
 
-    fn send_message_nowait(&self, msg: &proto::AgentSessionMessage) {
-        let (this, msg) = (Arc::clone(&self.0), msg.clone());
-        self.0.tasks.spawn(self.0.spawner.as_ref(), "remote session send", async move {
-            let _ = this.send(&msg).await;
-        });
-    }
-
     fn recv(
         &self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<proto::AgentSessionMessage>, HostError>> {

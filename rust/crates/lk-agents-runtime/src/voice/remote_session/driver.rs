@@ -374,7 +374,6 @@ mod tests {
                 Ok(())
             })
         }
-        fn send_message_nowait(&self, _msg: &proto::AgentSessionMessage) {}
         fn recv(
             &self,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Option<proto::AgentSessionMessage>, HostError>>

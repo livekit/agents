@@ -501,6 +501,29 @@ pub struct Toolset {
     pub agent: Option<Arc<dyn AgentFrame>>,
 }
 
+impl Toolset {
+    /// The tools as the host's setup reported them, every toolset's listed: the agent's frame
+    /// takes their policies (approval, duplicates, retries, expert identity), so its definition
+    /// is the one built after setup.
+    pub fn set_up(
+        tools: Vec<FunctionToolInfo>,
+        host: Option<lk_agents_abi::HostRef>,
+        agent: Option<Arc<dyn AgentFrame>>,
+    ) -> Toolset {
+        let specs = tools.iter().map(|t| t.spec.clone()).collect();
+        let agent = agent.map(|frame| {
+            let mut definition = frame.definition().clone();
+            definition.tools = tools.into_iter().filter(|t| t.spec.provider_tool.is_none()).collect();
+            Arc::new(VoiceAgentFrame {
+                definition,
+                host: Arc::clone(frame.host()),
+                host_context: frame.host_context().clone(),
+            }) as Arc<dyn AgentFrame>
+        });
+        Toolset { specs, host, agent }
+    }
+}
+
 impl std::fmt::Debug for Toolset {
     /// Hand-written: `host` cannot derive it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

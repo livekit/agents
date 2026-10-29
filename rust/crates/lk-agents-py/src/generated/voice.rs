@@ -4917,7 +4917,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         })
     }
 
-    fn setup_tools<'a>(&'a self, tools: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::vec::Vec<::lk_agents_abi::ToolSpec>, ::lk_agents_abi::errors::HostError>> {
+    fn setup_tools<'a>(&'a self, tools: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::vec::Vec<::lk_agents_abi::agent::FunctionToolInfo>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let tools_arg = ::std::clone::Clone::clone(tools);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_setup_tools", &self.context, &[], ::std::boxed::Box::new(move |py| {
@@ -4934,7 +4934,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 }
             };
             let o = out.bind(py);
-            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::ToolSpec>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::agent_run::function_tool_info_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

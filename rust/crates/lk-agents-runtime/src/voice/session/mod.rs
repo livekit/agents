@@ -728,10 +728,12 @@ impl VoiceSession {
                 std::task::Poll::Ready(guard) => guard,
                 std::task::Poll::Pending => turn.await,
             };
-            update.toolset.specs = hooks.setup_tools(&tools).await.unwrap_or_else(|e| {
+            let set_up = hooks.setup_tools(&tools).await.unwrap_or_else(|e| {
                 hooks.hook_failed("setup_tools", e.host_ref.clone());
                 Vec::new()
             });
+            let toolset = std::mem::take(&mut update.toolset);
+            update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);
             let handed = cmd.resources();
             if api.send_command(origin, cmd, Some(call)).is_err() {

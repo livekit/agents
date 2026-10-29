@@ -86,13 +86,18 @@ pub fn frame(registry: &Arc<Registry>, agent: &str, tools: &[String]) -> Arc<dyn
         name: agent.to_owned(),
         instructions: String::new(),
         dynamic_instructions: false,
-        tools: tools.iter().map(|name| tool_info(name)).collect(),
+        tools: tool_infos(tools),
         output: OutputSpec::Text { validated: false },
         retries: Default::default(),
     };
     let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
     let host: Arc<dyn AgentHost> = FakeTools::new(Arc::clone(registry));
     Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs)))
+}
+
+/// The fixture tools as the host's setup reports them.
+pub fn tool_infos(tools: &[String]) -> Vec<FunctionToolInfo> {
+    tools.iter().map(|name| tool_info(name)).collect()
 }
 
 /// The fixture tool `name`; [`APPROVAL_TOOL`] requires approval with the default read-back.

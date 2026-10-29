@@ -520,3 +520,41 @@ async def test_remote_tool_uses_only_its_configured_project_origin_for_default_c
         monkeypatch.setenv("LIVEKIT_URL", project)
         await RemoteAgent(peer.url, conn_options=OPTIONS).as_tool().setup()
         assert "authorization" not in peer.requests[-1][1]
+
+
+# Catches: a RemoteAgent tool a call lists at setup not opened as a delegation (its frame built
+# before setup knew no expert), so its result never reached the call before the session closed.
+@pytest.mark.asyncio
+async def test_a_remote_agent_on_a_call_delegates_and_its_result_reaches_the_call(
+    peer: Peer,
+) -> None:
+    from livekit.agents import Agent, VoiceSession
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    peer.scenario = "complete"
+    call = FunctionToolCall(
+        name="coverage_expert", arguments=json.dumps({"request": "Check coverage"}), call_id="c1"
+    )
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="Check coverage", content="", ttft=0, duration=0, tool_calls=[call]
+            )
+        ]
+    )
+    tool = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+    agent = Agent(instructions="Ask the expert.", name="desk", tools=[tool])
+    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+        await session.start(agent)
+        await session._run(user_input="Check coverage")
+
+        async def result() -> str:
+            while True:
+                for item in session.history.items:
+                    if item.type == "function_call_output" and "Confirmed" in item.output:
+                        return item.output
+                await asyncio.sleep(0.01)
+
+        assert "Confirmed" in await asyncio.wait_for(result(), 5)

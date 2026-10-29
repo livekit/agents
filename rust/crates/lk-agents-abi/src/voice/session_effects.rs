@@ -61,13 +61,16 @@ pub trait SessionHooks: Send + Sync {
     /// it closes) closed.
     #[host(await, name = "_core_close_toolsets")]
     fn close_toolsets<'a>(&'a self, agent: Option<&'a crate::HostRef>) -> crate::BoxFuture<'a, ()>;
-    /// The toolsets among `tools` (an agent's and the session's, a list) set up; the specs of every
-    /// tool they hold then.
+    /// The toolsets among `tools` (an agent's and the session's, a list) set up; every tool they
+    /// hold then, with its policies.
     #[host(await, name = "_core_setup_tools")]
     fn setup_tools<'a>(
         &'a self,
         tools: &'a crate::HostRef,
-    ) -> crate::BoxFuture<'a, Result<Vec<crate::ToolSpec>, crate::errors::HostError>>;
+    ) -> crate::BoxFuture<
+        'a,
+        Result<Vec<crate::agent::FunctionToolInfo>, crate::errors::HostError>,
+    >;
     /// The session closes: what runs beside it (AMD) closes first.
     #[host(await, name = "_core_closing")]
     fn closing(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;

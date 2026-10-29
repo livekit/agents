@@ -225,8 +225,9 @@ pub struct VoiceSessionArgs {
     /// `RoomOptions._to_core()`, resolved per leg; without it the scalars above.
     #[host(default = None)]
     pub room_io_config: Option<crate::voice::room_io::RoomIoConfig>,
+    /// Every tool of the first agent and the session, as `_core_setup_tools` reported them.
     #[host(default = None)]
-    pub tools: Option<Vec<ToolSpec>>,
+    pub tools: Option<Vec<crate::agent::FunctionToolInfo>>,
     #[host(default = None)]
     pub tools_host: Option<HostRef>,
     /// The first agent as its tools are hosted: its definition and its `AgentHost`.

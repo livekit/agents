@@ -67,7 +67,7 @@ impl SessionHooks for ScriptedHooks {
     fn setup_tools<'a>(
         &'a self,
         _: &'a lk_agents_abi::HostRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::ToolSpec>, HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError>> {
         Box::pin(async move { self.result(Vec::new()) })
     }
     fn closing(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {

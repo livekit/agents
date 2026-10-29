@@ -39,6 +39,7 @@ from .._core_view import (
     to_core_items,
     tool_specs,
 )
+from .._generated.agent_run import FunctionToolInfo
 from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.keyterms import KeytermDetectionOptions, STTContextOptions
@@ -92,7 +93,7 @@ from .agent import (
     _NodeCallsVar,
     _VoiceBinding,
 )
-from .agent_run import run_error
+from .agent_run import run_error, tool_infos
 from .events import (
     AgentEvent,
     AgentState,
@@ -1411,11 +1412,25 @@ class _AgentHooks:
                 self._held.remove(toolset)
         await asyncio.gather(*(t._release() for t in released))
 
-    async def _core_setup_tools(self, tools: list[llm.Tool | llm.Toolset]) -> list[Any]:
-        """An activation's tools: its agent's toolsets are acquired, the session's already
-        are."""
+    async def _core_setup_tools(
+        self, tools: list[llm.Tool | llm.Toolset]
+    ) -> list[FunctionToolInfo]:
+        """An activation's tools with their policies, read once its agent's toolsets are acquired
+        (the session's already are): a provider tool has none."""
         await self._acquire(self._agent_toolsets(tools))
-        return tool_specs(tools)
+        infos = {info.spec["name"]: info for info in tool_infos(llm.ToolContext(tools))}
+        return [
+            infos.get(spec["name"])
+            or FunctionToolInfo(
+                spec=spec,
+                raw_schema=False,
+                needs_approval=None,
+                on_duplicate="allow",
+                duplicate_scope="name",
+                retries=None,
+            )
+            for spec in tool_specs(tools)
+        ]
 
     def _agent_toolsets(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Toolset]:
         return [t for t in tools if isinstance(t, llm.Toolset) and t not in self._session._tools]

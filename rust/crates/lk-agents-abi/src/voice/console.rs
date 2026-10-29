@@ -17,10 +17,6 @@ pub trait SessionTransport: Send + Sync {
         msg: &'a proto::AgentSessionMessage,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
 
-    /// `send_message_threadsafe`: enqueue and forget, dropped when closed. Not ordered against
-    /// `send_message`.
-    fn send_message_nowait(&self, msg: &proto::AgentSessionMessage);
-
     /// The next message (`__anext__`); `Ok(None)` is `StopAsyncIteration`, `Err` ends the loop.
     /// Only the receive loop reads.
     fn recv(&self) -> crate::BoxFuture<'_, Result<Option<proto::AgentSessionMessage>, HostError>>;

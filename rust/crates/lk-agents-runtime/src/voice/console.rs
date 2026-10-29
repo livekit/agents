@@ -144,15 +144,11 @@ impl SessionTransport for Transport {
         msg: &'a proto::AgentSessionMessage,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async move {
-            self.send_message_nowait(msg);
+            if let Some(message) = msg.message.clone() {
+                self.io.send(message);
+            }
             Ok(())
         })
-    }
-
-    fn send_message_nowait(&self, msg: &proto::AgentSessionMessage) {
-        if let Some(message) = msg.message.clone() {
-            self.io.send(message);
-        }
     }
 
     /// End of stream also ends the microphone.
