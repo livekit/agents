@@ -143,36 +143,21 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::worker::worker::RegisteredInfo 
 
 // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::worker::job::SessionJob {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`SessionJob` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/remote_session.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::worker::remote_session::SessionPort {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`SessionPort` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::worker::cli::DevServer {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::worker::cli::DevServer>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`DevServer` is a declared proxy: it is taken from the host object, not a view"))
     }
 }

@@ -734,7 +734,7 @@ fn tts_node(
     check_pid()?;
     let options = self::conn_options(conn_options)?;
     let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
-    let tts = <dyn Tts as HostProxy>::from_host(tts, None)?;
+    let tts = <dyn Tts as HostProxy>::from_host(tts)?;
     let tts = tts.with_conn_options(&options).unwrap_or(tts);
     let tts = lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter::adapted_for::<
         lk_agents_runtime::process::Process,
@@ -764,8 +764,8 @@ fn stt_node(
     check_pid()?;
     let options = self::conn_options(conn_options)?;
     let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
-    let stt = <dyn Stt as HostProxy>::from_host(stt, None)?;
-    let vad = vad.map(|v| <dyn lk_agents_abi::Vad as HostProxy>::from_host(v, None)).transpose()?;
+    let stt = <dyn Stt as HostProxy>::from_host(stt)?;
+    let vad = vad.map(|v| <dyn lk_agents_abi::Vad as HostProxy>::from_host(v)).transpose()?;
     let stt = stt.with_conn_options(&options).unwrap_or(stt);
     let stt = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter::adapted(
         stt,

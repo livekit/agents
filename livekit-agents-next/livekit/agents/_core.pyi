@@ -67,7 +67,6 @@ from ._generated._core_classes import (
     GetNameResult as GetNameResult,
     GetPhoneNumberResult as GetPhoneNumberResult,
     GetSecurityCodeResult as GetSecurityCodeResult,
-    InferenceLlmStream as InferenceLlmStream,
     JobInfo as JobInfo,
     JobRequest as JobRequest,
     LlmMetricState as LlmMetricState,

@@ -1,4 +1,4 @@
-//! `EXPORT_SOURCES` in, [`Exposed`] out: every `#[host(export|object|error|stream|kwargs|proxy)]`
+//! `EXPORT_SOURCES` in, [`Exposed`] out: every `#[host(export|object|error|kwargs|proxy)]`
 //! item, with the file's `type` aliases read through.
 
 use super::meta::{
@@ -113,14 +113,13 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                         "wire_enum" | "string" => {
                             out.wire_enums.push(WireEnum { name: e.ident.to_string() })
                         }
-                        "stream" => out.streams.push(stream(label, &e.ident, &m)?),
                         "error" => out.exceptions.extend(exception(&m, &e.attrs)),
                         // The wire strings are Rust side only: the enum crosses by its own
                         // impls, if at all.
                         "wire_strs" | "handwritten" | "record" => {}
                         other => {
                             return Err(format!(
-                                "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream",
+                                "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string or error",
                                 e.ident
                             ));
                         }
@@ -134,7 +133,6 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                         "error" => out.exceptions.extend(exception(&m, &st.attrs)),
                         // A handwritten type crosses by its own impls.
                         "handwritten" | "record" => {}
-                        "stream" => out.streams.push(stream(label, &st.ident, &m)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
                         "string" => {
                             out.wire_enums.push(WireEnum { name: st.ident.to_string() });
@@ -144,17 +142,11 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                         }
                         other => {
                             return Err(format!(
-                                "{label}: struct {}: #[host({other})] -- a struct takes client, kwargs, error, stream or string",
+                                "{label}: struct {}: #[host({other})] -- a struct takes client, kwargs, error or string",
                                 st.ident
                             ));
                         }
                     }
-                }
-            }
-            syn::Item::Type(t) => {
-                for m in host_attrs_strict(label, &t.attrs)? {
-                    want_head(&format!("{label}: type {}", t.ident), &m, "stream")?;
-                    out.streams.push(stream(label, &t.ident, &m)?);
                 }
             }
             syn::Item::Trait(tr) => {
@@ -338,7 +330,6 @@ fn export_const(
             ret,
             defaults: Vec::new(),
             kw_only: KwOnly::None,
-            stream: None,
         },
         is_async: false,
     })
@@ -507,51 +498,6 @@ fn kw_record(label: &str, st: &syn::ItemStruct, al: &Aliases) -> Res<KwRecord> {
         });
     }
     Ok(KwRecord { name: st.ident.to_string(), fields })
-}
-
-fn stream(label: &str, ident: &syn::Ident, m: &[Meta]) -> Res<Stream> {
-    let at = format!("{label}: {ident}");
-    let known = [
-        "name",
-        "sink",
-        "push",
-        "input",
-        "output",
-        "end_input",
-        "close_ends_input",
-        "optional_sink",
-        "error",
-        "deadline",
-        "stub",
-        "stub_import",
-        "source",
-        "arg",
-        "input_py",
-        "doc",
-    ];
-    for x in m.iter().skip(1) {
-        let key = x.key.strip_prefix("stream.").unwrap_or(&x.key);
-        if !known.contains(&key) {
-            return Err(format!("{at}: stream({key}) -- a stream takes {}", known.join(", ")));
-        }
-    }
-    let values = |key: &str| -> Vec<String> {
-        let key = format!("stream.{key}");
-        m.iter().filter(|x| x.key == key).filter_map(|x| x.value.clone()).collect()
-    };
-    Ok(Stream {
-        name: meta_str(m, "stream.name")
-            .ok_or_else(|| format!("{at}: stream(name = \"..\") is the class name"))?,
-        sink_ty: meta_rust(m, "stream.sink"),
-        push: meta_str(m, "stream.push").unwrap_or_else(|| "push".to_owned()),
-        arg: meta_str(m, "stream.arg").unwrap_or_else(|| "text".to_owned()),
-        input_py: meta_str(m, "stream.input_py").unwrap_or_else(|| "str".to_owned()),
-        end_input: m.iter().any(|x| x.key == "stream.end_input"),
-        // The class's own `__doc__`: one source type backs several classes.
-        doc: meta_str(m, "stream.doc").map(|d| vec![d]).unwrap_or_default(),
-        stub_extra: values("stub"),
-        stub_imports: values("stub_import"),
-    })
 }
 
 fn proxy(label: &str, tr: &syn::ItemTrait) -> Res<Proxy> {

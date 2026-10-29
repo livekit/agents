@@ -37,7 +37,7 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
                 .collect::<PyResult<Vec<_>>>()?;
             let observer: Arc<dyn ChainObserver> = match on_availability {
                 Some(observer) => {
-                    <dyn ChainObserver as HostProxy>::from_host(&observer.into_pyobject(py)?, None)?
+                    <dyn ChainObserver as HostProxy>::from_host(&observer.into_pyobject(py)?)?
                 }
                 None => Arc::new(IgnoreEvents),
             };

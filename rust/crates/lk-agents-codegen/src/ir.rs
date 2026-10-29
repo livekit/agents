@@ -311,8 +311,6 @@ pub struct Sig {
     /// `defaults(x = "..")`: a Rust expression for pyo3's `signature`.
     pub defaults: Vec<(String, String)>,
     pub kw_only: KwOnly,
-    /// `stream = "Name"`: the source, or `(sink, source)`, handed over as that stream class.
-    pub stream: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -376,7 +374,7 @@ pub enum RTy {
     Shared(String),
     /// A host object interned in the side table.
     HostRef,
-    /// One half of a stream pair (returned only), as the method's `stream = ".."` class.
+    /// One half of a stream pair (returned only).
     StreamHalf {
         sink: bool,
     },
@@ -465,7 +463,6 @@ pub struct Exposed {
     pub objects: Vec<Object>,
     pub wire_enums: Vec<WireEnum>,
     pub kwargs: Vec<KwRecord>,
-    pub streams: Vec<Stream>,
     pub proxies: Vec<Proxy>,
     pub providers: Vec<Provider>,
     pub str_classes: Vec<StrClass>,
@@ -521,7 +518,6 @@ impl Exposed {
             && self.objects.is_empty()
             && self.wire_enums.is_empty()
             && self.kwargs.is_empty()
-            && self.streams.is_empty()
             && self.proxies.is_empty()
             && self.exceptions.is_empty()
     }
@@ -531,7 +527,6 @@ impl Exposed {
         self.objects.extend(other.objects);
         self.wire_enums.extend(other.wire_enums);
         self.kwargs.extend(other.kwargs);
-        self.streams.extend(other.streams);
         self.proxies.extend(other.proxies);
         self.providers.extend(other.providers);
         self.str_classes.extend(other.str_classes);
@@ -560,23 +555,6 @@ pub struct KwField {
     pub ty: RTy,
     /// A Rust expression for pyo3's signature.
     pub default: Option<String>,
-}
-
-/// `#[host(stream(..))]`: the Rust->host stream class over a source (and optionally a sink).
-#[derive(Debug, Clone)]
-pub struct Stream {
-    pub name: String,
-    /// `None` is a drain-only stream.
-    pub sink_ty: Option<String>,
-    /// `push`, `push_frame`, `push_text`.
-    pub push: String,
-    /// `frame` under `input_with`, else `text`; `input_py` is its stub type.
-    pub arg: String,
-    pub input_py: String,
-    pub end_input: bool,
-    pub doc: Vec<String>,
-    pub stub_extra: Vec<String>,
-    pub stub_imports: Vec<String>,
 }
 
 /// `#[host(proxy(..))]` on a core trait: an `impl Trait` over a host object, whose every method

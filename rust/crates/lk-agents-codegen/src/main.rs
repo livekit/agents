@@ -414,7 +414,7 @@ fn unlisted_exports(root: &Path) -> Result<(), String> {
         let Ok(text) = std::fs::read_to_string(root.join(path)) else { continue };
         let exports = text.lines().map(str::trim_start).any(|l| {
             l.starts_with("#[")
-                && ["host(export", "host(object(", "host(stream("].iter().any(|h| l.contains(h))
+                && ["host(export", "host(object("].iter().any(|h| l.contains(h))
         });
         if exports {
             unlisted.push(path);

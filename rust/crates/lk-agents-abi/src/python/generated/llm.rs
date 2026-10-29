@@ -179,60 +179,35 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Too
 
 // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::fallback::ChainObserver {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`ChainObserver` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::Llm {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::Llm>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`Llm` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::mcp::McpTransport {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`McpTransport` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::mcp::McpProgress {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`McpProgress` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::tool_executor::HostToolRunner {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::tool_executor::HostToolRunner>(obj)
-    }
-
-    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
-        let _ = handle;
-        Err(::pyo3::exceptions::PyTypeError::new_err("`HostToolRunner` is a declared proxy: it is taken from the host object, not a view"))
     }
 }

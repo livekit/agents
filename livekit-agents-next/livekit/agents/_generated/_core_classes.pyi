@@ -1257,13 +1257,6 @@ class TranscriptSynchronizer:
     async def aclose(self) -> None: ...
 
 
-class InferenceLlmStream:
-    """One in-flight completion."""
-
-    async def recv(self) -> Any: ...
-    async def aclose(self) -> None: ...
-
-
 class SessionClosing(RuntimeError):
     """`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing."""
 

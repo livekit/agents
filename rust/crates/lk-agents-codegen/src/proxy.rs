@@ -103,8 +103,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
 pub fn legacy_bridge(p: &Proxy) -> String {
     let tr = &p.trait_path;
     format!(
-        "impl crate::python::HostProxy for dyn {tr} {{\n    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {{\n        crate::python::declared_proxy::<dyn {tr}>(obj)\n    }}\n\n    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {{\n        let _ = handle;\n        Err(::pyo3::exceptions::PyTypeError::new_err(\"`{}` is a declared proxy: it is taken from the host object, not a view\"))\n    }}\n}}\n",
-        p.rust_name
+        "impl crate::python::HostProxy for dyn {tr} {{\n    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {{\n        crate::python::declared_proxy::<dyn {tr}>(obj)\n    }}\n}}\n"
     )
 }
 

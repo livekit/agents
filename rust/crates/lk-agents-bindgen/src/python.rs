@@ -728,9 +728,6 @@ fn inputs(s: &Sig) -> Vec<Option<crate::shape::In>> {
 
 /// `None` when pyo3 converts it itself (`shape::output`).
 fn output(s: &Sig) -> Option<crate::shape::Out> {
-    if s.stream.is_some() {
-        return None;
-    }
     match &s.ret {
         Ret::Unit => None,
         Ret::Plain(t) | Ret::Result(t) => crate::shape::output(t, quote!(out)),
@@ -786,16 +783,13 @@ fn checked_converters(s: &Sig) -> TokenStream {
     quote!(#(#functions)*)
 }
 
-/// The core's, a cell constructor's class, a stream class, or an `async` callable's awaitable.
+/// The core's, a cell constructor's class, or an `async` callable's awaitable.
 fn ret_ty(s: &Sig, wrap: Option<&syn::Ident>) -> TokenStream {
     if let Some(class) = wrap {
         return quote!(#class);
     }
     if s.is_async || s.reply.is_some() {
         return quote!(::pyo3::Bound<'py, ::pyo3::PyAny>);
-    }
-    if let Some(class) = &s.stream {
-        return quote!(#class);
     }
     match (&s.ret, output(s)) {
         (Ret::Unit, _) => quote!(()),
@@ -806,16 +800,6 @@ fn ret_ty(s: &Sig, wrap: Option<&syn::Ident>) -> TokenStream {
 
 fn body(s: &Sig, call: &Call) -> TokenStream {
     body_wrapped(s, call, None)
-}
-
-/// A `(sink, source)` pair, or a source alone.
-fn stream_wrap(s: &Sig) -> Option<TokenStream> {
-    let class = s.stream.as_ref()?;
-    let (Ret::Plain(t) | Ret::Result(t)) = &s.ret else { return None };
-    Some(match t {
-        syn::Type::Tuple(tu) if tu.elems.len() == 2 => quote!(#class::from_pair(out.0, out.1)),
-        _ => quote!(#class::from_source(out)),
-    })
 }
 
 /// How a cell's constructor holds the new value.
@@ -955,13 +939,12 @@ fn body_parts(s: &Sig, call: &Call, wrap: Option<(&syn::Ident, Wrap)>) -> (Token
         Some((class, Wrap::Value)) => quote!(#class { inner: out }),
         None => quote!(out),
     };
-    let convert = match (stream_wrap(s), output(s), wrap) {
-        (Some(w), _, _) => quote!(let out = #w;),
-        (None, Some(o), None) if s.is_async && o.py => {
+    let convert = match (output(s), wrap) {
+        (Some(o), None) if s.is_async && o.py => {
             let x = o.expr;
             quote!(let out = ::pyo3::Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(#x, py))?;)
         }
-        (None, Some(o), None) => {
+        (Some(o), None) => {
             let x = o.expr;
             quote!(let out = #x;)
         }

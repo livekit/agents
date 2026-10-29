@@ -398,7 +398,7 @@ impl PyTurn {
             .transpose()?
             .unwrap_or_default();
         let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
-        let host = <dyn TurnHost as HostProxy>::from_host(host, Some(clock.clone()))?;
+        let host = <dyn TurnHost as HostProxy>::from_host(host)?;
         Ok(Self { inner: Arc::new(Turn::new(thread.inner.clone(), lane, host, clock, opts)) })
     }
 

@@ -12,19 +12,17 @@
 mod cross;
 mod kwargs;
 pub mod meta;
-mod proxy;
+mod native;
 mod python;
 mod record;
 mod shape;
-mod stream;
 #[cfg(test)]
 mod tests;
 
 pub use python::{class, error, export_const, export_fn, export_impl, object, string, wire_enum};
 pub use kwargs::{client, kwargs};
-pub use proxy::{native, proxy};
+pub use native::native;
 pub use record::{RecordDefaults, record};
-pub use stream::stream;
 
 pub use meta::{Meta, Metas, Value, doc, is_host, to_snake};
 use proc_macro2::{Span, TokenStream};
@@ -127,8 +125,6 @@ pub struct Sig {
     /// `///` lines, one leading space removed, trailing blanks dropped.
     pub doc: Vec<String>,
     pub is_async: bool,
-    /// The returned halves, as that `#[host(stream)]` class.
-    pub stream: Option<syn::Path>,
     /// `T` of a `Reply<T>` return: sent now, awaited by the host.
     pub reply: Option<syn::Type>,
 }
@@ -303,7 +299,6 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
     };
     let pid = m.bool(&format!("{head}.pid"))?.or(object_pid).unwrap_or(true);
     let rust = s.ident.clone();
-    let stream = m.path(&format!("{head}.stream"))?;
     let reply = match &ret {
         Ret::Plain(t) | Ret::Result(t) => reply_of(t),
         Ret::Unit => None,
@@ -326,7 +321,6 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
         detach: m.flag(&format!("{head}.detach")),
         doc: doc(attrs),
         is_async: s.asyncness.is_some(),
-        stream,
     };
     sig.defaults = implied_defaults(&sig);
     Ok(sig)
@@ -406,7 +400,7 @@ fn result_ok(t: &syn::Type) -> Option<syn::Type> {
     })
 }
 
-const SIG_KEYS: [&str; 8] = ["name", "defaults.", "kw_only", "err", "pid", "detach", "stream", ""];
+const SIG_KEYS: [&str; 7] = ["name", "defaults.", "kw_only", "err", "pid", "detach", ""];
 
 fn sig_keys(head: &str) -> Vec<String> {
     SIG_KEYS.iter().map(|k| if k.is_empty() { head.to_owned() } else { format!("{head}.{k}") }).collect()

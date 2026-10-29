@@ -327,7 +327,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
         "{llm}"
     );
     assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?"), "{llm}");
-    assert!(llm.contains("HostProxy>::from_host(&v, None)"), "{llm}");
+    assert!(llm.contains("HostProxy>::from_host(&v)"), "{llm}");
     assert!(llm.contains("(&self.0, &items, conn, reporter)"), "{llm}");
     assert!(llm.contains("NativeStream(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out)))"), "{llm}");
     assert!(

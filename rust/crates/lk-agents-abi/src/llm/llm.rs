@@ -372,10 +372,7 @@ pub trait Llm: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-/// The completion's drain half: the same [`StreamSource`] every other leg hands out. Handed to the
-/// host as `InferenceLlmStream`.
-#[crate::host(stream(name = "InferenceLlmStream", doc = "One in-flight completion.", output = LlmChunk))]
+/// The completion's drain half: the same [`StreamSource`] every other leg hands out.
 pub type LlmStream = Box<dyn StreamSource<LlmChunk>>;
 
 #[cfg(test)]

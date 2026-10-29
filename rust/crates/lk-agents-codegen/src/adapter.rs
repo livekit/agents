@@ -744,7 +744,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             format!("<{rust} as ::lk_agents_abi::python::ArcClass>::shared(&{v})")
         }
         Ty::Proxy { rust, declared: None, .. } => {
-            format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v}, None)")
+            format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v})")
         }
         Ty::List(inner) if **inner == Ty::Int(crate::decl::Int::U8) => format!(
             "{{ if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ ::lk_agents_abi::python::owned_bytes(&{v}, {path}) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }} }}",

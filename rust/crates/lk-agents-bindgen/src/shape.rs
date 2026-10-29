@@ -319,7 +319,7 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     if let Some(tr) = arc_dyn(t) {
         return In {
             ty: quote!(&::pyo3::Bound<'py, ::pyo3::PyAny>),
-            prelude: Some(quote!(let #name = <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(#name, ::std::option::Option::None)?;)),
+            prelude: Some(quote!(let #name = <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(#name)?;)),
             arg: quote!(#name),
             py: true,
         };
@@ -329,7 +329,7 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     {
         return In {
             ty: quote!(::std::option::Option<::pyo3::Bound<'py, ::pyo3::PyAny>>),
-            prelude: Some(quote!(let #name = #name.map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v, ::std::option::Option::None)).transpose()?;)),
+            prelude: Some(quote!(let #name = #name.map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v)).transpose()?;)),
             arg: quote!(#name),
             py: true,
         };
@@ -337,7 +337,7 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     // `Maybe<Arc<dyn Trait>>` / `Maybe<Option<Arc<dyn Trait>>>`: `NOT_GIVEN` keeps the leg, `None`
     // (the latter) removes it, an object replaces it.
     if let Some(inner) = one(t, "Maybe") {
-        let from_host = |tr: &syn::Path| quote!(<dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v, ::std::option::Option::None));
+        let from_host = |tr: &syn::Path| quote!(<dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v));
         let (ty, given) = if let Some(tr) = arc_dyn(inner) {
             let f = from_host(tr);
             (quote!(::pyo3::Bound<'py, ::pyo3::PyAny>), quote!(#f?))
@@ -364,7 +364,7 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     {
         return In {
             ty: quote!(::std::vec::Vec<::pyo3::Bound<'py, ::pyo3::PyAny>>),
-            prelude: Some(quote!(let #name = #name.iter().map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(v, ::std::option::Option::None)).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?;)),
+            prelude: Some(quote!(let #name = #name.iter().map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(v)).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?;)),
             arg: quote!(#name),
             py: true,
         };

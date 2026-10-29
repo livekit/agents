@@ -65,8 +65,6 @@ pub use worker::job::{
 };
 
 #[cfg(feature = "python")]
-pub use llm::llm::InferenceLlmStream;
-#[cfg(feature = "python")]
 pub use tts::emitter::{AudioEmitter, EmitterError, SegmentDump};
 pub use utils::resample::{Quality, ResampleError, Resampler};
 

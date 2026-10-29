@@ -320,42 +320,6 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
         });
     }
 
-    // Catches: a duck-typed plugin (the reference API's shape, no base class) refused by a bare
-    // proxy instead of seen through the host class's own `_core_*` functions.
-    #[test]
-    fn a_duck_typed_host_object_is_seen_through_the_host_class() {
-        attach(|py| {
-            let out = eval_with_stubs(
-                py,
-                r#"
-import asyncio, functools
-view = _mod('livekit.agents._core_view')
-class _Duck:
-    def __init__(self, obj, base): self._obj = obj; self._base = base
-    def __getattr__(self, name):
-        if name.startswith('_core_'): return functools.partial(getattr(self._base, name), self._obj)
-        return getattr(self._obj, name)
-view.duck = _Duck
-host = _mod('host')
-class Base:
-    def _core_id(self): return {"label": self.label, "model": "unknown", "provider": "unknown"}
-host.Base = Base
-class Plain:
-    label = "plain"
-out = (asyncio.new_event_loop(), Plain())
-"#,
-            );
-            let (event_loop, plain): (Py<PyAny>, Py<PyAny>) = out.extract(py).unwrap();
-            let handle = HostHandle::from_parts(
-                plain,
-                pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone()),
-            );
-            let seen = handle.core_surface("host.Base", "_core_id").unwrap();
-            let id = seen.object().bind(py).call_method0("_core_id").unwrap();
-            assert_eq!(id.get_item("label").unwrap().extract::<String>().unwrap(), "plain");
-        });
-    }
-
     // Catches: a panic on an unknown `SpeechEventType` from a plugin, instead of an error that
     // names the value (§1.6 #6).
     #[test]

@@ -186,12 +186,11 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// |---|---|---|
 /// | `export` | free fn, const, or an associated const in a plain `impl` | a `#[pyfunction]` (an UPPER_CASE const: a module attribute) |
 /// | `object` | inherent `impl` | `#[pymethods]` on the type's class, or a cell class over it |
-/// | `proxy` | trait | `impl Trait for Py<Trait><B: HostBridge>`: the core calling a host object; nothing when its methods declare `await`/`notify` (the proxy is generated, `lk-agents-codegen`'s `decl`) |
+/// | `proxy` | trait | nothing: the core calling a host object; its methods declare their calls (`await`/`call`/`notify`..) and the proxy is generated (`lk-agents-codegen`'s `decl`) |
 /// | `class` / `functions` | trait | nothing: a declaration-model class or module functions (`lk-agents-codegen`'s `decl`), adapters generated |
 /// | `sink` | trait | nothing: a duplex stream class's input half, its `call`s methods of that class (`lk-agents-codegen`'s `decl`) |
 /// | `handwritten` | a type | nothing: declares that it crosses by its own pyo3 conversions |
 /// | `record` | a struct or enum | nothing: a schema-defined record; `lk-agents-codegen` writes its model and its conversions (`src/python/generated/`) |
-/// | `stream` | the source type of a stream pair | the Rust->host stream class (`recv`/`aclose`/`push`..) |
 /// | `client` / `kwargs` | a config struct | a keyword constructor / a keyword-spread parameter |
 /// | `error` | an error enum or struct | its `HostException`: every wrapper returning it raises through it; nothing for `error(raised = "..")`, a refusal a generated proxy reads |
 /// | `wire_enum` | a unit enum | its wire strings (below), and the string both ways |
@@ -207,8 +206,8 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// (`lk_agents_bindgen::fill_sends`), whatever the crate. A parameter
 /// takes `lenient`, `label = ".."`, `ambient`, `kwargs` or `required` (an `Option<T>` whose
 /// followers all default is `None` unwritten; `required` keeps it without). One value rule
-/// (`lk_agents_bindgen::meta`): Rust is written unquoted (`defaults(size = -1)`, `stream(sink =
-/// crate::Sink)`), host text as a string (`name = "read"`, `err = "RuntimeError"`).
+/// (`lk_agents_bindgen::meta`): Rust is written unquoted (`defaults(size = -1)`, `object(rust_name =
+/// Cell)`), host text as a string (`name = "read"`, `err = "RuntimeError"`).
 ///
 /// `wire_enum`, `wire_strs` and a unit enum's `#[derive(Host)]` write Rust whatever the feature:
 /// the wire strings are the enum's, so they are written once, at the variants (`#[host(rename =
@@ -227,7 +226,7 @@ use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
 const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `handwritten`/`record` on a type, \
-    `stream` on a type, `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
+    `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
     `file` on `const _`, `constant` on a `pub const` (written into its file's Python module), or `group` on an inline mod";
 
 fn expand_host(
@@ -247,7 +246,6 @@ fn expand_host(
             | (I::Impl(_), Some("object"))
             | (I::Trait(_), Some("proxy" | "native" | "class" | "functions" | "sink"))
             | (I::Enum(_) | I::Struct(_), Some("handwritten" | "record"))
-            | (I::Type(_) | I::Struct(_), Some("stream"))
             | (I::Struct(_), Some("client" | "kwargs"))
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
             | (I::Enum(_), Some("wire_enum" | "wire_strs"))
@@ -321,12 +319,13 @@ fn expand(
         (I::Enum(_) | I::Struct(_), Some("error")) => lk_agents_bindgen::error(attr, parsed),
         (I::Enum(e), Some("string")) => Ok(lk_agents_bindgen::string(&e.ident)),
         (I::Struct(st), Some("string")) => Ok(lk_agents_bindgen::string(&st.ident)),
-        // A proxy whose methods declare their calls is the declaration model's: its proxy is
-        // generated into the registration shell (`lk-agents-codegen`'s `decl`).
+        // Its proxy is generated into the registration shell (`lk-agents-codegen`'s `decl`).
         (I::Trait(t), Some("proxy")) if declared_proxy(t) => Ok(proc_macro2::TokenStream::new()),
-        (I::Trait(t), Some("proxy")) => lk_agents_bindgen::proxy(attr, t),
+        (I::Trait(t), Some("proxy")) => Err(syn::Error::new_spanned(
+            &t.ident,
+            "a `#[host(proxy)]` trait declares how each method is called (`#[host(await)]`, `call`, `notify`, `read_once` or `bind`)",
+        )),
         (I::Trait(t), Some("native")) => lk_agents_bindgen::native(attr, t),
-        (I::Type(_) | I::Struct(_), Some("stream")) => lk_agents_bindgen::stream(attr, parsed),
         (I::Struct(st), Some("client")) => lk_agents_bindgen::client(attr, st),
         (I::Struct(st), Some("kwargs")) => lk_agents_bindgen::kwargs(attr, st),
         // A group's records are the codegen's (the pydantic modules); nothing crosses in Rust.
@@ -366,7 +365,7 @@ fn declared_proxy(t: &syn::ItemTrait) -> bool {
 /// `binding`) on each struct, enum and const directly in it (a nested group strips its
 /// own). A proxy trait's Python face (`#[python(..)]` on the trait, its methods and parameters,
 /// read by `lk-agents-codegen`) goes too. The item's other attributes are left alone: a second
-/// `#[host(stream)]` is its own call.
+/// `#[host]` is its own call.
 fn strip(item: &mut syn::Item, group: bool) {
     let words: &[&str] = match item {
         _ if group => &["host", "python", "binding"],

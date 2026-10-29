@@ -2,7 +2,7 @@
 //! host shape is refused by name.
 
 use super::exposed::Aliases;
-use super::meta::{Meta, host_attr_strict, meta_rust};
+use super::meta::{Meta, host_attr_strict};
 use super::{Res, quote};
 use crate::ir::*;
 
@@ -110,9 +110,7 @@ pub(super) fn signature(
             KwOnly::From(p.clone())
         }
     };
-    let stream = meta_rust(m, &format!("{head}.stream"))
-        .map(|p| p.rsplit("::").next().unwrap_or(&p).to_owned());
-    Ok((receiver, Sig { params, ret, defaults, kw_only, stream }))
+    Ok((receiver, Sig { params, ret, defaults, kw_only }))
 }
 
 /// `Result<T, E>` -> `(Result<(), E>, T)`.

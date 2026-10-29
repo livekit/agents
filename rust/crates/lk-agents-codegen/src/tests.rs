@@ -604,19 +604,6 @@ fn a_routed_union_generates_its_dispatch_table_keyed_by_the_wire_kind() {
     assert!(e.contains("mirrors a state but is not an event"), "{e}");
 }
 
-// Catches: a stream's stub missing a method its class has, or the push argument typed `Any` where
-// the declaration named the host type.
-#[test]
-fn a_stream_class_has_its_stub() {
-    let stub = exports_stub(
-        "#[host(error(with = \"f\"))]\npub enum ProviderError { A }\n\
-         #[host(stream(name = \"S\", doc = \"One stream.\", sink = X, push = \"push_frame\", arg = \"frame\", input = AudioFrame, \
-         input_py = \"rtc.AudioFrame\", stub_import = \"from livekit import rtc\", end_input, output = u8, stub = \"def extra(self) -> None: ...\"))]\npub struct Src;",
-    );
-    assert!(stub.contains("from livekit import rtc\n"), "{stub}");
-    assert!(stub.contains("class S:\n    \"\"\"One stream.\"\"\"\n\n    def push_frame(self, frame: rtc.AudioFrame) -> None: ...\n    def flush(self) -> None: ...\n    def end_input(self) -> None: ...\n    def extra(self) -> None: ...\n    async def recv(self) -> Any: ...\n    async def aclose(self) -> None: ...\n"), "{stub}");
-}
-
 // Catches: the stub reading a method's kind from anything but its signature (the expansion's rule),
 // so a receiver-less method missing `@staticmethod`, an `async fn` or a `Reply<T>` method not
 // awaitable, or the awaitable typed as the `Reply` rather than what it resolves to.

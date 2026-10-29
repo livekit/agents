@@ -20,7 +20,6 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Stub>, String> {
     if classes.is_empty()
         && exposed.fns.is_empty()
         && exposed.objects.is_empty()
-        && exposed.streams.is_empty()
         && exposed.exceptions.is_empty()
     {
         return Ok(None);
@@ -100,7 +99,6 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Stub>, String> {
         .map(|(_, t)| t.name.clone())
         .chain(exposed.fns.iter().map(|f| f.name.clone()))
         .chain(exposed.objects.iter().map(|o| o.name.clone()))
-        .chain(exposed.streams.iter().map(|s| s.name.clone()))
         .chain(exposed.exceptions.iter().map(|e| e.name.clone()))
         .collect();
     Ok(Some(Stub { out: Out { path: PATH.to_owned(), text: b }, names }))
@@ -277,29 +275,6 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
         }
         out.push(b);
     }
-    for s in &x.streams {
-        let mut b = format!("class {}:\n", s.name);
-        if python::docstring(&mut b, &summary(&s.doc), 4) {
-            b.push('\n');
-        }
-        if s.sink_ty.is_some() {
-            b.push_str(&format!(
-                "    def {}(self, {}: {}) -> None: ...\n",
-                s.push, s.arg, s.input_py
-            ));
-            b.push_str("    def flush(self) -> None: ...\n");
-            if s.end_input {
-                b.push_str("    def end_input(self) -> None: ...\n");
-            }
-        }
-        for l in s.stub_extra.iter().flat_map(|l| l.lines()) {
-            b.push_str(&format!("    {l}\n"));
-        }
-        b.push_str(
-            "    async def recv(self) -> Any: ...\n    async def aclose(self) -> None: ...\n",
-        );
-        out.push(b);
-    }
     Ok(out)
 }
 
@@ -310,7 +285,6 @@ fn imports(x: &Exposed) -> Vec<String> {
         .objects
         .iter()
         .flat_map(|o| &o.stub_imports)
-        .chain(x.streams.iter().flat_map(|s| &s.stub_imports))
     {
         if !out.contains(l) {
             out.push(l.clone());
@@ -339,10 +313,7 @@ fn def(
             _ => parts.push(stub),
         }
     }
-    let ret = match &sig.stream {
-        Some(class) => class.clone(),
-        None => py_ty(cx, &sig.ret, false)?,
-    };
+    let ret = py_ty(cx, &sig.ret, false)?;
     let flat = format!("{pad}{prefix}def {name}({}) -> {ret}: ...\n", parts.join(", "));
     if flat.len() <= 100 {
         return Ok(flat);
