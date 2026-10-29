@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/worker/ipc.rs
+#     rust/crates/lk-agents-abi/src/worker/job.rs
 
 from __future__ import annotations
 
@@ -51,3 +52,22 @@ IpcFailure: TypeAlias = (
 class ProcessCompletion:
     exit_code: int | None
     failure: IpcFailure | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class StartJobFields:
+    """The process's one job, shared by the generated host boundary and the IPC wire protocol."""
+
+    job: bytes
+    name: str
+    identity: str
+    metadata: str
+    url: str
+    token: str
+    worker_id: str
+    fake_job: bool
+    received_at: float
+    accepted_at: float
+    assigned_at: float
+    launched_at: float
+    traceparent: str | None = None

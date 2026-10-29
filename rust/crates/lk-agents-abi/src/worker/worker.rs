@@ -3,8 +3,7 @@
 use lk_agents_host_derive::Host;
 
 /// Current worker state, available independently of lifecycle notification consumption.
-#[derive(Debug, Clone, Default, Host)]
-#[binding(emit)]
+#[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub worker_id: String,
     pub draining: bool,
@@ -56,14 +55,12 @@ impl Default for WorkerPermissions {
 }
 
 /// The scalar half of a `livekit.agent.Job`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[crate::class(from_py_object)]
-#[binding(class)]
+#[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(module = "worker_server", emit))]
 pub struct JobInfo {
     pub id: String,
     pub dispatch_id: String,
-    #[host(rename = "type")]
-    pub ty: i32,
+    pub r#type: i32,
     /// The room's name, flattened out of `Job.room`.
     pub room: Option<String>,
     pub room_sid: Option<String>,
@@ -73,7 +70,6 @@ pub struct JobInfo {
     pub enable_recording: bool,
     pub enable_redaction: bool,
     /// The exact `agent.Job` bytes: the fields above are lossy, and this crosses IPC.
-    #[python(ty = "bytes")]
     pub proto: Vec<u8>,
 }
 
@@ -92,14 +88,10 @@ impl JobRequest {
 }
 
 /// `RunningJobInfo`: what a launched job is handed.
-#[derive(Debug, Clone, PartialEq, Host)]
-// `accept_arguments` nests rather than converting: `AcceptArguments` already declares both directions.
-#[crate::class(from_py_object)]
-#[binding(class)]
+#[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(module = "worker_server", emit))]
 pub struct RunningJobInfo {
-    #[python(ty = "AcceptArguments")]
     pub accept_arguments: AcceptArguments,
-    #[python(ty = "JobInfo")]
     pub job: JobInfo,
     pub url: String,
     pub token: String,
@@ -123,9 +115,8 @@ pub enum JobDecision {
 }
 
 /// Accepted participant fields; application attributes retain their own string keys.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[crate::class]
-#[binding(class)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[crate::host(record(module = "worker_server", emit))]
 pub struct AcceptArguments {
     pub name: String,
     pub identity: String,
@@ -134,34 +125,7 @@ pub struct AcceptArguments {
     pub attributes: Vec<(String, String)>,
 }
 
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::types::{PyAnyMethods as _, PyDictMethods as _};
-        let d = obj.cast::<pyo3::types::PyDict>()?;
-        let text = |key: &str| -> pyo3::PyResult<String> {
-            Ok(match d.get_item(key)? {
-                Some(v) => v.extract()?,
-                None => String::new(),
-            })
-        };
-        Ok(AcceptArguments {
-            name: text("name")?,
-            identity: text("identity")?,
-            metadata: text("metadata")?,
-            attributes: match d.get_item("attributes")? {
-                Some(v) if !v.is_none() => v.extract()?,
-                _ => Vec::new(),
-            },
-        })
-    }
-}
-
-// --- `next_notification()`'s four dicts ------------------------------------------------------
-//
-// `worker.py` matches on `event["kind"]`, so the tag values are API.
+// --- the worker's notifications ------------------------------------------------------------
 
 /// Registration accepted by the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,18 +143,15 @@ pub struct RegisteredInfo {
 pub type WorkerRegistered = RegisteredInfo;
 
 /// `drain()` finished within its deadline. `kind: "drain_finished"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "drain_finished")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerDrainFinished {}
 
 /// `drain()` hit its deadline; the caller is still expected to close the worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "drain_timed_out")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerDrainTimedOut {}
 
 /// `run()` returned, and why. `kind: "stopped"`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "stopped")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerStopped {
     /// `closed`, `worker runtime cancelled`, or the runtime error's own sentence.
     pub reason: String,
@@ -199,9 +160,8 @@ pub struct WorkerStopped {
 // --- server launch configuration -----------------------------------------------------------
 
 /// Process-pool settings resolved before the host launch callback.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[crate::class(from_py_object)]
-#[binding(class, new)]
+#[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(module = "worker_server", emit))]
 pub struct ProcessPoolOptions {
     pub num_idle_processes: u32,
     pub initialize_timeout: f64,
@@ -213,16 +173,14 @@ pub struct ProcessPoolOptions {
 }
 
 /// Resolved server settings handed to the process launch adapter.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[crate::class(from_py_object)]
-#[binding(class, new)]
+#[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(module = "worker_server", emit))]
 pub struct ProcessStartOptions {
     pub devmode: bool,
     pub job_processes: bool,
     pub env: Vec<(String, String)>,
     pub job_executor_type: String,
     pub multiprocessing_context: String,
-    #[python(ty = "ProcessPoolOptions")]
     pub pool: ProcessPoolOptions,
 }
 

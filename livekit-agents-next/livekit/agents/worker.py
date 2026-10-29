@@ -18,7 +18,11 @@ from livekit.protocol import agent, models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
-from ._generated.worker_server import EndpointRoute
+from ._generated.worker_server import (
+    EndpointRoute,
+    ProcessStartOptions,
+    RunningJobInfo as CoreRunningJobInfo,
+)
 from .http import AgentHttp, AsgiApplication
 from .ipc.launch import preload_module_names, validate_setup_fnc
 from .job import (
@@ -306,7 +310,7 @@ class _ServerHost:
 
     # --- the lifecycle
 
-    async def _core_start(self, opts: _core.ProcessStartOptions) -> None:
+    async def _core_start(self, opts: ProcessStartOptions) -> None:
         """The job processes, when the core wants them. The server's settings (``opts.env``)
         become a job process's environment; this process's is never changed."""
         # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
@@ -389,7 +393,7 @@ class _ServerHost:
 
     # --- jobs and the user's load_fnc
 
-    async def _core_launch_job(self, info: _core.RunningJobInfo) -> str:
+    async def _core_launch_job(self, info: CoreRunningJobInfo) -> str:
         """A job the core took, with the timeline it stamped."""
         job = agent.Job.FromString(info.job.proto)
         await self.launch(

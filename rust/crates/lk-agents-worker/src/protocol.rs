@@ -32,7 +32,7 @@ pub fn job_info(job: &Job) -> JobInfo {
     JobInfo {
         id: job.id.clone(),
         dispatch_id: job.dispatch_id.clone(),
-        ty: job.r#type,
+        r#type: job.r#type,
         room: job.room.as_ref().map(|r| r.name.clone()),
         room_sid: job.room.as_ref().map(|r| r.sid.clone()),
         agent_name: job.agent_name.clone(),

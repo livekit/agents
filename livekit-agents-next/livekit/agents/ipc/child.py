@@ -40,6 +40,7 @@ from livekit import rtc
 from livekit.protocol import agent
 
 from .. import _core
+from .._generated.worker_ipc import StartJobFields
 from ..job import (
     JobAcceptArguments,
     JobContext,
@@ -185,7 +186,7 @@ class _JobProc:
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-    async def _core_start_job(self, fields: _core.StartJobFields) -> _core.JobRun:
+    async def _core_start_job(self, fields: StartJobFields) -> _core.JobRun:
         with use_traceparent(fields.traceparent):
             return self._start_job(
                 RunningJobInfo(

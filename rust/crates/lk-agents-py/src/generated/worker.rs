@@ -522,8 +522,9 @@ impl ProcSupervisor {
     }
 
     #[pyo3(signature = (fields))]
-    fn start_job<'py>(&self, py: Python<'py>, fields: ::lk_agents_abi::worker::job::StartJobFields) -> PyResult<Bound<'py, PyAny>> {
+    fn start_job<'py>(&self, py: Python<'py>, fields: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let fields = crate::generated::records::worker_ipc::start_job_fields_from_py(&fields)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ProcSupervisorImpl as ::lk_agents_abi::worker::ipc_host::ProcessSupervisor>::start_job(&this, fields)
@@ -2089,7 +2090,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let fields_arg = fields;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_start_job", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(fields_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::worker_ipc::start_job_fields_to_py(py, fields_arg)?];
                 Ok((host.bind(py).getattr("_core_start_job")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2654,7 +2655,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let info_arg = info;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ServerHost._core_launch_job", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(info_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::worker_server::running_job_info_to_py(py, info_arg)?];
                 Ok((host.bind(py).getattr("_core_launch_job")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2722,7 +2723,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let options_arg = options;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ServerHost._core_start", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(options_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::worker_server::process_start_options_to_py(py, options_arg)?];
                 Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

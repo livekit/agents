@@ -13,9 +13,9 @@ from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerHost
 
-from .._core import StartJobFields
 from .worker_cli import CliArgs, LogFields
 from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
+from .worker_ipc import StartJobFields
 from .worker_options import ServerOptions
 from .worker_server import EndpointRoute
 

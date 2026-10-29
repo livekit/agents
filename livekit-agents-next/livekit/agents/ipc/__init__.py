@@ -21,7 +21,7 @@ from types import FrameType
 from typing import Any, Literal
 
 from .. import _core, utils
-from .._generated.worker_ipc import ProcessCompletion
+from .._generated.worker_ipc import ProcessCompletion, StartJobFields
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
@@ -338,7 +338,7 @@ class JobExecutor:
         if not self.started or not self._pch.initialized:
             raise RuntimeError("process not initialized")
         await self._pch.start_job(
-            _core.StartJobFields(
+            StartJobFields(
                 job=info.job.SerializeToString(),
                 name=info.accept_arguments.name,
                 identity=info.accept_arguments.identity,

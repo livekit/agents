@@ -785,6 +785,7 @@ async def room_call_body(call: Call) -> None:
 async def job_call(call: Call) -> None:
     """A console job, as a job process runs it, whose entrypoint starts a session on its room."""
     from livekit.agents import _core, get_job_context
+    from livekit.agents._generated.worker_ipc import StartJobFields
     from livekit.agents.ipc.child import _JobProc
     from livekit.agents.job import (
         JobContext,
@@ -872,7 +873,7 @@ async def job_call(call: Call) -> None:
     # runs (the entrypoint, the callbacks) do not share
     serving = contextvars.Context().run(asyncio.ensure_future, client.serve(runner))
     await sup.start_job(
-        _core.StartJobFields(
+        StartJobFields(
             job=agent_proto.Job(
                 id="AJ_fuzz", room=models.Room(name="console", sid="RM_fuzz")
             ).SerializeToString(),

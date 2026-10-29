@@ -1457,6 +1457,7 @@ async def job() -> None:
     waits for the participant in the room, for whom a participant entrypoint runs, an API call is
     skipped, the
     shutdown it asks for runs the shutdown callback and tells the parent."""
+    from livekit.agents._generated.worker_ipc import StartJobFields
     from livekit.agents.ipc.child import _JobProc
     from livekit.agents.job import (
         JobAcceptArguments,
@@ -1543,7 +1544,7 @@ async def job() -> None:
         fake_job=True,
     )
     await sup.start_job(
-        _core.StartJobFields(
+        StartJobFields(
             job=request.job.SerializeToString(),
             name=request.accept_arguments.name,
             identity=request.accept_arguments.identity,

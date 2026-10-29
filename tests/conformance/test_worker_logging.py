@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import JobContext, _core
+from livekit.agents._generated.worker_ipc import StartJobFields
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.job import JobExecutorType
 from livekit.protocol import agent, models
@@ -74,7 +75,7 @@ async def _run_job() -> None:
         # complete on the real IPC connection and Python loop.
         await asyncio.wait_for(
             supervisor.start_job(
-                _core.StartJobFields(
+                StartJobFields(
                     job=agent.Job(
                         id="AJ_logging", room=models.Room(name="logging")
                     ).SerializeToString(),

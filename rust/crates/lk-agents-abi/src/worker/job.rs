@@ -1,14 +1,10 @@
 //! The job a process runs (`job.py`): its start fields, the session's view of it and its trace.
 
-use lk_agents_host_derive::Host;
-
 /// The process's one job, shared by the generated host boundary and the IPC wire protocol.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[crate::class(from_py_object)]
-#[binding(class, new)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[crate::host(record(module = "worker_ipc", emit, extract))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StartJobFields {
-    #[python(ty = "bytes")]
     pub job: Vec<u8>,
     pub name: String,
     pub identity: String,
@@ -21,7 +17,7 @@ pub struct StartJobFields {
     pub accepted_at: f64,
     pub assigned_at: f64,
     pub launched_at: f64,
-    #[binding(default)]
+    #[host(default = None)]
     pub traceparent: Option<String>,
 }
 
