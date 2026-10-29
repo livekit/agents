@@ -173,9 +173,13 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
     let rejected = StorageError::Rejected { running_task_id: None };
     assert!(matches!(
         operation(at(&mut m, Duration::ZERO, Err(rejected.clone()))),
-        Operation::RunningTask
+        Operation::ReadRuns(_)
     ));
-    let effects = at(&mut m, Duration::ZERO, Ok(Completion::RunningTask(Some("AST_r".into()))));
+    let runs = vec![
+        LaneRun { task_id: Some("AST_ended".into()), interrupted: false },
+        LaneRun { task_id: Some("AST_r".into()), interrupted: true },
+    ];
+    let effects = at(&mut m, Duration::ZERO, Ok(Completion::Runs(runs)));
     assert!(matches!(&effects[..], [Effect::Finished(Err(StorageError::Rejected {
         running_task_id: Some(id) }))] if id == "AST_r"));
     // a waiter whose wait ran out fails its task lease-timeout

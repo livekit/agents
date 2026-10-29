@@ -634,7 +634,7 @@ impl Port {
                 }
                 Completion::Released(released)
             }
-            Operation::RunningTask => Completion::RunningTask(None),
+            Operation::ReadRuns(_) => Completion::Runs(Vec::new()),
             Operation::Open { .. } | Operation::Handle(_) | Operation::Next(_) => {
                 unreachable!("executed elsewhere")
             }

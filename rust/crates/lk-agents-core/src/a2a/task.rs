@@ -126,8 +126,8 @@ pub enum Operation {
     CloseRun,
     /// Releases the receive's or the drain's kept lease when nothing is pending past it.
     ReleaseDrained,
-    /// The task of the run holding the lane.
-    RunningTask,
+    /// The lane's last runs, newest first: what names the task of the run holding the lane.
+    ReadRuns(usize),
 }
 
 /// What a turn stages into its open run.
@@ -201,9 +201,21 @@ pub enum Completion {
         run_id: String,
     },
     Released(bool),
-    RunningTask(Option<String>),
+    /// Newest first.
+    Runs(Vec<LaneRun>),
     Done,
 }
+
+/// One of the lane's runs, as its journal tells it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaneRun {
+    pub task_id: Option<String>,
+    /// Started and never ended: the run holding the lane, or one whose worker died.
+    pub interrupted: bool,
+}
+
+/// How many runs a refusal reads to name the running task.
+const RUNS_FOR_REJECT: usize = 50;
 
 /// How the message was answered: its task as stored, and the reply when this worker's turn
 /// committed it.
@@ -801,7 +813,9 @@ impl TaskMachine {
             }
             (Phase::RecoveryOrphans, Completion::Done) => self.close(After::Observe),
             (Phase::Closing(After::Observe), Completion::Done) => self.observe(),
-            (Phase::Refused, Completion::RunningTask(running_task_id)) => {
+            (Phase::Refused, Completion::Runs(runs)) => {
+                let running_task_id =
+                    runs.into_iter().find(|r| r.interrupted).and_then(|r| r.task_id);
                 return Err(Finish::Error(StorageError::Rejected { running_task_id }));
             }
             (phase, completion) => {
@@ -847,7 +861,7 @@ impl TaskMachine {
         let operation = match (self.phase, &error) {
             (Phase::Open, StorageError::Rejected { .. }) if self.policy == Policy::Reject => {
                 self.phase = Phase::Refused;
-                Operation::RunningTask
+                Operation::ReadRuns(RUNS_FOR_REJECT)
             }
             (Phase::Open, StorageError::Rejected { .. }) => {
                 // the lane was not released within the wait

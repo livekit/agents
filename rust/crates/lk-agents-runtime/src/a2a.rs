@@ -13,7 +13,9 @@ use tokio_util::task::TaskTracker;
 
 use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
-use lk_agents_core::a2a::task::{Completion, Effect, Event, HandlerEvent, Operation, TaskMachine};
+use lk_agents_core::a2a::task::{
+    Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine,
+};
 use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
     Verdict, caller_history_of, failed_message, host_error, resolve_policy,
@@ -35,8 +37,6 @@ pub trait Observer: Send + Sync {
 
 /// How many task rows the handler's context carries.
 const TASKS_IN_CONTEXT: i64 = 50;
-/// How many runs a refusal reads to name the running task.
-const RUNS_FOR_REJECT: usize = 50;
 
 /// The handler's turn: its checkpoint verdicts in, its events out.
 type Handler = (Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>);
@@ -410,12 +410,14 @@ impl Turn {
                 }
                 Completion::Released(released)
             }
-            Operation::RunningTask => {
-                let runs = call.lane.runs(RUNS_FOR_REJECT).await?;
-                Completion::RunningTask(
-                    runs.into_iter().find(|r| r.interrupted()).and_then(|r| r.task_id),
-                )
-            }
+            Operation::ReadRuns(limit) => Completion::Runs(
+                call.lane
+                    .runs(limit)
+                    .await?
+                    .into_iter()
+                    .map(|r| LaneRun { interrupted: r.interrupted(), task_id: r.task_id })
+                    .collect(),
+            ),
         })
     }
 
