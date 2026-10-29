@@ -23,7 +23,7 @@ fn interrupting_a_captured_output_does_not_clear_it_before_physical_admission() 
 
 #[test]
 fn disabling_selected_text_keeps_its_admitted_segment_until_it_finishes() {
-    let seed = 255;
+    let seed = 5;
     let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
     let outcome = search::explore(setup, seed, 3_000);
     assert!(outcome.case.inputs.iter().any(|input| matches!(
