@@ -10,9 +10,9 @@ use lk_agents_abi::media::pool::MediaExecutor;
 use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{Clock, ImageContent, Spawner};
 
+use crate::blocking_io::BlockingIo;
 use crate::http::GatewayHttp;
 use crate::session_report::ReportAdmission;
-use crate::blocking_io::BlockingIo;
 
 /// The media worker pool, read at use so a fork is checked before dispatching work.
 pub type MediaPoolSource = fn() -> Result<Arc<dyn MediaExecutor>, String>;

@@ -17,6 +17,7 @@
 pub mod a2a_auth;
 pub mod a2a_client;
 pub mod attempts;
+pub mod blocking_io;
 pub mod credentials;
 pub mod env;
 pub mod http;
@@ -29,7 +30,6 @@ pub mod token;
 pub mod transport;
 pub mod websocket;
 pub mod webtransport;
-pub mod blocking_io;
 
 pub mod connection_pool;
 

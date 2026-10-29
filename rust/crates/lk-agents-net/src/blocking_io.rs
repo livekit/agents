@@ -178,7 +178,9 @@ mod tests {
         let _ = caller.await;
         assert!(matches!(blocking_io.try_admit(), Err(BlockingIoError::Exhausted)));
         release.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), blocking_io.wait_for_capacity()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), blocking_io.wait_for_capacity())
+            .await
+            .unwrap();
         assert_eq!(blocking_io.try_spawn(|| 42).unwrap().await.unwrap(), 42);
     }
 
