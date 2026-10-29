@@ -350,7 +350,7 @@ class SpeechStream(stt.SpeechStream):
                                 )
                             self._mark_provider_progress()
                             continue
-                        if vad_bucket := self._opts.vad_bucket:
+                        if (vad_bucket := self._opts.vad_bucket) is not None:
                             positive_vad = (
                                 data["vad"][vad_bucket]["inactivity_prob"]
                                 > self._opts.vad_threshold

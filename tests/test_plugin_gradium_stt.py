@@ -251,7 +251,7 @@ async def test_vad_start_of_speech_is_off_by_default():
 
 @pytest.mark.asyncio
 async def test_vad_start_of_speech_with_vad_bucket_zero():
-    """vad_bucket=0 selects the first horizon, it does not disable the VAD start of speech."""
+    """vad_bucket=0 selects the first horizon for both the start and the end of a turn."""
     from livekit.agents.stt import SpeechEventType
     from livekit.plugins.gradium import STT
 
@@ -260,11 +260,23 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
     stream = stt.stream()
     collector = _EventCollector(stream)
     try:
-        step = _step(0.9)
-        step["vad"][0]["inactivity_prob"] = 0.2
-        session.ws.incoming.put_nowait(step)
 
-        events = await collector.wait_for(1)
-        assert [ev.type for ev in events] == [SpeechEventType.START_OF_SPEECH]
+        def bucket_zero_step(inactivity_prob: float) -> dict:
+            # the other buckets disagree, so only bucket 0 can drive the turn
+            step = _step(1.0 - inactivity_prob)
+            step["vad"][0]["inactivity_prob"] = inactivity_prob
+            return step
+
+        session.ws.incoming.put_nowait(bucket_zero_step(0.2))
+        # the first positive step starts the countdown, delay_in_tokens (6) more end the turn
+        for _ in range(7):
+            session.ws.incoming.put_nowait(bucket_zero_step(0.95))
+
+        events = await collector.wait_for(3)
+        assert [ev.type for ev in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
     finally:
         await stream.aclose()
