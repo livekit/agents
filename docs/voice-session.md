@@ -522,7 +522,7 @@ async def hold_on(
 
 
 @session.tts_node
-def voice(
+def spell_amounts(
     ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings
 ) -> AsyncIterable[rtc.AudioFrame]:
     if ctx.agent is billing:

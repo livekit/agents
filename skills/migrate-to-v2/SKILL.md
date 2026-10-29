@@ -145,7 +145,7 @@ class Billing(Agent):
 session = VoiceSession(stt=..., llm=..., tts=..., context=app, thread=ctx.thread)
 
 @session.tts_node
-def voice(ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings):
+def spell_amounts(ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings):
     if ctx.agent is billing:
         text = spell_out_amounts(text)
     return session.default.tts_node(ctx, text, model_settings)
