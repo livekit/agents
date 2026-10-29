@@ -412,7 +412,7 @@ impl ParticipantAudioInput {
                     return false;
                 }
             }
-            crate::yield_now().await;
+            crate::process::yield_now().await;
         }
         true
     }

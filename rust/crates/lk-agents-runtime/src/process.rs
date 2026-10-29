@@ -182,3 +182,18 @@ impl Process {
         lk_agents_media::images::Images::new(state().frames.clone())
     }
 }
+
+/// Lets the executor's other tasks run before continuing: one `Pending` that wakes itself.
+/// Unlike `tokio::task::yield_now`, it assumes no Tokio runtime, so a deterministic scheduler
+/// runs it as it is.
+pub(crate) async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if std::mem::replace(&mut yielded, true) {
+            return std::task::Poll::Ready(());
+        }
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await
+}

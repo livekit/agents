@@ -481,7 +481,7 @@ impl Playing<'_> {
                     CutEvent::Probed(report)
                 }
                 CutEffect::Yield => {
-                    crate::yield_now().await;
+                    crate::process::yield_now().await;
                     CutEvent::Yielded { closing: *self.shared.closing.borrow() }
                 }
                 CutEffect::WaitUntil(at) => {
