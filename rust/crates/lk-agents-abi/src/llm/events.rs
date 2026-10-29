@@ -160,12 +160,6 @@ pub struct LlmChunk {
     pub node_text: bool,
 }
 
-/// `ChatChunk`'s host model asks whether a chunk delivered visible generation.
-#[crate::host(export)]
-pub fn chat_chunk_has_response(chunk: LlmChunk) -> bool {
-    chunk.has_response()
-}
-
 impl LlmChunk {
     /// Truthiness, as the reference: `{"content": ""}` (common on a final chunk) has no response.
     pub fn has_response(&self) -> bool {

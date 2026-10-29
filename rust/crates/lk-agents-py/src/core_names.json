@@ -207,7 +207,6 @@
     "build_legacy_openai_schema",
     "build_strict_openai_schema",
     "card_expired",
-    "chat_chunk_has_response",
     "chat_ctx_copy_plan",
     "chat_ctx_merge_plan",
     "chat_ctx_summarize_plan",

@@ -100,7 +100,6 @@ from ._generated._core_classes import (
     amd_constants as amd_constants,
     amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     card_expired as card_expired,
-    chat_chunk_has_response as chat_chunk_has_response,
     chat_ctx_copy_plan as chat_ctx_copy_plan,
     chat_ctx_merge_plan as chat_ctx_merge_plan,
     chat_ctx_truncate_plan as chat_ctx_truncate_plan,
