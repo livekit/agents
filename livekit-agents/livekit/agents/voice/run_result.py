@@ -276,8 +276,8 @@ class RunResult(Generic[Run_T]):
             self._mark_done()
 
     def _set_final_output(self, output: Any) -> None:
-        """Keep the latest completed task result across subsequent speech."""
-        self.__last_final_output = output
+        """Preserve task values across speech without retaining handled errors."""
+        self.__last_final_output = None if isinstance(output, BaseException) else output
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -290,7 +290,9 @@ class RunResult(Generic[Run_T]):
                 self._done_fut.set_exception(self.__last_speech_handle._error)
                 return
 
-            final_output = self.__last_final_output
+            final_output = self.__last_speech_handle._maybe_run_final_output
+            if not isinstance(final_output, BaseException):
+                final_output = self.__last_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
                     # only the no-output case is retryable: a completed task is

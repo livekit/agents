@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from livekit.agents import NOT_GIVEN, Agent, AgentSession, AgentTask, function_tool
+from livekit.agents import NOT_GIVEN, Agent, AgentSession, AgentTask, ToolError, function_tool
 from livekit.agents.llm import FunctionToolCall, ToolResult
 from livekit.agents.voice.remote_session import RemoteSession, SessionHost
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -20,7 +20,12 @@ PARENT_LINES = ["Synthetic line one.", "Synthetic line two."]
 
 
 async def _start_confirmation(
-    *, depth: int, content: str = "", later_none: bool = False, task_result: Any = True
+    *,
+    depth: int,
+    content: str = "",
+    later_result: Any = NOT_GIVEN,
+    task_result: Any = True,
+    parent_speech: bool = True,
 ) -> tuple[AgentSession, asyncio.Event, FakeLLM]:
     ready = asyncio.Event()
     continued = asyncio.Event()
@@ -42,15 +47,19 @@ async def _start_confirmation(
             self.remaining = remaining
 
         async def on_enter(self) -> None:
-            if self.remaining:
-                answer = await Wrapper(self.remaining - 1)
+            try:
+                if self.remaining:
+                    answer = await Wrapper(self.remaining - 1)
+                else:
+                    answer = await Confirm(instructions="Confirm synthetic details.")
+            except (ValueError, ToolError) as error:
+                self.complete(error)
             else:
-                answer = await Confirm(instructions="Confirm synthetic details.")
-            self.complete(answer)
+                self.complete(answer)
 
-    class CompleteNone(AgentTask[None]):
+    class CompleteLater(AgentTask[Any]):
         async def on_enter(self) -> None:
-            self.complete(None)
+            self.complete(later_result)
 
     class Parent(Agent):
         async def on_enter(self) -> None:
@@ -60,12 +69,13 @@ async def _start_confirmation(
                 else:
                     answer = await Confirm(instructions="Confirm synthetic details.")
                 assert answer == task_result
-            except ValueError:
+                if later_result is not NOT_GIVEN:
+                    await CompleteLater(instructions="Complete immediately.")
+            except (ValueError, ToolError):
                 pass
-            if later_none:
-                await CompleteNone(instructions="Complete without a value.")
-            for line in PARENT_LINES:
-                await self.session.say(line)
+            if parent_speech:
+                for line in PARENT_LINES:
+                    await self.session.say(line)
             continued.set()
 
     llm = FakeLLM(
@@ -146,7 +156,7 @@ async def test_task_output_survives_parent_speech(depth: int, disable_retries: b
 async def test_later_explicit_none_replaces_task_output() -> None:
     from livekit.agents import UnexpectedModelBehavior
 
-    session, _, _ = await _start_confirmation(depth=1, later_none=True)
+    session, _, _ = await _start_confirmation(depth=1, later_result=None)
     try:
         with pytest.raises(UnexpectedModelBehavior, match="got NoneType"):
             await asyncio.wait_for(
@@ -172,22 +182,65 @@ async def test_invalid_task_output_is_not_replaced_by_parent_speech(
         await session.aclose()
 
 
-async def test_task_error_is_not_replaced_by_parent_speech() -> None:
-    session, _, _ = await _start_confirmation(
-        depth=0, task_result=ValueError("verification failed")
+@pytest.mark.parametrize("depth", [0, 1, 2])
+@pytest.mark.parametrize("error_type", [ValueError, ToolError])
+async def test_handled_task_error_allows_parent_speech(
+    depth: int, error_type: type[Exception]
+) -> None:
+    session, continued, llm = await _start_confirmation(
+        depth=depth, task_result=error_type("verification failed")
     )
     try:
-        with pytest.raises(ValueError, match="verification failed"):
+        with patch.object(llm, "chat", wraps=llm.chat) as requests:
+            result = await asyncio.wait_for(session.run(user_input="yes"), timeout=3)
+            assert requests.call_count == 1
+        assert continued.is_set()
+        assert [event.item.text_content for event in result.events if event.type == "message"] == (
+            PARENT_LINES
+        )
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize("error_after_success", [False, True])
+async def test_handled_task_error_does_not_supply_typed_output(error_after_success: bool) -> None:
+    from livekit.agents import UnexpectedModelBehavior
+
+    session, continued, _ = await _start_confirmation(
+        depth=1,
+        task_result=True if error_after_success else ValueError("verification failed"),
+        later_result=ValueError("verification failed") if error_after_success else NOT_GIVEN,
+    )
+    try:
+        with pytest.raises(UnexpectedModelBehavior, match="got NoneType"):
             await asyncio.wait_for(
                 session.run(user_input="yes", output_type=bool, output_options=None), timeout=3
             )
+        assert continued.is_set()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize("error_type", [ValueError, ToolError])
+async def test_task_error_on_final_speech_is_propagated(error_type: type[Exception]) -> None:
+    session, _, _ = await _start_confirmation(
+        depth=0, task_result=error_type("verification failed"), parent_speech=False
+    )
+    try:
+        with pytest.raises(error_type, match="verification failed"):
+            await asyncio.wait_for(session.run(user_input="yes"), timeout=3)
     finally:
         await session.aclose()
 
 
 @pytest.mark.parametrize("depth", [0, 1, 2])
-async def test_remote_run_records_parent_speech(depth: int) -> None:
-    session, continued, llm = await _start_confirmation(depth=depth)
+@pytest.mark.parametrize(
+    "task_result",
+    [True, ValueError("verification failed"), ToolError("verification failed")],
+    ids=["success", "handled_value_error", "handled_tool_error"],
+)
+async def test_remote_run_records_parent_speech(depth: int, task_result: Any) -> None:
+    session, continued, llm = await _start_confirmation(depth=depth, task_result=task_result)
     host_transport, client_transport = PairedTransport.create_pair()
     host = SessionHost(host_transport)
     host.register_session(session)
