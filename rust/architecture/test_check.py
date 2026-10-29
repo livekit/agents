@@ -18,6 +18,7 @@ from check import (
     pyo3_violations,
     use_violations,
     ratchet,
+    warning_violations,
     read_baselines,
     tracked_rust_paths,
 )
@@ -508,3 +509,35 @@ class Pyo3Contracts(unittest.TestCase):
                     "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/llm.rs",
                 },
             )
+
+
+class WarningContracts(unittest.TestCase):
+    NAMES = {f"id:{name}": name for name in ("lk-agents-core", "lk-agents-voice")}
+
+    def transcript(self, *warnings, success=True):
+        artifacts = [
+            {"reason": "compiler-artifact", "package_id": f"id:{name}"}
+            for name in ("lk-agents-core", "lk-agents-voice")
+        ]
+        messages = [
+            {
+                "reason": "compiler-message",
+                "package_id": f"id:{name}",
+                "message": {"level": "warning", "message": "unused", "rendered": name},
+            }
+            for name in warnings
+        ]
+        return [*messages, *artifacts, {"reason": "build-finished", "success": success}]
+
+    @patch("check.WARNING_CLEAN", {"lk-agents-core"})
+    def test_only_warning_clean_crates_fail_on_a_warning(self):
+        self.assertEqual(warning_violations(self.transcript("lk-agents-voice"), self.NAMES), [])
+        self.assertEqual(
+            warning_violations(self.transcript("lk-agents-core"), self.NAMES), ["lk-agents-core"]
+        )
+
+    @patch("check.WARNING_CLEAN", {"lk-agents-core", "lk-agents-net"})
+    def test_incomplete_or_failed_transcripts_cannot_pass(self):
+        for records in ([], self.transcript(success=False), self.transcript()):
+            with self.subTest(records=len(records)), self.assertRaises(ValueError):
+                warning_violations(records, self.NAMES)

@@ -61,6 +61,23 @@ BANNED = {
     "livekit-api",
     "lk-agents-runtime",
 }
+# Crates whose `cargo check --tests` output has no compiler warning. This list only grows.
+WARNING_CLEAN = {
+    f"lk-agents-{name}"
+    for name in (
+        "core",
+        "media",
+        "net",
+        "storage",
+        "inference",
+        "worker",
+        "codegen",
+        "bindgen",
+        "host-derive",
+        "test-support",
+        "bench-steps",
+    )
+}
 # The exact first line lk-agents-codegen writes; prose that merely starts with "Generated" is not it.
 GENERATED = "//! GENERATED FILE -- DO NOT EDIT."
 
@@ -266,6 +283,7 @@ def item_uses(text: str, pattern: re.Pattern) -> dict[str, int]:
         + [(m.start(), m) for m in pattern.finditer(code)],
         key=lambda event: event[0],
     )
+
     def record(names: list[str], found: list[str]) -> None:
         for text in found:
             key = f"{'::'.join(names) or '<file>'}:{text}"
@@ -471,6 +489,57 @@ def check_boundaries() -> int:
         errors.extend(check_history(root, path, json.loads((root / path).read_text())))
     for error in errors:
         print(error, file=sys.stderr)
+    return bool(errors)
+
+
+def warning_violations(records: list[dict], names: Mapping[str, str]) -> list[str]:
+    """Compiler warnings of warning-clean crates, from a complete `cargo check` transcript."""
+    if (
+        not records
+        or records[-1].get("reason") != "build-finished"
+        or records[-1].get("success") is not True
+    ):
+        raise ValueError("cargo check transcript is empty, incomplete or unsuccessful")
+    built = {names.get(r["package_id"]) for r in records if r.get("reason") == "compiler-artifact"}
+    if missing := WARNING_CLEAN - built:
+        raise ValueError(
+            f"cargo check transcript is missing warning-clean crates: {sorted(missing)}"
+        )
+    return [
+        record["message"].get("rendered") or record["message"]["message"]
+        for record in records
+        if record.get("reason") == "compiler-message"
+        and record["message"]["level"] == "warning"
+        and names.get(record["package_id"]) in WARNING_CLEAN
+    ]
+
+
+def check_warnings() -> int:
+    root = Path(__file__).resolve().parents[2]
+    config = ["--config", str(root / "rust/.cargo/config.toml")]
+    manifest = ["--manifest-path", str(root / "rust/Cargo.toml"), "--locked"]
+    metadata = subprocess.run(
+        ["cargo", "metadata", *config, *manifest, "--no-deps", "--format-version=1"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    names = {p["id"]: p["name"] for p in json.loads(metadata.stdout)["packages"]}
+    process = subprocess.run(
+        ["cargo", "check", *config, *manifest, "--tests", "--workspace", "--message-format=json"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    records = [json.loads(line) for line in process.stdout.splitlines()]
+    if process.returncode:
+        sys.stderr.write(process.stderr)
+        return process.returncode
+    errors = warning_violations(records, names)
+    for error in errors:
+        print(error, file=sys.stderr)
+    print(f"warnings: {len(errors)} in {len(WARNING_CLEAN)} warning-clean crates")
     return bool(errors)
 
 
@@ -971,7 +1040,7 @@ def check_clippy() -> int:
 
 
 def main() -> int:
-    return check_boundaries() or check_clippy()
+    return check_boundaries() or check_warnings() or check_clippy()
 
 
 if __name__ == "__main__":

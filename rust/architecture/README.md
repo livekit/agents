@@ -33,6 +33,9 @@ the workspace Rust flags.
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only
   `executors-baseline.json`.
+- Warning-clean crates (`WARNING_CLEAN` in `check.py`, a list that only grows) stay clean:
+  any compiler warning of theirs in `cargo check --tests --workspace` fails. ABI, voice,
+  runtime, py, fuzz and external path dependencies are not gated yet.
 - Git-tracked handwritten Rust files have a 1,250-line limit. A generated file's
   first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
   shrinking ceilings.
