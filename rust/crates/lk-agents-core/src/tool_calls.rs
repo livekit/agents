@@ -696,9 +696,9 @@ fn start<E: From<Effect>>(
     }
     let mut arguments = parsed.arguments;
     let confirmed = match tool.on_duplicate {
-        DuplicateMode::Confirm => {
-            arguments.remove(CONFIRM_DUPLICATE_PARAM).is_some_and(|v| truthy(&v))
-        }
+        DuplicateMode::Confirm => arguments
+            .remove(CONFIRM_DUPLICATE_PARAM)
+            .is_some_and(|v| crate::llm::provider_format::is_truthy(&v)),
         _ => false,
     };
     if !tool.raw_schema {
@@ -722,17 +722,6 @@ fn with_defaults(arguments: Map<String, Value>, schema: &Value) -> Map<String, V
             Value::Object(arguments) => arguments,
             _ => Map::new(),
         },
-    }
-}
-
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::Null => false,
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
     }
 }
 
