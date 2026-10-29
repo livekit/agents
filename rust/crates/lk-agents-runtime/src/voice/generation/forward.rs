@@ -210,7 +210,7 @@ impl Pump<'_> {
         };
         let audio_out = binding.audio();
         let text = binding.text();
-        let text = self.nodes.text_output(text);
+        let text = super::output::text_output(self.nodes, text);
         binding.retain_text_processing(text.clone());
         let (kind, aligned_provider) = match &self.voice {
             Voice::Tts(tts) => (VoiceKind::Synthesis, tts.capabilities().aligned_transcript),

@@ -1,9 +1,12 @@
 //! A generation owns its admitted output binding even when it is cancelled while awaiting it.
 
+use lk_agents_abi::TimedString;
+use lk_agents_abi::voice::io::Result as IoResult;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
     PlaybackSegment, TextOutput,
 };
+use lk_agents_abi::voice::nodes::TextNode;
 use lk_agents_voice::agent_session::output::SegmentBinding;
 use lk_agents_voice::agent_session::{Answer, RequestId, SessionShared};
 use lk_agents_voice::generation::GenEvent;
@@ -196,5 +199,140 @@ impl PlaybackObserver for OutputSettlement {
             .upgrade()
             .and_then(|shared| shared.resources.audio_output(self.output))
             .is_none_or(|audio| !audio.tracker().has_pending_segment(self.segment))
+    }
+}
+
+/// Bind the agent's transcription node to this segment's admitted text output.
+pub(super) fn text_output(
+    nodes: &lk_agents_voice::agent_session::nodes::OutputNodes,
+    below: Option<Arc<dyn TextOutput>>,
+) -> Option<Arc<dyn TextOutput>> {
+    let below = below?;
+    let Some(factory) = &nodes.transcription else { return Some(below) };
+    match factory.text_node(Arc::clone(&below)) {
+        Ok(node) => Some(Arc::new(NodeTextOutput::new(node, below))),
+        Err(e) => {
+            log::error!(target: "livekit.agents", error = e.to_string().as_str();
+                    "failed to open the transcription_node");
+            None
+        }
+    }
+}
+
+/// A [`TextNode`] as a link in the chain, with the core leg it emits into below it.
+struct NodeTextOutput {
+    node: Arc<dyn TextNode>,
+    next: Arc<dyn TextOutput>,
+}
+
+impl NodeTextOutput {
+    fn new(node: Arc<dyn TextNode>, next: Arc<dyn TextOutput>) -> Self {
+        NodeTextOutput { node, next }
+    }
+}
+
+impl TextOutput for NodeTextOutput {
+    fn label(&self) -> &str {
+        "Agent.transcription_node"
+    }
+
+    fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
+        Some(Arc::clone(&self.next))
+    }
+
+    fn capture_timed<'a>(
+        &'a self,
+        text: &'a TimedString,
+    ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+        Box::pin(async move {
+            self.node.capture_timed(text);
+            Ok(())
+        })
+    }
+
+    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+        Box::pin(async move {
+            self.node.capture_text(text);
+            Ok(())
+        })
+    }
+
+    fn retain_until_flushed(&self, owner: Box<dyn Send>) {
+        self.node.retain_until_drained(Box::new(TextOutputOwner {
+            next: self.next.clone(),
+            owner: Some(owner),
+        }));
+    }
+
+    fn cancel_flush(&self) {
+        self.node.cancel();
+        self.next.cancel_flush();
+    }
+
+    fn wait_for_flush(&self) -> lk_agents_abi::BoxFuture<'_, IoResult<()>> {
+        Box::pin(async {
+            self.node.drain().await?;
+            self.next.wait_for_flush().await
+        })
+    }
+
+    fn flush(&self) {
+        self.node.flush();
+    }
+}
+
+/// Pass a binding through every processing receipt in its text chain.
+struct TextOutputOwner {
+    next: Arc<dyn TextOutput>,
+    owner: Option<Box<dyn Send>>,
+}
+
+impl Drop for TextOutputOwner {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.take() {
+            self.next.retain_until_flushed(owner);
+        }
+    }
+}
+
+#[cfg(test)]
+mod text_node_tests {
+    use super::*;
+    use std::task::{Context, Poll, Waker};
+
+    use lk_agents_test_support::text::BufferedTextNode;
+
+    struct Destination;
+    impl TextOutput for Destination {
+        fn label(&self) -> &str {
+            "destination"
+        }
+        fn capture_text<'a>(&'a self, _: &'a str) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn a_buffered_text_node_keeps_the_segment_pending_until_its_drain_finishes() {
+        let delivered = Arc::new(BufferedTextNode::default());
+        let output = NodeTextOutput::new(delivered.clone(), Arc::new(Destination));
+        output.flush();
+        let mut completion = output.wait_for_flush();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Pending));
+        delivered.complete();
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+    }
+    #[test]
+    fn cancelling_a_buffered_text_node_settles_its_own_segment() {
+        let delivered = Arc::new(BufferedTextNode::default());
+        let output = NodeTextOutput::new(delivered, Arc::new(Destination));
+        output.flush();
+        let mut completion = output.wait_for_flush();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Pending));
+        output.cancel_flush();
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
     }
 }

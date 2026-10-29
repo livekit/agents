@@ -87,7 +87,8 @@ pub(crate) async fn realtime_generation_task(
             break;
         }
         let audio_out = binding.audio();
-        generation.text_out = ctx.providers.output_nodes.text_output(binding.text());
+        generation.text_out =
+            super::output::text_output(&ctx.providers.output_nodes, binding.text());
         binding.retain_text_processing(generation.text_out.clone());
         generation.state.bind(audio_out.is_some());
         // A node invocation belongs to this binding. Its configured transforms survive a tail

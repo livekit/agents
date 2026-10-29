@@ -5,7 +5,6 @@
 
 use super::api::NodeFactory;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{
     AudioFrame, ChatRequest, LanguageCode, Llm, LlmStream, SpeechEvent, StreamSource, Stt,
     SttCapabilities, SttSink, SttSource, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
@@ -50,23 +49,6 @@ impl Nodes {
 pub struct OutputNodes {
     pub transcription: Option<Arc<dyn NodeFactory>>,
     pub realtime_audio: Option<Arc<dyn NodeFactory>>,
-}
-
-impl OutputNodes {
-    /// The transcription output under the agent's `transcription_node`, opened for one segment.
-    /// A node that fails to open drops the segment's transcript.
-    pub fn text_output(&self, below: Option<Arc<dyn TextOutput>>) -> Option<Arc<dyn TextOutput>> {
-        let below = below?;
-        let Some(factory) = &self.transcription else { return Some(below) };
-        match factory.text_node(Arc::clone(&below)) {
-            Ok(node) => Some(Arc::new(crate::io::NodeTextOutput::new(node, below))),
-            Err(e) => {
-                log::error!(target: "livekit.agents", error = e.to_string().as_str();
-                    "failed to open the transcription_node");
-                None
-            }
-        }
-    }
 }
 
 struct Node<P: ?Sized> {
@@ -267,6 +249,7 @@ impl Stt for Node<dyn Stt> {
 mod tests {
     use super::*;
     use lk_agents_abi::errors::{ApiError, HostError};
+    use lk_agents_abi::voice::io::TextOutput;
 
     struct Below;
 
