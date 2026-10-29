@@ -27,15 +27,6 @@ use lk_agents_storage::run::{ItemRow, TaskRow};
 
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 
-/// Who watches a turn from outside: its response stream.
-#[async_trait::async_trait]
-pub trait Observer: Send + Sync {
-    /// The message's task is durable, before admission waits or application work.
-    async fn accepted(&self, task: &TaskRow) -> Result<(), StorageError>;
-    /// A handler's progress or answer token.
-    async fn event(&self, event: &TurnEvent) -> Result<(), StorageError>;
-}
-
 /// The handler's turn: its checkpoint verdicts in, its events out.
 type Handler = (Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>);
 
@@ -66,7 +57,8 @@ pub struct Turn {
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
     stream: Option<StreamInfo>,
-    observer: Option<Arc<dyn Observer>>,
+    /// Its response stream, which watches the turn from outside.
+    publisher: Option<Arc<door::stream::Publisher>>,
     host_context: Option<lk_agents_abi::HostRef>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: TaskTracker,
@@ -87,14 +79,14 @@ impl Turn {
             clock,
             opts: options,
             stream: None,
-            observer: None,
+            publisher: None,
             host_context: None,
             resolvers: TaskTracker::new(),
         }
     }
 
-    pub fn with_observer(mut self, observer: Arc<dyn Observer>) -> Self {
-        self.observer = Some(observer);
+    pub(crate) fn with_publisher(mut self, publisher: Arc<door::stream::Publisher>) -> Self {
+        self.publisher = Some(publisher);
         self
     }
 
@@ -217,11 +209,11 @@ impl Turn {
                 }
             }
             Operation::Accepted(task_id) => {
-                if let Some(observer) = &self.observer {
+                if let Some(publisher) = &self.publisher {
                     let task = call.lane.task(&task_id).await?.ok_or_else(|| {
                         StorageError::Unavailable("an accepted task was not durable".into())
                     })?;
-                    observer.accepted(&task).await?;
+                    publisher.accepted(&task).await?;
                 }
                 Completion::Done
             }
@@ -430,8 +422,8 @@ impl Turn {
                 match events.next().await.map_err(host_error)? {
                     Some(TurnEvent::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
                     Some(event @ (TurnEvent::Progress { .. } | TurnEvent::Token { .. })) => {
-                        if let Some(observer) = &self.observer {
-                            observer.event(&event).await?;
+                        if let Some(publisher) = &self.publisher {
+                            publisher.event(&event).await?;
                         }
                     }
                     Some(TurnEvent::Output { output }) => {

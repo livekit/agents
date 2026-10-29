@@ -1,7 +1,7 @@
 //! Executes decoded A2A RPCs against storage. A response observes one runtime-owned operation;
 //! dropping that observer leaves accepted work and its durable stream owned by the door.
 
-mod stream;
+pub(crate) mod stream;
 
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 use lk_agents_worker::endpoint_budget::EndpointBudget;
@@ -411,7 +411,7 @@ impl Inner {
         )
         .with_stream(created.clone())
         .with_owner(self.owner.clone())
-        .with_observer(publisher.clone());
+        .with_publisher(publisher.clone());
         let turn = match host_context {
             Some(context) => turn.with_context(context),
             None => turn,

@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use a2a::{JsonRpcId, StreamResponse};
-use async_trait::async_trait;
 use lk_agents_abi::a2a::door::{DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnEvent;
 use lk_agents_core::a2a::TurnResult;
@@ -77,17 +76,16 @@ impl Publisher {
         self.emit(events, &result.task.task_id).await?;
         self.streams.close(&self.stream_id).await
     }
-}
 
-#[async_trait]
-impl crate::a2a::Observer for Publisher {
-    async fn accepted(&self, task: &TaskRow) -> Result<(), StorageError> {
+    /// The message's task is durable, before admission waits or application work.
+    pub async fn accepted(&self, task: &TaskRow) -> Result<(), StorageError> {
         let task_id = self.continuing.as_deref().unwrap_or(&task.task_id);
         let announced = self.state.lock().await.0.announce(task_id, &self.context, now_ms());
         self.emit(announced.into_iter().collect(), task_id).await
     }
 
-    async fn event(&self, event: &TurnEvent) -> Result<(), StorageError> {
+    /// A handler's progress or answer token.
+    pub async fn event(&self, event: &TurnEvent) -> Result<(), StorageError> {
         let (TurnEvent::Progress { task_id, .. } | TurnEvent::Token { task_id, .. }) = event else {
             return Ok(());
         };
