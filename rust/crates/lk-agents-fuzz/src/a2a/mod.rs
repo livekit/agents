@@ -10,17 +10,20 @@
 //! Requests arrive out of order on three channels under door options the seed draws (the
 //! default map, one policy for every channel, or a map mixing them), workers die mid-turn (their
 //! lease lapses) and their clients resend, other clients resend at once or cancel tasks, and a
-//! client asked a question answers it, continuing the waiting task or not. The handler's turn is
-//! several steps (the pending question, its checkpoints, its output, the settlement), each
-//! interleaved with other requests by the database's latency. Faults stop after a window; the
-//! run then goes on until every live request is answered.
+//! client asked a question answers it, continuing the waiting task or not, and may cancel that
+//! reply while it runs. The handler's turn is several steps (the pending question, its
+//! checkpoints, its output, the settlement), each interleaved with other requests by the
+//! database's latency. Faults stop after a window; the run then goes on until every live request
+//! is answered.
 //!
 //! The rules ([`rules`]) hold over the whole run: a message is executed once and answered by its
 //! own task or the one it was merged into; every request is answered unless its worker died; an
 //! error answer is one the client can act on; a terminal task never changes; a commit that
 //! applied is never answered as a failure; every answer to one message names its task; every
 //! received inbox message is drained; at most one question waits on the lane; a commit leaves
-//! every terminal row it wrote as it wrote it, unless a client canceled it, and none `working`.
+//! every terminal row it wrote as it wrote it, unless a client canceled it, and none `working`;
+//! a task ends canceled only by its client or a newer message, and a canceled reply leaves the
+//! task it continued waiting on its question.
 
 mod database;
 mod handler;
@@ -248,11 +251,24 @@ async fn simulate(seed: u64, messages: usize) -> Record {
             if inject(&database, &world, &faults, &mut rng) {
                 database.lapse_lease().await;
             }
-            if rng.u16(0..400) == 0 {
-                let started: Vec<String> =
-                    requests.iter().filter(|r| r.started).map(|r| r.task_id.clone()).collect();
+            // a client cancels a task, now and then one of a reply that is running
+            let replying = rng.u16(0..100) == 0;
+            if replying || rng.u16(0..400) == 0 {
+                let started: Vec<String> = requests
+                    .iter()
+                    .filter(|r| {
+                        r.started && (!replying || r.continues.is_some() && r.answer.is_none())
+                    })
+                    .map(|r| r.task_id.clone())
+                    .collect();
                 if !started.is_empty() {
                     let task_id = &started[rng.usize(0..started.len())];
+                    let mut ledger = world.ledger.lock().unwrap();
+                    ledger.client_canceled.insert(task_id.clone());
+                    if replying {
+                        *ledger.injected.entry("ReplyCanceled").or_default() += 1;
+                    }
+                    drop(ledger);
                     let _ = client.lane(LANE).cancel_task(task_id, Default::default()).await;
                 }
             }

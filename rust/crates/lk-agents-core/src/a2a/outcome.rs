@@ -12,13 +12,12 @@ use lk_agents_abi::a2a::metadata::{
 };
 use lk_agents_abi::livekit_protocol::agent::chat_context::chat_item;
 use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCallOutput};
-use lk_agents_abi::storage::StorageError;
-use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::TaskData;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{
     ItemRow, RunOutcome, TaskPatch, TaskRow, WaitOptions, agent_message, wait_patch,
 };
+use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
 use crate::a2a::{
     HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, channel_of, chat_message,
@@ -119,6 +118,8 @@ pub struct PendingAnswer {
     pub transitions: Vec<TaskTransition>,
     /// The call's output, when the question came from a conversation tool's call.
     pub edit: Option<HistoryEdit>,
+    /// The question of the task the message continues by its `taskId`.
+    pub continued: Option<Ask>,
 }
 
 /// A conversation tool's pending `InputRequired`, if `pending` holds one: the last message is
@@ -138,6 +139,7 @@ pub fn answer_pending(
         answer_tool: None,
         transitions: Vec::new(),
         edit: None,
+        continued: None,
     };
     let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
     let Some(pending) = pending else { return out };
@@ -157,6 +159,7 @@ pub fn answer_pending(
     });
     if last.task_id.as_deref() == Some(pending.task_id.as_str()) {
         out.answer_task = pending.task_id.clone();
+        out.continued = Some(ask.clone());
         out.transitions.push(TaskTransition {
             task_id: received_task.to_owned(),
             status: TaskState::Completed,
@@ -220,6 +223,8 @@ pub struct Settle<'a> {
     pub stop: Option<Stop>,
     /// The answer row was already canceled by a client when the turn yielded.
     pub answer_canceled: bool,
+    /// The question of the task the message continued ([`PendingAnswer::continued`]).
+    pub continued: Option<&'a Ask>,
     /// A question becomes the lane's pending one, the next message's to answer; not under a run
     /// without the lane's lease, which no lease orders against the lane's other turns.
     pub lane_question: bool,
@@ -229,10 +234,10 @@ pub struct Settle<'a> {
 }
 
 /// The turn's end: the runs' new items (or the message and a text answer) for the history, then
-/// the rows: a client cancel leaves the answer row as the client wrote it, or cancels the task a
-/// canceled reply continued; a raise fails it; an interrupt cancels it; a question waits;
-/// otherwise it completes with the answer as an artifact. Every earlier message of a batch
-/// completes merged into the answer.
+/// the rows: a client cancel leaves the answer row as the client wrote it, and the task a
+/// canceled reply continued waiting on its question again; a raise fails it; an interrupt
+/// cancels it; a question waits; otherwise it completes with the answer as an artifact. Every
+/// earlier message of a batch completes merged into the answer.
 pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     let out = s.out;
     let last = s.batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
@@ -290,13 +295,12 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     }
     if s.stop == Some(Stop::ClientCanceled) || (settled.interrupted && s.answer_canceled) {
         // the answer row is the client's; the history keeps what ran, the run says why it ended
-        if !s.answer_canceled {
-            // the client canceled the reply continuing it: the task this turn carried ends too
-            let patch = TaskPatch::default();
+        if let Some(ask) = s.continued.filter(|_| !s.answer_canceled) {
+            // the client canceled the reply continuing it: its question waits for an answer again
             settled.transitions.push(TaskTransition {
                 task_id: answer,
-                status: TaskState::Canceled,
-                patch,
+                status: TaskState::InputRequired,
+                patch: TaskPatch { ask: Some(ask.clone()), ..TaskPatch::default() },
             });
         }
         settled.outcome = RunOutcome::Canceled;
@@ -556,6 +560,7 @@ mod tests {
             out: &out,
             stop,
             answer_canceled,
+            continued: None,
             lane_question: true,
             now: 2.0,
             ids: ids(),
@@ -661,6 +666,8 @@ mod tests {
         waiting.status = TaskState::InputRequired;
         waiting.message_id = Some("question".into());
         waiting.data.history = vec![msg("question", "book me a table").to_a2a()];
+        waiting.data.status_message =
+            Some(agent_text("AST_waiting", "For how many?", "msg_question".into()));
         waiting.internal = Some(lk_agents_abi::storage::TaskInternal {
             ask: Some(lk_agents_abi::storage::Ask {
                 question: "For how many?".into(),
@@ -686,7 +693,7 @@ mod tests {
             rows[i] = merge_write(&t.task_id, Some(&rows[i]), t.status, t.patch).unwrap();
         };
         let pending = answer_pending(Some(&waiting), &answer, "AST_receipt", 2.0, "i".into());
-        pending.transitions.into_iter().for_each(&mut write);
+        pending.transitions.iter().cloned().for_each(&mut write);
         let batch = [answer.clone()];
         let settled = settle(Settle {
             batch: &batch,
@@ -696,6 +703,7 @@ mod tests {
             out: &out,
             stop,
             answer_canceled: false,
+            continued: pending.continued.as_ref(),
             lane_question: true,
             now: 2.0,
             ids: ids(),
@@ -721,13 +729,17 @@ mod tests {
         assert_eq!(said, ["question", "answer"], "the continued task's history accumulates");
     }
 
-    /// Found by the A2A DST (A2A_SEED=2316 and ten more of 32768): a client canceled the
-    /// reply's receipt mid-turn; the turn stopped and its commit left the continued task
-    /// `working` with nobody running it, until the next holder failed it `worker-lost`.
+    /// docs/protocol/a2a.md#tasks: a client canceled the reply's receipt mid-turn; the task it
+    /// continued waits on its question again, so the person can answer anew. (Found by the A2A
+    /// DST, A2A_SEED=2316: the commit left it `working`, nobody running it.)
     #[test]
-    fn a_canceled_reply_ends_the_task_it_continued() {
+    fn a_canceled_reply_puts_the_continued_question_back() {
         let out = HandlerOutput { output: Some(json!("late")), ..HandlerOutput::default() };
         let rows = continued(out, Some(Stop::ClientCanceled));
-        assert_eq!(rows[0].status, TaskState::Canceled);
+        assert_eq!(rows[0].status, TaskState::InputRequired);
+        let ask = rows[0].internal.as_ref().and_then(|i| i.ask.as_ref());
+        assert_eq!(ask.map(|a| a.question.as_str()), Some("For how many?"));
+        let question = rows[0].data.status_message.as_ref().map(|m| m.parts[0].clone());
+        assert_eq!(question, Some(a2a::Part::text("For how many?")));
     }
 }

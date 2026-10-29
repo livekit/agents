@@ -6,9 +6,8 @@
 
 use std::time::Duration;
 
-use lk_agents_abi::storage::StorageError;
-use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{ItemRow, TaskPatch, TaskRow};
+use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
 use super::{
     Completion, Finish, Handle, HandlerEvent, Operation, Path, Phase, RunEnd, RunStep, Stage,
@@ -48,6 +47,8 @@ pub(super) struct Turning {
     at: f64,
     answer_task: String,
     answer_tool: Option<String>,
+    /// The question of the task the message continues.
+    continued: Option<Ask>,
     /// The pending question's settlement, staged before the handler runs.
     staged: Stage,
     user_message: Option<ItemRow>,
@@ -77,6 +78,7 @@ impl TaskMachine {
             at,
             answer_task,
             answer_tool: None,
+            continued: None,
             staged: Stage::default(),
             user_message: None,
             stop: None,
@@ -192,6 +194,7 @@ impl TaskMachine {
         let answer = answer_pending(pending, last, &received, turn.at, item_id);
         turn.answer_task = answer.answer_task.clone();
         turn.answer_tool = answer.answer_tool;
+        turn.continued = answer.continued;
         turn.staged = Stage {
             edits: answer.edit.into_iter().collect(),
             transitions: answer.transitions,
@@ -270,6 +273,7 @@ impl TaskMachine {
             out: &out,
             stop: turn.stop,
             answer_canceled,
+            continued: turn.continued.as_ref(),
             lane_question,
             now: turn.at,
             ids,

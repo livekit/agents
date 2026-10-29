@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use lk_agents_abi::a2a::metadata::{MERGED_INTO_KEY, REASON_KEY};
+use lk_agents_abi::a2a::metadata::{INTERRUPTED_KEY, MERGED_INTO_KEY, REASON_KEY};
 use lk_agents_abi::storage::{StorageError, TaskState};
 use lk_agents_core::a2a::Policy;
 
@@ -41,7 +41,7 @@ impl std::fmt::Display for Finding {
 
 type Rule = fn(&Record) -> Vec<Violation>;
 
-pub const RULES: [(&str, Rule); 9] = [
+pub const RULES: [(&str, Rule); 10] = [
     ("message_executes_once", message_executes_once),
     ("one_question_pending", one_question_pending),
     ("commit_is_what_the_run_staged", commit_is_what_the_run_staged),
@@ -51,6 +51,7 @@ pub const RULES: [(&str, Rule); 9] = [
     ("no_failure_nobody_observed", no_failure_nobody_observed),
     ("one_task_per_message", one_task_per_message),
     ("received_message_is_drained", received_message_is_drained),
+    ("cancel_ends_only_its_task", cancel_ends_only_its_task),
 ];
 
 /// Every violation of every rule.
@@ -324,12 +325,46 @@ pub fn received_message_is_drained(record: &Record) -> Vec<Violation> {
     }
 }
 
+/// A task ends `canceled` only by its own client's cancel or a newer message's interruption. A
+/// reply's cancel leaves the task it continued waiting on its question, so the person can answer
+/// again (docs/protocol/a2a.md#tasks).
+pub fn cancel_ends_only_its_task(record: &Record) -> Vec<Violation> {
+    let canceled_by_client = |task_id: &str| record.ledger.client_canceled.contains(task_id);
+    let canceled = record.tasks.values().filter_map(|t| {
+        let interrupted = t.data.metadata.contains_key(INTERRUPTED_KEY);
+        (t.status == TaskState::Canceled && !interrupted && !canceled_by_client(&t.task_id)).then(
+            || Violation {
+                subject: subject_of_message(record, t.message_id.as_deref().unwrap_or_default()),
+                text: format!("{} canceled, by no client nor a newer message", t.task_id),
+            },
+        )
+    });
+    let unasked = record.requests.iter().filter_map(|r| {
+        let continued = record.tasks.get(r.continues.as_deref()?)?;
+        let asked = record.ledger.asked.contains(&continued.task_id);
+        let asks = continued.internal.as_ref().is_some_and(|i| i.ask.is_some());
+        let waiting = continued.status == TaskState::InputRequired;
+        (canceled_by_client(&r.task_id) && asked && waiting && !asks).then(|| Violation {
+            subject: "Continuation",
+            text: format!("{} canceled, {} lost its question", r.message_id, continued.task_id),
+        })
+    });
+    canceled.chain(unasked).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A run that keeps every rule, with an answer its run committed.
     fn record() -> Record {
-        (0..64).map(|seed| super::super::run(seed, 6)).find(|r| check(r).is_empty()).unwrap()
+        let committed = |r: &Record| {
+            r.requests.iter().any(|q| matches!(&q.answer, Some(Ok(a)) if a.run_id.is_some()))
+        };
+        (0..64)
+            .map(|seed| super::super::run(seed, 6))
+            .find(|r| committed(r) && check(r).is_empty())
+            .unwrap()
     }
 
     #[test]
@@ -412,6 +447,30 @@ mod tests {
         // unless its handler answered it `Working`
         r.ledger.answered_working.insert("AST_1".into());
         assert!(commit_is_what_the_run_staged(&r).iter().all(|v| !v.text.contains("AST_1")));
+    }
+
+    #[test]
+    fn a_task_canceled_by_no_client_is_rejected() {
+        let mut r = record();
+        let row = r.tasks.values_mut().next().unwrap();
+        row.status = TaskState::Canceled;
+        row.data.metadata.remove(INTERRUPTED_KEY);
+        r.ledger.client_canceled.remove(&row.task_id);
+        assert!(!cancel_ends_only_its_task(&r).is_empty());
+    }
+
+    #[test]
+    fn a_continued_task_left_without_its_question_is_rejected() {
+        let mut r = record();
+        let row = r.tasks.values_mut().next().unwrap();
+        row.status = TaskState::InputRequired;
+        row.internal = None;
+        let continued = Some(row.task_id.clone());
+        let reply = r.requests.iter_mut().next().unwrap();
+        r.ledger.asked.extend(continued.clone());
+        reply.continues = continued;
+        r.ledger.client_canceled.insert(reply.task_id.clone());
+        assert!(!cancel_ends_only_its_task(&r).is_empty());
     }
 
     #[test]

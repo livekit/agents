@@ -2,8 +2,8 @@
 //! the run's virtual clock, behind storage's fault-injecting one, every request a little late so
 //! the workers' operations interleave. Between batches it observes what the rules read: a
 //! terminal row that changed, the rows a commit applied while its acknowledgment was lost, the
-//! terminal rows each commit wrote and those it left `working`, the most questions pending at
-//! once.
+//! terminal rows each commit wrote and those it left `working`, the tasks that held a question
+//! and the most questions pending at once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -31,6 +31,10 @@ pub struct Ledger {
     pub left_working: Vec<(u64, String)>,
     /// Tasks a committed handler invocation answered `Working`.
     pub answered_working: BTreeSet<String>,
+    /// Tasks a client asked to cancel.
+    pub client_canceled: BTreeSet<String>,
+    /// Tasks seen waiting on a question the lane holds.
+    pub asked: BTreeSet<String>,
     /// The most questions pending at once, and which.
     pub most_pending: Vec<String>,
     pub lost_acks: u64,
@@ -173,6 +177,7 @@ impl Database {
             .filter(|(_, (s, ask))| *s == TaskState::InputRequired && *ask)
             .map(|(id, _)| id.clone())
             .collect();
+        ledger.asked.extend(pending.iter().cloned());
         if pending.len() > ledger.most_pending.len() {
             ledger.most_pending = pending;
         }
