@@ -89,7 +89,11 @@ struct TrackerState {
     capturing: bool,
     selected: Option<PlaybackSegment>,
     pending: VecDeque<PlaybackSegment>,
+    /// The highest key begun: a begun key is never reused.
     highest_segment: u64,
+    /// The tracker's own keys (attachment 0) for audio captured with none begun, apart from the
+    /// begun ones so they never take a key the session will hand out.
+    unkeyed_segments: u64,
     /// Counts for waits latched at entry; keyed reports additionally enforce FIFO completion.
     segments: u64,
     finished: u64,
@@ -145,6 +149,7 @@ impl PlaybackTracker {
                 selected: None,
                 pending: VecDeque::new(),
                 highest_segment: 0,
+                unkeyed_segments: 0,
                 segments: 0,
                 finished: 0,
                 last: PlaybackFinished::default(),
@@ -273,11 +278,13 @@ impl PlaybackTracker {
         if !s.capturing {
             s.capturing = true;
             s.segments += 1;
-            let segment = s.selected.unwrap_or(PlaybackSegment {
-                attachment: 0,
-                segment: s.highest_segment.saturating_add(1),
-            });
-            s.highest_segment = s.highest_segment.max(segment.segment);
+            let segment = match s.selected {
+                Some(segment) => segment,
+                None => {
+                    s.unkeyed_segments += 1;
+                    PlaybackSegment { attachment: 0, segment: s.unkeyed_segments }
+                }
+            };
             s.selected = Some(segment);
             s.pending.push_back(segment);
             // A new segment: what was heard of the previous one is not this one's position.
@@ -998,5 +1005,19 @@ mod playback_identity_regression {
         let finished = PlaybackFinished::default();
         assert!(!tracker.playback_finished(old, finished.clone()));
         assert!(tracker.playback_finished(new, finished));
+    }
+
+    /// A reset mid-capture leaves the rest of the audio a segment the session never keyed; its
+    /// number must not take the key the session hands the next speech (seed 477 refused that
+    /// speech's output after its words were forwarded).
+    #[test]
+    fn audio_captured_after_a_reset_does_not_take_the_next_speechs_key() {
+        let tracker = PlaybackTracker::new();
+        assert!(tracker.begin_segment(PlaybackSegment { attachment: 4, segment: 1 }));
+        tracker.note_capture();
+        tracker.reset();
+        tracker.note_capture();
+        tracker.note_flush();
+        assert!(tracker.begin_segment(PlaybackSegment { attachment: 4, segment: 2 }));
     }
 }
