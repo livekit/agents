@@ -35,8 +35,12 @@ fn generated_recorder_is_the_runtime_tap_and_finalizes_a_readable_ogg_file() {
     // room does, then finalize through its declared host method on a real asyncio loop.
     let samples =
         (0..4800).map(|sample| ((sample * 37) % 20_000) as i16 - 10_000).collect::<Vec<_>>();
-    let frame =
-        lk_agents_abi::AudioFrame::new(lk_agents_media::pcm_bytes(&samples), 48_000, 1, 4800);
+    let frame = lk_agents_abi::AudioFrame::new(
+        lk_agents_runtime::media::pcm_bytes(&samples),
+        48_000,
+        1,
+        4800,
+    );
     tap.on_input_frame(0.1, &frame);
     tap.flush(0.1).unwrap();
     Python::attach(|py| {
@@ -58,11 +62,11 @@ fn generated_recorder_is_the_runtime_tap_and_finalizes_a_readable_ogg_file() {
     drop(object);
     let mut reader = std::fs::File::open(&path).unwrap();
     let mut samples = 0_usize;
-    lk_agents_media::ffmpeg::decode_stream(
+    lk_agents_runtime::media::ffmpeg::decode_stream(
         Some("ogg"),
         48_000,
         2,
-        lk_agents_media::decoder::DecodeLimits {
+        lk_agents_runtime::media::decoder::DecodeLimits {
             min_sample_rate: 8000,
             max_sample_rate: 192000,
             max_channels: 2,
