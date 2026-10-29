@@ -12,6 +12,8 @@ struct Host {
     joining: Arc<tokio::sync::Notify>,
     closing: Arc<tokio::sync::Notify>,
     release_close: Arc<tokio::sync::Semaphore>,
+    /// Holds the host's start until released.
+    start_gate: Option<Arc<tokio::sync::Semaphore>>,
     fail_start: bool,
     fail_close: bool,
 }
@@ -23,6 +25,7 @@ impl Host {
             joining: Arc::default(),
             closing: Arc::default(),
             release_close: Arc::new(tokio::sync::Semaphore::new(0)),
+            start_gate: None,
             fail_start: false,
             fail_close: false,
         }
@@ -40,8 +43,14 @@ impl ServerHost for Host {
         async { Ok(0.0) }.boxed()
     }
     fn start(&self, _: ProcessStartOptions) -> BoxFuture<'_, Result<(), HostError>> {
-        let fail = self.fail_start;
-        async move { if fail { Err("pool warmup timed out".into()) } else { Ok(()) } }.boxed()
+        let (fail, gate) = (self.fail_start, self.start_gate.clone());
+        async move {
+            if let Some(gate) = gate {
+                let _permit = gate.acquire().await.unwrap();
+            }
+            if fail { Err("pool warmup timed out".into()) } else { Ok(()) }
+        }
+        .boxed()
     }
     fn started(&self) -> BoxFuture<'_, Result<(), HostError>> {
         self.started.notify_one();
@@ -121,6 +130,34 @@ async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
     assert_eq!(first_drain.await, Err("server closed during drain".into()));
     assert_eq!(second_drain.await, Err("server closed during drain".into()));
     assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+}
+
+#[tokio::test]
+async fn a_drain_asked_during_startup_starts_once_the_server_runs() {
+    let mut host = Host::new();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    host.start_gate = Some(gate.clone());
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::blocking_io()));
+    let run = runtime.run(options());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Starting);
+    let drain = runtime.drain(None);
+    tokio::pin!(drain);
+    assert!(futures_util::poll!(&mut drain).is_pending());
+    let joining = host.joining.notified();
+    tokio::pin!(joining);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut joining).await.is_err(),
+        "the drain began before the server ran"
+    );
+    gate.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(1), &mut joining).await.unwrap();
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Draining);
+    assert_eq!(runtime.close().await, Ok(()));
+    assert_eq!(drain.await, Err("server closed during drain".into()));
+    assert_eq!(run.await, Ok(()));
 }
 
 #[tokio::test]
