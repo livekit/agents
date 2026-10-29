@@ -372,6 +372,22 @@ fn a_concurrent_message_canceled_before_its_turn_does_not_run() {
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
 }
 
+/// A2A_SEED=752 (request_answered_once, Inbox): a batch receipt's kept lease lapsed while it
+/// debounced and another worker drained its message; its release then found no lease and the
+/// request looped reading an empty inbox forever. A taken lease ends the drain: the task is
+/// watched.
+#[test]
+fn a_kept_lease_another_holder_took_ends_the_drain() {
+    let mut m = machine(Policy::Batch);
+    m.phase = Phase::Release;
+    m.leased = true;
+    m.pending = Some(1);
+    let taken = StorageError::LeaseLost("taken".into());
+    let next = operation(at(&mut m, Duration::ZERO, Err(taken)));
+    assert!(matches!(&next, Operation::ReadTask(t) if t == "receipt"), "{next:?}");
+    assert!(!m.leased);
+}
+
 fn row_of(status: TaskState) -> TaskRow {
     row(status)
 }

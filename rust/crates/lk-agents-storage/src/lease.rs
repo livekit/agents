@@ -115,9 +115,17 @@ impl Lease {
         Ok(())
     }
 
-    /// Releases when no inbox row is pending past `drained_id`; `true` when released.
+    /// Releases when no inbox row is pending past `drained_id`; `true` when released. A row
+    /// pending keeps the lease, extended; a lease another holder took is `LeaseLost`.
     pub async fn release_if_drained(&self) -> Result<bool, StorageError> {
-        Ok(self.inner.db.exec(db::release_if_drained(&self.inner.fence)).await? > 0)
+        let (db, fence) = (&self.inner.db, &self.inner.fence);
+        if db.exec(db::release_if_drained(fence)).await? > 0 {
+            return Ok(true);
+        }
+        if db.exec(db::extend(fence, db.timing.secs())).await? == 0 {
+            return Err(StorageError::LeaseLost(format!("lease on lane {} was taken", fence.lane)));
+        }
+        Ok(false)
     }
 }
 

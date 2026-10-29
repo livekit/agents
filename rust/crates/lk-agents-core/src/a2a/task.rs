@@ -1008,6 +1008,12 @@ impl TaskMachine {
                 let then = Phase::Answer { reason: Some(REASON_LEASE_TIMEOUT) };
                 self.fail_task(self.task_id.clone(), REASON_LEASE_TIMEOUT, then)
             }
+            (Phase::Release, StorageError::LeaseLost(_)) => {
+                // the kept lease lapsed and another holder took the lane: it drains what is
+                // pending, and this message's task is watched
+                self.leased = false;
+                self.observe()
+            }
             (Phase::Observe | Phase::Inbox, StorageError::Unavailable(_)) => {
                 // a durable task is watched through a transient failure, not given up on
                 return Ok(self.poll(now));
