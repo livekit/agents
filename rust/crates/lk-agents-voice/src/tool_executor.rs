@@ -304,7 +304,7 @@ pub(crate) struct Handling {
     pub(crate) step: u32,
     /// With its `executed` event, as issued.
     pub(crate) tools: StepTools,
-    pub(crate) verdict: tokio::sync::oneshot::Sender<ToolsVerdict>,
+    pub(crate) verdict: crate::agent_session::RequestId,
 }
 
 /// A finished tool step, as the driver commits it.
@@ -788,7 +788,7 @@ impl Driver {
         speech: SpeechId,
         step: u32,
         tools: StepTools,
-        verdict: Option<tokio::sync::oneshot::Sender<ToolsVerdict>>,
+        verdict: Option<crate::agent_session::RequestId>,
         hosted: bool,
         out: &mut Out,
     ) {
@@ -872,7 +872,10 @@ impl Driver {
             out.machine().emit(SessionEvent::FunctionToolsExecuted(executed.clone()));
         }
         if let Some(verdict) = verdict {
-            let _ = verdict.send(ToolsVerdict { executed: *executed });
+            out.answer(
+                Some(verdict),
+                crate::agent_session::Answer::ToolsVerdict(ToolsVerdict { executed: *executed }),
+            );
         }
     }
 

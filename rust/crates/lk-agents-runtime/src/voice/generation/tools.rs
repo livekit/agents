@@ -403,9 +403,10 @@ pub(crate) async fn run_tools(
     // A host running hooks runs the event's handlers before the step goes on: they may cancel the
     // reply or the handoff. A loop gone answers nothing, and nothing
     // changed.
-    let (tx, rx) = tokio::sync::oneshot::channel();
     let waits = shared.hook_host && decision.tools_executed.is_some();
-    shared.report(GenEvent::ToolsFinished {
+    let waiting =
+        waits.then(|| shared.open_call(lk_agents_voice::agent_session::Answer::tools_verdict));
+    let finished = GenEvent::ToolsFinished {
         speech: handle.id(),
         step: handle.num_steps(),
         tools: lk_agents_voice::tool_executor::StepTools {
@@ -415,10 +416,15 @@ pub(crate) async fn run_tools(
             deliveries: decision.deliveries.clone(),
             retries_exceeded: decision.retries_exceeded.clone(),
         },
-        verdict: waits.then_some(tx),
-    });
-    if waits && let Ok(verdict) = rx.await {
-        decision = decision.settle(verdict.executed);
+        verdict: waiting.as_ref().map(|(call, _)| call.id),
+    };
+    if let Some((call, verdict)) = waiting {
+        shared.report_awaited(finished, call);
+        if let Ok(verdict) = verdict.await {
+            decision = decision.settle(verdict.executed);
+        }
+    } else {
+        shared.report(finished);
     }
     Some(decision)
 }

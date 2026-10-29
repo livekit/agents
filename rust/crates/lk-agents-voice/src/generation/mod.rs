@@ -837,7 +837,7 @@ pub enum GenEvent {
         step: u32,
         tools: crate::tool_executor::StepTools,
         /// With `tools.executed`: the step waits here for the event's handlers (a host round trip).
-        verdict: Option<tokio::sync::oneshot::Sender<crate::tool_executor::ToolsVerdict>>,
+        verdict: Option<crate::agent_session::RequestId>,
     },
 
     ToolStep {
