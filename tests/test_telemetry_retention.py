@@ -74,7 +74,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     from types import SimpleNamespace
     from typing import cast
 
-    from livekit.agents import Agent, _core
+    from livekit.agents import Agent
     from livekit.agents.job import JobContext
     from livekit.protocol import agent as job_protocol
 
@@ -90,7 +90,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     monkeypatch.setattr(agent_session, "get_job_context", lambda **_: owner)
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
-        await session.start(Agent(instructions="desk"), room=_core.OfflineRoom("retention"))
+        await session.start(Agent(instructions="desk"), room=None)
         session.emit(
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript="retained within budget", is_final=True),

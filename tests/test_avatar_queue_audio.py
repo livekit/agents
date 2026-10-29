@@ -136,7 +136,7 @@ async def test_clear_accounting_matches_the_real_runner(
 
         async def _core_next_audio(self):
             observation = await super()._core_next_audio()
-            if self.first and isinstance(observation[2], rtc.AudioFrame):
+            if self.first and isinstance(observation[3], rtc.AudioFrame):
                 self.first = False
                 # Exactly the race: the host yielded a tagged frame, then clear reaches
                 # the native owner before this asynchronous result crosses the boundary.
