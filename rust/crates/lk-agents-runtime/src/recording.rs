@@ -1,6 +1,7 @@
 //! One admitted worker owns a recording's PCM, encoder and ordered writes. Ingress only retains
 //! bounded frame references; terminal status is published after the worker and file have settled.
 
+#[cfg(any(test, feature = "media-ffmpeg"))]
 use std::io::Write;
 #[cfg(feature = "media-ffmpeg")]
 use std::path::PathBuf;
@@ -10,23 +11,31 @@ use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::AudioRecorder;
-use lk_agents_media::recorder::{
-    FileLimits, OggOpusEncoder, RecordingCommand, RecordingFile, RecordingLimits,
-};
-use tokio::sync::{RwLock, mpsc, oneshot, watch};
-
+#[cfg(any(test, feature = "media-ffmpeg"))]
+use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
+use lk_agents_media::recorder::{RecordingCommand, RecordingLimits};
+#[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
 
 type Outcome = Result<RecordingSummary, RecordingFailure>;
 
+#[cfg_attr(
+    not(any(test, feature = "media-ffmpeg")),
+    expect(dead_code, reason = "only the recording worker reads commands")
+)]
 enum Command {
     Record(RecordingCommand),
     Flush(f64, Option<oneshot::Sender<Outcome>>),
     Abandon,
 }
 
+#[cfg_attr(
+    not(any(test, feature = "media-ffmpeg")),
+    expect(dead_code, reason = "only the recording worker reads commands")
+)]
 struct Queued {
     command: Command,
     bytes: usize,
@@ -40,6 +49,7 @@ struct Shared {
     cleanup_reported: AtomicBool,
     commands: AtomicUsize,
     queued_bytes: AtomicUsize,
+    #[cfg(any(test, feature = "media-ffmpeg"))]
     retained_bytes: AtomicUsize,
     failure: OnceLock<RecordingFailure>,
     status: watch::Sender<RecordingStatus>,
@@ -57,6 +67,7 @@ pub struct SessionRecorder {
 }
 
 impl Shared {
+    #[cfg(any(test, feature = "media-ffmpeg"))]
     fn check_failure(&self) -> Result<(), RecordingFailure> {
         self.failure.get().cloned().map_or(Ok(()), Err)
     }
@@ -111,6 +122,7 @@ impl SessionRecorder {
         Ok(recorder)
     }
 
+    #[cfg(any(test, feature = "media-ffmpeg"))]
     fn start_with<E, W>(
         workers: &MediaWorkers,
         sample_rate: u32,
@@ -396,6 +408,7 @@ impl AudioRecorder for SessionRecorder {
     }
 }
 
+#[cfg(any(test, feature = "media-ffmpeg"))]
 fn run<E: OggOpusEncoder, W: Write>(
     mut file: RecordingFile<E, W>,
     rx: mpsc::Receiver<Queued>,
@@ -411,6 +424,7 @@ fn run<E: OggOpusEncoder, W: Write>(
     outcome
 }
 
+#[cfg(any(test, feature = "media-ffmpeg"))]
 fn process<E: OggOpusEncoder, W: Write>(
     file: &mut RecordingFile<E, W>,
     mut rx: mpsc::Receiver<Queued>,
