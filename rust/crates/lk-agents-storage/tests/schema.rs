@@ -1,17 +1,16 @@
 //! Schema initialization reconciles authoritative metadata, independent of server diagnostic text.
 
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
-use lk_agents_storage::sqlite::FileConnection;
-use lk_agents_storage::{CommitOptions, RunOptions, SqliteConnection, Thread, ThreadDb};
 use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement};
+use lk_agents_storage::sqlite::FileConnection;
+use lk_agents_storage::testing::Backend;
+use lk_agents_storage::{CommitOptions, RunOptions, SqliteConnection, Thread};
 use lk_agents_storage::{StorageError, db, run::RunOutcome};
 use serde_json::json;
-use lk_agents_storage::testing::Backend;
 
 struct Diagnostics {
     primary: Arc<FileConnection>,
@@ -70,15 +69,15 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
         contender_version: version,
     });
     let result = async {
-        let database = ThreadDb::new(
+        let thread = Thread::new(
             diagnostics.clone(),
             "AT_schema_probe",
             LeaseTiming::default(),
             SchemaCell::default(),
+            "schema-worker",
         )
         .await?;
         diagnostics.reword.store(true, Ordering::Relaxed);
-        let thread = Thread::new(database, "schema-worker");
         let lane = thread.lane("desk");
         let mut run = lane.open(RunOptions::new("schema-run", "AST_schema")).await?;
         run.state = Some(json!({"saved": true}));

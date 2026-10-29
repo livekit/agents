@@ -11,7 +11,7 @@ use lk_agents_net::task::OwnedTask;
 use tokio::sync::watch;
 
 use crate::db::{self, EventWrite};
-use crate::engine::ThreadDb;
+use crate::engine::Thread;
 use crate::{Fence, StorageError};
 
 pub use lk_agents_abi::storage::thread::LanePoll;
@@ -24,7 +24,7 @@ pub struct Lease {
 }
 
 struct Held {
-    db: ThreadDb,
+    db: Thread,
     fence: Fence,
     /// Why the lease was lost, once it was.
     lost: Arc<watch::Sender<Option<String>>>,
@@ -33,7 +33,7 @@ struct Held {
 }
 
 impl Lease {
-    pub(crate) fn new(db: ThreadDb, fence: Fence) -> Self {
+    pub(crate) fn new(db: Thread, fence: Fence) -> Self {
         let (lost, _) = watch::channel(None);
         Self {
             inner: Arc::new(Held { db, fence, lost: Arc::new(lost), renewal: Mutex::new(None) }),

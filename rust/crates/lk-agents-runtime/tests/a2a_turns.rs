@@ -686,7 +686,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     let fx = backend.fixture(lease).await;
     let a = fx.thread("worker-a").await;
     let lane_a = a.lane(LANE);
-    let db = lane_a.db();
+    let db = &lane_a;
     let message = user_message("first", "m1", Some("sms"), None);
     let data = TaskData { history: vec![message.clone()], ..TaskData::default() };
 
@@ -919,7 +919,6 @@ async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
         // a resend of the message inserts no second row
         let inserted = b
             .lane(LANE)
-            .db()
             .submit(&TaskWrite {
                 task_id: "AST_other".into(),
                 status: TaskState::Submitted,

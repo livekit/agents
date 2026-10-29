@@ -59,7 +59,7 @@ impl VoiceStore {
         let snapshot = async {
             let lane = thread.lane(&lane);
             let history =
-                if explicit_history.is_none() { lane.db().history().await? } else { Vec::new() };
+                if explicit_history.is_none() { lane.history().await? } else { Vec::new() };
             let version = lane.info().await?.map_or(0, |lane| lane.version);
             Ok::<_, StorageError>((history, version))
         }

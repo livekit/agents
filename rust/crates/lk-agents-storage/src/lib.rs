@@ -34,7 +34,7 @@ use livekit_protocol::agent::agent_thread::{
 };
 
 pub use db::{Commit, Committed, EventWrite, Fence, TaskQuery};
-pub use engine::{CommitOptions, Lane, LaneDb, Run, RunOptions, Tasks, Thread, ThreadDb};
+pub use engine::{CommitOptions, Lane, Run, RunOptions, Tasks, Thread};
 pub use lease::Lease;
 pub use run::{ItemRow, RunOutcome, TaskState};
 pub use streams::{LocalStreams, QueuedStreams, ResponseStreams, StreamRead};

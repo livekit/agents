@@ -16,7 +16,7 @@ use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter};
 use crate::engine::{LeaseTiming, SchemaCell};
 use crate::sql::{BatchResult, Row, Statement};
 use crate::sqlite::{FileConnection, SqliteStorage};
-use crate::{SqliteConnection, Storage, Thread, ThreadDb, shortuuid};
+use crate::{SqliteConnection, Storage, Thread, shortuuid};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Backend {
@@ -211,9 +211,10 @@ impl Fixture {
             unreachable_for: std::sync::Mutex::new(None),
             unreachable_until: std::sync::Mutex::new(None),
         });
-        let db = ThreadDb::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default())
-            .await
-            .unwrap();
-        (Thread::new(db, holder), faulty)
+        let thread =
+            Thread::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default(), holder)
+                .await
+                .unwrap();
+        (thread, faulty)
     }
 }

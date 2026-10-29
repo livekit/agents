@@ -84,8 +84,8 @@ async fn sqlite_restart_keeps_references_but_no_inline_upload_in_task_or_inbox()
         let result = turn.run(json!({"messageId": "inline", "role": "ROLE_USER", "parts": [{"raw": "dXBsb2FkZWQgYnl0ZXM=", "mediaType": mime}]}), None).await;
         assert!(matches!(result, Err(StorageError::Invalid(_))));
     }
-    assert!(thread.lane("desk").db().tasks(None, 10).await.unwrap().is_empty());
-    assert!(thread.lane("desk").db().inbox(false).await.unwrap().is_empty());
+    assert!(thread.lane("desk").tasks(None, 10).await.unwrap().is_empty());
+    assert!(thread.lane("desk").inbox(false).await.unwrap().is_empty());
     let parts = json!([
         {"text": "review"},
         {"url": "private photo reference", "mediaType": "image/png", "filename": "photo.png"},
@@ -105,7 +105,7 @@ async fn sqlite_restart_keeps_references_but_no_inline_upload_in_task_or_inbox()
     let thread = reopened.open(&created.thread_id, "second-worker").await.unwrap();
     let task = thread.task(&task_id).await.unwrap().unwrap();
     assert_eq!(serde_json::to_value(&task.data.history[0]).unwrap()["parts"], parts);
-    let inbox = thread.lane("desk").db().inbox(false).await.unwrap();
+    let inbox = thread.lane("desk").inbox(false).await.unwrap();
     assert!(inbox.is_empty(), "the successful turn drained its inbox rows");
     let durable = serde_json::to_string(&task).unwrap() + &serde_json::to_string(&inbox).unwrap();
     assert!(!durable.contains("dXBsb2FkZWQgYnl0ZXM="));

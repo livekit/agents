@@ -58,7 +58,7 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     assert!(matches!(store.acquire(2, Vec::new()).await, Err(StorageError::LeaseLost(_))));
     store.abort(1).await.unwrap();
     let thread = fixture.thread("reader").await;
-    assert!(thread.lane("desk").db().history().await.unwrap().is_empty());
+    assert!(thread.lane("desk").history().await.unwrap().is_empty());
     let restored =
         ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
             .await

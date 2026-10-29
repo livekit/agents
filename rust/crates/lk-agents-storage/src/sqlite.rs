@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::StorageError;
 use crate::db;
-use crate::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
+use crate::engine::{LeaseTiming, SchemaCell, Thread};
 use crate::sql::{BatchResult, Row, SqlValue, Statement};
 use crate::streams::{LocalStreams, ResponseStreams};
 use crate::{SqliteConnection, Storage, shortuuid};
@@ -461,8 +461,7 @@ impl Storage for SqliteStorage {
                 Arc::new(MemoryConnection(connection))
             }
         };
-        let db = ThreadDb::new(connection, thread_id, self.lease, SchemaCell::default()).await?;
-        Ok(Thread::new(db, holder))
+        Thread::new(connection, thread_id, self.lease, SchemaCell::default(), holder).await
     }
 
     fn response_streams(&self) -> Arc<dyn ResponseStreams> {

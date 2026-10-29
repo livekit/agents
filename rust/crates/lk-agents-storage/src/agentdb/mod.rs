@@ -19,7 +19,7 @@ use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
 
-use crate::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
+use crate::engine::{LeaseTiming, SchemaCell, Thread};
 use crate::{SqliteConnection, Storage};
 pub use conn::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
 pub use streams::{StreamReader, Streams};
@@ -206,8 +206,7 @@ impl AgentDbStorage {
             pool: self.pool.clone(),
             closed: AtomicBool::new(false),
         };
-        let db = ThreadDb::new(Arc::new(pooled), thread_id, self.opts.lease, schema).await?;
-        Ok(Thread::new(db, holder))
+        Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, holder).await
     }
 }
 

@@ -193,7 +193,7 @@ impl PyThread {
         check_pid()?;
         let lane = self.inner.lane(lane);
         crate::host::future_into_py(py, async move {
-            let rows = lane.db().inbox(pending).await.map_err(to_py_err)?;
+            let rows = lane.inbox(pending).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, rows, crate::generated::records::storage_class::inbox_row_to_py)
             })

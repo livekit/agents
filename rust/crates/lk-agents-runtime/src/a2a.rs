@@ -181,14 +181,13 @@ impl Turn {
         machine: &TaskMachine,
         operation: Operation,
     ) -> Result<Completion, StorageError> {
-        let db = call.lane.db().clone();
         Ok(match operation {
             Operation::FindReceipt(message_id) => {
-                Completion::Task(db.task_for_message(&message_id).await?)
+                Completion::Task(call.lane.task_for_message(&message_id).await?)
             }
             Operation::FindTarget(task_id) => Completion::Task(self.thread.task(&task_id).await?),
             Operation::ReadTask(task_id) => Completion::Task(call.lane.task(&task_id).await?),
-            Operation::Submit(task) => Completion::Submitted(db.submit(&task).await?),
+            Operation::Submit(task) => Completion::Submitted(call.lane.submit(&task).await?),
             Operation::Receive { message, task } => {
                 let input = ReceiveInput {
                     task_id: &task.task_id,
@@ -196,7 +195,7 @@ impl Turn {
                     data: &task.data,
                     internal: task.internal.as_ref(),
                 };
-                let (received, lease) = db.receive(self.thread.holder(), input).await?;
+                let (received, lease) = call.lane.receive(self.thread.holder(), input).await?;
                 call.lease = lease;
                 match received {
                     Receive::Duplicate(existing) => Completion::Received {
@@ -245,12 +244,12 @@ impl Turn {
                 call.run = Some(run);
                 opened
             }
-            Operation::ReadInbox => Completion::Inbox(db.inbox(true).await?),
-            Operation::Pickup(task_id) => Completion::Picked(db.pickup(&task_id).await?),
+            Operation::ReadInbox => Completion::Inbox(call.lane.inbox(true).await?),
+            Operation::Pickup(task_id) => Completion::Picked(call.lane.pickup(&task_id).await?),
             Operation::ReadWorking => Completion::Tasks(call.run()?.tasks.working().await?),
             Operation::FailOrphans { reason, failed } => {
                 for (task_id, message) in failed {
-                    db.fail_orphan(&task_id, &message).await?;
+                    call.lane.fail_orphan(&task_id, &message).await?;
                     log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
                 }
                 Completion::Done
@@ -321,7 +320,7 @@ impl Turn {
                 let holder = call.run()?.holder.clone();
                 let mut rows = Vec::with_capacity(task_ids.len());
                 for task_id in &task_ids {
-                    rows.push(db.checkpoint(task_id).await?);
+                    rows.push(call.lane.checkpoint(task_id).await?);
                 }
                 Completion::Checkpoint { holder, rows }
             }
@@ -390,7 +389,7 @@ impl Turn {
         self.resolvers.spawn(async move {
             match run.resolve_later().await {
                 Some(Err(e)) if rejected_commit(&e) => {
-                    if let Err(e) = lane.db().fail_orphan(&answer, &failed).await {
+                    if let Err(e) = lane.fail_orphan(&answer, &failed).await {
                         log::warn!(target: "livekit.agents", taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
                     }
                 }

@@ -149,7 +149,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert_eq!((info.version, info.drained_id, info.lease_until), (2, 0, 0));
     assert_eq!(s2.lanes().await.unwrap().len(), 1);
     assert!(s2.events(0, 100).await.unwrap().len() >= 5);
-    assert!(lane.db().inbox(true).await.unwrap().is_empty());
+    assert!(lane.inbox(true).await.unwrap().is_empty());
     fx.cleanup(&[&s1, &s2]).await;
 }
 
@@ -337,7 +337,7 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     let s1 = fx.thread("w1").await;
     let s2 = fx.thread("w2").await;
     let lane = s1.lane(LANE);
-    lane.db().submit(&submitted("AST_1")).await.unwrap();
+    lane.submit(&submitted("AST_1")).await.unwrap();
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     let canceled = s2.lane(LANE).cancel_task("AST_1", metadata("client")).await.unwrap();
     assert_eq!(canceled.unwrap().status, TaskState::Canceled);
@@ -369,7 +369,7 @@ async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
         .commit(Default::default())
         .await
         .unwrap();
-    lane.db().submit(&submitted("AST_1")).await.unwrap();
+    lane.submit(&submitted("AST_1")).await.unwrap();
     let opts = RunOptions { exclusive: false, pickup: true, ..RunOptions::new("r1", "AST_1") };
     let mut run = lane.open(opts).await.unwrap();
     assert!(run.picked_up);
@@ -419,7 +419,7 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
         .await
         .unwrap();
     for task_id in ["AST_first", "AST_second"] {
-        assert!(lane.db().submit(&submitted(task_id)).await.unwrap());
+        assert!(lane.submit(&submitted(task_id)).await.unwrap());
     }
     let second = || RunOptions { wait: false, pickup: true, ..RunOptions::new("r2", "AST_second") };
     let refused = lane.open(second()).await.err().expect("the older waiter goes first");
@@ -567,7 +567,7 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     for id in ["AST_1", "AST_2", "AST_3", "AST_4", "AST_5"] {
-        assert!(lane.db().submit(&submitted(id)).await.unwrap());
+        assert!(lane.submit(&submitted(id)).await.unwrap());
     }
     tokio::time::sleep(Duration::from_millis(5)).await;
     lane.cancel_task("AST_2", Default::default()).await.unwrap();
