@@ -158,7 +158,6 @@ async def test_on_a_call_the_experts_progress_is_spoken_and_its_answer_told(
     assert spoken(session) == ["Checking the calendar now.", "We have 10 slots."]
 
 
-@pytest.mark.xfail(strict=True, reason='R58: any newer item reads as "may be covered"')
 @pytest.mark.rule("R58")
 async def test_a_result_after_only_the_persons_words_is_told_as_new() -> None:
     """The result landed while the call was busy and the person spoke after it: no reply had

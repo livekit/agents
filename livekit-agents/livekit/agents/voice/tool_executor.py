@@ -907,16 +907,19 @@ class _CallSink:
             chat_ctx = target_activity._chat_ctx.copy()
             chat_ctx.insert(items_to_insert)
 
-        # if the update is still the tail, the agent hasn't spoken since: summarize
-        # directly; otherwise let the LLM decide whether it already covered this
-        at_tail = (items := target_activity._chat_ctx.items) and items[-1].id == pending_items[
-            -1
-        ].id
+        # only a reply made after the results landed had them in front of it and may have told
+        # them; the person's words after them tell nothing
+        items = target_activity._chat_ctx.items
+        landed = {item.id for item in pending_items}
+        first = next((n for n, item in enumerate(items) if item.id in landed), len(items))
+        at_tail = not any(
+            item.type == "message" and item.role == "assistant" for item in items[first + 1 :]
+        )
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
         tool_choice = _reply_tool_choice(u.tool_choice for u in updates)
         speech = session.generate_reply(
             instructions=_reply_instructions(
-                self._executor._tool_options, at_tail=bool(at_tail), call_ids=call_ids
+                self._executor._tool_options, at_tail=at_tail, call_ids=call_ids
             ),
             tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
             chat_ctx=chat_ctx,
