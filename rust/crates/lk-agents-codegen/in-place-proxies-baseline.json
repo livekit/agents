@@ -1,12 +1,6 @@
 [
-  "::lk_agents_abi::a2a::turn::TurnHost",
-  "::lk_agents_abi::agent::AgentHost",
   "::lk_agents_abi::agent::HostInstructions",
-  "::lk_agents_abi::evals::EvaluationHost",
-  "::lk_agents_abi::llm::fallback::ChainObserver",
   "::lk_agents_abi::Llm",
-  "::lk_agents_abi::llm::mcp::McpTransport",
-  "::lk_agents_abi::llm::mcp::McpProgress",
   "::lk_agents_abi::llm::tool_executor::HostToolRunner",
   "::lk_agents_abi::Stt",
   "::lk_agents_abi::Tts",
@@ -25,6 +19,5 @@
   "::lk_agents_abi::voice::session_effects::SessionHooks",
   "::lk_agents_abi::voice::session_effects::SessionEvents",
   "::lk_agents_abi::worker::job::SessionJob",
-  "::lk_agents_abi::worker::remote_session::SessionPort",
-  "::lk_agents_abi::worker::cli::DevServer"
+  "::lk_agents_abi::worker::remote_session::SessionPort"
 ]

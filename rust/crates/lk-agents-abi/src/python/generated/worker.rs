@@ -154,10 +154,3 @@ impl crate::python::HostProxy for dyn ::lk_agents_abi::worker::remote_session::S
         crate::python::declared_proxy::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(obj)
     }
 }
-
-// Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::worker::cli::DevServer {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::worker::cli::DevServer>(obj)
-    }
-}

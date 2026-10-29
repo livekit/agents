@@ -177,31 +177,10 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Too
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::fallback::ChainObserver {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::Llm {
     fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::Llm>(obj)
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::mcp::McpTransport {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::mcp::McpProgress {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
     }
 }
 

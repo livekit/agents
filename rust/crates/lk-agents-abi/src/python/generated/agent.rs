@@ -56,13 +56,6 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::agent::run::RunError {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/agent.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::agent::AgentHost {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::agent::AgentHost>(obj)
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/agent.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::agent::HostInstructions {
     fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::agent::HostInstructions>(obj)

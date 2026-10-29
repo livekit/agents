@@ -22,7 +22,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/python/conversion_tests.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/a2a.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/agent.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/evals.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/llm.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/mod.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/stt.rs",

@@ -161,10 +161,3 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::client::Message {
         MESSAGE.import(py, "livekit.agents._generated.a2a_client", "Message")?.call((), Some(&kwargs))
     }
 }
-
-// Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::a2a::turn::TurnHost {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
-    }
-}

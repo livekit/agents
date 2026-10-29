@@ -6,7 +6,7 @@ use std::sync::Arc;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
-use lk_agents_abi::python::{Ambient, HostProxy, native};
+use lk_agents_abi::python::{Ambient, native};
 use lk_agents_abi::{HostRef, Realtime, RealtimeSession, Spawner, WallAnchor};
 use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
 use lk_agents_runtime::inference::realtime::native::fallback::{
@@ -37,7 +37,7 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
                 .collect::<PyResult<Vec<_>>>()?;
             let observer: Arc<dyn ChainObserver> = match on_availability {
                 Some(observer) => {
-                    <dyn ChainObserver as HostProxy>::from_host(&observer.into_pyobject(py)?)?
+                    crate::generated::llm::ChainObserverProxy::from_host(&observer.into_pyobject(py)?)?
                 }
                 None => Arc::new(IgnoreEvents),
             };

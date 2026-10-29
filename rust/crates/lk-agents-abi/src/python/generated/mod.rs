@@ -5,7 +5,6 @@
 
 mod a2a;
 mod agent;
-mod evals;
 mod llm;
 mod stt;
 mod telemetry;
