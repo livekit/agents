@@ -1,6 +1,4 @@
 [
-  "pyclass|rust/crates/lk-agents-abi/src/python/bridge.rs|mod cancelling::struct Completer|pyclass (frozen)",
-  "pyclass|rust/crates/lk-agents-abi/src/python/bridge.rs|mod cancelling::struct Starter|pyclass",
   "pyclass|rust/crates/lk-agents-py/src/runtime.rs|enum Role|pyclass (eq , eq_int , from_py_object , module = \"livekit.agents._core\")",
   "pyclass|rust/crates/lk-agents-py/src/turn.rs|struct PyRun|pyclass (name = \"Run\" , module = \"livekit.agents._core\" , frozen)",
   "pyclass|rust/crates/lk-agents-py/src/turn.rs|struct PyThread|pyclass (name = \"Thread\" , module = \"livekit.agents._core\" , frozen)",
@@ -9,8 +7,6 @@
   "pyfunction|rust/crates/lk-agents-py/src/runtime.rs|fn init|pyfunction",
   "pymethods|rust/crates/lk-agents-abi/src/llm/chat_context.rs|impl  for PyChatContent|pyo3 :: pymethods",
   "pymethods|rust/crates/lk-agents-abi/src/llm/chat_context.rs|impl  for PyChatItem|pyo3 :: pymethods",
-  "pymethods|rust/crates/lk-agents-abi/src/python/bridge.rs|mod cancelling::impl  for Completer|pymethods",
-  "pymethods|rust/crates/lk-agents-abi/src/python/bridge.rs|mod cancelling::impl  for Starter|pymethods",
   "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyRun|pymethods",
   "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyThread|pymethods",
   "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyTurn|pymethods"

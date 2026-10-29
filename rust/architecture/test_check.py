@@ -18,6 +18,7 @@ from check import (
     pyo3_violations,
     ratchet,
     read_baselines,
+    stale,
     tracked_rust_paths,
     use_violations,
     warning_violations,
@@ -264,6 +265,12 @@ class BaselineContracts(unittest.TestCase):
     def test_same_count_replacement_is_rejected(self):
         self.assertTrue(ratchet({"new"}, {"old"}))
         self.assertFalse(ratchet(set(), {"old"}))
+
+    def test_a_row_no_violation_matches_is_stale(self):
+        self.assertEqual(stale({"kept"}, {"kept", "gone"}), ["stale baseline row: gone"])
+        self.assertEqual(stale({"kept.rs": 1300}, {"kept.rs": 1400, "gone.rs": 1300}),
+                         ["stale baseline row: gone.rs"])
+        self.assertFalse(stale({"kept"}, {"kept"}))
 
     @patch("check.check_history", return_value=[])
     def test_first_sqlite_baseline_cannot_receive_retired_core_exemptions(self, history):

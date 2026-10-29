@@ -391,6 +391,11 @@ def ratchet(actual, baseline) -> list[str]:
     return errors
 
 
+def stale(actual, baseline) -> list[str]:
+    """A baseline row no current violation matches would let that violation return unseen."""
+    return [f"stale baseline row: {identity}" for identity in sorted(set(baseline) - set(actual))]
+
+
 def check_history(root: Path, path: str, current) -> list[str]:
     """Compare with every committed version, preventing removed identities from returning."""
     if git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
@@ -470,6 +475,7 @@ def check_boundaries() -> int:
     baseline, history_errors = read_baselines(root, DEPENDENCY_BASELINES)
     actual = dependency_violations(metadata)
     errors.extend(ratchet(actual, baseline))
+    errors.extend(stale(actual, baseline))
     errors.extend(history_errors)
     print(f"dependencies: {len(actual)} existing identities; baseline {len(baseline)}")
     for name, actual in (
@@ -483,6 +489,7 @@ def check_boundaries() -> int:
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())
         errors.extend(ratchet(actual, baseline))
+        errors.extend(stale(actual, baseline))
         errors.extend(check_history(root, path, baseline))
         print(f"{name}: {len(actual)} existing identities; baseline {len(baseline)}")
     for name in ("export-placement",):
@@ -1031,6 +1038,7 @@ def check_clippy() -> int:
         raise ValueError("core source changed during Clippy captures; rerun: " + ", ".join(changed))
     actual.update(site_inventory(root, helper, sorted(locations)))
     errors.extend(ratchet(actual, baseline))
+    errors.extend(stale(actual, baseline))
     for error in errors:
         print(error, file=sys.stderr)
     print(

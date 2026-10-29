@@ -55,11 +55,18 @@ pub fn check(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A baseline row no current violation matches is stale: it would let that violation return.
 fn validate(locations: Vec<(String, usize)>, baseline: &BTreeSet<String>) -> Result<(), String> {
+    let current: BTreeSet<_> = locations.iter().map(|(identity, _)| identity.as_str()).collect();
+    let stale = baseline
+        .iter()
+        .filter(|identity| !current.contains(identity.as_str()))
+        .map(|identity| format!("stale baseline row: {identity}"));
     let errors: Vec<_> = locations
-        .into_iter()
+        .iter()
         .filter(|(identity, _)| !baseline.contains(identity))
         .map(|(identity, line)| format!("{identity} (line {line})"))
+        .chain(stale)
         .collect();
     if errors.is_empty() {
         Ok(())
@@ -296,7 +303,7 @@ mod tests {
             let baseline = existing.iter().map(|(identity, _)| identity.clone()).collect();
             assert!(validate(existing, &baseline).is_ok());
             assert!(validate(violations(path, new).unwrap(), &baseline).is_err());
-            assert!(validate(Vec::new(), &baseline).is_ok());
+            assert!(validate(Vec::new(), &baseline).is_err(), "a stale row passed");
         }
         assert!(super::baseline("[\"same\", \"same\"]").is_err());
         assert!(super::baseline("[1]").is_err());
