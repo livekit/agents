@@ -198,15 +198,6 @@ fn headers(
         HeaderValue::from_static("text/event-stream, application/json"),
     );
     headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    for (name, value) in custom {
-        if ["accept", "mcp-session-id", "last-event-id"]
-            .iter()
-            .any(|reserved| name.as_str().eq_ignore_ascii_case(reserved))
-        {
-            return Err(Error::ReservedHeaderConflict(name.to_string()));
-        }
-        headers.insert(name, value);
-    }
     for (name, value) in [
         (SESSION, session.map(str::to_owned)),
         ("Last-Event-Id", last_event),
@@ -219,6 +210,15 @@ fn headers(
                     .map_err(|error| Error::UnexpectedServerResponse(error.to_string().into()))?,
             );
         }
+    }
+    for (name, value) in custom {
+        if ["accept", "mcp-session-id", "last-event-id"]
+            .iter()
+            .any(|reserved| name.as_str().eq_ignore_ascii_case(reserved))
+        {
+            return Err(Error::ReservedHeaderConflict(name.to_string()));
+        }
+        headers.insert(name, value);
     }
     Ok(headers)
 }
