@@ -191,6 +191,20 @@ pub trait SpawnerExt: Spawner {
         task.map(|_| ())
     }
 
+    /// Work nobody owns, by choice: it ends on its own and nothing waits for it or cancels it.
+    /// Each call site says why.
+    #[track_caller]
+    fn spawn_detached<F>(&self, work: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let work = Box::pin(async move { Box::new(work.await) as Box<dyn Any + Send> });
+        drop(
+            self.launch(Launch { work, settled: None, site: Location::caller() })
+                .into_abort_handle(),
+        );
+    }
+
     /// Unowned work with a cancel-only handle.
     #[track_caller]
     fn spawn_unboxed<F>(&self, work: F) -> AbortHandle
