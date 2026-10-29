@@ -33,7 +33,9 @@ fn steering_removed(
     }
     match nonverbals {
         None | Some(NonverbalSounds::Enabled(true)) => Vec::new(),
-        Some(NonverbalSounds::Enabled(false)) => table.iter().flat_map(|(_, l)| l.iter().copied()).collect(),
+        Some(NonverbalSounds::Enabled(false)) => {
+            table.iter().flat_map(|(_, l)| l.iter().copied()).collect()
+        }
         Some(NonverbalSounds::Per(flags)) => table
             .iter()
             .filter(|(f, _)| !enabled(flags, *f))
@@ -53,7 +55,7 @@ pub fn allowed_prosody(provider: Provider, steering: Option<&SpeechSteering>) ->
     provider.prosody().iter().copied().filter(|p| !removed.contains(p)).collect()
 }
 
-fn sound_guidance(sounds: &[&str]) -> String {
+pub(crate) fn sound_guidance(sounds: &[&str]) -> String {
     let mut hints: Vec<&'static str> = Vec::new();
     for sound in sounds {
         if let Some(hint) = sound_usage_hint(sound)

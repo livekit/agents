@@ -10,6 +10,7 @@ pub enum Provider {
     Xai,
     #[host(rename = "fishaudio")]
     FishAudio,
+    Gemini,
 }
 
 /// The unit steering turns non-verbal sounds off by.

@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 use fancy_regex::Regex;
 
 use crate::tts::markup::provider::{
-    FISHAUDIO_TONES, Provider, ProviderExt, XAI_WRAPPING, cartesia_prosody, fishaudio_sound_alias,
-    xai_sound_alias,
+    FISHAUDIO_TONES, GEMINI_PAUSE, GEMINI_SOUNDS, Provider, ProviderExt, XAI_WRAPPING,
+    cartesia_prosody, fishaudio_sound_alias, gemini_sound_alias, xai_sound_alias,
 };
 use crate::tts::markup::strip::{
     Captures, EXPRESSION_RE, LEADING_WS, WORD_BOUNDARY as B, compile, convert_expression_tags,
@@ -77,7 +77,8 @@ pub(crate) fn split_expr(text: &str) -> (String, Vec<ExpressiveTag>) {
     (clean, tags)
 }
 
-/// An unsupported type is a hallucination: its marker is dropped, its words kept.
+/// An unsupported type is a hallucination: its marker is dropped, its words kept. Gemini's
+/// `expression` marker is not text but the part's style, so it stays for the plugin to lift out.
 fn convert_expr(provider: Provider, text: &str) -> String {
     if !text.contains("<expr") && !text.contains("</expr") {
         return text.to_string();
@@ -119,12 +120,19 @@ fn convert_expr(provider: Provider, text: &str) -> String {
                     inner.to_string()
                 }
             }
+            // capitalizing is Gemini's one in-text stress control
+            Provider::Gemini if label == "emphasis" => inner.to_uppercase(),
+            Provider::Gemini => inner.to_string(),
         }
     });
 
     let text = sub_expr(&EXPR_SELF_RE, &text, |m| {
         let marker_type = attr(m, "type");
         let label = attr(m, "label");
+        if provider == Provider::Gemini && marker_type == "expression" {
+            let pre = m.name("pre").map_or(0, |p| p.as_str().len());
+            return m[0][pre..].to_string();
+        }
         match marker_type.as_str() {
             "expression" => match provider {
                 // Cartesia's discrete emotion vocabulary (instructions list it)
@@ -133,7 +141,7 @@ fn convert_expr(provider: Provider, text: &str) -> String {
                     format!("<expression value=\"{label}\"/>")
                 }
                 // xAI has no free-form delivery descriptions
-                Provider::Xai => String::new(),
+                Provider::Xai | Provider::Gemini => String::new(),
             },
             "sound" => match provider {
                 // no non-verbal sound support
@@ -148,7 +156,13 @@ fn convert_expr(provider: Provider, text: &str) -> String {
                     format!("<sound value=\"{l}\"/>")
                 }
                 Provider::Inworld => format!("<sound value=\"{label}\"/>"),
+                Provider::Gemini => {
+                    let l = py_strip(&label).to_lowercase();
+                    let l = gemini_sound_alias(&l).unwrap_or(&l);
+                    if GEMINI_SOUNDS.contains(&l) { format!("<{l}>") } else { String::new() }
+                }
             },
+            "break" if provider == Provider::Gemini => format!("<{GEMINI_PAUSE}>"),
             "break" => format!("<break time=\"{label}\"/>"),
             // Cartesia prosody is a self-closing point control (speed/volume)
             "prosody" if provider == Provider::Cartesia => {
@@ -168,7 +182,12 @@ fn convert_expr(provider: Provider, text: &str) -> String {
     });
 
     // A stray unpaired expr tag must never reach the TTS: drop the delimiters, keep the words.
-    let text = sub_expr(&EXPR_OPEN_RE, &text, |_| String::new());
+    // Gemini's standing style markers would match the opening pattern; only closers go there.
+    let text = if provider == Provider::Gemini {
+        text
+    } else {
+        sub_expr(&EXPR_OPEN_RE, &text, |_| String::new())
+    };
     sub_expr(&EXPR_CLOSE_RE, &text, |_| String::new())
 }
 
@@ -246,7 +265,7 @@ fn close_unclosed_native(provider: Provider, text: &str) -> String {
         Provider::Cartesia => &CARTESIA,
         Provider::Inworld => &INWORLD,
         Provider::FishAudio => &FISHAUDIO,
-        Provider::Xai => return text.to_string(),
+        Provider::Xai | Provider::Gemini => return text.to_string(),
     };
     sub(re, text, |m| format!("<{}{}/>", &m[1], &m[2]))
 }

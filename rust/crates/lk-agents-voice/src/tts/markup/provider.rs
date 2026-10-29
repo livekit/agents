@@ -5,6 +5,7 @@
 //! * Inworld: <https://docs.inworld.ai/tts/capabilities/steering>
 //! * xAI: <https://docs.x.ai/developers/model-capabilities/audio/text-to-speech>
 //! * Fish Audio: <https://docs.fish.audio/developer-guide/core-features/emotions>
+//! * Gemini: <https://ai.google.dev/gemini-api/docs/speech-generation#controllable>
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -28,6 +29,7 @@ impl ProviderExt for Provider {
             Provider::Xai => XAI_TAGS.as_slice(),
             // Fish's native dialect is brackets; these names catch hallucinated XML natives.
             Provider::FishAudio => &FISHAUDIO_TAGS,
+            Provider::Gemini => GEMINI_TAGS.as_slice(),
         }
     }
 
@@ -37,6 +39,7 @@ impl ProviderExt for Provider {
             Provider::Inworld => &INWORLD_SOUNDS,
             Provider::Xai => &XAI_INLINE,
             Provider::FishAudio => &FISHAUDIO_SOUNDS,
+            Provider::Gemini => &GEMINI_SOUNDS,
             Provider::Cartesia => &[],
         }
     }
@@ -57,7 +60,7 @@ impl ProviderExt for Provider {
             // well under xAI's 15,000-char request limit; sized as an expressive batch target
             Provider::Xai => Some(1000),
             // Fish markers are sentence-scoped, so per-sentence emission keeps TTFA low.
-            Provider::FishAudio => None,
+            Provider::FishAudio | Provider::Gemini => None,
         }
     }
 
@@ -67,7 +70,7 @@ impl ProviderExt for Provider {
             Provider::Cartesia => &["emotion", "speed", "volume", "break"],
             Provider::Inworld => &["expression", "sound", "break"],
             Provider::FishAudio => &["expression", "sound", "break"],
-            Provider::Xai => &[],
+            Provider::Xai | Provider::Gemini => &[],
         }
     }
 }
@@ -162,13 +165,34 @@ pub(crate) const FISHAUDIO_SOUNDS: [&str; 8] = [
 pub(crate) const FISHAUDIO_TONES: [&str; 4] = ["whispering", "soft", "shouting", "hurried"];
 pub(crate) const FISHAUDIO_TAGS: [&str; 4] = ["expression", "sound", "break", "emphasis"];
 
+// Gemini's direction rides two channels: an `expression` marker becomes the part's
+// `speech_metadata.style` (the plugin lifts it out), while sounds, breaks and emphasis lower to
+// inline tags. Angle brackets: the docs measured them more reliable than square ones.
+pub(crate) const GEMINI_SOUNDS: [&str; 9] = [
+    // the model's own documented list
+    "laugh", "chuckle", "sigh", "breath", "cough", "argh",
+    // named by the general TTS docs, which warn there is no exhaustive list; the rest of what
+    // they name is sustained delivery, which belongs in the style
+    "gasp", "giggle", "cry",
+];
+/// Gemini documents one pause length, so every break lowers to it.
+pub(crate) const GEMINI_PAUSE: &str = "short pause";
+pub(crate) static GEMINI_TAGS: LazyLock<Vec<&str>> =
+    LazyLock::new(|| [&GEMINI_SOUNDS[..], &[GEMINI_PAUSE]].concat());
+
 pub(crate) const INWORLD_SOUNDS: [&str; 6] =
     ["laugh", "sigh", "breathe", "clear throat", "cough", "yawn"];
 
 /// Union of every provider's XML tag names. Sorted: it is the alternation order, and CPython
 /// alternation is leftmost-first.
 pub(crate) static ALL_MARKUP_TAGS: LazyLock<Vec<&str>> = LazyLock::new(|| {
-    let providers = [Provider::Cartesia, Provider::Inworld, Provider::Xai, Provider::FishAudio];
+    let providers = [
+        Provider::Cartesia,
+        Provider::Inworld,
+        Provider::Xai,
+        Provider::FishAudio,
+        Provider::Gemini,
+    ];
     let tags: BTreeSet<&str> =
         providers.iter().flat_map(|p| p.native_tags().iter().copied()).collect();
     tags.into_iter().collect()
@@ -209,6 +233,15 @@ pub(crate) fn nonverbal_sound_labels(
             (MouthSounds, &[]),
             (ReflexSounds, &["clear throat", "yawning"]),
         ],
+        Provider::Gemini => &[
+            (Laughing, &["laugh", "chuckle", "giggle"]),
+            (Breathing, &["breath", "gasp"]),
+            (Sighing, &["sigh"]),
+            (Crying, &["cry"]),
+            (Vocalizing, &["argh"]),
+            (MouthSounds, &[]),
+            (ReflexSounds, &["cough"]),
+        ],
         Provider::Cartesia => &[],
     }
 }
@@ -230,13 +263,14 @@ pub(crate) fn sound_usage_hint(sound: &str) -> Option<&'static str> {
         "chuckle" | "chuckling" | "giggle" => "a chuckle at something subtly humorous",
         "sigh" | "sighing" => "a sigh when commiserating",
         "inhale" => "a sharp inhale before a big reveal",
-        "gasping" => "a gasp at a sudden shock or reveal",
+        "gasp" | "gasping" => "a gasp at a sudden shock or reveal",
         "lip-smack" | "tongue-click" => "a lip-smack or tongue-click as a tiny beat of thought",
         "tsk" => "a tsk for mock-disapproval",
         "clear throat" => "a clear-throat when shifting to a new step or topic",
-        "groaning" => "a groan at a groan-worthy pun or an unwelcome chore",
+        "argh" | "groaning" => "a groan at a groan-worthy pun or an unwelcome chore",
+        "cough" => "a cough only when a cough is the point",
         "yawning" => "a yawn when tiredness itself is the topic",
-        "sobbing" => "a sob reserved for real heartbreak",
+        "cry" | "sobbing" => "a sob reserved for real heartbreak",
         _ => return None,
     })
 }
@@ -256,6 +290,21 @@ pub(crate) fn fishaudio_sound_alias(label: &str) -> Option<&'static str> {
         "groan" => "groaning",
         "yawn" => "yawning",
         "sob" | "cry" => "sobbing",
+        _ => return None,
+    })
+}
+
+/// `_GEMINI_SOUND_ALIASES`: expr labels that differ from Gemini's native tag names.
+pub(crate) fn gemini_sound_alias(label: &str) -> Option<&'static str> {
+    Some(match label {
+        "breathe" => "breath",
+        "laughing" | "laughs" => "laugh",
+        "chuckling" => "chuckle",
+        "sighing" | "sighs" => "sigh",
+        "groan" | "groaning" => "argh",
+        "giggles" | "giggling" => "giggle",
+        "gasping" => "gasp",
+        "crying" | "sob" | "sobbing" => "cry",
         _ => return None,
     })
 }

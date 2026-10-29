@@ -2,9 +2,11 @@
 
 use crate::tts::markup::prompts::*;
 use crate::tts::markup::provider::{
-    FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, Provider, XAI_INLINE, XAI_WRAPPING,
+    FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, GEMINI_SOUNDS, Provider, XAI_INLINE, XAI_WRAPPING,
 };
-use crate::tts::markup::steering::{SpeechSteering, allowed_prosody, allowed_sounds};
+use crate::tts::markup::steering::{
+    SpeechSteering, allowed_prosody, allowed_sounds, sound_guidance,
+};
 
 /// Drop example lines that demonstrate a *vocabulary* label not in `allowed`.
 fn sound_examples(examples: &[&str], allowed: &[&str], vocabulary: &[&str]) -> Vec<String> {
@@ -34,7 +36,7 @@ fn inworld(sounds: &[&str]) -> String {
     let mut sections = vec![INWORLD_DELIVERY.to_string()];
     if !sounds.is_empty() {
         let fits = if sounds.contains(&"clear throat") { INWORLD_CLEAR_THROAT_FIT } else { "" };
-        let mut section = fmt3(INWORLD_SOUNDS_TMPL, sounds[0], &sounds.join(", "), fits);
+        let mut section = fill(INWORLD_SOUNDS_TMPL, &[sounds[0], &sounds.join(", "), fits]);
         if sounds.contains(&"breathe") {
             section.push_str(INWORLD_BREATHE_NOTE);
         }
@@ -63,11 +65,11 @@ fn inworld(sounds: &[&str]) -> String {
 fn xai(sounds: &[&str], prosody: &[&str]) -> String {
     let mut sections: Vec<String> = Vec::new();
     if !sounds.is_empty() {
-        sections.push(fmt2(XAI_SOUNDS_TMPL, sounds[0], &sounds.join(", ")));
+        sections.push(fill(XAI_SOUNDS_TMPL, &[sounds[0], &sounds.join(", ")]));
     }
     sections.push(XAI_PAUSES.to_string());
     let tones: Vec<&str> = prosody.iter().copied().filter(|p| *p != "emphasis").collect();
-    sections.push(fmt1(XAI_PROSODY_TMPL, &tones.join(", ")));
+    sections.push(fill(XAI_PROSODY_TMPL, &[&tones.join(", ")]));
     sections.push(XAI_EMPHASIS.to_string());
 
     let no_freeform = format!(
@@ -100,12 +102,12 @@ fn xai(sounds: &[&str], prosody: &[&str]) -> String {
 }
 
 fn fishaudio(sounds: &[&str], disfluencies: bool) -> String {
-    let mut sections = vec![fmt1(FISH_EMOTION_TMPL, &FISHAUDIO_EMOTIONS.join(", "))];
+    let mut sections = vec![fill(FISH_EMOTION_TMPL, &[&FISHAUDIO_EMOTIONS.join(", ")])];
     if !sounds.is_empty() {
-        sections.push(fmt2(FISH_SOUNDS_TMPL, sounds[0], &sounds.join(", ")));
+        sections.push(fill(FISH_SOUNDS_TMPL, &[sounds[0], &sounds.join(", ")]));
     }
     sections.push(FISH_PAUSES.to_string());
-    sections.push(fmt1(FISH_TONE_TMPL, &FISHAUDIO_TONES.join(", ")));
+    sections.push(fill(FISH_TONE_TMPL, &[&FISHAUDIO_TONES.join(", ")]));
     sections.push(FISH_EMPHASIS.to_string());
 
     let mut parts = vec![
@@ -136,6 +138,30 @@ fn fishaudio(sounds: &[&str], disfluencies: bool) -> String {
     parts.join("\n\n")
 }
 
+/// The `expression` label becomes the part's `speech_metadata.style`, so its label space is
+/// Gemini's own natural-language style prompt, not a vocabulary of ours.
+fn gemini(sounds: &[&str]) -> String {
+    let mut sections = vec![GEMINI_DELIVERY.to_string(), GEMINI_ACCENT.to_string()];
+    if let Some(first) = sounds.first() {
+        let all = sounds.join(", ");
+        let guidance = sound_guidance(sounds);
+        sections.push(fill(GEMINI_SOUNDS_TMPL, &[first, &all, first, first, &guidance]));
+    }
+    sections.push(GEMINI_PAUSES.to_string());
+    sections.push(GEMINI_EMPHASIS.to_string());
+    let examples = sound_examples(&GEMINI_EXAMPLES, sounds, &GEMINI_SOUNDS);
+    [
+        EXPR_PREAMBLE.to_string(),
+        numbered_sections(&sections),
+        GEMINI_NO_OTHER_MARKERS.to_string(),
+        GEMINI_ONE_LINE.to_string(),
+        GEMINI_WRITE_FOR_EAR.to_string(),
+        GEMINI_LABELS_IN_ENGLISH.to_string(),
+        examples_block(&examples),
+    ]
+    .join("\n\n")
+}
+
 /// `None` for a provider with no markup dialect.
 pub(crate) fn llm_instructions(
     provider: Option<Provider>,
@@ -153,22 +179,18 @@ pub(crate) fn llm_instructions(
             // `steering.get("disfluencies", True)` — absent means on
             steering.and_then(|s| s.disfluencies).unwrap_or(true),
         ),
+        Provider::Gemini => gemini(&allowed_sounds(provider, steering)),
     })
 }
 
-// --- `{}` substitution for the `_TMPL` constants: the prompts contain no other brace.
-
-fn fmt1(tmpl: &str, a: &str) -> String {
-    let (head, tail) = tmpl.split_once("{}").expect("template has one hole");
-    format!("{head}{a}{tail}")
-}
-
-fn fmt2(tmpl: &str, a: &str, b: &str) -> String {
-    let (head, rest) = tmpl.split_once("{}").expect("template has two holes");
-    format!("{head}{a}{}", fmt1(rest, b))
-}
-
-fn fmt3(tmpl: &str, a: &str, b: &str, c: &str) -> String {
-    let (head, rest) = tmpl.split_once("{}").expect("template has three holes");
-    format!("{head}{a}{}", fmt2(rest, b, c))
+/// `tmpl` with its `{}` holes filled by `args`, in order: the prompts contain no other brace.
+fn fill(tmpl: &str, args: &[&str]) -> String {
+    let mut pieces = tmpl.split("{}");
+    let mut out = pieces.next().unwrap_or_default().to_owned();
+    for (piece, arg) in pieces.zip(args) {
+        out.push_str(arg);
+        out.push_str(piece);
+    }
+    debug_assert_eq!(tmpl.matches("{}").count(), args.len(), "template holes");
+    out
 }

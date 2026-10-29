@@ -395,3 +395,132 @@ pub(crate) const FISH_DISFLUENT_EXAMPLES: [&str; 3] = [
         "type=\"expression\" label=\"sarcastic\"/> Fair play, I guess.",
     ),
 ];
+
+pub(crate) const GEMINI_DELIVERY: &str = concat!(
+    "Delivery - the style this sentence is spoken in. Self-closing; place before EVERY ",
+    "sentence.\n",
+    "   <expr type=\"expression\" label=\"DESCRIPTORS\"/>\n",
+    "   The label is free-form natural language, not a fixed vocabulary — it is read as a ",
+    "stage direction. Write one to three descriptors, comma-separated and capitalized, like ",
+    "\"Thoughtful, Quiet\", \"Wistful\", \"Warm, Unhurried\", \"Bright, Eager\", \"Measured, Clear\".\n",
+    "   Use ADJECTIVES — name the feeling or the manner (\"Gently amused\", \"Subdued, ",
+    "Sincere\"). A mechanical direction (\"rising tone\", \"120 words per minute\") steers far ",
+    "worse than the mood that would produce it.\n",
+    "   Make the descriptors agree with each other. Clashing ones (\"Calm, Excited\") cancel ",
+    "out and flatten the delivery into neither.\n",
+    "   Match the label to the sentence's punctuation: an exclamation needs a bright or ",
+    "eager descriptor, and a calm label flattens the \"!\". Never lead an exclamatory sentence ",
+    "with a subdued tag.\n",
+    "   Put each question in its own sentence — write \"Welcome back. What can I do for ",
+    "you?\", not \"Welcome back, what can I do for you?\" — so the question gets its own style ",
+    "instead of inheriting the statement's. Never put \"Questioning\" in a label; the question ",
+    "mark already carries the intonation.\n",
+    "   A style applies to exactly the sentence it precedes and does NOT carry over, so an ",
+    "untagged sentence is spoken flat. Tag every one.\n",
+    "   Carry your persona into the labels — they should read like this character's stage ",
+    "directions, not generic ones. A relaxed persona tags with \"Easygoing, Amiable\"; a ",
+    "formal one tags the same sentence \"Courteous, Composed\".\n",
+    "   Rotate the descriptors — don't reuse the same label twice in a row. A starting ",
+    "palette:\n",
+    "     greeting: \"Warm, Welcoming\" / \"Bright, Glad\" / \"Easygoing, Friendly\"\n",
+    "     asking a question: \"Gently curious\" / \"Open, Attentive\" / \"Interested, Light\"\n",
+    "     good news: \"Delighted\" / \"Bright, Pleased\" / \"Buoyant\"\n",
+    "     reassuring: \"Calm, Steady\" / \"Grounded, Confident\" / \"Unhurried, Kind\"\n",
+    "     bad news or empathy: \"Sincere, Subdued\" / \"Soft, Caring\" / \"Quiet, Gentle\"\n",
+    "     reading back a total, date, or code: \"Measured, Clear\"",
+);
+
+pub(crate) const GEMINI_ACCENT: &str = concat!(
+    "Accent - OPTIONAL last descriptor, written \"<PLACE> accent\" (\"American accent\", ",
+    "\"British accent\", \"Irish accent\").\n",
+    "   <expr type=\"expression\" label=\"Thoughtful, Quiet, American accent\"/>\n",
+    "   An accent is who the speaker IS, not how they feel, so use the SAME accent in every ",
+    "tag for the whole conversation. Switching it mid-conversation swaps the speaker out ",
+    "from under the listener. If you are not deliberately playing an accent, leave it out ",
+    "entirely rather than naming a different one each turn.",
+);
+
+/// The first sound, every sound, the first twice more, then the usage guidance.
+pub(crate) const GEMINI_SOUNDS_TMPL: &str = concat!(
+    "Sounds - one non-verbal sound, at the exact point it happens. Self-closing.\n",
+    "   <expr type=\"sound\" label=\"{}\"/>\n",
+    "   Labels are a fixed vocabulary: {}.\n",
+    "   Unlike the delivery style, which colours a whole sentence, a sound is a single ",
+    "event: put the marker where the sound belongs, mid-sentence if that is where it lands.\n",
+    "   Keep it clear of punctuation: put it after the mark that ends the sentence, never ",
+    "between a word and that mark. \"Better buns! <expr type=\"sound\" label=\"{}\"/>\", not ",
+    "\"Better buns <expr type=\"sound\" label=\"{}\"/>!\".\n",
+    "   {}",
+);
+
+pub(crate) const GEMINI_PAUSES: &str = concat!(
+    "Pauses - a beat of silence. Self-closing.\n",
+    "   <expr type=\"break\" label=\"500ms\"/>\n",
+    "   Gemini has ONE pause length, so the duration is only a hint that a beat belongs ",
+    "here.\n",
+    "   A period or an ellipsis (...) already creates a pause, so don't put a break marker ",
+    "right next to one — pick one or the other.",
+);
+
+pub(crate) const GEMINI_EMPHASIS: &str = concat!(
+    "Emphasis - stresses the words it wraps.\n",
+    "   <expr type=\"prosody\" label=\"emphasis\">one word</expr>\n",
+    "   Use it on a single word, rarely — at most once in a turn, and not every turn. It is ",
+    "the only in-text prosody this voice has; pace, pitch and volume all belong in the ",
+    "delivery label instead.",
+);
+
+pub(crate) const GEMINI_NO_OTHER_MARKERS: &str = concat!(
+    "There are no other marker types for this voice — no spell marker, and no wrapping ",
+    "prosody beyond emphasis. Don't invent one.",
+);
+
+pub(crate) const GEMINI_ONE_LINE: &str = concat!(
+    "Write the whole turn as one continuous line. A marker goes immediately before the words ",
+    "it governs, not at the head of a new line — don't put each sentence on its own line. ",
+    "This is speech, so line breaks buy nothing and a marker heading a line reads as a pause ",
+    "that isn't there.",
+);
+
+pub(crate) const GEMINI_WRITE_FOR_EAR: &str = concat!(
+    "Write for the EAR, not the page: no em or en dashes anywhere in spoken text — use a ",
+    "comma or a period for a short beat, or a break marker for a real pause. Avoid ",
+    "semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate ",
+    "sentences or commas.",
+);
+
+pub(crate) const GEMINI_LABELS_IN_ENGLISH: &str = concat!(
+    "When the conversation is in another language, still write every label in English — the ",
+    "style descriptions and sound names steer the voice and are never translated. Name that ",
+    "language's accent only if you are deliberately playing one.",
+);
+
+/// `_GEMINI_EXAMPLES`.
+pub(crate) const GEMINI_EXAMPLES: [&str; 6] = [
+    concat!(
+        "<expr type=\"expression\" label=\"Thoughtful, Quiet\"/> Sienna? <expr type=\"expression\" ",
+        "label=\"Wistful\"/> What's on your mind?",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"Warm, Welcoming\"/> Hey, good to hear from you. <expr ",
+        "type=\"expression\" label=\"Gently curious\"/> What can I help you with today?",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"Sincere, Subdued\"/> Oh no, I'm really sorry. <expr ",
+        "type=\"break\" label=\"300ms\"/> <expr type=\"expression\" label=\"Calm, Steady\"/> Let me ",
+        "see what I can do about it.",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"Gently amused\"/> Okay, why did the burger go to the ",
+        "gym? <expr type=\"expression\" label=\"Bright, Playful\"/> Because it wanted better ",
+        "buns! <expr type=\"sound\" label=\"laugh\"/>",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"Easygoing, Warm\"/> Yeah, <expr type=\"sound\" ",
+        "label=\"chuckle\"/> I get that a lot.",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"Measured, Clear\"/> Your confirmation code is <expr ",
+        "type=\"prosody\" label=\"emphasis\">B four J seven</expr>.",
+    ),
+];
