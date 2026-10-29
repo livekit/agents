@@ -4,7 +4,7 @@ its event and error stay here, where the generated session events import them.""
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -59,6 +59,6 @@ class OverlappingSpeechEvent(BaseModel):
     """Requests sent for this event."""
 
     @model_serializer(mode="wrap")
-    def _serialize(self, handler: SerializerFunctionWrapHandler) -> Any:
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> object:
         # the numpy arrays stay out of the dump
         return handler(self.model_copy(update={"speech_input": None, "probabilities": None}))
