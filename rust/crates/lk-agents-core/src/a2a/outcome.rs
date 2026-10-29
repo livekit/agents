@@ -12,6 +12,7 @@ use lk_agents_abi::a2a::metadata::{
 };
 use lk_agents_abi::livekit_protocol::agent::chat_context::chat_item;
 use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCallOutput};
+use lk_agents_abi::storage::journal::JournalEvent;
 use lk_agents_abi::storage::thread::TaskData;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{
@@ -205,8 +206,8 @@ pub struct Settlement {
     pub transitions: Vec<TaskTransition>,
     pub outcome: RunOutcome,
     pub reason: Option<String>,
-    /// Journal entries to append: `(type, payload)`.
-    pub events: Vec<(String, Value)>,
+    /// Journal entries to append.
+    pub events: Vec<JournalEvent>,
     pub output: Option<Value>,
     pub interrupted: bool,
 }
@@ -275,7 +276,12 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
         transitions: Vec::new(),
         outcome: RunOutcome::Completed,
         reason: None,
-        events: out.events.iter().map(|e| (e.r#type.clone(), e.payload.clone())).collect(),
+        events: out
+            .tool_executions
+            .iter()
+            .cloned()
+            .map(JournalEvent::ToolExecutionUpdated)
+            .collect(),
         output: None,
         interrupted: s.stop.is_some() || out.interrupted,
     };
@@ -336,7 +342,7 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
                 ..base
             },
         });
-        settled.events.push(("error".into(), serde_json::json!({"error": err})));
+        settled.events.push(JournalEvent::Error { error: err.clone() });
         settled.outcome = RunOutcome::Failed;
         settled.reason = Some(err.clone());
         return Ok(settled);

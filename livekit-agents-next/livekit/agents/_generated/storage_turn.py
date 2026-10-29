@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/a2a/turn.rs
+#     rust/crates/lk-agents-abi/src/storage/journal.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -46,16 +47,6 @@ class PendingCall:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class HostEvent:
-    """A journal event the handler recorded (docs/internals/storage.md#journal):
-    `tool_execution_updated` for a call's start, its progress and its end.
-    """
-
-    type: str
-    payload: object
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class HandlerOutput:
     output: object | None
     new_items: list[object]
@@ -69,7 +60,8 @@ class HandlerOutput:
     interrupted: bool
     metadata: dict[str, object]
     error: str | None
-    events: list[HostEvent]
+    tool_executions: list[ToolExecution]
+    """The calls' starts, progress and ends the handler recorded, for the journal."""
     status: TaskState | None = None
     """A `Rejected` or `Working` transition's state (docs/server.md#handler-outcomes); `output`
     is then its reason or status message.
@@ -111,3 +103,18 @@ class Token:
 
 
 TurnEvent: TypeAlias = Checkpoint | Output | Progress | Token
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ToolExecution:
+    """`tool_execution_updated`: one call's start, a progress update from `ctx.update()`, its end."""
+
+    phase: ToolPhase
+    call_id: str | None = None
+    name: str | None = None
+    is_error: bool | None = None
+    text: str | None = None
+    """The progress message of an `update`."""
+
+
+ToolPhase: TypeAlias = Literal["started", "update", "ended"]

@@ -16,13 +16,12 @@ use crate::run::{
     self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunUsage,
     RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
-use crate::schema::{
-    EventRow, InboxRow, ItemRow, LaneRow, RunEnded, RunStarted, THREAD_SCHEMA_VERSION, TaskRow,
-};
+use crate::schema::{EventRow, InboxRow, ItemRow, LaneRow, THREAD_SCHEMA_VERSION, TaskRow};
 use crate::sql::Statement;
 use crate::{Fence, StorageError, TaskWrite};
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
+use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;
@@ -500,14 +499,14 @@ impl Lane {
                 wait_ms: LEASE_WAIT_TIMEOUT.as_millis() as i64,
                 run_id: &opts.run_id,
                 task_id: &opts.task_id,
-                run_started: EventWrite::run_started(
+                run_started: EventWrite::new(
                     unix_now_ms(),
-                    &RunStarted {
+                    JournalEvent::RunStarted(RunStarted {
                         task_id: Some(opts.task_id.clone()),
                         stream_id: Some(opts.task_id.clone()),
                         channel: opts.channel.clone(),
                         exclusive: None,
-                    },
+                    }),
                 ),
                 submit,
                 pickup: opts.pickup,
@@ -602,8 +601,8 @@ pub struct EventLog {
 }
 
 impl EventLog {
-    pub fn append(&mut self, r#type: &str, payload: Value) {
-        self.new.push(EventWrite { ts_ms: unix_now_ms(), r#type: r#type.to_owned(), payload });
+    pub fn append(&mut self, event: JournalEvent) {
+        self.new.push(EventWrite::new(unix_now_ms(), event));
     }
 }
 
@@ -851,9 +850,9 @@ impl Run {
         if self.closed {
             return lease.release(None).await;
         }
-        let ended = EventWrite::run_ended(
+        let ended = EventWrite::new(
             unix_now_ms(),
-            &RunEnded { outcome, reason: Some(reason.into()) },
+            JournalEvent::RunEnded(RunEnded { outcome, reason: Some(reason.into()) }),
         );
         if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
             log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");

@@ -78,7 +78,7 @@ class Host:
                     interrupted=True,
                     metadata={},
                     error=None,
-                    events=[],
+                    tool_executions=[],
                 )
         return HandlerOutput(
             output="reply to: " + text,
@@ -92,7 +92,7 @@ class Host:
             interrupted=False,
             metadata={},
             error=None,
-            events=[],
+            tool_executions=[],
         )
 
 

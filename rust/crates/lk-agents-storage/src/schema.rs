@@ -3,10 +3,9 @@ use livekit_protocol::agent::chat_context::ChatItem;
 /// record below is checked against them when the crate compiles.
 pub use livekit_protocol::agent::{THREAD_SCHEMA_V1 as THREAD_SCHEMA, THREAD_SCHEMA_VERSION};
 use lk_agents_host_derive::Table;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::run::{RunOutcome, TaskState};
+use crate::run::TaskState;
 use crate::sql::SqlValue;
 use crate::sql::{FromCell, json_cell, statement};
 
@@ -81,32 +80,6 @@ struct EventColumns {
     run_id: String,
     r#type: String,
     payload: Value,
-}
-
-pub const RUN_STARTED_EVENT: &str = "run_started";
-pub const RUN_ENDED_EVENT: &str = "run_ended";
-
-/// `run_started`'s payload.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct RunStarted {
-    #[serde(default)]
-    pub task_id: Option<String>,
-    /// The answer stream, the run's task.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream_id: Option<String>,
-    #[serde(default)]
-    pub channel: Option<String>,
-    /// `false` for a `concurrent` run, which holds no lease.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exclusive: Option<bool>,
-}
-
-/// `run_ended`'s payload.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RunEnded {
-    pub outcome: RunOutcome,
-    #[serde(default)]
-    pub reason: Option<String>,
 }
 
 json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);

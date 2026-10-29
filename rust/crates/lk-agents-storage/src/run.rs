@@ -4,14 +4,15 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::StorageError;
 use crate::TaskWrite;
 use crate::db::{Commit, EventWrite};
-use crate::schema::{EventRow, RUN_ENDED_EVENT, RUN_STARTED_EVENT, RunEnded, RunStarted};
+use crate::schema::EventRow;
 pub use crate::schema::{ItemRow, LaneRow, TaskRow};
 use livekit_protocol::agent::chat_context::ChatItem;
+use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
 
 /// a waiter that has not acquired after 60 s fails `lease-timeout`.
 pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
@@ -69,19 +70,14 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
             channel: w.channel.map(str::to_owned),
             exclusive: Some(false),
         };
-        events.push(EventWrite::run_started(w.now_ms, &started));
+        events.push(EventWrite::new(w.now_ms, JournalEvent::RunStarted(started)));
     }
     events.extend(items.iter().filter(|i| !w.loaded.iter().any(|(id, _)| *id == i.id)).map(|i| {
-        EventWrite {
-            ts_ms: w.now_ms,
-            r#type: "conversation_item_added".into(),
-            payload: json!({"item": &i.payload}),
-        }
+        EventWrite::new(w.now_ms, JournalEvent::ConversationItemAdded { item: i.payload.clone() })
     }));
     events.extend(w.events.iter().cloned());
     if w.usage.requests != 0 || w.usage.tool_calls != 0 {
-        let payload = serde_json::to_value(w.usage).unwrap_or(Value::Null);
-        events.push(EventWrite { ts_ms: w.now_ms, r#type: "usage".into(), payload });
+        events.push(EventWrite::new(w.now_ms, JournalEvent::Usage(w.usage)));
     }
     Ok(Commit {
         run_id: w.run_id.to_owned(),
@@ -95,9 +91,12 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         scope_writes: Vec::new(),
         app_writes: Vec::new(),
         drained_id: w.drained_id.filter(|_| w.exclusive),
-        run_ended: EventWrite::run_ended(
+        run_ended: EventWrite::new(
             w.now_ms,
-            &RunEnded { outcome: w.outcome, reason: w.reason.map(str::to_owned) },
+            JournalEvent::RunEnded(RunEnded {
+                outcome: w.outcome,
+                reason: w.reason.map(str::to_owned),
+            }),
         ),
         read_task: w.answer_task,
     })
@@ -151,14 +150,8 @@ impl RunSummary {
     pub fn from_events(events: &[EventRow]) -> Vec<RunSummary> {
         let mut runs: Vec<RunSummary> = Vec::new();
         for ev in events {
-            let payload = ev.payload.clone();
-            let event = match ev.r#type.as_str() {
-                RUN_STARTED_EVENT => serde_json::from_value(payload).ok().map(RunEvent::Started),
-                RUN_ENDED_EVENT => serde_json::from_value(payload).ok().map(RunEvent::Ended),
-                _ => None,
-            };
-            match event {
-                Some(RunEvent::Started(started)) => {
+            match JournalEvent::from_row(&ev.r#type, ev.payload.clone()) {
+                Ok(JournalEvent::RunStarted(started)) => {
                     let summary = RunSummary {
                         run_id: ev.run_id.clone(),
                         lane: ev.lane.clone(),
@@ -174,23 +167,18 @@ impl RunSummary {
                         None => runs.push(summary),
                     }
                 }
-                Some(RunEvent::Ended(ended)) => {
+                Ok(JournalEvent::RunEnded(ended)) => {
                     if let Some(run) = runs.iter_mut().find(|r| r.run_id == ev.run_id) {
                         run.ended_at_ms = Some(ev.ts_ms);
                         run.outcome = Some(ended.outcome);
                         run.reason = ended.reason;
                     }
                 }
-                None => {}
+                _ => {}
             }
         }
         runs
     }
-}
-
-enum RunEvent {
-    Started(RunStarted),
-    Ended(RunEnded),
 }
 
 /// How many rows a lookup by id or `messageId` scans.

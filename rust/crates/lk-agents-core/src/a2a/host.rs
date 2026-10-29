@@ -79,7 +79,7 @@ impl TryFrom<host::HandlerOutput> for HandlerOutput {
             interrupted: output.interrupted,
             metadata: output.metadata,
             error: output.error,
-            events: output.events,
+            tool_executions: output.tool_executions,
             status: output.status,
         })
     }
@@ -115,7 +115,7 @@ impl From<HandlerOutput> for host::HandlerOutput {
             interrupted: output.interrupted,
             metadata: output.metadata,
             error: output.error,
-            events: output.events,
+            tool_executions: output.tool_executions,
             status: output.status,
         }
     }

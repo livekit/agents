@@ -4,6 +4,7 @@
 
 use std::time::{Duration, Instant};
 
+use lk_agents_abi::storage::journal::JournalEvent;
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
 use lk_agents_storage::schema::TaskData;
@@ -95,7 +96,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     run1.history.push(message("i2", ChatRole::Assistant, "hello"));
     run1.history.push(message("sys", ChatRole::System, "be nice"));
     run1.state = Some(json!({"patient": "Ann"}));
-    run1.events.append("agent_state_changed", json!({"state": "thinking"}));
+    run1.events.append(JournalEvent::Error { error: "boom".into() });
     run1.usage.requests = 1;
     run1.usage.input_tokens = 10;
     let request = run1.writes(CommitOptions::default()).unwrap();
@@ -103,7 +104,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert_eq!(request.items[0].message_id.as_deref(), Some("m1"));
     assert_eq!(
         request.events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
-        vec!["conversation_item_added", "conversation_item_added", "agent_state_changed", "usage"]
+        vec!["conversation_item_added", "conversation_item_added", "error", "usage"]
     );
     assert_eq!(request.events[3].payload["input_tokens"], 10);
     assert_eq!(request.state, Some(json!({"patient": "Ann"})));
@@ -160,7 +161,7 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     run.history.push(message("i1", ChatRole::User, "hi"));
     run.state = Some(json!({"x": 1}));
-    run.events.append("agent_state_changed", json!({"state": "thinking"}));
+    run.events.append(JournalEvent::Error { error: "boom".into() });
     run.tasks
         .write(
             "AST_t",

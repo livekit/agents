@@ -41,7 +41,8 @@ pub use outcome::*;
 pub use policy::*;
 
 pub use lk_agents_abi::a2a::options::{Policy, TurnOptions};
-pub use lk_agents_abi::a2a::turn::{HostEvent, PendingCall, TurnEvent, TurnHost, Verdict};
+pub use lk_agents_abi::a2a::turn::{PendingCall, TurnEvent, TurnHost, Verdict};
+use lk_agents_abi::storage::journal::ToolExecution;
 
 /// One incoming A2A message, as the handler sees it in `ctx.messages`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -265,9 +266,9 @@ pub struct HandlerOutput {
     /// The handler raised: `"<TypeName>: <text>"`; the task fails with it.
     #[serde(default)]
     pub error: Option<String>,
-    /// Journal events the handler recorded, in order, written with the commit.
+    /// The calls' starts, progress and ends the handler recorded, in order, for the journal.
     #[serde(default)]
-    pub events: Vec<HostEvent>,
+    pub tool_executions: Vec<ToolExecution>,
     /// A `Rejected` or `Working` transition's state; `output` is then its reason or status
     /// message.
     #[serde(default)]

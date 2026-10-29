@@ -141,8 +141,8 @@ pub enum Access {
 pub struct Stage {
     pub edits: Vec<HistoryEdit>,
     pub transitions: Vec<TaskTransition>,
-    /// Journal entries: `(type, payload)`.
-    pub events: Vec<(String, Value)>,
+    /// Journal entries.
+    pub events: Vec<lk_agents_abi::storage::journal::JournalEvent>,
     /// How the run ends, once the turn settled.
     pub end: Option<RunEnd>,
 }

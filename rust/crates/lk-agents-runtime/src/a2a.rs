@@ -273,8 +273,8 @@ impl Turn {
                 for t in staged.transitions {
                     run.tasks.write(&t.task_id, t.status, t.patch).await?;
                 }
-                for (ty, payload) in staged.events {
-                    run.events.append(&ty, payload);
+                for event in staged.events {
+                    run.events.append(event);
                 }
                 if let Some(end) = staged.end {
                     if end.state.is_some() {

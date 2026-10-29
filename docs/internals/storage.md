@@ -557,6 +557,10 @@ One journal per thread, shared by every lane. Each event carries:
 | `tool_execution_updated`  | one call's lifecycle: started, a progress update from `ctx.update()`, ended                                                           |
 | `error`                   | a failure the runtime recorded                                                                                                        |
 
+Each type is one declared record (`lk_agents_abi::storage::journal::JournalEvent`)
+that the core or storage producing the event builds; a stored payload of the
+wrong shape for its type is refused when read.
+
 On a call, the voice runtime's own events are recorded as well: agent and
 user state changes, transcripts, interruptions, end-of-turn and
 answering-machine detection. They are the same `AgentSessionEvent`

@@ -2,6 +2,7 @@
 //! configure, the thread records it answers with, and the error every operation fails with.
 
 pub mod context;
+pub mod journal;
 mod rows;
 pub mod thread;
 pub mod voice;

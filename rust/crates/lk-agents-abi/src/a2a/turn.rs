@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::errors::ProviderError;
 use crate::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
+use crate::storage::journal::ToolExecution;
 use crate::storage::{ItemRow, RunUsage, TaskRecord, TaskState};
 use crate::{StreamSink, StreamSource};
 
@@ -42,16 +43,6 @@ pub struct PendingCall {
     pub answer_tool: Option<String>,
 }
 
-/// A journal event the handler recorded (docs/internals/storage.md#journal):
-/// `tool_execution_updated` for a call's start, its progress and its end.
-#[crate::host(record(module = "storage_turn", extract))]
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct HostEvent {
-    pub r#type: String,
-    pub payload: Value,
-}
-
 #[crate::host(record(module = "storage_turn", extract))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HandlerOutput {
@@ -67,7 +58,8 @@ pub struct HandlerOutput {
     pub interrupted: bool,
     pub metadata: Map<String, Value>,
     pub error: Option<String>,
-    pub events: Vec<HostEvent>,
+    /// The calls' starts, progress and ends the handler recorded, for the journal.
+    pub tool_executions: Vec<ToolExecution>,
     /// A `Rejected` or `Working` transition's state (docs/server.md#handler-outcomes); `output`
     /// is then its reason or status message.
     #[host(default = None)]

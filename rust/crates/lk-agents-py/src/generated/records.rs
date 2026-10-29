@@ -4277,21 +4277,6 @@ pub mod storage_turn {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
-    static HOST_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn host_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::turn::HostEvent> {
-        let py = obj.py();
-            if !obj.is_instance(HOST_EVENT.import(py, "livekit.agents._generated.storage_turn", "HostEvent")?)? {
-                return Err(super::not_a(obj, "HostEvent"));
-            }
-            Ok(::lk_agents_abi::a2a::turn::HostEvent {
-                r#type: ::lk_agents_abi::python::attr_with(obj, "HostEvent", "type", |v| v.extract::<::std::string::String>())?,
-                payload: ::lk_agents_abi::python::attr_with(obj, "HostEvent", "payload", |v| ::lk_agents_abi::python::value_from_py(v, "HostEvent.payload"))?,
-            })
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
     static HANDLER_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4312,7 +4297,7 @@ pub mod storage_turn {
                 interrupted: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "interrupted", |v| v.extract::<bool>())?,
                 metadata: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "metadata", |v| match ::lk_agents_abi::python::value_from_py(v, "HandlerOutput.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("HandlerOutput.metadata: expected a dict")) })?,
                 error: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "error", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                events: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "events", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::storage_turn::host_event_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
+                tool_executions: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "tool_executions", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::storage_turn::tool_execution_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
                 status: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "status", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::storage_class::task_state_from_py(v)).map(Some) })?,
             })
     }
@@ -4376,6 +4361,36 @@ pub mod storage_turn {
                 return Ok(::lk_agents_abi::a2a::turn::TurnEvent::Token { task_id: ::lk_agents_abi::python::attr_with(obj, "Token", "task_id", |v| v.extract::<::std::string::String>())?, delta: ::lk_agents_abi::python::attr_with(obj, "Token", "delta", |v| v.extract::<::std::string::String>())? });
             }
             Err(super::not_a(obj, "Checkpoint | Output | Progress | Token"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/journal.rs.
+    static TOOL_EXECUTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_execution_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::storage::journal::ToolExecution> {
+        let py = obj.py();
+            if !obj.is_instance(TOOL_EXECUTION.import(py, "livekit.agents._generated.storage_turn", "ToolExecution")?)? {
+                return Err(super::not_a(obj, "ToolExecution"));
+            }
+            Ok(::lk_agents_abi::storage::journal::ToolExecution {
+                phase: ::lk_agents_abi::python::attr_with(obj, "ToolExecution", "phase", |v| crate::generated::records::storage_turn::tool_phase_from_py(v))?,
+                call_id: ::lk_agents_abi::python::attr_with(obj, "ToolExecution", "call_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                name: ::lk_agents_abi::python::attr_with(obj, "ToolExecution", "name", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                is_error: ::lk_agents_abi::python::attr_with(obj, "ToolExecution", "is_error", |v| if v.is_none() { Ok(None) } else { (v.extract::<bool>()).map(Some) })?,
+                text: ::lk_agents_abi::python::attr_with(obj, "ToolExecution", "text", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/journal.rs.
+
+    pub fn tool_phase_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::storage::journal::ToolPhase> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "started" => Ok(::lk_agents_abi::storage::journal::ToolPhase::Started),
+                "update" => Ok(::lk_agents_abi::storage::journal::ToolPhase::Update),
+                "ended" => Ok(::lk_agents_abi::storage::journal::ToolPhase::Ended),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("ToolPhase: {other:?} is not one of 'started', 'update', 'ended'"))),
+            }
     }
 }
 

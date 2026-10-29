@@ -4,6 +4,7 @@
 //! reads a clock or mints an id: lease tokens, timestamps and run ids are supplied.
 
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
+use lk_agents_abi::storage::journal::JournalEvent;
 use serde_json::{Map, Value};
 
 use crate::run::TaskState;
@@ -60,14 +61,9 @@ pub struct EventWrite {
 }
 
 impl EventWrite {
-    pub fn run_started(ts_ms: i64, p: &RunStarted) -> Self {
-        let payload = serde_json::to_value(p).unwrap_or_default();
-        Self { ts_ms, r#type: RUN_STARTED_EVENT.into(), payload }
-    }
-
-    pub fn run_ended(ts_ms: i64, p: &RunEnded) -> Self {
-        let payload = serde_json::to_value(p).unwrap_or_default();
-        Self { ts_ms, r#type: RUN_ENDED_EVENT.into(), payload }
+    pub fn new(ts_ms: i64, event: JournalEvent) -> Self {
+        let (r#type, payload) = event.into_row();
+        Self { ts_ms, r#type, payload }
     }
 }
 

@@ -13,7 +13,6 @@ import contextlib
 from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import cast
 
-from pydantic import JsonValue
 from pydantic_core import to_jsonable_python
 
 from .._generated.a2a_client import Message
@@ -21,9 +20,9 @@ from .._generated.storage_class import RunUsage, TaskRecord, TaskState
 from .._generated.storage_turn import (
     Checkpoint,
     HandlerOutput,
-    HostEvent,
     Output,
     PendingCall,
+    ToolExecution,
     TurnContext,
     TurnEvent,
 )
@@ -78,7 +77,7 @@ class A2ASessionContext:
         self.caller_history: ChatContext | None = (
             ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
         )
-        self._events: list[HostEvent] = []
+        self._events: list[ToolExecution] = []
         """What the turn appends to the journal (docs/internals/storage.md#journal): each ``update`` here, the
         tool calls from the runs' results."""
         self._interrupted = False
@@ -88,7 +87,7 @@ class A2ASessionContext:
 
     async def update(self, text: str) -> None:
         """A ``working`` status frame to the client: progress, as the person hears it."""
-        self._events.append(_tool_event("update", text=text))
+        self._events.append(ToolExecution(phase="update", text=text))
         if self._on_update is not None:
             await self._on_update(self.task_id, text)
 
@@ -270,7 +269,7 @@ class _TurnHost:
             pending_call=pending,
             interrupted=ctx._interrupted or interrupted,
             metadata=metadata,
-            events=[*_tool_events(results), *ctx._events],
+            tool_executions=[*_tool_events(results), *ctx._events],
             error=error,
             status=status,
         )
@@ -361,22 +360,20 @@ def _waiting_call(result: RunInputRequired) -> FunctionCall | None:
     )
 
 
-def _tool_events(results: list[RunResult[object]]) -> list[HostEvent]:
+def _tool_events(results: list[RunResult[object]]) -> list[ToolExecution]:
     """Each call's start and end as the runs' results hold them (docs/internals/storage.md#journal)."""
-    events: list[HostEvent] = []
+    events: list[ToolExecution] = []
     for result in results:
         for item in result.new_messages():
             if isinstance(item, FunctionCall):
-                events.append(_tool_event("started", callId=item.call_id, name=item.name))
+                events.append(ToolExecution(phase="started", call_id=item.call_id, name=item.name))
             elif isinstance(item, FunctionCallOutput):
                 events.append(
-                    _tool_event("ended", callId=item.call_id, name=item.name, isError=item.is_error)
+                    ToolExecution(
+                        phase="ended", call_id=item.call_id, name=item.name, is_error=item.is_error
+                    )
                 )
     return events
-
-
-def _tool_event(phase: str, **fields: JsonValue) -> HostEvent:
-    return HostEvent(type="tool_execution_updated", payload={"phase": phase, **fields})
 
 
 def _usage(results: list[RunResult[object]]) -> RunUsage:
