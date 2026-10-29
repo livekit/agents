@@ -23,7 +23,7 @@ pub mod nodes;
 pub mod realtime_fallback;
 /// `init(role)` and the registration table.
 pub mod runtime;
-/// `Streams` and `StreamReader`, and the record helpers of `turn.rs`.
+/// The record helpers of `turn.rs`.
 pub mod storage;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
@@ -32,7 +32,6 @@ pub use lk_agents_runtime::{inference, process, worker};
 
 /// The classes the generated adapters hand an implementation's own objects out as.
 pub mod handles {
-    pub use crate::storage::PyStreams as Streams;
     pub use crate::turn::PyThread as Thread;
 }
 

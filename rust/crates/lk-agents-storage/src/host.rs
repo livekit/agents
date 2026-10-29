@@ -27,7 +27,7 @@ use crate::db::{ItemPage, TaskPage, TaskQuery};
 use crate::engine::LeaseTiming;
 use crate::sqlite::SqliteStorage;
 use crate::voice::VoiceStore;
-use crate::{QueuedStreams, Storage, Thread};
+use crate::{Storage, Thread};
 use lk_agents_abi::storage::context::ContextScope;
 
 /// What the lazily opened backend is built from.
@@ -62,7 +62,6 @@ impl Backend {
 pub struct HostStorage {
     config: Config,
     backend: OnceCell<Backend>,
-    streams: OnceCell<Arc<QueuedStreams>>,
     a2a_tasks: TaskTracker,
 }
 
@@ -237,7 +236,6 @@ async fn local_tasks(
 
 impl HostStorageClass for HostStorage {
     type Thread = Thread;
-    type Streams = Arc<QueuedStreams>;
     type ContextActivation = ContextStore;
     type VoiceStore = VoiceStore;
     type Env = ProcessEnv;
@@ -293,12 +291,7 @@ impl HostStorageClass for HostStorage {
                 ));
             }
         };
-        Ok(Self {
-            config,
-            backend: OnceCell::new(),
-            streams: OnceCell::new(),
-            a2a_tasks: TaskTracker::new(),
-        })
+        Ok(Self { config, backend: OnceCell::new(), a2a_tasks: TaskTracker::new() })
     }
 
     fn location(&self) -> String {
@@ -446,15 +439,6 @@ impl HostStorageClass for HostStorage {
     ) -> Result<Self::ContextActivation, StorageError> {
         let storage = self.backend().await?.shared_storage();
         ContextStore::turn(storage, thread_id, lane, scopes, routing_state, read_only).await
-    }
-
-    async fn streams(&self) -> Result<Arc<QueuedStreams>, StorageError> {
-        let storage = self.storage().await?;
-        Ok(self
-            .streams
-            .get_or_init(|| async { Arc::new(QueuedStreams::new(storage.response_streams())) })
-            .await
-            .clone())
     }
 
     async fn aclose(&self) {

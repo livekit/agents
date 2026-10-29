@@ -265,66 +265,6 @@ impl StreamRead for LocalReader {
     }
 }
 
-/// A turn's appends in order without awaiting each: one task sends them, and `close` waits for
-/// the stream's queued appends before closing it. A failed append is logged, never the turn's.
-pub struct QueuedStreams {
-    streams: Arc<dyn ResponseStreams>,
-    queue: mpsc::UnboundedSender<Queued>,
-}
-
-enum Queued {
-    Append(String, Vec<u8>),
-    Drained(oneshot::Sender<()>),
-}
-
-impl QueuedStreams {
-    /// Spawns the sender on the current runtime.
-    pub fn new(streams: Arc<dyn ResponseStreams>) -> Self {
-        let (queue, mut rx) = mpsc::unbounded_channel();
-        let sender = streams.clone();
-        tokio::spawn(async move {
-            while let Some(q) = rx.recv().await {
-                match q {
-                    Queued::Append(stream_id, record) => {
-                        if let Err(e) = sender.append(&stream_id, &record).await {
-                            log::warn!("an answer frame was not kept (stream {stream_id}): {e}");
-                        }
-                    }
-                    Queued::Drained(done) => {
-                        let _ = done.send(());
-                    }
-                }
-            }
-        });
-        Self { streams, queue }
-    }
-
-    pub async fn create(&self, ttl: Option<Duration>) -> Result<StreamInfo, StorageError> {
-        self.streams.create(ttl).await
-    }
-
-    pub fn append(&self, stream_id: &str, record: Vec<u8>) {
-        let _ = self.queue.send(Queued::Append(stream_id.to_owned(), record));
-    }
-
-    /// Once every append queued before it was sent.
-    pub async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
-        let (done, drained) = oneshot::channel();
-        if self.queue.send(Queued::Drained(done)).is_ok() {
-            let _ = drained.await;
-        }
-        self.streams.close(stream_id).await
-    }
-
-    pub async fn delete(&self, stream_id: &str) -> Result<(), StorageError> {
-        self.streams.delete(stream_id).await
-    }
-
-    pub fn read(&self, stream_id: &str, after: Option<&str>, live: bool) -> Box<dyn StreamRead> {
-        self.streams.read(stream_id, after, live)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

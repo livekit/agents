@@ -21,8 +21,6 @@ const HANDWRITTEN: &[&str] = &[
     "ItemStream",
     "Role",
     "Run",
-    "StreamReader",
-    "Streams",
     "Thread",
     "Turn",
     "init",

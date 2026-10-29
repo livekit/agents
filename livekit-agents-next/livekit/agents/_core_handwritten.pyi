@@ -17,7 +17,6 @@ from ._generated.storage_class import (
     InboxRow,
     ItemRow,
     LaneRow,
-    StreamInfo,
     TaskPage,
     TaskRecord,
     ThreadItemPage,
@@ -39,29 +38,6 @@ def init(role: Role) -> None: ...
 # Every request is the model of its name, or a dict in the model's shape (its ``model_dump``);
 # every result, rows included, is an instance of its model. An ``Awaitable`` runs on the loop
 # that constructed the object and is cancelled when Rust drops the operation.
-
-class Streams:
-    """The response streams of one storage (``_core.Storage.streams()``)."""
-
-    def create(self, ttl_seconds: int | None = None) -> Awaitable[StreamInfo]: ...
-    def append(self, stream_id: str, record: bytes) -> None:
-        """Queued: kept in order; a failure is logged and does not fail the turn."""
-
-    def close(self, stream_id: str) -> Awaitable[None]:
-        """Once the stream's queued frames are kept."""
-
-    def delete(self, stream_id: str) -> Awaitable[None]: ...
-    def read(self, stream_id: str, after: str | None = None, live: bool = False) -> StreamReader:
-        """From ``after`` (an offset; ``None`` is the beginning); ``live`` follows the tail until
-        the stream closes."""
-
-class StreamReader:
-    """A read position over one stream."""
-
-    def next(self) -> Awaitable[bytes | None]:
-        """The next frame, or ``None``: the tail of a catch-up read, the close of a live one."""
-
-    def next_offset(self) -> Awaitable[str]: ...
 
 # --- turn.rs -------------------------------------------------------------------------------------
 

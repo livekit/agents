@@ -10,8 +10,6 @@ from ._core_handwritten import (
     ItemStream as ItemStream,
     Role as Role,
     Run as Run,
-    StreamReader as StreamReader,
-    Streams as Streams,
     Thread as Thread,
     Turn as Turn,
     init as init,

@@ -203,17 +203,6 @@ impl Storage {
         })
     }
 
-    /// The storage's response streams, shared by its threads.
-    fn streams<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::streams(&this, )
-                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::handles::Streams::from(out), py))
-        })
-    }
-
     /// Releases backend resources once open handles settled; repeat-safe.
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;

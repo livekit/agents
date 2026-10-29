@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from .._core import ChatItem, Streams, Thread
+from .._core import ChatItem, Thread
 from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
 from .storage_context import (
     AppStatement,
@@ -109,8 +109,6 @@ class Storage:
         """A managed turn's field store over the scopes and routing state its run loaded: saves
         and `transaction()` writes stage for the turn's commit.
         """
-    async def streams(self) -> Streams:
-        """The storage's response streams, shared by its threads."""
     async def aclose(self) -> None:
         """Releases backend resources once open handles settled; repeat-safe."""
 

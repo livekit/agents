@@ -37,7 +37,7 @@ pub use db::{Commit, Committed, EventWrite, Fence, TaskQuery};
 pub use engine::{CommitOptions, Lane, Run, RunOptions, Tasks, Thread};
 pub use lease::Lease;
 pub use run::{ItemRow, RunOutcome, TaskState};
-pub use streams::{LocalStreams, QueuedStreams, ResponseStreams, StreamRead};
+pub use streams::{LocalStreams, ResponseStreams, StreamRead};
 
 pub use lk_agents_abi::storage::StorageError;
 pub use lk_agents_abi::storage::thread::{TaskWrite, timestamp};

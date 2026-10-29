@@ -85,9 +85,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// An open thread: the shared engine's handle, bound to a holder.
     #[host(handle(class = "Thread"))]
     type Thread: Send + Sync + 'static;
-    /// The response streams a task's subscribers read.
-    #[host(handle(class = "Streams"))]
-    type Streams: Send + Sync + 'static;
     #[host(class(name = "_core_ContextActivation"))]
     type ContextActivation: Send + Sync + 'static;
 
@@ -202,10 +199,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] routing_state: Option<Value>,
         #[host(default = false)] read_only: bool,
     ) -> Result<Self::ContextActivation, StorageError>;
-
-    /// The storage's response streams, shared by its threads.
-    #[host(await)]
-    async fn streams(&self) -> Result<Self::Streams, StorageError>;
 
     /// Releases backend resources once open handles settled; repeat-safe.
     #[host(await)]
