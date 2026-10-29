@@ -4068,33 +4068,6 @@ pub mod worker_server {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
-    static JOB_ANSWER_ACCEPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static JOB_ANSWER_REJECT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static JOB_ANSWER_TERMINATE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static JOB_ANSWER_UNANSWERED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn job_answer_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::server_host::JobAnswer> {
-        let py = obj.py();
-            if obj.is_instance(JOB_ANSWER_ACCEPT.import(py, "livekit.agents._generated.worker_server", "JobAnswerAccept")?)? {
-                return Ok(::lk_agents_abi::worker::server_host::JobAnswer::Accept { name: ::lk_agents_abi::python::attr_with(obj, "JobAnswerAccept", "name", |v| v.extract::<::std::string::String>())?, identity: ::lk_agents_abi::python::attr_with(obj, "JobAnswerAccept", "identity", |v| v.extract::<::std::string::String>())?, metadata: ::lk_agents_abi::python::attr_with(obj, "JobAnswerAccept", "metadata", |v| v.extract::<::std::string::String>())?, attributes: ::lk_agents_abi::python::attr_with(obj, "JobAnswerAccept", "attributes", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "JobAnswerAccept.attributes"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?,)) })() }).collect::<PyResult<Vec<_>>>())? });
-            }
-            if obj.is_instance(JOB_ANSWER_REJECT.import(py, "livekit.agents._generated.worker_server", "JobAnswerReject")?)? {
-                return Ok(::lk_agents_abi::worker::server_host::JobAnswer::Reject);
-            }
-            if obj.is_instance(JOB_ANSWER_TERMINATE.import(py, "livekit.agents._generated.worker_server", "JobAnswerTerminate")?)? {
-                return Ok(::lk_agents_abi::worker::server_host::JobAnswer::Terminate);
-            }
-            if obj.is_instance(JOB_ANSWER_UNANSWERED.import(py, "livekit.agents._generated.worker_server", "JobAnswerUnanswered")?)? {
-                return Ok(::lk_agents_abi::worker::server_host::JobAnswer::Unanswered);
-            }
-            Err(super::not_a(obj, "JobAnswerAccept | JobAnswerReject | JobAnswerTerminate | JobAnswerUnanswered"))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
     static ENDPOINT_ROUTE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

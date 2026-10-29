@@ -47,10 +47,8 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
             unregistered=True,
             has_rtc=False,
             has_text_doors=True,
-            publisher=False,
             routes=[],
             has_load_fnc=False,
-            has_on_request=False,
             endpoints=http._server,
             app=AsgiApplication(http.app),
         )

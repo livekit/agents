@@ -979,8 +979,7 @@ pub use lk_agents_abi::errors::{HostError, HostResult};
 
 #[async_trait]
 pub trait WorkerHost: Send + Sync {
-    /// The user's `request_fnc`; Rust auto-rejects if it returns without answering. No deadline:
-    /// an implementation's own timeout must report [`JobDecision::Failed`], not hang.
+    /// Whether this worker takes the job.
     async fn on_job_request(&self, req: JobRequest) -> JobDecision;
 
     /// Returns the LiveKit job ID.
@@ -1011,8 +1010,8 @@ mod write_tests {
     async fn pending_statuses_coalesce_but_availability_replies_keep_their_order() {
         let mut queue = Outbox::new(Duration::from_secs(10));
         queue.push(protocol::update_worker(crate::WorkerStatus::Available, 0.1, 0), None).unwrap();
-        queue.push(protocol::availability_reject("first", false), None).unwrap();
-        queue.push(protocol::availability_reject("second", false), None).unwrap();
+        queue.push(protocol::availability_reject("first"), None).unwrap();
+        queue.push(protocol::availability_reject("second"), None).unwrap();
         queue.push(protocol::update_worker_draining(0), None).unwrap();
         use livekit_protocol::worker_message::Message as M;
         assert!(
@@ -1031,9 +1030,9 @@ mod write_tests {
     async fn queue_capacity_and_write_age_are_bounded() {
         let mut queue = Outbox::new(Duration::from_secs(1));
         for i in 0..MAX_PENDING_WRITES {
-            queue.push(protocol::availability_reject(&i.to_string(), false), None).unwrap();
+            queue.push(protocol::availability_reject(&i.to_string()), None).unwrap();
         }
-        assert!(queue.push(protocol::availability_reject("overflow", false), None).is_err());
+        assert!(queue.push(protocol::availability_reject("overflow"), None).is_err());
         tokio::time::advance(Duration::from_secs(2)).await;
         assert!(queue.pop_front().unwrap().deadline < tokio::time::Instant::now());
         queue.clear();

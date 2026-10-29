@@ -1,6 +1,6 @@
 //! Worker control messages and conversions to the ABI job contracts.
 
-use crate::{AcceptArguments, JobInfo, ServerType, WorkerPermissions};
+use crate::{AcceptArguments, JobInfo, WorkerPermissions};
 use livekit_protocol as pb;
 pub use livekit_protocol::agent_http::AgentEndpoint;
 pub use livekit_protocol::server_message;
@@ -13,12 +13,6 @@ use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 use prost::Message as _;
 use std::collections::BTreeMap;
 
-fn server_type_proto(server_type: ServerType) -> JobType {
-    match server_type {
-        ServerType::Room => JobType::JtRoom,
-        ServerType::Publisher => JobType::JtPublisher,
-    }
-}
 /// `agent: true` is not a `WorkerPermissions` field but always set: it marks the participant as an
 /// agent (deprecated in the proto, still read by the server).
 fn permissions_proto(permissions: &WorkerPermissions) -> pb::ParticipantPermission {
@@ -70,8 +64,8 @@ fn wrap(m: pb::worker_message::Message) -> WorkerMessage {
 /// requests the data plane.
 pub const ENDPOINT_PROTOCOL: u32 = 1;
 
+/// A worker takes one job per room.
 pub fn register(
-    server_type: ServerType,
     agent_name: &str,
     deployment: &str,
     version: &str,
@@ -80,7 +74,7 @@ pub fn register(
     instance_id: &str,
 ) -> WorkerMessage {
     wrap(pb::worker_message::Message::Register(RegisterWorkerRequest {
-        r#type: server_type_proto(server_type) as i32,
+        r#type: JobType::JtRoom as i32,
         agent_name: agent_name.to_string(),
         version: version.to_string(),
         deployment: deployment.to_string(),
@@ -92,12 +86,11 @@ pub fn register(
     }))
 }
 
-/// The capacity early-return leaves `terminate` false; an explicit reject sets it.
-pub fn availability_reject(job_id: &str, terminate: bool) -> WorkerMessage {
+/// A rejected job stays the server's to offer another worker (`terminate` false).
+pub fn availability_reject(job_id: &str) -> WorkerMessage {
     wrap(pb::worker_message::Message::Availability(AvailabilityResponse {
         job_id: job_id.to_string(),
         available: false,
-        terminate,
         ..Default::default()
     }))
 }
@@ -176,8 +169,7 @@ mod tests {
     // Catches: forgetting `agent: true` on the register permissions.
     #[test]
     fn register_marks_the_permission_as_an_agent() {
-        let msg =
-            register(ServerType::Room, "a", "d", "1.2.3", &WorkerPermissions::default(), &[], "i1");
+        let msg = register("a", "d", "1.2.3", &WorkerPermissions::default(), &[], "i1");
         let Some(pb::worker_message::Message::Register(r)) = msg.message else {
             panic!("wrong variant")
         };

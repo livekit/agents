@@ -102,7 +102,7 @@ struct LoadHost {
 #[async_trait]
 impl WorkerHost for LoadHost {
     async fn on_job_request(&self, _r: crate::JobRequest) -> JobDecision {
-        JobDecision::Reject { terminate: false }
+        JobDecision::Reject
     }
     async fn launch_job(&self, _i: crate::RunningJobInfo) -> Result<JobId, HostError> {
         Err(HostError::new("no pool"))

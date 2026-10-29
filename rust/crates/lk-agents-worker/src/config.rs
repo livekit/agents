@@ -1,5 +1,5 @@
 //! Environment and CPU discovery for resolved worker configuration.
-use super::{ServerType, WorkerPermissions};
+use super::WorkerPermissions;
 
 use std::time::Duration;
 
@@ -22,7 +22,6 @@ pub struct WorkerOptions {
     pub agent_name: Option<String>,
     /// Falls back to `LIVEKIT_AGENT_DEPLOYMENT`.
     pub deployment: Option<String>,
-    pub server_type: ServerType,
     pub version: String,
     pub permissions: WorkerPermissions,
     /// Routes served at `/agents/{agent_name}/{deployment}/{path}`; declaring any requests the
@@ -53,7 +52,6 @@ impl Default for WorkerOptions {
             worker_token: None,
             agent_name: None,
             deployment: None,
-            server_type: worker.server_type,
             version: env!("CARGO_PKG_VERSION").into(),
             permissions: worker.permissions,
             endpoints: Vec::new(),
@@ -104,7 +102,6 @@ impl WorkerOptions {
             ws_url: ws_url.clone(),
             agent_name,
             deployment,
-            server_type: self.server_type,
             version: self.version,
             permissions: self.permissions,
             endpoints: self.endpoints,
@@ -292,7 +289,6 @@ pub const DEFAULT_LOAD_THRESHOLD_DEV: f32 = f32::INFINITY;
 /// Resolved settings for [`crate::WorkerState`]; performs no environment reads.
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
-    pub server_type: ServerType,
     pub agent_name: String,
     pub deployment: String,
     pub version: String,
@@ -315,7 +311,6 @@ pub struct WorkerConfig {
 impl Default for WorkerConfig {
     fn default() -> Self {
         WorkerConfig {
-            server_type: ServerType::Room,
             agent_name: String::new(),
             deployment: String::new(),
             version: "0.0.0".into(),

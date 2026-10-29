@@ -7,34 +7,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class JobAnswerAccept:
-    name: str
-    identity: str
-    metadata: str
-    attributes: list[tuple[str, str]]
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class JobAnswerReject:
-    pass
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class JobAnswerTerminate:
-    """Reject and ask the server to end the job."""
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class JobAnswerUnanswered:
-    """The callback returned without answering: reject without terminating."""
-
-
-JobAnswer: TypeAlias = JobAnswerAccept | JobAnswerReject | JobAnswerTerminate | JobAnswerUnanswered
-"""The host's answer to a job request."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

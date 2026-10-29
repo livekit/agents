@@ -3,7 +3,7 @@
 
 use livekit_protocol as proto;
 
-use crate::{EnvOption, ServerType, WorkerPermissions};
+use crate::{EnvOption, WorkerPermissions};
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
@@ -273,7 +273,6 @@ impl ServerSettings {
     pub fn worker_options(
         &self,
         devmode: bool,
-        server_type: ServerType,
         endpoints: Vec<proto::agent_http::AgentEndpoint>,
         transport: crate::TransportConfig,
         worker_url: Option<String>,
@@ -286,7 +285,6 @@ impl ServerSettings {
             worker_token: Some(self.worker_token.clone()),
             agent_name: Some(self.agent_name.clone()),
             deployment: Some(self.deployment.clone()),
-            server_type,
             version: self.version.clone(),
             permissions: self.permissions.clone(),
             endpoints,

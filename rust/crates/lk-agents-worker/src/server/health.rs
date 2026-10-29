@@ -70,7 +70,6 @@ pub(super) async fn health_route(
     method: &str,
     path: &str,
     settings: &ServerSettings,
-    server_type: ServerType,
     status: &ServerStatus,
     probe: &dyn HealthProbe,
 ) -> Response {
@@ -91,11 +90,7 @@ pub(super) async fn health_route(
         return text(200, "OK", "OK");
     }
     let info = proto::WorkerInfo {
-        worker_type: match server_type {
-            ServerType::Room => "JT_ROOM",
-            ServerType::Publisher => "JT_PUBLISHER",
-        }
-        .into(),
+        worker_type: "JT_ROOM".into(),
         agent_name: settings.agent_name.clone(),
         active_jobs: probe.health().await as f32,
         sdk_version: settings.version.clone(),
@@ -123,14 +118,13 @@ pub(super) async fn metrics_route(method: &str, path: &str, probe: &dyn HealthPr
 pub async fn serve_health(
     listener: tokio::net::TcpListener,
     settings: Arc<ServerSettings>,
-    server_type: ServerType,
     status: Arc<ServerStatus>,
     probe: Arc<dyn HealthProbe>,
     stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
     serve(listener, stop, move |method, path| {
         let (settings, status, probe) = (settings.clone(), status.clone(), probe.clone());
-        async move { health_route(&method, &path, &settings, server_type, &status, &*probe).await }
+        async move { health_route(&method, &path, &settings, &status, &*probe).await }
     })
     .await
 }

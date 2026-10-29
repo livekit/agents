@@ -107,25 +107,16 @@ impl HealthProbe for Probe {
 #[tokio::test]
 async fn endpoint_route_inventory_health_listener_serves_no_content() {
     let status = ServerStatus::default();
-    assert_eq!(
-        health_route("GET", "/", &settings(), ServerType::Room, &status, &Probe).await.0,
-        503
-    );
+    assert_eq!(health_route("GET", "/", &settings(), &status, &Probe).await.0, 503);
     status.ready.send_replace(true);
-    assert_eq!(
-        health_route("GET", "/", &settings(), ServerType::Room, &status, &Probe).await.0,
-        200
-    );
+    assert_eq!(health_route("GET", "/", &settings(), &status, &Probe).await.0, 200);
     for path in [
         "/threads",
         "/threads/AT_unknown/tasks",
         "/content/file.txt",
         "/.well-known/agent-card.json",
     ] {
-        assert_eq!(
-            health_route("GET", path, &settings(), ServerType::Room, &status, &Probe).await.0,
-            404
-        );
+        assert_eq!(health_route("GET", path, &settings(), &status, &Probe).await.0, 404);
     }
 }
 
@@ -156,18 +147,17 @@ fn the_worker_record_prints_as_message_to_json() {
     );
 }
 
-// Catches: a text-only server launching a process for a job, a default accept that differs
-// from `JobRequest.accept()`, or the host skipped when it has an `on_request`.
+// Catches: a text-only server launching a process for a job, or a default accept that differs
+// from the agent's identity.
 #[test]
-fn a_server_answers_a_job_request_alone_unless_its_door_has_on_request() {
+fn a_server_takes_a_job_only_with_a_voice_door() {
     let job = proto::Job { id: "AJ_1".into(), ..Default::default() };
     let req = JobRequest { job: crate::protocol::job_info(&job), resuming: false };
-    assert_eq!(own_decision(&req, false, true), Some(JobDecision::Reject { terminate: false }));
-    let Some(JobDecision::Accept(args)) = own_decision(&req, true, false) else {
-        panic!("a door without on_request accepts")
+    assert_eq!(job_decision(&req, false), JobDecision::Reject);
+    let JobDecision::Accept(args) = job_decision(&req, true) else {
+        panic!("a voice door accepts")
     };
     assert_eq!((args.identity.as_str(), args.name.as_str()), ("agent-AJ_1", ""));
-    assert_eq!(own_decision(&req, true, true), None);
 }
 
 // Catches: a fake job without credentials refused, a real one without its room accepted, or the

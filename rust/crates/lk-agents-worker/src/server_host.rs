@@ -14,7 +14,7 @@ use lk_agents_abi::worker::endpoint::EndpointRequest as RequestInfo;
 use lk_agents_abi::worker::endpoint_host::{AsgiApplication, EndpointServer, EndpointService};
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::server_host::{
-    EndpointRoute, JobAnswer, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
+    EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
 };
 use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
 
@@ -22,8 +22,8 @@ use crate::endpoint::host::{Endpoints, NativeStream};
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
 use crate::transport::AgentEndpointKind;
 use crate::{
-    AcceptArguments, EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId,
-    JobRequest, RunningJobInfo, TransportConfig, WorkerCommand, WorkerHost, protocol,
+    EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId, JobRequest, RunningJobInfo,
+    TransportConfig, WorkerCommand, WorkerHost, protocol,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::worker_io::WorkerIo;
@@ -106,25 +106,18 @@ pub struct HostedServer {
     pub(crate) proxy: Arc<dyn Host>,
     /// The user gave a `load_fnc` the worker may call (not on Cloud).
     user_load: bool,
-    /// The server has a voice door, and that door an `on_request`.
+    /// The server has a voice door.
     has_rtc: bool,
-    has_on_request: bool,
     mounted: Mounted,
 }
 
 impl HostedServer {
     pub(crate) fn new(proxy: Arc<dyn Host>) -> Self {
-        HostedServer {
-            proxy,
-            user_load: true,
-            has_rtc: false,
-            has_on_request: false,
-            mounted: Mounted::default(),
-        }
+        HostedServer { proxy, user_load: true, has_rtc: false, mounted: Mounted::default() }
     }
 
-    pub(crate) fn configured(&self, has_rtc: bool, has_on_request: bool, user_load: bool) -> Self {
-        Self { has_rtc, has_on_request, user_load, ..self.clone() }
+    pub(crate) fn configured(&self, has_rtc: bool, user_load: bool) -> Self {
+        Self { has_rtc, user_load, ..self.clone() }
     }
 
     pub(crate) async fn start(
@@ -166,19 +159,7 @@ impl HostedServer {
 #[async_trait]
 impl WorkerHost for HostedServer {
     async fn on_job_request(&self, req: JobRequest) -> JobDecision {
-        if let Some(decision) = server::own_decision(&req, self.has_rtc, self.has_on_request) {
-            return decision;
-        }
-        // A failed `request_fnc` rejects without terminating, so the server can redispatch.
-        match self.proxy.job_request(req).await {
-            Err(error) => JobDecision::Failed(error),
-            Ok(JobAnswer::Accept { name, identity, metadata, attributes }) => {
-                JobDecision::Accept(AcceptArguments { name, identity, metadata, attributes })
-            }
-            Ok(JobAnswer::Reject) => JobDecision::Reject { terminate: false },
-            Ok(JobAnswer::Terminate) => JobDecision::Reject { terminate: true },
-            Ok(JobAnswer::Unanswered) => JobDecision::Unanswered,
-        }
+        server::job_decision(&req, self.has_rtc)
     }
 
     async fn launch_job(&self, info: RunningJobInfo) -> Result<JobId, HostError> {
@@ -323,10 +304,8 @@ impl ServerRuntime for AgentRuntime {
         unregistered: bool,
         has_rtc: bool,
         has_text_doors: bool,
-        publisher: bool,
         routes: Vec<EndpointRoute>,
         has_load_fnc: bool,
-        has_on_request: bool,
         endpoints: Arc<dyn EndpointService>,
         app: Arc<dyn AsgiApplication>,
     ) -> Result<(), WorkerError> {
@@ -342,11 +321,9 @@ impl ServerRuntime for AgentRuntime {
             unregistered,
             has_rtc,
             has_text_doors,
-            publisher,
             transport: transport_for(!routes.is_empty()),
             endpoints: routes,
             has_load_fnc,
-            has_on_request,
             worker_url: std::env::var("LIVEKIT_WORKER_URL").ok().filter(|url| !url.is_empty()),
         };
         self.running.store(true, Ordering::Release);

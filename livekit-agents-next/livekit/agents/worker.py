@@ -9,7 +9,6 @@ import threading
 from abc import ABC
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
 
 from typing_extensions import Unpack
@@ -19,14 +18,7 @@ from livekit.protocol import agent, models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
-from ._generated.worker_server import (
-    EndpointRoute,
-    JobAnswer,
-    JobAnswerAccept,
-    JobAnswerReject,
-    JobAnswerTerminate,
-    JobAnswerUnanswered,
-)
+from ._generated.worker_server import EndpointRoute
 from .http import AgentHttp, AsgiApplication
 from .ipc.launch import preload_module_names, validate_setup_fnc
 from .job import (
@@ -34,7 +26,6 @@ from .job import (
     JobContext,
     JobExecutorType,
     JobProcess,
-    JobRequest,
     RunningJobInfo,
 )
 from .log import logger
@@ -48,11 +39,6 @@ from .version import __version__
 if TYPE_CHECKING:
     from .a2a.endpoint import A2AEndpoint, A2ASessionOptions
     from .storage.backends import Storage
-
-
-class ServerType(Enum):
-    ROOM = agent.JobType.JT_ROOM
-    PUBLISHER = agent.JobType.JT_PUBLISHER
 
 
 Entrypoint = Callable[[JobContext], Awaitable[None]]
@@ -78,10 +64,6 @@ class RtcDoor:
     endpoint: str = ""
     on_session_end: Callable[[JobContext], Any] | None = None
     on_simulation_end: Callable[[SimulationContext], Any] | None = None
-    type: ServerType = ServerType.ROOM
-    """A job per room or per publisher."""
-    on_request: Callable[[JobRequest], Any] | None = None
-    """Decides on each job request; every job is accepted without one."""
 
 
 def rtc_session(**options: Unpack[RtcSessionOptions]) -> Callable[[Entrypoint], RtcDoor]:
@@ -251,10 +233,8 @@ class AgentServer(AgentHandler):
             unregistered=unregistered,
             has_rtc=self._rtc is not None,
             has_text_doors=bool(self._a2a_endpoints),
-            publisher=self._rtc is not None and self._rtc.type == ServerType.PUBLISHER,
             routes=[EndpointRoute(**route) for route in self._http.manifest()],
             has_load_fnc=self._load_fnc is not None,
-            has_on_request=self._rtc is not None and self._rtc.on_request is not None,
             endpoints=self._http._server,
             app=AsgiApplication(self._http.app),
         )
@@ -405,32 +385,7 @@ class _ServerHost:
         if proc.running_job is not None and self._server._runtime is not None:
             self._server._runtime.job_status(proc.running_job.job.id, proc.status.value)
 
-    # --- the user's callbacks
-
-    @utils.log_exceptions(logger=logger)
-    async def _core_job_request(self, req: _core.JobRequest) -> JobAnswer:
-        """The voice door's ``on_request``, which the core asks only when there is one; a
-        request it leaves unanswered or raises in, the core rejects."""
-        answer: JobAnswer = JobAnswerUnanswered()
-
-        async def on_reject(terminate: bool) -> None:
-            nonlocal answer
-            answer = JobAnswerTerminate() if terminate else JobAnswerReject()
-
-        async def on_accept(args: JobAcceptArguments) -> None:
-            nonlocal answer
-            answer = JobAnswerAccept(
-                name=args.name,
-                identity=args.identity,
-                metadata=args.metadata,
-                attributes=list((args.attributes or {}).items()),
-            )
-
-        door = self._server._rtc
-        assert door is not None and door.on_request is not None
-        job = agent.Job.FromString(req.job.proto)
-        await door.on_request(JobRequest(job=job, on_reject=on_reject, on_accept=on_accept))
-        return answer
+    # --- jobs and the user's load_fnc
 
     async def _core_launch_job(self, info: _core.RunningJobInfo) -> str:
         """A job the core took, with the timeline it stamped."""

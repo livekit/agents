@@ -62,7 +62,6 @@ from ._generated._core_classes import (
     GetPhoneNumberResult as GetPhoneNumberResult,
     GetSecurityCodeResult as GetSecurityCodeResult,
     JobInfo as JobInfo,
-    JobRequest as JobRequest,
     MarkdownFilter as MarkdownFilter,
     ModelUsageCollector as ModelUsageCollector,
     PlaybackInfo as PlaybackInfo,

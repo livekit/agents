@@ -27,9 +27,7 @@ pub use settings::{
 use livekit_protocol as proto;
 use prost::Message as _;
 
-use crate::{
-    AcceptArguments, JobDecision, JobRequest, RunningJobInfo, ServerType, WORKER_PROTOCOL_VERSION,
-};
+use crate::{AcceptArguments, JobDecision, JobRequest, RunningJobInfo, WORKER_PROTOCOL_VERSION};
 
 // --------------------------------------------------------------------- simulated jobs
 
@@ -99,10 +97,9 @@ pub fn simulated_job(
 
 // --------------------------------------------------------------------- job requests
 
-/// The answer to a job request when the host's `on_request` is not needed: a server with no
-/// voice door rejects it (without terminating, so another worker may take it) and one whose door
-/// has no `on_request` accepts it as `JobRequest.accept()` does. `None`: ask the host.
-pub fn own_decision(req: &JobRequest, has_rtc: bool, has_on_request: bool) -> Option<JobDecision> {
+/// The answer to a job request: a server with no voice door rejects it (another worker may take
+/// it), one with a voice door accepts it.
+pub fn job_decision(req: &JobRequest, has_rtc: bool) -> JobDecision {
     if !has_rtc {
         crate::diagnostics::emit(
             log::Level::Warn,
@@ -112,13 +109,11 @@ pub fn own_decision(req: &JobRequest, has_rtc: bool, has_on_request: bool) -> Op
                 req.room_name()
             ),
         );
-        return Some(JobDecision::Reject { terminate: false });
+        return JobDecision::Reject;
     }
-    (!has_on_request).then(|| {
-        JobDecision::Accept(AcceptArguments {
-            identity: format!("agent-{}", req.job.id),
-            ..AcceptArguments::default()
-        })
+    JobDecision::Accept(AcceptArguments {
+        identity: format!("agent-{}", req.job.id),
+        ..AcceptArguments::default()
     })
 }
 
@@ -136,8 +131,6 @@ pub struct ServerStart {
     pub has_rtc: bool,
     pub has_text_doors: bool,
     pub has_load_fnc: bool,
-    pub has_on_request: bool,
-    pub publisher: bool,
     pub endpoints: Vec<crate::protocol::AgentEndpoint>,
     pub transport: crate::TransportConfig,
     pub worker_url: Option<String>,
@@ -451,11 +444,7 @@ impl ServerRuntime {
         if settings.cloud() {
             settings.load_threshold = DEFAULT_LOAD_THRESHOLD;
         }
-        let host = self.host.configured(
-            start.has_rtc,
-            start.has_on_request,
-            start.has_load_fnc && !settings.cloud(),
-        );
+        let host = self.host.configured(start.has_rtc, start.has_load_fnc && !settings.cloud());
         let configured = settings.prometheus_multiproc_dir.clone();
         let discover_cpus = settings.num_idle_processes.is_none();
         let workers = match &self.workers {
@@ -501,8 +490,6 @@ impl ServerRuntime {
         if !start.has_rtc {
             settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
         }
-        let server_type =
-            if start.publisher { crate::ServerType::Publisher } else { crate::ServerType::Room };
         let status = Arc::new(ServerStatus::default());
         let probe = Arc::new(host.clone());
         if !settings.simulation {
@@ -513,7 +500,6 @@ impl ServerRuntime {
             resources.health = Some(tokio::spawn(serve_health(
                 listener,
                 Arc::new(settings.clone()),
-                server_type,
                 status.clone(),
                 probe.clone(),
                 stop.subscribe(),
@@ -535,7 +521,6 @@ impl ServerRuntime {
         if !start.unregistered {
             let options = settings.worker_options(
                 start.devmode,
-                server_type,
                 start.endpoints.clone(),
                 match &start.transport {
                     crate::TransportConfig::WebSocket { heartbeat } => {

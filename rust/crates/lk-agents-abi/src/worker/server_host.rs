@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::errors::HostError;
 use crate::worker::endpoint_host::{AsgiApplication, EndpointService};
 use crate::worker::ipc_host::WorkerError;
-use crate::worker::worker::{JobRequest, ProcessStartOptions, RunningJobInfo, ServerOptions};
+use crate::worker::worker::{ProcessStartOptions, RunningJobInfo, ServerOptions};
 
 /// Preserve the native configuration identity shared by a server and its options surface.
 #[crate::host(native(refused = "expected a native ServerConfig"))]
@@ -45,23 +45,6 @@ pub trait ServerConfig: Send + Sync + Sized + 'static {
     fn set_simulation(&self, value: bool);
 }
 
-/// The host's answer to a job request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::host(record(module = "worker_server", extract))]
-pub enum JobAnswer {
-    Accept {
-        name: String,
-        identity: String,
-        metadata: String,
-        attributes: Vec<(String, String)>,
-    },
-    Reject,
-    /// Reject and ask the server to end the job.
-    Terminate,
-    /// The callback returned without answering: reject without terminating.
-    Unanswered,
-}
-
 /// One route of the endpoint manifest the worker registers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[crate::host(record(module = "worker_server", extract))]
@@ -77,12 +60,6 @@ pub struct EndpointRoute {
 /// loop. Which jobs to take, when, and whether job processes start at all are the runtime's.
 #[crate::host(proxy(host = "livekit.agents.worker._ServerHost"))]
 pub trait ServerHost: Send + Sync {
-    /// The voice door's `on_request`, asked only when there is one.
-    #[host(await, name = "_core_job_request")]
-    fn job_request(
-        &self,
-        request: JobRequest,
-    ) -> crate::BoxFuture<'_, Result<JobAnswer, HostError>>;
     /// A job the runtime took, with the timeline it stamped; its LiveKit job id.
     #[host(await, name = "_core_launch_job")]
     fn launch_job(&self, info: RunningJobInfo) -> crate::BoxFuture<'_, Result<String, HostError>>;
@@ -142,10 +119,8 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
         unregistered: bool,
         has_rtc: bool,
         has_text_doors: bool,
-        publisher: bool,
         routes: Vec<EndpointRoute>,
         has_load_fnc: bool,
-        has_on_request: bool,
         endpoints: Arc<dyn EndpointService>,
         app: Arc<dyn AsgiApplication>,
     ) -> Result<(), WorkerError>;

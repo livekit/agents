@@ -401,40 +401,22 @@ fn assignment_for_an_unaccepted_job_is_reported_not_launched() {
 
 // availability answers
 
-// Catches: rejecting with terminate=true when request_fnc simply did not answer.
+// Catches: a rejected job terminated instead of left to another worker.
 #[test]
-fn unanswered_and_raising_request_fnc_reject_without_terminating() {
-    for decision in [JobDecision::Unanswered, JobDecision::Failed("boom".into())] {
-        let mut r = Rig::new();
-        r.register();
-        let slot = slot_of(&r.offer("job-1", 0.0));
-        let out = r.ev(WorkerStateInput::RequestDecision {
-            generation: 0,
-            slot,
-            decision: decision.clone(),
-        });
-        let resp = availability_out(&out);
-        assert_eq!(resp.len(), 1, "{out:?}");
-        assert!(!resp[0].available);
-        assert!(!resp[0].terminate, "unanswered must not terminate the job: {decision:?}");
-        assert_eq!(r.m.reserved_slots(), 0);
-    }
-}
-
-// Catches: an explicit reject losing its terminate flag.
-#[test]
-fn explicit_reject_preserves_terminate() {
+fn a_rejected_job_is_left_to_another_worker() {
     let mut r = Rig::new();
     r.register();
     let slot = slot_of(&r.offer("job-1", 0.0));
     let out = r.ev(WorkerStateInput::RequestDecision {
         generation: 0,
         slot,
-        decision: JobDecision::Reject { terminate: true },
+        decision: JobDecision::Reject,
     });
     let resp = availability_out(&out);
+    assert_eq!(resp.len(), 1, "{out:?}");
     assert!(!resp[0].available);
-    assert!(resp[0].terminate);
+    assert!(!resp[0].terminate);
+    assert_eq!(r.m.reserved_slots(), 0);
 }
 
 // Catches: asking request_fnc when the worker is already over threshold.

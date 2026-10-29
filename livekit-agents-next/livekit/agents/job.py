@@ -33,7 +33,7 @@ import aiohttp
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims
-from livekit.protocol import agent, models
+from livekit.protocol import agent
 
 from . import _core
 from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, SessionReportSnapshot
@@ -966,64 +966,6 @@ class JobProcess:
     @property
     def http_proxy(self) -> str | None:
         return self._http_proxy
-
-
-class JobRequest:
-    def __init__(
-        self,
-        *,
-        job: agent.Job,
-        on_reject: Callable[[bool], Coroutine[None, None, None]],
-        on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
-    ) -> None:
-        self._job = job
-        self._on_reject = on_reject
-        self._on_accept = on_accept
-
-    @property
-    def id(self) -> str:
-        return self._job.id
-
-    @property
-    def job(self) -> agent.Job:
-        return self._job
-
-    @property
-    def room(self) -> models.Room:
-        return self._job.room
-
-    @property
-    def publisher(self) -> models.ParticipantInfo | None:
-        return self._job.participant
-
-    @property
-    def agent_name(self) -> str:
-        return self._job.agent_name
-
-    async def reject(self, *, terminate: bool = True) -> None:
-        """Reject the job request. The job will not be assigned to another worker"""
-        await self._on_reject(terminate)
-
-    async def accept(
-        self,
-        *,
-        name: str = "",
-        identity: str = "",
-        metadata: str = "",
-        attributes: dict[str, str] | None = None,
-    ) -> None:
-        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""  # noqa: E501
-        if not identity:
-            identity = "agent-" + self.id
-
-        accept_arguments = JobAcceptArguments(
-            name=name,
-            identity=identity,
-            metadata=metadata,
-            attributes=attributes,
-        )
-
-        await self._on_accept(accept_arguments)
 
 
 @dataclass

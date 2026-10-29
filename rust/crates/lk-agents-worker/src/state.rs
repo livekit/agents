@@ -323,7 +323,6 @@ impl WorkerState {
                 self.generation = generation;
                 self.conn = ConnState::Connecting;
                 let msg = protocol::register(
-                    self.cfg.server_type,
                     &self.cfg.agent_name,
                     &self.cfg.deployment,
                     &self.cfg.version,
@@ -448,7 +447,7 @@ impl WorkerState {
             return;
         }
         if self.rollover_requested || self.assignment_usage() >= self.assignment_capacity {
-            self.queue(protocol::availability_reject(&job.id, false));
+            self.queue(protocol::availability_reject(&job.id));
             return;
         }
         let slot = self.alloc_slot();
@@ -490,7 +489,7 @@ impl WorkerState {
             let job_id = p.job.id.clone();
             self.drop_pending(slot);
             // Rejected on load: `terminate` stays false.
-            self.queue(protocol::availability_reject(&job_id, false));
+            self.queue(protocol::availability_reject(&job_id));
             return;
         }
         p.state = PendingState::AwaitingUser;
@@ -523,26 +522,9 @@ impl WorkerState {
                 }
                 self.push(WorkerStateEffect::SendAvailability { job_id, arguments });
             }
-            JobDecision::Reject { terminate } => {
+            JobDecision::Reject => {
                 self.drop_pending(slot);
-                self.queue(protocol::availability_reject(&job_id, terminate));
-            }
-            // Both are the "not answered" path: reject with `terminate=false`, unlike an explicit
-            // `reject()`.
-            JobDecision::Failed(err) => {
-                self.diagnostic(
-                    log::Level::Error,
-                    format!(
-                        "job_request_fnc failed, rejecting the job job_id={job_id} error={err}"
-                    ),
-                );
-                self.drop_pending(slot);
-                self.queue(protocol::availability_reject(&job_id, false));
-            }
-            JobDecision::Unanswered => {
-                self.diagnostic(log::Level::Warn, format!("no answer was given inside the job_request_fnc, automatically rejecting the job job_id={job_id}"));
-                self.drop_pending(slot);
-                self.queue(protocol::availability_reject(&job_id, false));
+                self.queue(protocol::availability_reject(&job_id));
             }
         }
     }

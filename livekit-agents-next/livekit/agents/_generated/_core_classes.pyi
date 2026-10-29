@@ -17,7 +17,7 @@ from typing import Any
 from ..types import NotGivenOr
 
 class JobInfo:
-    """The scalar half of a `livekit.agent.Job`, as handed to the user's `request_fnc`."""
+    """The scalar half of a `livekit.agent.Job`."""
     @property
     def id(self) -> str: ...
     @property
@@ -40,14 +40,6 @@ class JobInfo:
     def enable_redaction(self) -> bool: ...
     @property
     def proto(self) -> bytes: ...
-
-
-class JobRequest:
-    """A job offered to the host. The host returns a [`JobDecision`]."""
-    @property
-    def job(self) -> JobInfo: ...
-    @property
-    def resuming(self) -> bool: ...
 
 
 class RunningJobInfo:

@@ -308,10 +308,8 @@ class ServerRuntime:
         unregistered: bool,
         has_rtc: bool,
         has_text_doors: bool,
-        publisher: bool,
         routes: Sequence[EndpointRoute],
         has_load_fnc: bool,
-        has_on_request: bool,
         endpoints: EndpointServer,
         app: AsgiApplication,
     ) -> None:

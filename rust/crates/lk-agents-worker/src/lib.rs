@@ -34,8 +34,8 @@ pub use config::{
 };
 pub use hw::{CpuMonitor, CpuMonitorKind};
 pub use lk_agents_abi::worker::worker::{
-    AcceptArguments, JobDecision, JobInfo, JobRequest, RawJobDecision, RunningJobInfo, ServerType,
-    WorkerDrainFinished, WorkerDrainTimedOut, WorkerPermissions, WorkerRegistered, WorkerStopped,
+    AcceptArguments, JobDecision, JobInfo, JobRequest, RunningJobInfo, WorkerDrainFinished,
+    WorkerDrainTimedOut, WorkerPermissions, WorkerRegistered, WorkerStopped,
 };
 pub use state::{Slot, WorkerState, WorkerStateEffect, WorkerStateInput, WorkerTimer};
 pub use transport::{

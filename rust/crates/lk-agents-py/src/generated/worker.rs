@@ -1061,15 +1061,15 @@ impl ServerRuntime {
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
     /// return once closed. `endpoints` serves `routes` with `app`.
-    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, publisher, routes, has_load_fnc, has_on_request, endpoints, app))]
-    fn run<'py>(&self, py: Python<'py>, devmode: bool, unregistered: bool, has_rtc: bool, has_text_doors: bool, publisher: bool, routes: Bound<'_, PyAny>, has_load_fnc: bool, has_on_request: bool, endpoints: Bound<'_, PyAny>, app: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints, app))]
+    fn run<'py>(&self, py: Python<'py>, devmode: bool, unregistered: bool, has_rtc: bool, has_text_doors: bool, routes: Bound<'_, PyAny>, has_load_fnc: bool, endpoints: Bound<'_, PyAny>, app: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let routes = routes.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::worker_server::endpoint_route_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let endpoints = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::EndpointService>(&endpoints).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("endpoints", ": expected a native EndpointServer")))?;
         let app = crate::generated::worker::AsgiApplicationProxy::from_host(&app)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::run(&this, devmode, unregistered, has_rtc, has_text_doors, publisher, routes, has_load_fnc, has_on_request, endpoints, app)
+            let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::run(&this, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints, app)
                 .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
@@ -2698,29 +2698,6 @@ impl ServerHostProxy {
 }
 
 impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
-    fn job_request(&self, request: ::lk_agents_abi::worker::worker::JobRequest) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::worker::server_host::JobAnswer, ::lk_agents_abi::errors::HostError>> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let request_arg = request;
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ServerHost._core_job_request", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(request_arg, py)?];
-                Ok((host.bind(py).getattr("_core_job_request")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
-        ::std::boxed::Box::pin(async move {
-        let out = started.await;
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let out = (crate::generated::records::worker_server::job_answer_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
-            Ok(out)
-        })
-        })
-    }
-
     fn launch_job(&self, info: ::lk_agents_abi::worker::worker::RunningJobInfo) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let info_arg = info;

@@ -18,12 +18,6 @@ pub struct Snapshot {
     pub finished: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerType {
-    Room,
-    Publisher,
-}
-
 /// `WorkerPermissions`, field-for-field, including the defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(dataclass, module = "worker_options")]
@@ -61,7 +55,7 @@ impl Default for WorkerPermissions {
     }
 }
 
-/// The scalar half of a `livekit.agent.Job`, as handed to the user's `request_fnc`.
+/// The scalar half of a `livekit.agent.Job`.
 #[derive(Debug, Clone, PartialEq, Host)]
 #[crate::class(from_py_object)]
 #[binding(class)]
@@ -70,7 +64,7 @@ pub struct JobInfo {
     pub dispatch_id: String,
     #[host(rename = "type")]
     pub ty: i32,
-    /// The room's name, flattened out of `Job.room` so a `request_fnc` need not parse a protobuf.
+    /// The room's name, flattened out of `Job.room`.
     pub room: Option<String>,
     pub room_sid: Option<String>,
     pub agent_name: String,
@@ -83,12 +77,9 @@ pub struct JobInfo {
     pub proto: Vec<u8>,
 }
 
-/// A job offered to the host. The host returns a [`JobDecision`].
-#[derive(Debug, Clone, PartialEq, Host)]
-#[crate::class(from_py_object)]
-#[binding(class)]
+/// A job offered to the worker, which answers it with a [`JobDecision`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct JobRequest {
-    #[python(ty = "JobInfo")]
     pub job: JobInfo,
     /// `AvailabilityRequest.resuming` -- the job is migrating from another worker.
     pub resuming: bool,
@@ -124,49 +115,11 @@ pub struct RunningJobInfo {
 }
 
 /// Acceptance returns before assignment and launch; the worker owns the assignment deadline.
+/// A rejection leaves the job to another worker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobDecision {
     Accept(AcceptArguments),
-    Reject {
-        terminate: bool,
-    },
-    /// The host returned without a decision: reject without terminating.
-    Unanswered,
-    /// Logged, then rejected without terminating.
-    Failed(crate::errors::HostError),
-}
-
-impl JobDecision {
-    /// The one table of `accept`, `reject`, `terminate`, `unanswered`, `failed`; `terminate` also
-    /// asks the server to end the job. An unknown word is refused with the binding's message.
-    pub fn from_wire(
-        word: &str,
-        accept: impl FnOnce() -> Result<AcceptArguments, String>,
-        error: impl FnOnce() -> String,
-    ) -> Result<JobDecision, String> {
-        Ok(match word {
-            "accept" => JobDecision::Accept(accept()?),
-            "reject" => JobDecision::Reject { terminate: false },
-            "terminate" => JobDecision::Reject { terminate: true },
-            "unanswered" => JobDecision::Unanswered,
-            "failed" => JobDecision::Failed(crate::errors::HostError::new(error())),
-            other => {
-                return Err(format!(
-                    "unknown decision {other:?}: expected accept, reject, terminate, unanswered or failed"
-                ));
-            }
-        })
-    }
-}
-
-/// The dict a `request_fnc` answers with, before it is a [`JobDecision`]: the `decision` word and
-/// the `error` only `failed` carries.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items)]
-pub struct RawJobDecision {
-    pub decision: String,
-    #[binding(default)]
-    pub error: Option<String>,
+    Reject,
 }
 
 /// Accepted participant fields; application attributes retain their own string keys.
@@ -241,53 +194,6 @@ pub struct WorkerDrainTimedOut {}
 pub struct WorkerStopped {
     /// `closed`, `worker runtime cancelled`, or the runtime error's own sentence.
     pub reason: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{AcceptArguments, JobDecision};
-
-    // Catches: a decision word read differently, e.g. `terminate` as a plain reject.
-    #[test]
-    fn every_decision_word_maps_to_its_decision_and_an_unknown_one_is_refused() {
-        let accept = || -> Result<AcceptArguments, String> {
-            Ok(AcceptArguments { name: "agent".into(), ..AcceptArguments::default() })
-        };
-        let message = || "boom".to_owned();
-        assert_eq!(
-            JobDecision::from_wire("accept", accept, message),
-            Ok(JobDecision::Accept(AcceptArguments {
-                name: "agent".into(),
-                ..AcceptArguments::default()
-            }))
-        );
-        assert_eq!(
-            JobDecision::from_wire("reject", accept, message),
-            Ok(JobDecision::Reject { terminate: false })
-        );
-        assert_eq!(
-            JobDecision::from_wire("terminate", accept, message),
-            Ok(JobDecision::Reject { terminate: true })
-        );
-        assert_eq!(
-            JobDecision::from_wire("unanswered", accept, message),
-            Ok(JobDecision::Unanswered)
-        );
-        assert_eq!(
-            JobDecision::from_wire("failed", accept, message),
-            Ok(JobDecision::Failed(crate::errors::HostError::new("boom")))
-        );
-        // A malformed `accept` payload is the caller's error, not an unknown word.
-        assert_eq!(
-            JobDecision::from_wire(
-                "accept",
-                || Err::<AcceptArguments, _>("bad name".to_owned()),
-                message
-            ),
-            Err("bad name".to_owned())
-        );
-        assert!(JobDecision::from_wire("maybe", accept, message).is_err());
-    }
 }
 
 // --- server launch configuration -----------------------------------------------------------

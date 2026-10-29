@@ -1,10 +1,10 @@
 use super::*;
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::worker::server_host::{JobAnswer, ServerHost};
+use lk_agents_abi::worker::server_host::ServerHost;
 use lk_agents_abi::worker::worker::ProcessStartOptions;
 
-use crate::{JobRequest, RunningJobInfo};
+use crate::RunningJobInfo;
 
 #[derive(Clone)]
 struct Host {
@@ -30,9 +30,6 @@ impl Host {
 }
 
 impl ServerHost for Host {
-    fn job_request(&self, _: JobRequest) -> BoxFuture<'_, Result<JobAnswer, HostError>> {
-        async { Ok(JobAnswer::Unanswered) }.boxed()
-    }
     fn launch_job(&self, _: RunningJobInfo) -> BoxFuture<'_, Result<String, HostError>> {
         async { Ok("job".into()) }.boxed()
     }
@@ -92,8 +89,6 @@ fn options() -> ServerStart {
         has_rtc: false,
         has_text_doors: true,
         has_load_fnc: false,
-        has_on_request: false,
-        publisher: false,
         endpoints: vec![],
         transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
         worker_url: None,
