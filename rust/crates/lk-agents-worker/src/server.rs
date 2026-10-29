@@ -165,8 +165,8 @@ pub struct ServerRuntime {
     outcome: Outcome,
     cleanup_outcome: Outcome,
     drain_outcome: Outcome,
-    /// The lifecycle task `run` starts. Every clone shares it, the task's own included, so it
-    /// ends with the server's stop rather than with a cancelled `run` caller.
+    /// The lifecycle task `run` starts, outliving a cancelled `run` caller; `close` takes and
+    /// awaits it unless a missed cleanup deadline left it holding the stragglers.
     serving: Arc<std::sync::Mutex<Option<OwnedTask>>>,
 }
 
@@ -251,7 +251,14 @@ impl ServerRuntime {
             control.close = true;
             true
         });
-        wait_outcome(&self.cleanup_outcome).await
+        let result = wait_outcome(&self.cleanup_outcome).await;
+        if self.snapshot().incomplete_cleanup.is_empty() {
+            let serving = self.serving.lock().unwrap_or_else(|p| p.into_inner()).take();
+            if let Some(serving) = serving {
+                let _ = serving.await;
+            }
+        }
+        result
     }
 
     fn publish(&self, state: &ServerLifecycle, effects: Vec<ServerEffect>) {
