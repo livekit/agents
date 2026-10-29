@@ -38,3 +38,18 @@ class CliArgsDownloadFiles:
 
 CliArgs: TypeAlias = CliArgsStart | CliArgsConsole | CliArgsDownloadFiles
 """The command accepted by the process launcher."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class LogFields:
+    """What a log line is made of: the record's level, logger, process and time, a `dict` message
+    when one was logged, and its extra fields (the record's attributes outside the standard ones),
+    as JSON values.
+    """
+
+    level: str
+    name: str
+    pid: int | None
+    created: float
+    msg: dict[str, object] | None
+    extra: dict[str, object]

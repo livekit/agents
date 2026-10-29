@@ -2697,6 +2697,25 @@ pub mod worker_cli {
                 ::lk_agents_abi::worker::cli::CliArgs::DownloadFiles => crate::host::construct(CLI_ARGS_DOWNLOAD_FILES.import(py, "livekit.agents._generated.worker_cli", "CliArgsDownloadFiles")?.as_any(), (), None),
             }
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
+    static LOG_FIELDS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn log_fields_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::cli::LogFields> {
+        let py = obj.py();
+            if !obj.is_instance(LOG_FIELDS.import(py, "livekit.agents._generated.worker_cli", "LogFields")?)? {
+                return Err(super::not_a(obj, "LogFields"));
+            }
+            Ok(::lk_agents_abi::worker::cli::LogFields {
+                level: ::lk_agents_abi::python::attr_with(obj, "LogFields", "level", |v| v.extract::<::std::string::String>())?,
+                name: ::lk_agents_abi::python::attr_with(obj, "LogFields", "name", |v| v.extract::<::std::string::String>())?,
+                pid: ::lk_agents_abi::python::attr_with(obj, "LogFields", "pid", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "LogFields.pid")).map(Some) })?,
+                created: ::lk_agents_abi::python::attr_with(obj, "LogFields", "created", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LogFields.created"))?,
+                msg: ::lk_agents_abi::python::attr_with(obj, "LogFields", "msg", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "LogFields.msg")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("LogFields.msg: expected a dict")) }).map(Some) })?,
+                extra: ::lk_agents_abi::python::attr_with(obj, "LogFields", "extra", |v| match ::lk_agents_abi::python::value_from_py(v, "LogFields.extra")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("LogFields.extra: expected a dict")) })?,
+            })
+    }
 }
 
 pub mod worker_endpoint {

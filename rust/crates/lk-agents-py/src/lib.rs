@@ -31,8 +31,6 @@ pub mod runtime;
 pub mod storage;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
-/// The worker CLI's host log-record conversion.
-pub mod worker_host;
 
 pub use lk_agents_runtime::{inference, process, worker};
 
@@ -119,7 +117,7 @@ impl generated::Implementations for Selected {
     type WorkerProcPool =
         lk_agents_runtime::worker::ipc::ProcessPool<lk_agents_runtime::process::Process>;
     type WorkerJobRun = lk_agents_runtime::worker::ipc::JobRun<lk_agents_runtime::process::Process>;
-    type WorkerCli = crate::worker_host::cli::WorkerCli;
+    type WorkerCli = lk_agents_runtime::worker::cli::Commands;
     type EndpointStream = lk_agents_runtime::worker::endpoint_host::NativeStream;
     type EndpointServer = lk_agents_runtime::worker::endpoint_host::Endpoints;
     type AsgiReceive = lk_agents_runtime::worker::endpoint_host::ReceiveCall;

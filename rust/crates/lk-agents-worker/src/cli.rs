@@ -153,45 +153,7 @@ fn stem(p: &Path) -> String {
 
 // ------------------------------------------------------------------------------------ log lines
 
-/// What a log line is made of: the record's level, logger, process and time, a `dict` message
-/// when one was logged, and its extra fields (the record's attributes outside the standard ones).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct LogFields {
-    pub level: String,
-    pub name: String,
-    pub pid: Option<i64>,
-    pub created: f64,
-    pub msg: Option<Map<String, Value>>,
-    pub extra: Map<String, Value>,
-}
-
-/// `logging.LogRecord`'s own attributes, which a line never repeats as extras.
-#[doc(hidden)]
-pub const RESERVED: [&str; 23] = [
-    "args",
-    "asctime",
-    "created",
-    "exc_info",
-    "exc_text",
-    "filename",
-    "funcName",
-    "levelname",
-    "levelno",
-    "lineno",
-    "module",
-    "msecs",
-    "message",
-    "msg",
-    "name",
-    "pathname",
-    "process",
-    "processName",
-    "relativeCreated",
-    "stack_info",
-    "thread",
-    "threadName",
-    "taskName",
-];
+pub use lk_agents_abi::worker::cli::LogFields;
 
 /// One log line. `style` is `json` (production: one object per line, Python's `json.dumps`
 /// spelling), or `console`, `compact` or `dev` (colored, the console's line reset first, the
@@ -600,6 +562,47 @@ impl ExitSignals {
 impl Default for ExitSignals {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The launcher's functions as the host calls them.
+pub struct Commands;
+
+#[async_trait::async_trait]
+impl lk_agents_abi::worker::cli::WorkerCli for Commands {
+    fn parse_cli(argv: Vec<String>) -> Result<CliArgs, CliError> {
+        parse_cli(argv)
+    }
+
+    fn entrypoint_module(path: Option<String>) -> Result<(String, String), CliError> {
+        entrypoint_module(path)
+    }
+
+    fn format_log_record(
+        style: String,
+        record: LogFields,
+        message: String,
+        asctime: String,
+        exception: Option<String>,
+        stack: Option<String>,
+        ensure_ascii: bool,
+    ) -> String {
+        format_log_record(&style, record, message, asctime, exception, stack, ensure_ascii)
+    }
+
+    async fn dev_channel(
+        cli_addr: String,
+        agent_name: String,
+        url: String,
+        api_key: String,
+        api_secret: String,
+        server: Arc<dyn lk_agents_abi::worker::cli::DevServer>,
+    ) {
+        dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await;
+    }
+
+    fn ipc_pair() -> Result<(i64, i64), HostError> {
+        crate::ipc::process::ipc_pair().map_err(|error| HostError::new(error.to_string()))
     }
 }
 

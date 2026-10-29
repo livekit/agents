@@ -337,11 +337,13 @@ pub fn entrypoint_module(path: ::std::option::Option<::std::string::String>) -> 
     Ok(out)
 }
 
-/// Format one host logging record using its boundary adapter.
+/// One log line in `style`: `message` is the formatted message, `asctime` the record's time
+/// as the host formats it, `exception` and `stack` the tracebacks.
 #[pyfunction]
 #[pyo3(signature = (style, record, message, asctime, exception, stack, ensure_ascii))]
-pub fn format_log_record(style: ::std::string::String, record: ::lk_agents_abi::HostRef, message: ::std::string::String, asctime: ::std::string::String, exception: ::std::option::Option<::std::string::String>, stack: ::std::option::Option<::std::string::String>, ensure_ascii: bool) -> PyResult<::std::string::String> {
-    let out = <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::format_log_record(style, record, message, asctime, exception, stack, ensure_ascii).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+pub fn format_log_record(style: ::std::string::String, record: Bound<'_, PyAny>, message: ::std::string::String, asctime: ::std::string::String, exception: ::std::option::Option<::std::string::String>, stack: ::std::option::Option<::std::string::String>, ensure_ascii: bool) -> PyResult<::std::string::String> {
+    let record = crate::generated::records::worker_cli::log_fields_from_py(&record)?;
+    let out = <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::format_log_record(style, record, message, asctime, exception, stack, ensure_ascii);
     Ok(out)
 }
 

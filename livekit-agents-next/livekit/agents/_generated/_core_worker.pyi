@@ -15,7 +15,7 @@ from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerHost
 
 from .._core import StartJobFields
-from .worker_cli import CliArgs
+from .worker_cli import CliArgs, LogFields
 from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
 from .worker_options import ServerOptions
 from .worker_server import EndpointRoute
@@ -76,14 +76,16 @@ def entrypoint_module(path: str | None) -> tuple[str, str]: ...
 
 def format_log_record(
     style: str,
-    record: object,
+    record: LogFields,
     message: str,
     asctime: str,
     exception: str | None,
     stack: str | None,
     ensure_ascii: bool,
 ) -> str:
-    """Format one host logging record using its boundary adapter."""
+    """One log line in `style`: `message` is the formatted message, `asctime` the record's time
+    as the host formats it, `exception` and `stack` the tracebacks.
+    """
 
 async def dev_channel(
     cli_addr: str,

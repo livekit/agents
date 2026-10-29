@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import importlib
 import logging
+import math
 import os
 import pkgutil
 import signal
@@ -21,7 +22,13 @@ from livekit.protocol import agent
 
 from . import _core
 from ._exceptions import CLIError
-from ._generated.worker_cli import CliArgs, CliArgsConsole, CliArgsDownloadFiles, CliArgsStart
+from ._generated.worker_cli import (
+    CliArgs,
+    CliArgsConsole,
+    CliArgsDownloadFiles,
+    CliArgsStart,
+    LogFields,
+)
 from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
 from .log import DEV_LEVEL, _add_global_log_fields, logger
 from .telemetry import loop_monitor
@@ -127,6 +134,43 @@ def _download_files() -> int:
 # --- logs --------------------------------------------------------------------------------------
 
 
+# `logging.LogRecord`'s own attributes, which a line never repeats as extras.
+_RECORD_ATTRIBUTES = frozenset(logging.makeLogRecord({}).__dict__) | {"asctime", "message"}
+
+
+def _log_fields(record: logging.LogRecord) -> LogFields:
+    extra = {
+        key: _lenient(value)
+        for key, value in record.__dict__.items()
+        if key not in _RECORD_ATTRIBUTES and not key.startswith("_")
+    }
+    msg = _lenient(record.msg) if isinstance(record.msg, dict) else None
+    return LogFields(
+        level=record.levelname,
+        name=record.name,
+        pid=record.process,
+        created=record.created,
+        msg=msg,
+        extra=extra,
+    )
+
+
+def _lenient(value: Any) -> Any:
+    """A record's attribute as JSON, as the reference's encoder writes it: a date by its
+    ``isoformat()``, anything else not JSON by its ``str()``."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, dict):
+        return {str(k): _lenient(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_lenient(v) for v in value]
+    if callable(isoformat := getattr(value, "isoformat", None)):
+        return str(isoformat())
+    return str(value)
+
+
 class _LogFormatter(logging.Formatter):
     """A record as the core writes its line (``style``: ``json``, ``dev``, ``compact`` or
     ``console``)."""
@@ -139,7 +183,7 @@ class _LogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         return _core.format_log_record(
             self._line_style,
-            record,
+            _log_fields(record),
             record.getMessage(),
             self.formatTime(record, self.datefmt),
             self.formatException(record.exc_info) if record.exc_info else record.exc_text,

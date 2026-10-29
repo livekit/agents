@@ -38,6 +38,20 @@ pub enum CliError {
     NoPath(String),
 }
 
+/// What a log line is made of: the record's level, logger, process and time, a `dict` message
+/// when one was logged, and its extra fields (the record's attributes outside the standard ones),
+/// as JSON values.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[crate::host(record(module = "worker_cli", extract))]
+pub struct LogFields {
+    pub level: String,
+    pub name: String,
+    pub pid: Option<i64>,
+    pub created: f64,
+    pub msg: Option<serde_json::Map<String, serde_json::Value>>,
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
 /// The typed command parser and filesystem entrypoint discovery implemented by the launcher.
 #[crate::host(functions)]
 #[async_trait::async_trait]
@@ -48,17 +62,18 @@ pub trait WorkerCli {
     #[host(function)]
     fn entrypoint_module(path: Option<String>) -> Result<(String, String), CliError>;
 
-    /// Format one host logging record using its boundary adapter.
+    /// One log line in `style`: `message` is the formatted message, `asctime` the record's time
+    /// as the host formats it, `exception` and `stack` the tracebacks.
     #[host(function, pid = false)]
     fn format_log_record(
         style: String,
-        record: crate::HostRef,
+        record: LogFields,
         message: String,
         asctime: String,
         exception: Option<String>,
         stack: Option<String>,
         ensure_ascii: bool,
-    ) -> Result<String, crate::errors::HostError>;
+    ) -> String;
 
     /// The development launcher connection.
     #[host(function)]
