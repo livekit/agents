@@ -4,17 +4,38 @@ its event and error stay here, where the generated session events import them.""
 from __future__ import annotations
 
 import time
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from .. import _core
+from ._utils import Credentials
 
 __all__ = ["AdaptiveInterruptionDetector", "InterruptionDetectionError", "OverlappingSpeechEvent"]
 
-AdaptiveInterruptionDetector = _core.InterruptionDetector
+
+class AdaptiveInterruptionDetector(_core.InterruptionDetector):
+    """The gateway model that tells an interruption from a backchannel while the agent speaks.
+    ``base_url``, ``api_key`` and ``api_secret`` default to the server's settings."""
+
+    def __new__(
+        cls,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        **options: Any,
+    ) -> AdaptiveInterruptionDetector:
+        credentials = Credentials.resolve(base_url, api_key, api_secret)
+        return super().__new__(
+            cls,
+            base_url=credentials.base_url,
+            api_key=credentials.api_key,
+            api_secret=credentials.api_secret,
+            **options,
+        )
 
 
 class InterruptionDetectionError(BaseModel):

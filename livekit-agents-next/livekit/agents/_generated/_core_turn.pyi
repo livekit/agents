@@ -101,7 +101,9 @@ class InterruptionDetector:
         conn_options: APIConnectOptions | None = None,
         token_ttl_secs: int = 600,
     ) -> None:
-        """Empty `base_url`, `api_key` or `api_secret` fall back to the environment."""
+        """`base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
+        the server's settings.
+        """
     def update_options(
         self,
         *,

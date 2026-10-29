@@ -153,14 +153,16 @@ pub trait EotStream: crate::EotDetector + Sized + 'static {
 /// backchannel while the agent speaks. Natively the session's interruption source.
 #[crate::host(class(
     name = "InterruptionDetector",
-    native = crate::turn::interruption::InterruptionSource
+    native = crate::turn::interruption::InterruptionSource,
+    subclass
 ))]
 pub trait InterruptionDetector: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
 
-    /// Empty `base_url`, `api_key` or `api_secret` fall back to the environment.
+    /// `base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
+    /// the server's settings.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(

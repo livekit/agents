@@ -11,7 +11,7 @@ import threading
 
 import pytest
 
-from livekit.agents import AgentServer, JobContext
+from livekit.agents import AgentServer, JobContext, inference
 from livekit.agents.inference._utils import get_default_inference_url, resolve_credentials
 from livekit.agents.job import JobExecutorType
 from livekit.agents.telemetry._providers import _AuthHeaderProvider
@@ -39,6 +39,7 @@ async def test_a_thread_job_reads_credentials_from_server_options(
     @server.rtc_session()
     async def entrypoint(ctx: JobContext) -> None:
         credentials = resolve_credentials(None, None)
+        inference.AdaptiveInterruptionDetector()  # resolves from the server's options too
         url = get_default_inference_url()
         token = _AuthHeaderProvider()()["Authorization"].removeprefix("Bearer ")
         issuer = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "==="))["iss"]

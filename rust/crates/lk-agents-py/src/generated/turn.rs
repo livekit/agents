@@ -249,12 +249,13 @@ fn _extract_interruption_detector_update_options_min_interruption_duration(obj: 
 
 /// `inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
 /// backchannel while the agent speaks. Natively the session's interruption source.
-#[pyclass(frozen, name = "InterruptionDetector", module = "livekit.agents._core")]
+#[pyclass(frozen, subclass, name = "InterruptionDetector", module = "livekit.agents._core")]
 pub struct InterruptionDetector(pub(crate) ::std::sync::Arc<InterruptionDetectorImpl>);
 
 #[pymethods]
 impl InterruptionDetector {
-    /// Empty `base_url`, `api_key` or `api_secret` fall back to the environment.
+    /// `base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
+    /// the server's settings.
     #[new]
     #[pyo3(signature = (*, threshold = None, min_interruption_duration = 0.05, max_audio_duration = 3.0, audio_prefix_duration = 1.0, detection_interval = 0.1, inference_timeout = 0.7, base_url = None, api_key = None, api_secret = None, conn_options = None, token_ttl_secs = 600))]
     fn new(#[pyo3(from_py_with = _extract_interruption_detector_new_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_new_min_interruption_duration)] min_interruption_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_max_audio_duration)] max_audio_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_audio_prefix_duration)] audio_prefix_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_detection_interval)] detection_interval: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_inference_timeout)] inference_timeout: f64, base_url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)] token_ttl_secs: u64) -> PyResult<InterruptionDetector> {

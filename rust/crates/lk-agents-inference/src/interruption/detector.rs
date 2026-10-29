@@ -6,10 +6,8 @@ use std::sync::Arc;
 use lk_agents_abi::inference::InvalidOption;
 use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSource};
 use lk_agents_abi::{ApiConnectOptions, WallAnchor};
-use lk_agents_net::credentials::resolve_credential;
 
 use super::{AdaptiveInterruptionDetector, ConnectionConfig, InterruptionLeg, InterruptionOptions};
-use crate::headers::default_inference_url;
 use lk_agents_net::env::ProcessEnv;
 
 /// The detector the session reads, its streams timed against the host's clock.
@@ -34,14 +32,10 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
         conn_options: Option<ApiConnectOptions>,
         token_ttl_secs: u64,
     ) -> Result<Self, InvalidOption> {
-        // The public constructor is this class's process boundary: it reads the environment once.
-        // `base_url if base_url else ...`: an empty argument falls through to the environment.
-        let given = |v: Option<String>| v.filter(|v| !v.is_empty());
-        let var = |name: &str| std::env::var(name).ok();
-        let credential = |explicit, inference: &str, livekit: &str| {
-            given(explicit).unwrap_or_else(|| {
-                resolve_credential(None, var(inference).as_deref(), var(livekit).as_deref())
-            })
+        let required = |value: Option<String>, name: &str| {
+            value
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| InvalidOption(format!("{name} is required")))
         };
         let opts = InterruptionOptions::new(
             threshold,
@@ -50,14 +44,9 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
             audio_prefix_duration,
             detection_interval,
             inference_timeout,
-            given(base_url).unwrap_or_else(|| {
-                default_inference_url(
-                    var("LIVEKIT_INFERENCE_URL").as_deref(),
-                    var("LIVEKIT_URL").as_deref(),
-                )
-            }),
-            credential(api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY"),
-            credential(api_secret, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET"),
+            required(base_url, "base_url")?,
+            required(api_key, "api_key")?,
+            required(api_secret, "api_secret")?,
         )
         .map_err(|e| InvalidOption(e.to_string()))?;
         // The session's stream owns its retries.
