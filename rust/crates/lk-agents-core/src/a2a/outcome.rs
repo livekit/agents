@@ -229,9 +229,10 @@ pub struct Settle<'a> {
 }
 
 /// The turn's end: the runs' new items (or the message and a text answer) for the history, then
-/// the rows: a client cancel leaves the answer row as the client wrote it; a raise fails it; an
-/// interrupt cancels it; a question waits; otherwise it completes with the answer as an artifact.
-/// Every earlier message of a batch completes merged into the answer.
+/// the rows: a client cancel leaves the answer row as the client wrote it, or cancels the task a
+/// canceled reply continued; a raise fails it; an interrupt cancels it; a question waits;
+/// otherwise it completes with the answer as an artifact. Every earlier message of a batch
+/// completes merged into the answer.
 pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     let out = s.out;
     let last = s.batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
@@ -289,6 +290,15 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     }
     if s.stop == Some(Stop::ClientCanceled) || (settled.interrupted && s.answer_canceled) {
         // the answer row is the client's; the history keeps what ran, the run says why it ended
+        if !s.answer_canceled {
+            // the client canceled the reply continuing it: the task this turn carried ends too
+            let patch = TaskPatch::default();
+            settled.transitions.push(TaskTransition {
+                task_id: answer,
+                status: TaskState::Canceled,
+                patch,
+            });
+        }
         settled.outcome = RunOutcome::Canceled;
         settled.reason = Some("client-cancel".into());
         return Ok(settled);
@@ -640,11 +650,10 @@ mod tests {
         assert_eq!(answer.transitions[0].task_id, "AST_receipt");
     }
 
-    /// Found by the A2A DST (A2A_SEED=8): a reply continuing a pending question by its `taskId`
-    /// stamped its `messageId` on both the receipt and the continued task, and the thread's
-    /// unique (lane, message_id) task index refused the whole commit.
-    #[test]
-    fn a_continuation_keeps_one_task_per_message_and_the_continued_history() {
+    /// A reply "two" continuing the pending question "For how many?" of `AST_waiting` by its
+    /// `taskId`, through `answer_pending` and the settlement of a turn that ended with `out` or
+    /// `stop`: the continued row, then the reply's receipt, as the commit leaves them.
+    fn continued(out: HandlerOutput, stop: Option<Stop>) -> Vec<TaskWrite> {
         let mut waiting =
             unpersisted_failed("AST_waiting", "desk", None, "", 0, "msg_question".into());
         waiting.status = TaskState::InputRequired;
@@ -676,7 +685,6 @@ mod tests {
         };
         let pending = answer_pending(Some(&waiting), &answer, "AST_receipt", 2.0, "i".into());
         pending.transitions.into_iter().for_each(&mut write);
-        let out = HandlerOutput { output: Some(json!("booked")), ..HandlerOutput::default() };
         let batch = [answer.clone()];
         let settled = settle(Settle {
             batch: &batch,
@@ -684,7 +692,7 @@ mod tests {
             answer_task: &pending.answer_task,
             user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
             out: &out,
-            stop: None,
+            stop,
             answer_canceled: false,
             lane_question: true,
             now: 2.0,
@@ -692,6 +700,16 @@ mod tests {
         })
         .unwrap();
         settled.transitions.into_iter().for_each(&mut write);
+        rows
+    }
+
+    /// Found by the A2A DST (A2A_SEED=8): a reply continuing a pending question by its `taskId`
+    /// stamped its `messageId` on both the receipt and the continued task, and the thread's
+    /// unique (lane, message_id) task index refused the whole commit.
+    #[test]
+    fn a_continuation_keeps_one_task_per_message_and_the_continued_history() {
+        let out = HandlerOutput { output: Some(json!("booked")), ..HandlerOutput::default() };
+        let rows = continued(out, None);
         let ids: Vec<_> = rows.iter().map(|r| r.message_id.as_deref()).collect();
         assert_eq!(ids, [Some("question"), Some("answer")], "one task per messageId");
         let continued = &rows[0];
@@ -699,5 +717,15 @@ mod tests {
         let said: Vec<&str> =
             continued.data.history.iter().map(|m| m.message_id.as_str()).collect();
         assert_eq!(said, ["question", "answer"], "the continued task's history accumulates");
+    }
+
+    /// Found by the A2A DST (A2A_SEED=2316 and ten more of 32768): a client canceled the
+    /// reply's receipt mid-turn; the turn stopped and its commit left the continued task
+    /// `working` with nobody running it, until the next holder failed it `worker-lost`.
+    #[test]
+    fn a_canceled_reply_ends_the_task_it_continued() {
+        let out = HandlerOutput { output: Some(json!("late")), ..HandlerOutput::default() };
+        let rows = continued(out, Some(Stop::ClientCanceled));
+        assert_eq!(rows[0].status, TaskState::Canceled);
     }
 }

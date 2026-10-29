@@ -19,7 +19,7 @@
 //! error answer is one the client can act on; a terminal task never changes; a commit that
 //! applied is never answered as a failure; every answer to one message names its task; every
 //! received inbox message is drained; at most one question waits on the lane; a commit leaves
-//! every terminal row it wrote as it wrote it, unless a client canceled it.
+//! every terminal row it wrote as it wrote it, unless a client canceled it, and none `working`.
 
 mod database;
 mod handler;

@@ -146,8 +146,9 @@ pub fn one_question_pending(record: &Record) -> Vec<Violation> {
 
 /// A committed run's terminal rows end as its commit wrote them, unless a client canceled one: no
 /// other turn overwrites them. A request its committed run answered reads its answer settled:
-/// no write of the run's settlement was dropped on its way to the database. (A write storage
-/// refuses fails the turn `Invalid`, which [`answer_is_an_outcome`] rejects.)
+/// no write of the run's settlement was dropped on its way to the database. A commit leaves no
+/// row `working`: the run that held it ended. (A write storage refuses fails the turn
+/// `Invalid`, which [`answer_is_an_outcome`] rejects.)
 pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
     let overwritten =
         record.ledger.staged_terminal.iter().filter_map(|(commit, task_id, staged)| {
@@ -169,7 +170,11 @@ pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
             ),
         })
     });
-    overwritten.chain(unsettled).collect()
+    let working = record.ledger.left_working.iter().map(|(commit, task_id)| Violation {
+        subject: "Run",
+        text: format!("commit {commit}: left {task_id} working"),
+    });
+    overwritten.chain(unsettled).chain(working).collect()
 }
 
 /// A request whose worker lived is answered: no task is watched or waited on forever.
@@ -375,6 +380,13 @@ mod tests {
         row.status = TaskState::Failed;
         let staged = (1, id.clone(), TaskState::Completed);
         r.ledger.staged_terminal.push(staged);
+        assert!(!commit_is_what_the_run_staged(&r).is_empty());
+    }
+
+    #[test]
+    fn a_row_a_commit_left_working_is_rejected() {
+        let mut r = record();
+        r.ledger.left_working.push((1, "AST_1".into()));
         assert!(!commit_is_what_the_run_staged(&r).is_empty());
     }
 

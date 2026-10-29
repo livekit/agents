@@ -2,7 +2,8 @@
 //! the run's virtual clock, behind storage's fault-injecting one, every request a little late so
 //! the workers' operations interleave. Between batches it observes what the rules read: a
 //! terminal row that changed, the rows a commit applied while its acknowledgment was lost, the
-//! terminal rows each commit wrote, the most questions pending at once.
+//! terminal rows each commit wrote and those it left `working`, the most questions pending at
+//! once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,8 @@ pub struct Ledger {
     pub terminal_changes: Vec<String>,
     /// Every applied commit's terminal rows: `(commit, task_id, status)`.
     pub staged_terminal: Vec<(u64, String, TaskState)>,
+    /// Rows an applied commit left `working`: `(commit, task_id)`.
+    pub left_working: Vec<(u64, String)>,
     /// The most questions pending at once, and which.
     pub most_pending: Vec<String>,
     pub lost_acks: u64,
@@ -147,6 +150,9 @@ impl Database {
         if commit {
             let mut commits = self.commits.lock().unwrap();
             *commits += 1;
+            let working = changed.iter().filter(|(_, s)| *s == TaskState::Working);
+            let working = working.map(|(id, _)| (*commits, id.clone()));
+            ledger.left_working.extend(working.collect::<Vec<_>>());
             match result {
                 Ok(_) => {
                     let terminal = changed.iter().filter(|(_, s)| s.is_terminal());
