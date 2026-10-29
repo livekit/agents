@@ -189,9 +189,7 @@ class STT(stt.STT):
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> SpeechStream:
-        resolved = _core._core_resolve_api_connect_options(
-            self._conn, conn_options if is_given(conn_options) else None
-        )
+        resolved = conn_options if is_given(conn_options) else self._conn
         return SpeechStream(
             stt=self,
             language=str(LanguageCode(language)) if is_given(language) else None,

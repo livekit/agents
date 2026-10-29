@@ -189,17 +189,13 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> tts.ChunkedStream:
-        resolved = _core._core_resolve_api_connect_options(
-            self._conn, conn_options if is_given(conn_options) else None
-        )
+        resolved = conn_options if is_given(conn_options) else self._conn
         return self._synthesize_with_stream(text, conn_options=resolved)
 
     def stream(
         self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> SynthesizeStream:
-        resolved = _core._core_resolve_api_connect_options(
-            self._conn, conn_options if is_given(conn_options) else None
-        )
+        resolved = conn_options if is_given(conn_options) else self._conn
         return SynthesizeStream(tts=self, conn_options=resolved)
 
 

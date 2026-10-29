@@ -20,7 +20,42 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{ApiConnectOptions, HOST_TEARDOWN_TIMEOUT, Ts};
+use lk_agents_abi::{ApiConnectOptions, ApiConnectOptionsError, HOST_TEARDOWN_TIMEOUT, Ts};
+
+/// The host's `APIConnectOptions` rules: its boundary check and its retry interval.
+pub struct ConnectOptionsRules;
+
+impl lk_agents_abi::types::connect::ConnectOptionsFunctions for ConnectOptionsRules {
+    fn api_connect_options_check(
+        max_retry: i64,
+        retry_interval: f64,
+        pool_timeout: Option<f64>,
+        connect_timeout: Option<f64>,
+        write_timeout: Option<f64>,
+        read_timeout: Option<f64>,
+        total_timeout: Option<f64>,
+    ) -> Result<(), ApiConnectOptionsError> {
+        let max_retry = u32::try_from(max_retry).map_err(|_| ApiConnectOptionsError {
+            field: "max_retry",
+            requirement: "must be an integer >= 0",
+        })?;
+        ApiConnectOptions {
+            max_retry,
+            retry_interval,
+            pool_timeout,
+            connect_timeout,
+            write_timeout,
+            read_timeout,
+            total_timeout,
+        }
+        .validate()
+    }
+
+    fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64 {
+        ApiConnectOptions { retry_interval, ..ApiConnectOptions::default() }
+            .interval_for_retry(num_retries)
+    }
+}
 
 /// A retiring request's phases are bounded so it asks at least this many times inside its window:
 /// a silent attempt never holds the whole window, even when the caller set no limits.
@@ -513,5 +548,21 @@ impl Attempts {
                 p.read_timeout.map(|t| (waiting_since.saturating_add(t), TimeoutPhase::Read))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lk_agents_abi::types::connect::ConnectOptionsFunctions as _;
+
+    use super::ConnectOptionsRules;
+
+    // Catches: a negative retry count wrapping into a huge budget instead of naming its field.
+    #[test]
+    fn a_negative_max_retry_is_refused_by_name() {
+        let err =
+            ConnectOptionsRules::api_connect_options_check(-1, 2.0, None, None, None, None, None)
+                .unwrap_err();
+        assert_eq!(err.to_string(), "conn_options.max_retry must be an integer >= 0");
     }
 }

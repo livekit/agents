@@ -96,12 +96,9 @@ from ._generated._core_classes import (
     VideoFrameRef as VideoFrameRef,
     VoiceSession as VoiceSession,
     _core_mcp_timeout_check as _core_mcp_timeout_check,
-    _core_resolve_api_connect_options as _core_resolve_api_connect_options,
     _core_RoomSession as _core_RoomSession,
     amd_constants as amd_constants,
     amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
-    api_connect_options_check as api_connect_options_check,
-    api_retry_interval as api_retry_interval,
     card_expired as card_expired,
     chat_chunk_has_response as chat_chunk_has_response,
     chat_ctx_copy_plan as chat_ctx_copy_plan,
@@ -326,6 +323,8 @@ from ._generated._core_turn import (
 )
 from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,
+    api_connect_options_check as api_connect_options_check,
+    api_retry_interval as api_retry_interval,
 )
 from ._generated._core_utils import (
     AudioByteStream as AudioByteStream,

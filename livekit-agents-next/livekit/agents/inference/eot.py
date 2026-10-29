@@ -169,9 +169,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         return self._detector.supports(language)
 
     def stream(self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN) -> _core.EotStream:
-        resolved = _core._core_resolve_api_connect_options(
-            self._conn_options, conn_options if is_given(conn_options) else None
-        )
+        resolved = conn_options if is_given(conn_options) else self._conn_options
         return self._detector.stream(list(get_inference_headers().items()), resolved)
 
     def _emit_metrics(self, ev: dict[str, object]) -> None:

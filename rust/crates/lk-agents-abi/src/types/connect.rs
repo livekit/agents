@@ -138,42 +138,28 @@ pub fn duration_from_seconds(seconds: f64) -> Option<Duration> {
 /// The largest duration accepted: a century, far below what `Duration::from_secs_f64` overflows on.
 const MAX_SECONDS: f64 = 100.0 * 365.25 * 86_400.0;
 
-/// The record as the host built it, checked at the boundary; the error names the field.
-#[crate::host(export(pid = false))]
-pub fn api_connect_options_check(
-    max_retry: i64,
-    retry_interval: f64,
-    pool_timeout: Option<f64>,
-    connect_timeout: Option<f64>,
-    write_timeout: Option<f64>,
-    read_timeout: Option<f64>,
-    total_timeout: Option<f64>,
-) -> Result<(), ApiConnectOptionsError> {
-    let max_retry = u32::try_from(max_retry).map_err(|_| ApiConnectOptionsError {
-        field: "max_retry",
-        requirement: "must be an integer >= 0",
-    })?;
-    ApiConnectOptions {
-        max_retry,
-        retry_interval,
-        pool_timeout,
-        connect_timeout,
-        write_timeout,
-        read_timeout,
-        total_timeout,
-    }
-    .validate()
+/// The connection policy rules `APIConnectOptions` applies.
+#[crate::host(functions(pid = false))]
+pub trait ConnectOptionsFunctions {
+    /// The record as the host built it, checked at the boundary; the error names the field.
+    #[host(function)]
+    fn api_connect_options_check(
+        max_retry: i64,
+        retry_interval: f64,
+        pool_timeout: Option<f64>,
+        connect_timeout: Option<f64>,
+        write_timeout: Option<f64>,
+        read_timeout: Option<f64>,
+        total_timeout: Option<f64>,
+    ) -> Result<(), ApiConnectOptionsError>;
+
+    /// `APIConnectOptions.interval_for_retry` for the host's retry loops; only `retry_interval`
+    /// affects the answer.
+    #[host(function)]
+    fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64;
 }
 
 pub const FIRST_RETRY_INTERVAL: f64 = 0.1;
-
-/// `APIConnectOptions.interval_for_retry` (`types.py:138`) for the host's retry loops; only
-/// `retry_interval` affects the answer.
-#[crate::host(export(pid = false))]
-pub fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64 {
-    ApiConnectOptions { max_retry: 0, retry_interval, ..DEFAULT_API_CONNECT_OPTIONS }
-        .interval_for_retry(num_retries)
-}
 
 #[cfg(test)]
 mod tests {
@@ -214,17 +200,5 @@ mod tests {
                 ApiConnectOptions { retry_interval: bad, ..DEFAULT_API_CONNECT_OPTIONS }.validate();
             assert_eq!(err.unwrap_err().field, "retry_interval", "{bad}");
         }
-        let err = api_connect_options_check(-1, 2.0, None, None, None, None, None).unwrap_err();
-        assert_eq!(err.to_string(), "conn_options.max_retry must be an integer >= 0");
     }
-}
-
-/// Select the immutable host policy without reconstructing it. The constructor and native
-/// operation boundary validate its typed fields.
-#[crate::host(export(name = "_core_resolve_api_connect_options", pid = false))]
-pub fn resolve_api_connect_options(
-    provider: crate::HostRef,
-    call: Option<crate::HostRef>,
-) -> crate::HostRef {
-    call.unwrap_or(provider)
 }

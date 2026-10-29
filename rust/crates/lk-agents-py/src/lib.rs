@@ -47,6 +47,7 @@ impl generated::Implementations for Selected {
     type LanguageFunctions = lk_agents_runtime::cores::Languages;
     type ApiErrorFunctions = lk_agents_runtime::net::http::HttpErrors;
     type ChatContextDiffs = lk_agents_runtime::cores::ChatDiffs;
+    type ConnectOptionsFunctions = lk_agents_runtime::net::attempts::ConnectOptionsRules;
     type ImageFunctions = lk_agents_runtime::images::ImageFunctions;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;

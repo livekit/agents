@@ -116,7 +116,6 @@ pub use stt::events::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType
 pub use turn::events::EotPrediction;
 pub use types::connect::{
     ApiConnectOptions, ApiConnectOptionsError, DEFAULT_API_CONNECT_OPTIONS, FIRST_RETRY_INTERVAL,
-    api_retry_interval,
 };
 pub use utils::host_ref::{CoreObject, HostRef, MediaRef, RefRegistry};
 pub use vad::events::{VadEvent, VadEventType};

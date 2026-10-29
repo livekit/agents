@@ -116,6 +116,7 @@ pub trait Implementations: 'static {
     type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
     type EotStream: ::lk_agents_abi::turn::inference::EotStream;
     type InterruptionDetector: ::lk_agents_abi::turn::inference::InterruptionDetector;
+    type ConnectOptionsFunctions: ::lk_agents_abi::types::connect::ConnectOptionsFunctions;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
     type AudioByteStream: ::lk_agents_abi::utils::byte_stream::AudioByteStream;
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
@@ -328,6 +329,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<turn::InferenceEot>()?;
     m.add_class::<turn::EotStream>()?;
     m.add_class::<turn::InterruptionDetector>()?;
+    m.add_function(wrap_pyfunction!(types::api_connect_options_check, m)?)?;
+    m.add_function(wrap_pyfunction!(types::api_retry_interval, m)?)?;
     m.add_class::<types::_core_ProviderAttempts>()?;
     m.add_class::<utils::AudioByteStream>()?;
     m.add_class::<utils::ConnectionPoolState>()?;

@@ -10,6 +10,22 @@ from livekit.agents.types import APIConnectOptions
 from ._retry import _core_RetryDecision
 from .stt import SpeechEvent
 
+def api_connect_options_check(
+    max_retry: int,
+    retry_interval: float,
+    pool_timeout: float | None,
+    connect_timeout: float | None,
+    write_timeout: float | None,
+    read_timeout: float | None,
+    total_timeout: float | None,
+) -> None:
+    """The record as the host built it, checked at the boundary; the error names the field."""
+
+def api_retry_interval(retry_interval: float, num_retries: int) -> float:
+    """`APIConnectOptions.interval_for_retry` for the host's retry loops; only `retry_interval`
+    affects the answer.
+    """
+
 class _core_ProviderAttempts:
     """Host callbacks execute attempts authorized by the shared inference request machine."""
     def __init__(self, kind: str, conn_options: APIConnectOptions, now_ns: int) -> None: ...
