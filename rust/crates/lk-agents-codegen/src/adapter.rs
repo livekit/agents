@@ -388,6 +388,14 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 wrap.replace("{}", "out").replace("{py}", "py")
             ));
         }
+        MethodKind::Await if m.eager => {
+            s.push_str(&format!(
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = {call}(&self.0, {});\n        crate::host::future_into_py(py, async move {{\n            let out = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
+                passed.join(", "),
+                wrap.replace("{}", "out").replace("{py}", "py")
+            ));
+        }
         MethodKind::Await => {
             s.push_str(&format!(
                 "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::host::future_into_py(py, async move {{\n            let out = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",

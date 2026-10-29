@@ -268,14 +268,20 @@ impl Resolver<'_> {
             ));
         }
         let receiver = f.sig.receiver();
+        // `fn ..(&self, ..) -> BoxFuture<'static, T>`: the call runs at once, under the host's
+        // call (a command sent in call order), and the host awaits the future it returns.
+        let eager = kind == MethodKind::Await
+            && f.sig.asyncness.is_none()
+            && proxy::boxed_future(&f.sig.output).is_some_and(|(lt, _)| lt == "'static");
         let shape_ok = match kind {
             MethodKind::AsyncFunction => receiver.is_none() && f.sig.asyncness.is_some(),
             MethodKind::New | MethodKind::Function | MethodKind::StaticCall => {
                 receiver.is_none() && f.sig.asyncness.is_none()
             }
-            MethodKind::Await | MethodKind::Next => {
-                receiver.is_some_and(shared) && f.sig.asyncness.is_some()
+            MethodKind::Await => {
+                receiver.is_some_and(shared) && (f.sig.asyncness.is_some() || eager)
             }
+            MethodKind::Next => receiver.is_some_and(shared) && f.sig.asyncness.is_some(),
             MethodKind::Getter | MethodKind::Setter => {
                 receiver.is_some_and(shared) && f.sig.asyncness.is_none()
             }
@@ -285,7 +291,7 @@ impl Resolver<'_> {
         };
         if !shape_ok {
             return Err(format!(
-                "{at}: the signature does not fit `{}` (new/function: no receiver; getter: `&self`; call: no receiver, `&self` or `&mut self`; await: `async fn(&self)`)",
+                "{at}: the signature does not fit `{}` (new/function: no receiver; getter: `&self`; call: no receiver, `&self` or `&mut self`; await: `async fn(&self)` or `fn(&self) -> BoxFuture<'static, T>`)",
                 format!("{kind:?}").to_lowercase()
             ));
         }
@@ -392,7 +398,10 @@ impl Resolver<'_> {
         if kind == MethodKind::Getter && !params.is_empty() {
             return Err(format!("{at}: a getter takes no parameters"));
         }
-        let ret = self.ret(&f.sig.output, &at)?;
+        let ret = match proxy::boxed_future(&f.sig.output).filter(|_| eager) {
+            Some((_, out)) => self.ret(&syn::parse_quote!(-> #out), &at)?,
+            None => self.ret(&f.sig.output, &at)?,
+        };
         if kind == MethodKind::Setter
             && (params.iter().filter(|parameter| !parameter.ty.hidden()).count() != 1
                 || ret.ok != Ty::Unit)
@@ -435,6 +444,7 @@ impl Resolver<'_> {
             mutable: receiver.is_some_and(|r| r.mutability.is_some()),
             name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
             kind,
+            eager,
             detach,
             pid: voc::boolean(&at, &entries, "pid")?,
             params,

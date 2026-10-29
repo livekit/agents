@@ -351,6 +351,9 @@ pub struct Method {
     /// The host name; the Rust one unless `name = ".."`.
     pub name: String,
     pub kind: MethodKind,
+    /// An `await` declared `fn(&self, ..) -> BoxFuture<'static, T>`: called synchronously at the
+    /// host's call, its future awaited after.
+    pub eager: bool,
     /// Release the host lock while executing this synchronous native operation.
     pub detach: bool,
     /// Override the class or function group fork guard for this entry.

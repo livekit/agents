@@ -140,6 +140,26 @@ fn aliases_generics_reexports_and_declared_kinds_resolve() {
     assert_eq!(c.methods[3].kind, MethodKind::Await);
 }
 
+// Catches: an awaited method declared `-> BoxFuture<'static, T>` started only when the host
+// awaits it (a command it sends would then be ordered after later calls), or its future's output
+// read as the declared result instead of the future itself.
+#[test]
+fn an_eager_await_runs_at_the_call_and_awaits_its_future() {
+    let decls = read(&class(
+        "#[host(await)] fn ready(&self, id: String) -> crate::BoxFuture<'static, Res<u32>>;",
+    ))
+    .expect("resolves");
+    let ready = &decls.classes[0].methods[0];
+    assert!(ready.eager && ready.kind == MethodKind::Await);
+    assert_eq!(ready.ret.ok, Ty::Int(crate::decl::Int::U32));
+    let adapter = crate::adapter::emit(&decls).unwrap();
+    let text = adapter.iter().map(|o| o.text.as_str()).collect::<String>();
+    let (sent, awaited) = (text.find("let call = <").unwrap(), text.find("call.await").unwrap());
+    assert!(sent < text.find("future_into_py").unwrap() && sent < awaited, "{text}");
+    let err = refuse("#[host(await)] fn ready(&self) -> crate::BoxFuture<'_, Res<u32>>;");
+    assert!(err.contains("BoxFuture<'static"), "{err}");
+}
+
 // Catches: an implementation's own object (a handle) taken as an input, or handed out as
 // anything but the shell's class built from it.
 #[test]
