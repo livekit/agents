@@ -68,38 +68,6 @@ struct TokenLogState {
 }
 
 impl TokenLog {
-    pub fn for_host() -> Self {
-        TokenLog::default()
-    }
-
-    pub fn push_text(&self, text: String) {
-        self.push(Token::Text(text));
-    }
-
-    pub fn push_flush(&self) {
-        self.push(Token::Flush);
-    }
-
-    pub fn end_input(&self) {
-        self.end();
-    }
-
-    /// Everything pushed so far (`None` for a flush) and whether the input ended: what the host
-    /// replays into a fresh stream's channel.
-    pub fn replay_tokens(&self) -> (Vec<Option<String>>, bool) {
-        let (tokens, ended) = self.snapshot();
-        let tokens = tokens
-            .into_iter()
-            .map(|t| match t {
-                Token::Text(text) => Some(text),
-                Token::Flush => None,
-            })
-            .collect();
-        (tokens, ended)
-    }
-}
-
-impl TokenLog {
     pub fn new() -> Arc<Self> {
         Arc::new(TokenLog::default())
     }
@@ -546,72 +514,10 @@ impl FallbackTts {
     }
 }
 
-/// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 impl FallbackTts {
-    /// `ttss` in order. `sample_rate = None` takes the maximum of the entries' rates and upsamples
-    /// the rest, as the reference does.
-    pub fn for_host(
-        ttss: Vec<Arc<dyn Tts>>,
-        max_retry_per_tts: u32,
-        sample_rate: Option<u32>,
-        on_availability: Option<Arc<dyn ChainObserver>>,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
-        speech: SpeechTextProcessors,
-    ) -> Result<Self, TtsChainError> {
-        let policy =
-            ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
-        let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackTts::new(ttss, sample_rate, policy, clock, spawner, observer, speech)
-    }
-
-    /// The chain as the provider the session holds (a native `_core.FallbackTts` is not proxied).
-    pub fn as_tts(self: &Arc<Self>) -> Arc<dyn Tts> {
-        Arc::clone(self) as Arc<dyn Tts>
-    }
-
-    pub fn active_index(&self) -> usize {
-        self.chain.active_index()
-    }
-
     /// Cancel every recovery probe in flight, idempotently.
     pub fn aclose(&self) {
         self.chain.aclose();
-    }
-
-    /// `aclose()`: every recovery probe in flight closes its stream, awaited (bounded).
-    pub async fn aclose_for_host(&self) {
-        self.chain.close().await;
-    }
-
-    /// The merged capabilities, as `TTSCapabilities` keyword arguments.
-    pub fn merged_capabilities(&self) -> TtsCapabilities {
-        self.capabilities
-    }
-
-    pub fn output_sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    pub fn output_num_channels(&self) -> u16 {
-        self.num_channels
-    }
-
-    /// The one-shot path: a stream with no push half.
-    pub async fn synthesize_for_host(
-        &self,
-        text: String,
-        conn_options: Option<ApiConnectOptions>,
-    ) -> Result<TtsSource, ProviderError> {
-        Tts::synthesize(&self.configured(conn_options), &text).await
-    }
-
-    /// `stream()`: the duplex path, text in, audio out.
-    pub async fn stream_for_host(
-        &self,
-        conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(TtsSink, TtsSource), ProviderError> {
-        Tts::stream(&self.configured(conn_options)).await
     }
 }
 

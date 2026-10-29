@@ -10,7 +10,8 @@ use lk_agents_abi::{ApiConnectOptions, Tts, TtsCapabilities};
 use crate::tts::stream::TtsStream;
 use lk_agents_net::env::ProcessEnv;
 
-use super::{FallbackTts, TokenLog};
+use super::{FallbackTts, Token, TokenLog};
+use crate::fallback::ChainPolicy;
 
 impl port::FallbackTts for FallbackTts {
     type Stream = TtsStream;
@@ -23,38 +24,44 @@ impl port::FallbackTts for FallbackTts {
         sample_rate: Option<u32>,
         on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, InvalidPayload> {
-        FallbackTts::for_host(
+        // `sample_rate = None` takes the maximum of the entries' rates and upsamples the rest.
+        let policy =
+            ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
+        let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
+        let spawner = (env.spawner)().map_err(InvalidPayload)?;
+        FallbackTts::new(
             ttss,
-            max_retry_per_tts,
             sample_rate,
-            on_availability,
+            policy,
             env.clock.clone(),
-            (env.spawner)().map_err(InvalidPayload)?,
+            spawner,
+            observer,
             env.speech_text,
         )
         .map_err(|error| InvalidPayload(error.to_string()))
     }
     fn active_index(&self) -> usize {
-        self.active_index()
+        self.chain.active_index()
     }
     fn capabilities(&self) -> TtsCapabilities {
-        self.merged_capabilities()
+        self.capabilities
     }
     fn sample_rate(&self) -> u32 {
-        self.output_sample_rate()
+        self.sample_rate
     }
     fn num_channels(&self) -> u16 {
-        self.output_num_channels()
+        self.num_channels
     }
+    /// Every recovery probe in flight closes its stream, awaited (bounded).
     async fn aclose(&self) {
-        self.aclose_for_host().await;
+        self.chain.close().await;
     }
     async fn synthesize(
         &self,
         text: String,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self::Stream, ProviderError> {
-        self.synthesize_for_host(text, conn_options)
+        Tts::synthesize(&self.configured(conn_options), &text)
             .await
             .map(|source| TtsStream::new(None, source))
     }
@@ -62,7 +69,7 @@ impl port::FallbackTts for FallbackTts {
         &self,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self::Stream, ProviderError> {
-        self.stream_for_host(conn_options)
+        Tts::stream(&self.configured(conn_options))
             .await
             .map(|(sink, source)| TtsStream::new(Some(sink), source))
     }
@@ -73,15 +80,24 @@ impl port::TtsTokenLog for TokenLog {
         Self::default()
     }
     fn push(&self, text: String) {
-        self.push_text(text);
+        TokenLog::push(self, Token::Text(text));
     }
     fn flush(&self) {
-        self.push_flush();
+        TokenLog::push(self, Token::Flush);
     }
     fn end(&self) {
-        self.end_input();
+        TokenLog::end(self);
     }
+    /// Everything pushed so far (`None` for a flush) and whether the input ended.
     fn snapshot(&self) -> (Vec<Option<String>>, bool) {
-        self.replay_tokens()
+        let (tokens, ended) = TokenLog::snapshot(self);
+        let tokens = tokens
+            .into_iter()
+            .map(|token| match token {
+                Token::Text(text) => Some(text),
+                Token::Flush => None,
+            })
+            .collect();
+        (tokens, ended)
     }
 }
