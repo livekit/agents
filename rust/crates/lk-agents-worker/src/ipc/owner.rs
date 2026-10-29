@@ -10,7 +10,7 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::lock;
 use lk_agents_abi::worker::ipc_host::{
-    ProcessHost, SupervisedProcess, WorkerError, WorkerProcSupervisor,
+    JobExecutor, ProcessSupervisor, SupervisedProcess, WorkerError,
 };
 use lk_agents_abi::worker::job::StartJobFields;
 use tokio::sync::watch;
@@ -19,17 +19,17 @@ use super::process::{ProcessControl, ProcessLaunch, ProcessResource, StartMethod
 use super::supervisor::{CleanupObservation, SignalFailure};
 use super::{
     Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, MemoryError, PROTOCOL_VERSION,
-    ProcessCallbacks, ProcSupervisor, SupervisorOptions, extra_fields, secs,
+    ProcSupervisor, ProcessCallbacks, SupervisorOptions, extra_fields, secs,
 };
-use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::blocking_io::BlockingIo;
+use lk_agents_net::env::ProcessEnv;
 
 pub struct ProcessOwner {
     launch: watch::Sender<ProcessLaunch>,
     pub(crate) sup: ProcSupervisor,
     /// Taken by `run()`: the executor holds this object, so keeping it would be a cycle the
     /// host's collector cannot see.
-    host: Mutex<Option<Arc<dyn ProcessHost>>>,
+    host: Mutex<Option<Arc<dyn JobExecutor>>>,
     /// What the executor's steps run in: the constructor's caller.
     context: CallContext,
     io: BlockingIo,
@@ -59,13 +59,13 @@ impl ProcessOwner {
     }
 }
 
-impl WorkerProcSupervisor for ProcessOwner {
+impl ProcessSupervisor for ProcessOwner {
     type Env = ProcessEnv;
 
     fn new(
         env: &ProcessEnv,
         fd: i64,
-        host: Arc<dyn ProcessHost>,
+        host: Arc<dyn JobExecutor>,
         pid: u32,
         initialize_timeout: f64,
         close_timeout: f64,
@@ -243,7 +243,7 @@ impl WorkerProcSupervisor for ProcessOwner {
 /// The host's launch: on success the process's receipt was reported; a failure before that
 /// receipt leaves no process to own.
 async fn launch(
-    host: Arc<dyn ProcessHost>,
+    host: Arc<dyn JobExecutor>,
     context: CallContext,
     sup: ProcSupervisor,
     launch: watch::Sender<ProcessLaunch>,
@@ -275,7 +275,7 @@ async fn launch(
 /// The launched process's owner: its identity, supervision once initialized, its exit and the
 /// start method's reaping receipt, then the host's completion.
 async fn own(
-    host: Arc<dyn ProcessHost>,
+    host: Arc<dyn JobExecutor>,
     context: CallContext,
     sup: ProcSupervisor,
     launch: watch::Sender<ProcessLaunch>,
@@ -372,7 +372,7 @@ async fn own(
 
 /// The supervisor's diagnostics and process handle, until the process exited.
 struct ProcessDiagnostics {
-    host: Mutex<Option<Arc<dyn ProcessHost>>>,
+    host: Mutex<Option<Arc<dyn JobExecutor>>>,
     process: watch::Receiver<Option<Arc<ProcessControl>>>,
 }
 
@@ -386,7 +386,7 @@ impl ProcessDiagnostics {
 
 /// One record for the executor's logger, written by the bounded diagnostics writer.
 pub(crate) fn queue_diagnostic(
-    host: Arc<dyn ProcessHost>,
+    host: Arc<dyn JobExecutor>,
     level: Level,
     message: &str,
     mut extra: Extra,

@@ -7,23 +7,23 @@ use std::sync::{Arc, OnceLock};
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{PoolHost, ProcessHost, WorkerError, WorkerProcPool};
+use lk_agents_abi::worker::ipc_host::{JobExecutor, PoolCallbacks, WorkerError};
 
 use super::owner::{ProcessOwner, queue_diagnostic};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::{Level, ProcSupervisor, secs};
-use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::blocking_io::BlockingIo;
+use lk_agents_net::env::ProcessEnv;
 
 /// One executor and, once started, its native supervisor.
 #[derive(Clone)]
 pub struct Executor {
-    pub(super) host: Arc<dyn ProcessHost>,
+    pub(super) host: Arc<dyn JobExecutor>,
     supervisor: Arc<OnceLock<ProcSupervisor>>,
 }
 
 impl Executor {
-    pub(super) fn new(host: Arc<dyn ProcessHost>) -> Self {
+    pub(super) fn new(host: Arc<dyn JobExecutor>) -> Self {
         Self { host, supervisor: Arc::new(OnceLock::new()) }
     }
 }
@@ -37,7 +37,7 @@ impl PartialEq for Executor {
 
 /// The host's pool and the context its executors' steps run in (the pool's constructor's).
 struct HostExecutors {
-    host: Arc<dyn PoolHost>,
+    host: Arc<dyn PoolCallbacks>,
     context: CallContext,
 }
 
@@ -129,12 +129,12 @@ pub struct ProcessPool {
     io: BlockingIo,
 }
 
-impl WorkerProcPool for ProcessPool {
+impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
     type Env = ProcessEnv;
 
     fn new(
         env: &ProcessEnv,
-        host: Arc<dyn PoolHost>,
+        host: Arc<dyn PoolCallbacks>,
         num_idle_processes: usize,
         initialize_timeout: f64,
         close_timeout: f64,
@@ -152,7 +152,7 @@ impl WorkerProcPool for ProcessPool {
         })
     }
 
-    fn processes(&self) -> Vec<Arc<dyn ProcessHost>> {
+    fn processes(&self) -> Vec<Arc<dyn JobExecutor>> {
         self.pool.processes().into_iter().map(|proc| proc.host).collect()
     }
 

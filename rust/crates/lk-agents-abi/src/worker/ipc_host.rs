@@ -36,7 +36,7 @@ pub enum WorkerError {
 /// The executor of one job process (`ipc.JobExecutor`): it spawns the process, owns its
 /// start-method bookkeeping and receives the supervisor's diagnostics.
 #[crate::host(proxy(host = "livekit.agents.ipc.JobExecutor"))]
-pub trait ProcessHost: Any + Send + Sync {
+pub trait JobExecutor: Any + Send + Sync {
     /// Spawn the process on its socket; it reports its receipt through `_core_launched_process`.
     #[host(await, name = "_core_launch")]
     fn launch<'a>(
@@ -107,7 +107,7 @@ pub trait ProcessHost: Any + Send + Sync {
 pub trait SupervisedProcess: Any + Send + Sync {}
 
 #[crate::host(class(name = "ProcSupervisor", native = SupervisedProcess))]
-pub trait WorkerProcSupervisor: Send + Sync + Sized + 'static {
+pub trait ProcessSupervisor: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -117,7 +117,7 @@ pub trait WorkerProcSupervisor: Send + Sync + Sized + 'static {
     fn new(
         env: &Self::Env,
         fd: i64,
-        host: Arc<dyn ProcessHost>,
+        host: Arc<dyn JobExecutor>,
         #[host(kw)] pid: u32,
         initialize_timeout: f64,
         close_timeout: f64,
@@ -175,7 +175,7 @@ pub trait ChildInitialize: Send + Sync {
 /// The job process's runner (`ipc.child._JobProc`): it starts the job the parent hands over and
 /// runs each step of the job's run, in the context the run captured.
 #[crate::host(proxy(host = "livekit.agents.ipc.child._JobProc"))]
-pub trait JobHost: Send + Sync {
+pub trait JobProcess: Send + Sync {
     /// Answers once its loop ran it: a pong measures the loop's responsiveness.
     #[host(await, name = "_core_ping")]
     fn ping(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
@@ -289,7 +289,7 @@ pub trait ParticipantEntrypoint: Send + Sync {
 }
 
 #[crate::host(class(name = "IpcClient"))]
-pub trait WorkerIpcClient: Send + Sync + Sized + 'static {
+pub trait IpcClient: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -306,7 +306,7 @@ pub trait WorkerIpcClient: Send + Sync + Sized + 'static {
     fn asyncio_debug(&self) -> bool;
     /// Serve the parent's messages until it goes, its shutdown ends the process, or `stop()`.
     #[host(await)]
-    async fn serve(&self, host: Arc<dyn JobHost>) -> Result<(), WorkerError>;
+    async fn serve(&self, host: Arc<dyn JobProcess>) -> Result<(), WorkerError>;
     #[host(call)]
     fn stop(&self);
     #[host(await)]
@@ -314,16 +314,16 @@ pub trait WorkerIpcClient: Send + Sync + Sized + 'static {
 }
 
 #[crate::host(proxy(host = "livekit.agents.ipc.ProcPool"))]
-pub trait PoolHost: Send + Sync {
+pub trait PoolCallbacks: Send + Sync {
     /// A new executor, made on the host's loop.
     #[host(await, name = "_core_create")]
-    fn create(&self) -> crate::BoxFuture<'_, Result<Arc<dyn ProcessHost>, HostError>>;
+    fn create(&self) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecutor>, HostError>>;
     #[host(notify, name = "emit")]
-    fn emit(&self, event: String, process: Arc<dyn ProcessHost>);
+    fn emit(&self, event: String, process: Arc<dyn JobExecutor>);
 }
 
 #[crate::host(class(name = "ProcPool"))]
-pub trait WorkerProcPool: Send + Sync + Sized + 'static {
+pub trait ProcessPool: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -331,14 +331,14 @@ pub trait WorkerProcPool: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        host: Arc<dyn PoolHost>,
+        host: Arc<dyn PoolCallbacks>,
         #[host(kw)] num_idle_processes: usize,
         initialize_timeout: f64,
         close_timeout: f64,
         #[host(context)] context: CallContext,
     ) -> Result<Self, WorkerError>;
     #[host(getter)]
-    fn processes(&self) -> Vec<Arc<dyn ProcessHost>>;
+    fn processes(&self) -> Vec<Arc<dyn JobExecutor>>;
     #[host(getter)]
     fn jobs_waiting(&self) -> usize;
     #[host(getter)]
@@ -364,7 +364,7 @@ pub trait JobExecution: Any + Send + Sync {}
 /// order and bounds of the shutdown, the participant entrypoints, the room connected once, the
 /// application calls in flight and the recording's setup.
 #[crate::host(class(name = "JobRun", native = JobExecution))]
-pub trait WorkerJobRun: Send + Sync + Sized + 'static {
+pub trait JobRun: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -453,7 +453,7 @@ pub trait WorkerJobRun: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn run(
         &self,
-        host: Arc<dyn JobHost>,
+        host: Arc<dyn JobProcess>,
         #[host(context)] context: CallContext,
     ) -> Result<(), WorkerError>;
 }

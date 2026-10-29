@@ -11,7 +11,7 @@ use std::time::Duration;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{
-    JobCall, JobExecution, JobHost, ParticipantEntrypoint, WorkerError, WorkerJobRun,
+    JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
 };
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef, lock};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
@@ -19,8 +19,8 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{oneshot, watch};
 
 use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
-use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::blocking_io::BlockingIo;
+use lk_agents_net::env::ProcessEnv;
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -68,7 +68,7 @@ pub struct JobRun {
 
 struct Inner {
     /// The runner and the context its steps run in, from `run()`.
-    host: OnceLock<(Arc<dyn JobHost>, CallContext)>,
+    host: OnceLock<(Arc<dyn JobProcess>, CallContext)>,
     /// The parent the job process reports its end to (none for a job run outside one).
     parent: OnceLock<Arc<IpcClient>>,
     io: BlockingIo,
@@ -120,7 +120,7 @@ impl Inner {
         }
     }
 
-    fn host(&self) -> Option<&Arc<dyn JobHost>> {
+    fn host(&self) -> Option<&Arc<dyn JobProcess>> {
         self.host.get().map(|(host, _)| host)
     }
 
@@ -136,7 +136,7 @@ impl Inner {
         }
     }
 
-    fn span_end(&self, host: &dyn JobHost, span: HostRef, error: Option<HostError>, late: bool) {
+    fn span_end(&self, host: &dyn JobProcess, span: HostRef, error: Option<HostError>, late: bool) {
         if let Err(failure) = host.span_end(span, error, late) {
             log::warn!(target: crate::LOG, "a shutdown span did not end: {failure}");
         }
@@ -145,7 +145,7 @@ impl Inner {
     /// One shutdown step in a span of its own, bounded by `timeout`.
     async fn spanned<F: Future<Output = Result<(), HostError>>>(
         &self,
-        host: &dyn JobHost,
+        host: &dyn JobProcess,
         name: &str,
         callback: Option<&str>,
         step: impl FnOnce(HostRef) -> F,
@@ -337,7 +337,7 @@ fn log_level(level: Level) -> log::Level {
     }
 }
 
-impl WorkerJobRun for JobRun {
+impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     type Env = ProcessEnv;
 
     fn new(
@@ -581,7 +581,11 @@ impl WorkerJobRun for JobRun {
         lock(&self.inner.state).redaction
     }
 
-    async fn run(&self, host: Arc<dyn JobHost>, context: CallContext) -> Result<(), WorkerError> {
+    async fn run(
+        &self,
+        host: Arc<dyn JobProcess>,
+        context: CallContext,
+    ) -> Result<(), WorkerError> {
         if self.inner.host.set((host, context)).is_err() {
             return Err(WorkerError::Failed("the job already runs".into()));
         }

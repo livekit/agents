@@ -152,10 +152,10 @@ pub trait Implementations: 'static {
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
     type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
-    type WorkerProcSupervisor: ::lk_agents_abi::worker::ipc_host::WorkerProcSupervisor;
-    type WorkerIpcClient: ::lk_agents_abi::worker::ipc_host::WorkerIpcClient;
-    type WorkerProcPool: ::lk_agents_abi::worker::ipc_host::WorkerProcPool;
-    type WorkerJobRun: ::lk_agents_abi::worker::ipc_host::WorkerJobRun;
+    type ProcessSupervisor: ::lk_agents_abi::worker::ipc_host::ProcessSupervisor;
+    type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
+    type ProcessPool: ::lk_agents_abi::worker::ipc_host::ProcessPool;
+    type JobRun: ::lk_agents_abi::worker::ipc_host::JobRun;
     type ServerConfig: ::lk_agents_abi::worker::server_host::ServerConfig;
     type ServerRuntime: ::lk_agents_abi::worker::server_host::ServerRuntime;
 }

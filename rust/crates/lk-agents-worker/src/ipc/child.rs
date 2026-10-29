@@ -6,13 +6,13 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::lock;
-use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobHost, WorkerError, WorkerIpcClient};
+use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
 use tokio::sync::watch;
 
 use super::job_run::JobRun;
 use super::{IpcClient, PROTOCOL_VERSION, ToChild, ToParent};
-use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::blocking_io::BlockingIo;
+use lk_agents_net::env::ProcessEnv;
 
 pub struct ChildChannel {
     client: Arc<IpcClient>,
@@ -26,7 +26,7 @@ pub struct ChildChannel {
 
 impl ChildChannel {
     /// One message from the parent; `false` ends the serving.
-    async fn on_message(&self, host: &dyn JobHost, msg: ToChild) -> Result<bool, WorkerError> {
+    async fn on_message(&self, host: &dyn JobProcess, msg: ToChild) -> Result<bool, WorkerError> {
         match msg {
             ToChild::Ping { sent_ms } => {
                 if host.ping().await.is_err() {
@@ -66,7 +66,7 @@ impl ChildChannel {
 
     async fn start(
         &self,
-        host: &dyn JobHost,
+        host: &dyn JobProcess,
         job: lk_agents_abi::worker::job::StartJobFields,
     ) -> Result<(), WorkerError> {
         if lock(&self.run).is_some() {
@@ -82,7 +82,7 @@ impl ChildChannel {
     }
 }
 
-impl WorkerIpcClient for ChildChannel {
+impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
     type Env = ProcessEnv;
 
     /// Once initialized, the child calls itself orphaned when the parent goes quiet past the
@@ -134,7 +134,7 @@ impl WorkerIpcClient for ChildChannel {
         self.asyncio_debug
     }
 
-    async fn serve(&self, host: Arc<dyn JobHost>) -> Result<(), WorkerError> {
+    async fn serve(&self, host: Arc<dyn JobProcess>) -> Result<(), WorkerError> {
         let mut stop = self.stop.subscribe();
         let served = async {
             loop {
