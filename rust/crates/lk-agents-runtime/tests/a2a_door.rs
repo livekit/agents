@@ -150,6 +150,11 @@ fn principal(write: bool) -> AuthPrincipal {
     }
 }
 
+fn door(storage: Arc<dyn lk_agents_storage::Storage>, host: Arc<dyn TurnHost>) -> Door {
+    let clock = Arc::new(lk_agents_abi::RealClock::new());
+    Door::new(storage, config(), host, Arc::default(), clock).unwrap()
+}
+
 fn config() -> DoorConfig {
     DoorConfig {
         lane: "desk".into(),
@@ -175,7 +180,7 @@ fn body(method: &str, params: Value) -> Vec<u8> {
 
 async fn create_requires_write_before_allocating_a_thread(backend: Backend) {
     let store = backend.store(Default::default()).await;
-    let door = Door::new(store.storage.clone(), config(), Arc::new(Host), Arc::default()).unwrap();
+    let door = door(store.storage.clone(), Arc::new(Host));
     let response = door.dispatch(body("SendMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(false), None, None, None, None).await;
     assert!(matches!(response.next().await, Err(DoorError::Auth(_))));
     let listed = store
@@ -193,7 +198,7 @@ async fn create_requires_write_before_allocating_a_thread(backend: Backend) {
 
 async fn subscriptions_use_task_records_and_resume_each_durable_event(backend: Backend) {
     let store = backend.store(Default::default()).await;
-    let door = Door::new(store.storage.clone(), config(), Arc::new(Host), Arc::default()).unwrap();
+    let door = door(store.storage.clone(), Arc::new(Host));
     let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), Some("1.0".into()), None, None, None).await;
     let mut frames = Vec::new();
     while let Some(frame) = response.next().await.unwrap() {
@@ -260,7 +265,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
         .open(lk_agents_storage::RunOptions::new("hold", "held-task"))
         .await
         .unwrap();
-    let door = Door::new(store.storage.clone(), config(), Arc::new(Host), Arc::default()).unwrap();
+    let door = door(store.storage.clone(), Arc::new(Host));
     let response = Arc::new(door.dispatch(body("SendStreamingMessage", json!({"message": {"contextId": created.thread_id, "messageId": "queued", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None).await);
     let first = tokio::time::timeout(std::time::Duration::from_secs(1), response.next())
         .await
@@ -293,8 +298,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
 
 async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend) {
     let store = backend.store(Default::default()).await;
-    let door =
-        Door::new(store.storage.clone(), config(), Arc::new(AskingHost), Arc::default()).unwrap();
+    let door = door(store.storage.clone(), Arc::new(AskingHost));
     let first = door.dispatch(body("SendMessage", json!({"message": {"messageId": "start", "role": "ROLE_USER", "parts": [{"text": "start"}]}})), principal(true), None, None, None, None).await;
     let envelope: JsonRpcResponse =
         serde_json::from_str(&first.next().await.unwrap().unwrap().json).unwrap();
@@ -356,8 +360,7 @@ async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend
 
 async fn a_slow_observer_can_resume_every_undelivered_event(backend: Backend) {
     let store = backend.store(Default::default()).await;
-    let door =
-        Door::new(store.storage.clone(), config(), Arc::new(BurstHost), Arc::default()).unwrap();
+    let door = door(store.storage.clone(), Arc::new(BurstHost));
     let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "burst", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None).await;
     // Leave the observer idle until its bounded queue has detached from durable work.
     door.aclose().await;

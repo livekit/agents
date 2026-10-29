@@ -7,7 +7,6 @@ use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, R
 use lk_agents_abi::agent::{AgentDefinition, AgentHost, Invocation};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
-use lk_agents_abi::utils::clock::RealClock;
 use lk_agents_abi::utils::stream::StreamSource;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
 use lk_agents_core::tool_outcome::Mode;
@@ -45,7 +44,7 @@ impl AgentRunner for Runner {
             definition,
             llm,
             host,
-            clock: Arc::new(RealClock::new()),
+            clock: env.clock.clone(),
             running: Mutex::new(Vec::new()),
             runtime: env.runtime,
         })

@@ -4,7 +4,6 @@ use lk_agents_abi::agent::run::InvalidRun;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
-use lk_agents_abi::utils::clock::RealClock;
 use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
@@ -22,6 +21,7 @@ pub struct Runner {
     agents: BTreeMap<String, TextSessionAgent>,
     control: Mutex<Option<Control>>,
     runtime: fn() -> Result<tokio::runtime::Handle, String>,
+    clock: Arc<dyn Clock>,
 }
 
 impl TextSessionRunner for Runner {
@@ -47,7 +47,8 @@ impl TextSessionRunner for Runner {
         .map_err(|e| InvalidRun(e.to_string()))?;
         let resources =
             agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
-        Ok(Self { config, agents: resources, control: Mutex::new(None), runtime: env.runtime })
+        let (control, runtime, clock) = (Mutex::new(None), env.runtime, env.clock.clone());
+        Ok(Self { config, agents: resources, control, runtime, clock })
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
@@ -61,7 +62,7 @@ impl TextSessionRunner for Runner {
             self.config.clone(),
             self.agents.clone(),
             request,
-            Arc::new(RealClock::new()),
+            self.clock.clone(),
         )?;
         *current = Some(control);
         Ok(updates)

@@ -67,10 +67,10 @@ impl Door {
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
         owner: Arc<TaskSet>,
+        clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Result<Self, StorageError> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
-        let clock = Arc::new(lk_agents_abi::RealClock::new());
         Self::over(Store::Open(storage), config, host, owner, runtime, clock)
     }
 
