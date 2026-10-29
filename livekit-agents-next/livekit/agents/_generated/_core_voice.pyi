@@ -234,6 +234,14 @@ def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -
     remote session protocol; `another_session_is_primary` is the job's claim already taken.
     """
 
+def speech_priorities() -> tuple[int, int, int]:
+    """`SpeechHandle.SPEECH_PRIORITY_{LOW,NORMAL,HIGH}`, as `(low, normal, high)`: the
+    scheduler's own, so a host copy cannot drift and silently reorder.
+    """
+
+def default_input_modality() -> str:
+    """`DEFAULT_INPUT_DETAILS.modality`, as its wire string."""
+
 def validate_card_number(card_number: str) -> bool:
     """The Luhn checksum over an all-digit string."""
 

@@ -100,8 +100,6 @@
   "host|rust/crates/lk-agents-voice/src/remote_session.rs|impl  for FrameDecoder::new|host (new)",
   "host|rust/crates/lk-agents-voice/src/remote_session.rs|impl  for FrameDecoder|lk_agents_abi :: host (object)",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|enum SpeechRefused|lk_agents_abi :: host (error (kind = \"RuntimeError\"))",
-  "host|rust/crates/lk-agents-voice/src/speech_handle.rs|fn default_input_modality|lk_agents_abi :: host (export (pid = false))",
-  "host|rust/crates/lk-agents-voice/src/speech_handle.rs|fn speech_priorities|lk_agents_abi :: host (export (pid = false))",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|impl  for SpeechHandle::allow_interruptions_for_host|host (getter (name = \"allow_interruptions\"))",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|impl  for SpeechHandle::chat_items|host (getter)",
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|impl  for SpeechHandle::detached|host (new (kw_only , defaults (speech_id = String :: new () , allow_interruptions = true)))",

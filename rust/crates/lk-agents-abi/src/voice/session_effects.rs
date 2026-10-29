@@ -27,6 +27,18 @@ pub trait SessionStart {
     ) -> StartPlan;
 }
 
+/// The speech scheduler's values the host's `SpeechHandle` reads at import.
+#[crate::host(functions(pid = false))]
+pub trait SpeechDefaults {
+    /// `SpeechHandle.SPEECH_PRIORITY_{LOW,NORMAL,HIGH}`, as `(low, normal, high)`: the
+    /// scheduler's own, so a host copy cannot drift and silently reorder.
+    #[host(function)]
+    fn speech_priorities() -> (i32, i32, i32);
+    /// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.
+    #[host(function)]
+    fn default_input_modality() -> String;
+}
+
 /// What a filler's callable answered: nothing, its text to say, or anything else (a speech it
 /// scheduled itself).
 #[derive(Debug, Clone, PartialEq, Eq, Host)]

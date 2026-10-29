@@ -16,19 +16,18 @@ use tokio::sync::watch;
 /// The `extra` key marking a call that detached (`RunContext.update()`): its speech no longer
 /// waits on it.
 pub const TOOL_NON_BLOCKING_EXTRA_KEY: &str = "__livekit_agents_tool_non_blocking";
-/// `SpeechHandle.SPEECH_PRIORITY_{LOW,NORMAL,HIGH}`, as `(low, normal, high)`. Minted beside the
-/// scheduler's heap key that reads them, so a host copy cannot drift and silently reorder.
-/// No fork guard: `voice/speech_handle.py` reads these at import.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn speech_priorities() -> (i32, i32, i32) {
-    use crate::agent_activity::scheduling as s;
-    (s::SPEECH_PRIORITY_LOW, s::SPEECH_PRIORITY_NORMAL, s::SPEECH_PRIORITY_HIGH)
-}
+/// The scheduler's values, as the host reads them.
+pub struct SpeechDefaultValues;
 
-/// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn default_input_modality() -> &'static str {
-    Modality::default().as_str()
+impl lk_agents_abi::voice::session_effects::SpeechDefaults for SpeechDefaultValues {
+    fn speech_priorities() -> (i32, i32, i32) {
+        use crate::agent_activity::scheduling as s;
+        (s::SPEECH_PRIORITY_LOW, s::SPEECH_PRIORITY_NORMAL, s::SPEECH_PRIORITY_HIGH)
+    }
+
+    fn default_input_modality() -> String {
+        Modality::default().as_str().to_owned()
+    }
 }
 
 type Api = crate::agent_session::Tx;
