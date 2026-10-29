@@ -27,7 +27,7 @@ pub const VOICE: Boundary = Boundary {
          deterministic harness per delivered event, with effects performed against fake ports",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
         "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
-         over FakeRoom, on the run's scheduler (decision 92)",
+         over FakeRoom, on the run's injected scheduler and clock",
     ],
     fakes: &[
         "fakes::stt",
@@ -58,7 +58,7 @@ pub const VOICE: Boundary = Boundary {
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
-        "worker, IPC and job processes (lk-agents-worker's own tests, decision 70)",
+        "worker, IPC and job processes (lk-agents-worker's own tests; the DST fakes the worker)",
         "agent-db storage and the A2A door's transport (I-27 backend contracts; the A2A DST fakes the storage port)",
     ],
 };
