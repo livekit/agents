@@ -18,7 +18,13 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import INTERRUPTED, MERGED_INTO
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionCallOutput, FunctionToolCall
+from livekit.agents.llm import (
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    FunctionToolCall,
+)
 from livekit.agents.llm.tool_context import DuplicateMode, ToolFlag
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.types import NOT_GIVEN
@@ -555,12 +561,18 @@ async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_tas
 
 
 @pytest.mark.rule("R29")
+@pytest.mark.xfail(strict=True, reason="B61: the background frame repeats the question")
 async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     door: Callable[..., Door],
 ) -> None:
     question = "Which time on Monday?"
     desk = await bookings(
-        door, *BOOK_MONDAY, Reply("Booked at nine.", when=said("nine")), asks={"monday": question}
+        door,
+        *BOOK_MONDAY,
+        Reply(tool_calls=[call("book", "b2", day="tuesday")], when=said("and tuesday")),
+        Reply("Tuesday booked.", when=told("b2_final")),
+        asks={"monday": question},
+        days=("monday", "tuesday"),
     )
     first = desk.send("book monday")
     (task,) = await desk.in_the_background()
@@ -571,8 +583,19 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     # as on a call, the question is what the person gets, with no reply generated for it
     assert asked.state == "input_required" and asked.status_text == question
     assert len(desk.model.requests) == requests
-    answered = await desk.send("nine")
-    assert answered.task["id"] == task["id"] and answered.answer == "Booked at nine."
+
+    # the next message continues the task; the frame that leaves work running drops the question
+    second = desk.send("and tuesday")
+    await desk.in_the_background()
+    desk.release["tuesday"].set()
+    continued = await asyncio.wait_for(second, 20)
+    assert continued.task["id"] == task["id"] and continued.answer == "Tuesday booked."
+    running = [
+        f["statusUpdate"]["status"]
+        for f in continued.frames
+        if state_of(f) == "TASK_STATE_WORKING" and metadata_of(f["statusUpdate"]).get(BACKGROUND)
+    ]
+    assert running and all("message" not in s for s in running)
 
 
 @pytest.mark.rule("R55")
@@ -747,6 +770,65 @@ async def test_a_message_stops_the_reply_while_it_streams(door: Callable[..., Do
     assert stopped.state == "canceled" and stopped.metadata[INTERRUPTED] is True
     assert stopped.answer == "Here is everything"
     assert ran.answer == "Fine."
+
+
+def cut_off(ctx: ChatContext, call_id: str) -> bool:
+    """The request notes that the reply to ``call_id``'s output was cut off."""
+    from livekit.agents.llm.tool_context import CUT_OFF_REPLY
+
+    out = next(i for i in ctx.items if isinstance(i, FunctionCallOutput) and i.call_id == call_id)
+    return out.output.endswith(CUT_OFF_REPLY)
+
+
+@pytest.mark.rule("R68", "B57")
+@pytest.mark.xfail(strict=True, reason="R68: no note on a cut-off reply's output")
+def test_only_the_newest_message_reads_the_note_on_a_cut_off_reply() -> None:
+    """The output of a flagged call gets the note on a copy, until the person speaks again."""
+    from livekit.agents.llm.tool_context import CUT_OFF_KEY, note_cut_off_replies
+
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="book monday")
+    ctx.insert(FunctionCall(call_id="b1", name="book", arguments="{}", extra={CUT_OFF_KEY: "true"}))
+    stored = FunctionCallOutput(call_id="b1", name="book", output="booked", is_error=False)
+    ctx.insert(stored)
+    ctx.add_message(role="user", content="are you there")
+    request = ctx.copy()
+    note_cut_off_replies(request)
+    assert cut_off(request, "b1") and stored.output == "booked"
+
+    ctx.add_message(role="user", content="thanks")
+    request = ctx.copy()
+    note_cut_off_replies(request)
+    assert not cut_off(request, "b1")
+
+
+@pytest.mark.rule("R6", "R68", "B57")
+@pytest.mark.xfail(strict=True, reason="B57: an empty interrupted reply is recorded")
+async def test_a_reply_cut_off_before_it_showed_leaves_no_message(
+    door: Callable[..., Door],
+) -> None:
+    held = asyncio.Event()
+    desk = await bookings(
+        door,
+        Reply(hold=held, when=said("tell me everything")),
+        Reply("Fine.", when=said("never mind")),
+    )
+    first = desk.send("tell me everything")
+
+    async def streaming() -> bool:
+        return len(desk.model.requests) == 1
+
+    await until(streaming, "the reply streams")
+    await asyncio.wait_for(desk.send("never mind"), 20)
+    held.set()
+    await asyncio.wait_for(first, 20)
+
+    # the person's two messages, one after the other: nothing was hidden from them
+    last_two = desk.model.requests[-1].items[-2:]
+    assert [(i.role, i.text_content) for i in last_two] == [  # type: ignore[union-attr]
+        ("user", "tell me everything"),
+        ("user", "never mind"),
+    ]
 
 
 @pytest.mark.rule("R6")

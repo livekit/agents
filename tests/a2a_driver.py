@@ -263,12 +263,18 @@ async def door(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., D
 
 @pytest.fixture
 async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., A2ADelegate]]:
-    """``expert(handler, name=, announce=)``: an ``A2ADelegate`` to an expert's door, its own lane,
-    on the same store."""
+    """``expert(handler, name=, announce=, tool=)``: an ``A2ADelegate`` to an expert's door, its
+    own lane, on the same store; ``tool`` names its tool."""
     clients: list[httpx.AsyncClient] = []
     delegates: list[A2ADelegate] = []
 
-    def make(handler: Any, name: str = EXPERT, announce: bool = True, **kw: Any) -> A2ADelegate:
+    def make(
+        handler: Any,
+        name: str = EXPERT,
+        announce: bool = True,
+        tool: str | None = None,
+        **kw: Any,
+    ) -> A2ADelegate:
         server = AgentServer(
             storage=agentdb_storage, agent_name=name, api_key=API_KEY, api_secret=API_SECRET
         )
@@ -282,7 +288,7 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
             )
         )
         url = f"http://experts.test/{name}"
-        delegates.append(A2ADelegate(url, httpx_client=clients[-1], announce=announce))
+        delegates.append(A2ADelegate(url, httpx_client=clients[-1], announce=announce, name=tool))
         return delegates[-1]
 
     yield make

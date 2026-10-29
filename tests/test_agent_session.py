@@ -522,6 +522,67 @@ async def test_interruption_options() -> None:
     check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
 
 
+def recorded_requests(session: LiveSession) -> list[ChatContext]:
+    """Every chat context the session's model is asked with, from now on."""
+    requests: list[ChatContext] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, **kwargs):  # type: ignore[no-untyped-def]
+        requests.append(chat_ctx.copy())
+        return orig_chat(chat_ctx=chat_ctx, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+    return requests
+
+
+@pytest.mark.rule("R68", "B57")
+@pytest.mark.xfail(strict=True, reason="R68: no note on a cut-off reply's output")
+async def test_a_spoken_reply_to_a_tool_output_cut_off_is_noted_on_the_output() -> None:
+    from livekit.agents.llm.tool_context import CUT_OFF_REPLY
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather in Paris?")
+    actions.add_llm(
+        "",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments='{"location": "Paris"}', call_id="1")
+        ],
+    )
+    actions.add_llm("It is sunny in Paris all day.", input="The weather in Paris is sunny today.")
+    actions.add_tts(5.0)
+    actions.add_user_speech(4.5, 5.5, "Are you there?")
+    actions.add_llm("Yes.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    requests = recorded_requests(session)
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    output = next(i for i in requests[-1].items if i.type == "function_call_output")
+    assert output.output.endswith(CUT_OFF_REPLY)
+
+
+@pytest.mark.rule("R68", "B57")
+async def test_a_spoken_reply_cut_off_before_it_played_leaves_no_message() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story.", ttft=3.0)
+    actions.add_tts(5.0)
+    actions.add_user_speech(3.5, 4.5, "Never mind.")
+    actions.add_llm("Fine.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    requests = recorded_requests(session)
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    last_two = requests[-1].items[-2:]
+    assert [(i.role, i.text_content) for i in last_two] == [  # type: ignore[union-attr]
+        ("user", "Tell me a story."),
+        ("user", "Never mind."),
+    ]
+
+
 async def test_false_interruption_before_speaking_resumes() -> None:
     """
     Brief VAD-only noise during ``thinking`` must pause then resume on VAD EOS,
