@@ -57,8 +57,8 @@ impl AudioEot {
                 let (cloud, clock) = (cloud.clone(), clock.clone());
                 return MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| {
                     let socket = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
-                    let transport = CloudTransport::new(cloud, sink, socket);
-                    Arc::new(transport.with_clock(clock)) as Arc<dyn EotTransport>
+                    Arc::new(CloudTransport::new(cloud, sink, socket, clock))
+                        as Arc<dyn EotTransport>
                 });
             }
             let local = match crate::local_models::native() {

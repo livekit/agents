@@ -23,7 +23,7 @@ fn opts() -> SttOptions {
 
 fn stt(ws: Arc<FakeWs>) -> GatewayStt {
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    GatewayStt::new(opts(), ws, spawner)
+    GatewayStt::new(opts(), ws, spawner, Arc::new(lk_agents_abi::RealClock::new()))
 }
 
 /// A client whose streams do not retry, for tests about one connection's failure.
@@ -31,7 +31,7 @@ fn stt_once(ws: Arc<FakeWs>) -> GatewayStt {
     let mut opts = opts();
     opts.conn_options.max_retry = 0;
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    GatewayStt::new(opts, ws, spawner)
+    GatewayStt::new(opts, ws, spawner, Arc::new(lk_agents_abi::RealClock::new()))
 }
 
 // Catches: a failed connection ending the stream instead of reconnecting under
@@ -43,7 +43,8 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
     opts.conn_options =
         ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..Default::default() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let stt: GatewayStt = GatewayStt::new(opts, ws.clone(), spawner);
+    let stt: GatewayStt =
+        GatewayStt::new(opts, ws.clone(), spawner, Arc::new(lk_agents_abi::RealClock::new()));
     let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
     let err = lk_agents_abi::timeout(
         &lk_agents_abi::RealClock::new(),
@@ -88,7 +89,8 @@ async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
     let mut opts = opts();
     opts.model = Some("assemblyai/universal-3-6-pro".into());
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let stt: GatewayStt = GatewayStt::new(opts, ws.clone(), spawner);
+    let stt: GatewayStt =
+        GatewayStt::new(opts, ws.clone(), spawner, Arc::new(lk_agents_abi::RealClock::new()));
     let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
     for _ in 0..32 {
         tokio::task::yield_now().await;
@@ -596,8 +598,8 @@ async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
             opts(),
             ws.clone(),
             Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-        )
-        .with_clock(clock.clone());
+            clock.clone(),
+        );
         let (_sink, source) = provider.stream(None, None).await.unwrap().unwrap();
         ws.inner.feed(text(json!({"type":"session.created"})));
         for _ in 0..lk_agents_abi::AUDIO_QUEUE_FRAMES {
@@ -664,7 +666,12 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
     let mut options = opts();
     options.conn_options =
         ApiConnectOptions { max_retry: 0, total_timeout: Some(0.0), ..Default::default() };
-    let client: GatewayStt = GatewayStt::new(options, ws, Arc::new(TokioSpawner::current()));
+    let client: GatewayStt = GatewayStt::new(
+        options,
+        ws,
+        Arc::new(TokioSpawner::current()),
+        Arc::new(lk_agents_abi::RealClock::new()),
+    );
     let (sink, mut source) = client.stream(None, None).await.unwrap().unwrap();
     let error = source.next().await.expect_err("the operation expired before launch");
     assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));

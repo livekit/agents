@@ -443,8 +443,13 @@ fn hanging_cloud_fixture(sink: Arc<RecordingSink>, hang: bool) -> CloudFixture {
         incoming: Mutex::new(Some(incoming)),
         hang,
     });
-    let transport =
-        Arc::new(CloudTransport::new(cloud_options(), sink as Arc<dyn PredictionListener>, connector));
+    let sink = sink as Arc<dyn PredictionListener>;
+    let transport = Arc::new(CloudTransport::new(
+        cloud_options(),
+        sink,
+        connector,
+        Arc::new(lk_agents_abi::RealClock::new()),
+    ));
     CloudFixture { transport, sent, urls, headers, server }
 }
 

@@ -25,7 +25,7 @@ use base64::Engine as _;
 use lifecycle::{SttEffect, SttEvent, SttProtocol};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
+use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
@@ -125,7 +125,12 @@ impl GatewayStt {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
 
-    pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(
+        opts: SttOptions,
+        ws: Arc<dyn WsTransport>,
+        spawner: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         let capabilities =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
         let shared = SttClient {
@@ -136,7 +141,7 @@ impl GatewayStt {
             ws,
             spawner,
             tasks: Arc::default(),
-            clock: Arc::new(RealClock::new()),
+            clock,
             vad: Mutex::new(None),
             live: Mutex::new(Vec::new()),
         };
@@ -174,6 +179,7 @@ impl GatewayStt {
     }
 
     /// Before the client is shared.
+    #[cfg(test)]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         Arc::get_mut(&mut self.shared).expect("a client is clocked before it is shared").clock =
             clock;
@@ -397,9 +403,8 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
             fallback: fallback.unwrap_or_default(),
             conn_options,
         };
-        let stt =
-            GatewayStt::new(opts, Arc::new(lk_agents_net::websocket::TungsteniteTransport), spawner)
-                .with_clock(env.clock.clone());
+        let ws = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
+        let stt = GatewayStt::new(opts, ws, spawner, env.clock.clone());
         stt.set_vad(vad);
         Ok(stt)
     }

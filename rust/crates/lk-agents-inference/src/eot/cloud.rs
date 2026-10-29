@@ -8,9 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
-use lk_agents_abi::{
-    ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock,
-};
+use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
@@ -82,16 +80,12 @@ impl CloudTransport {
         opts: CloudOptions,
         sink: Arc<dyn PredictionListener>,
         transport: Arc<dyn WsTransport>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
-        CloudTransport {
-            opts,
-            sink,
-            transport,
-            state: Mutex::new(CloudState::default()),
-            clock: Arc::new(RealClock::new()),
-        }
+        CloudTransport { opts, sink, transport, state: Mutex::new(CloudState::default()), clock }
     }
 
+    #[cfg(test)]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
