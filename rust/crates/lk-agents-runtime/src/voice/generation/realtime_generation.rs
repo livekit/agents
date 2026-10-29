@@ -410,7 +410,10 @@ impl Generation<'_> {
     async fn unvoice(&mut self) {
         let Some(v) = self.voiced.take() else { return };
         v.sink.end_input();
-        let _ = v.source.close(super::pipeline_reply::teardown_deadline(self.shared)).await;
+        let _ = v
+            .source
+            .close(lk_agents_voice::generation::pipeline::cleanup_deadline(self.shared.time.now()))
+            .await;
     }
 }
 

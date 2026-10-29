@@ -6,7 +6,7 @@ use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
 use crate::voice::generation::realtime_generation::realtime_generation_task;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{ChatItem, ChatMessage, Ts};
+use lk_agents_abi::{ChatItem, ChatMessage};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 pub(crate) use lk_agents_voice::generation::pipeline::Finished;
@@ -365,8 +365,4 @@ pub(super) fn empty_outcome(
     interrupted: bool,
 ) -> TurnOutcome {
     ctx.empty_outcome(shared.time.wall(), shared.time.wall_secs(), interrupted)
-}
-
-pub(super) fn teardown_deadline(shared: &SessionShared) -> Ts {
-    shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
 }

@@ -2,13 +2,13 @@
 
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
 use super::llm::{Retried, SegEvent, report_metrics, retry};
-use super::pipeline_reply::teardown_deadline;
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::generation::pipeline::cleanup_deadline;
 pub(super) use lk_agents_voice::generation::tts::Lost;
 use lk_agents_voice::generation::tts::{
     AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics, TextEffect,
@@ -156,7 +156,7 @@ async fn synthesize(
     // Always: `end_input` before teardown (a second call is a no-op).
     sink.end_input();
     let fed = transformed(shared, &words.raw);
-    let _ = source.close(teardown_deadline(shared)).await;
+    let _ = source.close(cleanup_deadline(shared.time.now())).await;
     let produced = tts_data.produced();
     match heard {
         Ok(mut heard) => {
