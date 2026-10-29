@@ -86,8 +86,9 @@ class _ExceptionDecorator(Protocol):
 
 
 def log_exceptions(
-    msg: str = "", logger: logging.Logger = logging.getLogger()
-) -> _ExceptionDecorator:  # noqa: B008
+    msg: str = "",
+    logger: logging.Logger = logging.getLogger(),  # noqa: B008
+) -> _ExceptionDecorator:
     @overload
     def deco(
         fn: Callable[_P, Coroutine[object, object, _R]],
