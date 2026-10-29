@@ -325,7 +325,7 @@ impl Resolver<'_> {
             Shape::Named { found: Found::External(path), args }
                 if is(path, &["std", "result", "Result"]) && args.len() == 2 =>
             {
-                Some((clone_shape(&args[0]), clone_shape(&args[1])))
+                Some((args[0].clone(), args[1].clone()))
             }
             _ => None,
         };

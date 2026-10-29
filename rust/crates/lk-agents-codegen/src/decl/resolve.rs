@@ -61,6 +61,7 @@ struct Resolver<'a> {
 }
 
 /// A path's meaning with its generic arguments, before classification.
+#[derive(Clone)]
 enum Shape {
     Named {
         found: Found,
@@ -564,7 +565,7 @@ impl Resolver<'_> {
                     ["Self", assoc] => return Ok(Shape::SelfAssoc(assoc.to_owned())),
                     [one] => {
                         if let Some((_, shape)) = env.iter().find(|(n, _)| n == one) {
-                            return Ok(clone_shape(shape));
+                            return Ok((*shape).clone());
                         }
                     }
                     _ => {}
@@ -881,7 +882,7 @@ impl Resolver<'_> {
         }
         if derives_host(attrs) {
             let words = binding_words(attrs);
-            let (name, module_name) = python_target(attrs);
+            let (name, module_name, typed_dict) = python_target(attrs);
             voc::only(at, &entries, &["host_type", "rename", "wire", "handwritten"])?;
             // `handwritten(extract)` beside the derive: the read is the type's own conversion.
             let own_extract = match voc::find(&entries, "handwritten") {
@@ -904,7 +905,7 @@ impl Resolver<'_> {
                     HostForm::External { module: module.to_owned(), name: name.to_owned() }
                 }
                 // `from_items` reads a dict: only a `TypedDict` model is that dict's type.
-                (None, Some(_)) if from_items && !typed_dict(attrs) => HostForm::Dict,
+                (None, Some(_)) if from_items && !typed_dict => HostForm::Dict,
                 (None, Some(module)) => {
                     HostForm::Model { module, name: name.unwrap_or_else(|| ident.clone()) }
                 }
@@ -1049,20 +1050,6 @@ fn is(path: &[String], want: &[&str]) -> bool {
     path.iter().map(String::as_str).eq(want.iter().copied())
 }
 
-fn clone_shape(s: &Shape) -> Shape {
-    match s {
-        Shape::Named { found, args } => {
-            Shape::Named { found: found.clone(), args: args.iter().map(clone_shape).collect() }
-        }
-        Shape::Tuple(items) => Shape::Tuple(items.iter().map(clone_shape).collect()),
-        Shape::Dyn { found, args } => {
-            Shape::Dyn { found: found.clone(), args: args.iter().map(clone_shape).collect() }
-        }
-        Shape::SelfType => Shape::SelfType,
-        Shape::SelfAssoc(n) => Shape::SelfAssoc(n.clone()),
-    }
-}
-
 /// A host may pass it: every record in it declares `extract`; classes and sources are outputs.
 fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
     match ty {
@@ -1186,32 +1173,18 @@ fn binding_words(attrs: &[syn::Attribute]) -> Vec<String> {
     words
 }
 
-/// `#[python(typed_dict)]`: the host model is a `TypedDict`, a plain dict at runtime.
-fn typed_dict(attrs: &[syn::Attribute]) -> bool {
-    let mut found = false;
-    for a in attrs.iter().filter(|a| a.path().is_ident("python")) {
-        let _ = a.parse_nested_meta(|m| {
-            found |= m.path.is_ident("typed_dict");
-            if m.input.peek(syn::Token![=]) {
-                m.value()?.parse::<proc_macro2::TokenTree>()?;
-            } else if m.input.peek(syn::token::Paren) {
-                m.input.parse::<proc_macro2::Group>()?;
-            }
-            Ok(())
-        });
-    }
-    found
-}
-
-/// A record's `#[python(name = "..", module = "..")]`: its host class and generated module.
-fn python_target(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>) {
-    let (mut name, mut module) = (None, None);
+/// A record's `#[python(name = "..", module = "..", typed_dict)]`: its host class, generated
+/// module, and whether that model is a `TypedDict` (a plain dict at runtime).
+fn python_target(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>, bool) {
+    let (mut name, mut module, mut typed_dict) = (None, None, false);
     for a in attrs.iter().filter(|a| a.path().is_ident("python")) {
         let _ = a.parse_nested_meta(|m| {
             if m.path.is_ident("name") {
                 name = Some(m.value()?.parse::<syn::LitStr>()?.value());
             } else if m.path.is_ident("module") {
                 module = Some(m.value()?.parse::<syn::LitStr>()?.value());
+            } else if m.path.is_ident("typed_dict") {
+                typed_dict = true;
             } else if m.input.peek(syn::Token![=]) {
                 m.value()?.parse::<proc_macro2::TokenTree>()?;
             } else if m.input.peek(syn::token::Paren) {
@@ -1220,7 +1193,7 @@ fn python_target(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>) {
             Ok(())
         });
     }
-    (name, module)
+    (name, module, typed_dict)
 }
 
 /// The `#[host(file(module = ".."))]` default of the records in a file.
