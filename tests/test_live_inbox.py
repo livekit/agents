@@ -18,8 +18,20 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import INTERRUPTED, MERGED_INTO
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionCallOutput, FunctionToolCall
-from livekit.agents.llm.tool_context import DuplicateMode, ToolFlag
+from livekit.agents.llm import (
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    FunctionToolCall,
+)
+from livekit.agents.llm.tool_context import (
+    CUT_OFF_KEY,
+    CUT_OFF_REPLY,
+    DuplicateMode,
+    ToolFlag,
+    note_cut_off_replies,
+)
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.types import NOT_GIVEN
 
@@ -560,7 +572,12 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
 ) -> None:
     question = "Which time on Monday?"
     desk = await bookings(
-        door, *BOOK_MONDAY, Reply("Booked at nine.", when=said("nine")), asks={"monday": question}
+        door,
+        *BOOK_MONDAY,
+        Reply(tool_calls=[call("book", "b2", day="tuesday")], when=said("and tuesday")),
+        Reply("Tuesday booked.", when=told("b2_final")),
+        asks={"monday": question},
+        days=("monday", "tuesday"),
     )
     first = desk.send("book monday")
     (task,) = await desk.in_the_background()
@@ -571,8 +588,19 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     # as on a call, the question is what the person gets, with no reply generated for it
     assert asked.state == "input_required" and asked.status_text == question
     assert len(desk.model.requests) == requests
-    answered = await desk.send("nine")
-    assert answered.task["id"] == task["id"] and answered.answer == "Booked at nine."
+
+    # the next message continues the task; the frame that leaves work running drops the question
+    second = desk.send("and tuesday")
+    await desk.in_the_background()
+    desk.release["tuesday"].set()
+    continued = await asyncio.wait_for(second, 20)
+    assert continued.task["id"] == task["id"] and continued.answer == "Tuesday booked."
+    running = [
+        f["statusUpdate"]["status"]
+        for f in continued.frames
+        if state_of(f) == "TASK_STATE_WORKING" and metadata_of(f["statusUpdate"]).get(BACKGROUND)
+    ]
+    assert running and all("message" not in s for s in running)
 
 
 @pytest.mark.rule("R55")
@@ -749,8 +777,61 @@ async def test_a_message_stops_the_reply_while_it_streams(door: Callable[..., Do
     assert ran.answer == "Fine."
 
 
-@pytest.mark.rule("R6")
-async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
+def cut_off(ctx: ChatContext, call_id: str) -> bool:
+    """The request notes that the reply to ``call_id``'s output was cut off."""
+    out = next(i for i in ctx.items if isinstance(i, FunctionCallOutput) and i.call_id == call_id)
+    return out.output.endswith(CUT_OFF_REPLY)
+
+
+@pytest.mark.rule("R68", "B57")
+def test_only_the_newest_message_reads_the_note_on_a_cut_off_reply() -> None:
+    """The output of a flagged call gets the note on a copy, until the person speaks again."""
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="book monday")
+    ctx.insert(FunctionCall(call_id="b1", name="book", arguments="{}", extra={CUT_OFF_KEY: "true"}))
+    stored = FunctionCallOutput(call_id="b1", name="book", output="booked", is_error=False)
+    ctx.insert(stored)
+    ctx.add_message(role="user", content="are you there")
+    request = ctx.copy()
+    note_cut_off_replies(request)
+    assert cut_off(request, "b1") and stored.output == "booked"
+
+    ctx.add_message(role="user", content="thanks")
+    request = ctx.copy()
+    note_cut_off_replies(request)
+    assert not cut_off(request, "b1")
+
+
+@pytest.mark.rule("R6", "R68", "B57")
+async def test_a_reply_cut_off_before_it_showed_leaves_no_message(
+    door: Callable[..., Door],
+) -> None:
+    held = asyncio.Event()
+    desk = await bookings(
+        door,
+        Reply(hold=held, when=said("tell me everything")),
+        Reply("Fine.", when=said("never mind")),
+    )
+    first = desk.send("tell me everything")
+
+    async def streaming() -> bool:
+        return len(desk.model.requests) == 1
+
+    await until(streaming, "the reply streams")
+    await asyncio.wait_for(desk.send("never mind"), 20)
+    held.set()
+    await asyncio.wait_for(first, 20)
+
+    # the person's two messages, one after the other: nothing was hidden from them
+    last_two = desk.model.requests[-1].items[-2:]
+    assert [(i.role, i.text_content) for i in last_two] == [  # type: ignore[union-attr]
+        ("user", "tell me everything"),
+        ("user", "never mind"),
+    ]
+
+
+@pytest.mark.rule("R6", "R68", "B57")
+async def test_a_reply_to_a_result_cut_off_while_it_streams_is_noted_on_the_result(
     door: Callable[..., Door],
 ) -> None:
     held = asyncio.Event()
@@ -773,16 +854,12 @@ async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
     held.set()
     await asyncio.wait_for(first, 20)
 
-    # the next turn's model reads the result, then the reply cut off before it said anything
-    items = desk.model.requests[-1].items
-    at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "b1_final")
-    reply = items[at + 2]
-    assert isinstance(reply, ChatMessage) and reply.role == "assistant"
-    assert reply.interrupted and reply.content == [""]
+    # the next turn's model reads that the person was not told the result
+    assert cut_off(desk.model.requests[-1], "b1_final")
 
 
-@pytest.mark.rule("R6")
-async def test_an_interrupt_before_the_reply_to_a_result_is_kept_as_interrupted(
+@pytest.mark.rule("R6", "R68", "B57")
+async def test_a_reply_to_a_result_cut_off_before_it_began_is_noted_on_the_result(
     door: Callable[..., Door],
 ) -> None:
     desk = await bookings(
@@ -798,11 +875,7 @@ async def test_an_interrupt_before_the_reply_to_a_result_is_kept_as_interrupted(
     await asyncio.wait_for(asyncio.gather(first, second), 20)
 
     # the result came back as the next message waited: its turn stopped before the reply
-    items = desk.model.requests[-1].items
-    at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "l1")
-    reply = items[at + 2]
-    assert isinstance(reply, ChatMessage) and reply.role == "assistant"
-    assert reply.interrupted and reply.content == [""]
+    assert cut_off(desk.model.requests[-1], "l1")
 
 
 @pytest.mark.rule("R7", "B27")

@@ -99,11 +99,10 @@ pub struct TurnContext {
     /// A delegating caller's conversation when the message carried a `chat_ctx` data part (plan
     /// 7.5), as the part's `data`.
     pub caller_history: Option<Value>,
-    /// The tool the message is handed to before the model runs: the last turn's question came
-    /// from it with a reference, and this message is its answer.
-    pub answer_tool: Option<String>,
-    /// What `answer_tool` continues with the answer, such as the expert's task.
-    pub answer_ref: Option<String>,
+    /// The tools the message is handed to before the model runs, each with what it continues
+    /// the answer with, such as an expert's task: the last turn's question came from their calls,
+    /// and this message is its answer.
+    pub answer_to: Vec<(String, String)>,
     /// The turn runs under `live`: a tool may go on in the background after its first update.
     #[python(default = "False")]
     pub live: bool,
@@ -118,14 +117,11 @@ pub struct TurnContext {
 pub struct PendingCall {
     pub name: String,
     pub call_id: String,
-    /// The tool that takes the answer, when the question carries a reference.
+    /// The tools that take the answer, each with what it continues it with: the calls of the
+    /// step whose questions carry a reference.
     #[serde(default)]
-    #[python(default = "None")]
-    pub answer_tool: Option<String>,
-    /// What the tool that takes the answer continues with it, such as the expert's task.
-    #[serde(default)]
-    #[python(default = "None")]
-    pub answer_ref: Option<String>,
+    #[python(default_factory = "list")]
+    pub answer_to: Vec<(String, String)>,
 }
 
 /// A journal event the handler recorded (docs/journal.md): `tool_execution_updated` for a

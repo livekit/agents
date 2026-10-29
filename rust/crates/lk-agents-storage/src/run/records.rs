@@ -23,6 +23,8 @@ pub const INTERRUPT_KEY: &str = "livekit/interrupt";
 pub const BACKGROUND_KEY: &str = "livekit/background";
 /// The `livekit/kind` of the message of a turn that delivers what work in the background queued.
 pub const KIND_DELIVERY: &str = "delivery";
+/// On a `working` task whose question waits behind the one in front of the person, unshown.
+pub const QUEUED_KEY: &str = "livekit/queued";
 /// The key `Tasks::fail` writes into the status message's metadata.
 pub const REASON_KEY: &str = "livekit/reason";
 

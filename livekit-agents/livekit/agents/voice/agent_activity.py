@@ -6,7 +6,14 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    Callable,
+    Coroutine,
+    Iterator,
+    Sequence,
+)
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -23,6 +30,7 @@ from ..llm.tool_context import (
     APPROVAL_ANSWERED,
     APPROVAL_KEY,
     ASK_IN_OWN_WORDS,
+    CUT_OFF_KEY,
     SAY_EXACTLY,
     Completed,
     Failed,
@@ -37,6 +45,7 @@ from ..llm.tool_context import (
     Working,
     get_fnc_tool_names,
     is_transition,
+    note_cut_off_replies,
 )
 from ..llm.utils import answer_arguments
 from ..log import logger
@@ -3728,6 +3737,7 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
+        _replies_to: Sequence[llm.FunctionCall] = (),
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -3742,6 +3752,7 @@ class AgentActivity(RecognitionHooks):
                 new_message=new_message,
                 instructions=instructions,
                 _previous_user_metrics=_previous_user_metrics,
+                _replies_to=_replies_to,
             )
 
     async def _pipeline_reply_task_impl(
@@ -3754,6 +3765,7 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
+        _replies_to: Sequence[llm.FunctionCall] = (),
     ) -> None:
         from .agent import ModelSettings
 
@@ -3866,6 +3878,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx,
             [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
         )
+        note_cut_off_replies(chat_ctx)
 
         tasks: list[asyncio.Task[Any]] = []
         # the spans of this generation record their input against the last committed one
@@ -4005,6 +4018,9 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             _record_interruption(speech_handle)
+            # a reply to tool outputs cut before it played may hide what they say
+            for fnc in _replies_to:
+                fnc.extra[CUT_OFF_KEY] = "true"
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
             return
 
@@ -4030,6 +4046,8 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             _record_interruption(speech_handle)
+            for fnc in _replies_to:
+                fnc.extra[CUT_OFF_KEY] = "true"
             await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
             return
 
@@ -4273,6 +4291,8 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         if speech_handle.interrupted:
+            for fnc in _replies_to:
+                fnc.extra[CUT_OFF_KEY] = "true"
             await utils.aio.cancel_and_wait(exe_task)
 
             # commit results of tools that finished despite the interruption (#3702), so
@@ -4367,6 +4387,13 @@ class AgentActivity(RecognitionHooks):
             if tool_messages:
                 self._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
+            replies_to = [
+                out.fnc_call for out in tool_output.output if out.fnc_call_out.reply_required
+            ]
+            if fnc_executed_ev.has_tool_reply and speech_handle.interrupted:
+                # the person spoke while the tools ran: their reply never starts
+                for fnc in replies_to:
+                    fnc.extra[CUT_OFF_KEY] = "true"
 
             if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
@@ -4416,6 +4443,7 @@ class AgentActivity(RecognitionHooks):
                         # one if the reply only generated tools, or the last turn of a
                         # sub-conversation an inline AgentTask ran inside the tool
                         _previous_user_metrics=self._session._unanswered_user_metrics,
+                        _replies_to=replies_to,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",

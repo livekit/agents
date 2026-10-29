@@ -46,6 +46,7 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+    from .chat_context import ChatContext
 
 
 class Tool(ABC):
@@ -356,6 +357,10 @@ APPROVAL_KEY = "lk.approval"
 """``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
 returned the read-back, ``granted`` when it ran on the person's answer."""
 
+CUT_OFF_KEY = "lk.cut_off"
+"""``FunctionCall.extra`` key, ``"true"``, on a call whose output's reply the person cut off by
+speaking: the output stores no ``extra``, and the call is stored beside it."""
+
 
 _approval_scope: ContextVar[_ApprovalScope | None] = ContextVar(
     "agents_approval_scope", default=None
@@ -424,6 +429,34 @@ def as_model_reads(items: Sequence[Any]) -> list[Any]:
             item = item.model_copy(update={"output": text})
         out.append(item)
     return out
+
+
+CUT_OFF_REPLY = (
+    "(The reply to this was cut off by the person's next message: they got only what follows, "
+    "if anything. If it still matters to what they say now, tell them along with your answer; "
+    "if they moved on, leave it.)"
+)
+"""What the model reads after an output whose reply was cut off, on the turn that cut it."""
+
+
+def note_cut_off_replies(chat_ctx: ChatContext) -> None:
+    """Note the outputs whose reply the newest user message cut off, on copies in the request:
+    the stored items stay as they are."""
+    from .chat_context import ChatMessage, FunctionCall, FunctionCallOutput
+
+    items = chat_ctx.items
+    cut = {i.call_id for i in items if isinstance(i, FunctionCall) and i.extra.get(CUT_OFF_KEY)}
+    users = [n for n, i in enumerate(items) if isinstance(i, ChatMessage) and i.role == "user"]
+    if not cut or not users:
+        return
+    for n in range(users[-2] + 1 if len(users) > 1 else 0, users[-1]):
+        item = items[n]
+        if (
+            isinstance(item, FunctionCallOutput)
+            and item.call_id in cut
+            and not item.output.endswith(CUT_OFF_REPLY)  # a request built on a noted one
+        ):
+            items[n] = item.model_copy(update={"output": f"{item.output}\n\n{CUT_OFF_REPLY}"})
 
 
 WAITING_PREFIX = "waiting for the person's answer to: "
