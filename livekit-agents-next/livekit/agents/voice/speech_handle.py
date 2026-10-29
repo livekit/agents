@@ -8,12 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .. import _core, llm
-from .._generated.speech_defaults import (
-    DEFAULT_INPUT_MODALITY,
-    SPEECH_PRIORITY_HIGH,
-    SPEECH_PRIORITY_LOW,
-    SPEECH_PRIORITY_NORMAL,
-)
+from .._generated import speech_defaults
 from ..log import logger
 
 
@@ -22,12 +17,10 @@ class InputDetails:
     modality: Literal["text", "audio"]
 
 
-DEFAULT_INPUT_DETAILS = InputDetails(modality=DEFAULT_INPUT_MODALITY)  # type: ignore[arg-type]
+DEFAULT_INPUT_DETAILS = InputDetails(modality=speech_defaults.DEFAULT_INPUT_MODALITY)  # type: ignore[arg-type]
 
 InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
 """Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""
-
-_LOW, _NORMAL, _HIGH = SPEECH_PRIORITY_LOW, SPEECH_PRIORITY_NORMAL, SPEECH_PRIORITY_HIGH
 
 
 class SpeechHandle:
@@ -36,11 +29,11 @@ class SpeechHandle:
     ``exception()`` for a failure. The core hands this object back wherever the speech is named
     (``speech_created``, a tool's ``RunContext``), for as long as it lives."""
 
-    SPEECH_PRIORITY_LOW = _LOW
+    SPEECH_PRIORITY_LOW = speech_defaults.SPEECH_PRIORITY_LOW
     """Priority for messages that should be played after all other messages in the queue"""
-    SPEECH_PRIORITY_NORMAL = _NORMAL
+    SPEECH_PRIORITY_NORMAL = speech_defaults.SPEECH_PRIORITY_NORMAL
     """Every speech generates by the VoiceAgent defaults to this priority."""
-    SPEECH_PRIORITY_HIGH = _HIGH
+    SPEECH_PRIORITY_HIGH = speech_defaults.SPEECH_PRIORITY_HIGH
     """Priority for important messages that should be played before others."""
 
     def __init__(self, core: _core.SpeechHandle) -> None:
