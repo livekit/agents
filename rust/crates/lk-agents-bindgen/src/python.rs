@@ -261,7 +261,7 @@ pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
             if vm.0.is_empty() {
                 continue;
             }
-            vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate"])?;
+            vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate", "kwargs"])?;
             let vi = &v.ident;
             if vm.flag("delegate") {
                 if !matches!(&v.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1) {
@@ -279,7 +279,23 @@ pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
                 syn::Fields::Unnamed(_) => quote!(Self::#vi(..)),
                 syn::Fields::Named(_) => quote!(Self::#vi { .. }),
             };
-            let r = raise(k, quote!(::std::string::ToString::to_string(self)));
+            let message = quote!(::std::string::ToString::to_string(self));
+            // `kwargs`: the variant's fields are the host class's keyword arguments too.
+            let r = if vm.flag("kwargs") {
+                let (syn::Fields::Named(named), Some((module, class))) = (&v.fields, k.rsplit_once('.')) else {
+                    return Err(syn::Error::new_spanned(vi, "`kwargs` passes a named-field variant's fields to a dotted host class"));
+                };
+                let fields: Vec<_> = named.named.iter().filter_map(|f| f.ident.clone()).collect();
+                let names = fields.iter().map(|f| f.to_string());
+                arms.push(quote!(Self::#vi { #(#fields),* } => ::lk_agents_abi::python::host_exception_with(#module, #class, #message, |kwargs| {
+                    #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, #fields)?; )*
+                    ::std::result::Result::Ok(())
+                }),));
+                kind_arms.push(quote!(#pat => #k,));
+                continue;
+            } else {
+                raise(k, message)
+            };
             arms.push(quote!(#pat => #r,));
             kind_arms.push(quote!(#pat => #k,));
         }

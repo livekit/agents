@@ -471,7 +471,7 @@ impl Resolver<'_> {
     fn error(&self, shape: &Shape, at: &str) -> Result<ErrorDecl, String> {
         let (_, _, rust, entries) = self.error_item(shape, at)?;
         let declared = voc::find(&entries, "error").expect("error_item checked it");
-        if declared.nested.iter().all(|e| e.key == "raised") {
+        if !declared.nested.is_empty() && declared.nested.iter().all(|e| e.key == "raised") {
             return Err(format!(
                 "{at}: `{rust}` is a refusal the host raises (error(raised)), not an error raised to it"
             ));

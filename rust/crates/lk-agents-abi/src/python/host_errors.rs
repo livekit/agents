@@ -159,6 +159,25 @@ pub fn to_py_exception(py: Python<'_>, err: &ProviderError) -> PyResult<Py<PyAny
     Ok(raise_provider(py, err.clone()).into_value(py).into_any())
 }
 
+/// For a `#[host(kind = "..", kwargs)]` variant: the class called with the message and the
+/// keyword arguments `kwargs` sets. A failed import or call is the error instead.
+pub fn host_exception_with(
+    module: &str,
+    class: &str,
+    message: String,
+    kwargs: impl FnOnce(&Bound<'_, PyDict>) -> PyResult<()>,
+) -> PyErr {
+    Python::attach(|py| {
+        let build = || -> PyResult<PyErr> {
+            let arguments = PyDict::new(py);
+            kwargs(&arguments)?;
+            let class = py.import(module)?.getattr(class)?;
+            Ok(PyErr::from_value(class.call((message,), Some(&arguments))?))
+        };
+        build().unwrap_or_else(|e| e)
+    })
+}
+
 /// For a `#[host(error)]` kind that names one. A failed import is the error instead.
 pub fn host_exception(module: &str, class: &str, message: String) -> PyErr {
     Python::attach(|py| {
