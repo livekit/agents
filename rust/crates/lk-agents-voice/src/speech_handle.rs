@@ -265,7 +265,7 @@ impl SpeechHandle {
                 },
             };
             let transition = inner.state.handle(input)?;
-            let (mut cancel_tasks, mut generation_done) = (false, false);
+            let (mut cancel_tasks, mut generation_done) = (false, None);
             for effect in transition.effects {
                 match effect {
                     StateEffect::PublishAcceptedView(view) => {
@@ -276,8 +276,15 @@ impl SpeechHandle {
                     StateEffect::PublishRequestFlag(requested) => {
                         self.interrupt_requested.store(requested, Ordering::Release);
                     }
+                    StateEffect::NewGeneration => {
+                        self.generations.lock().unwrap().push(Arc::new(Monotone::new(false)));
+                    }
+                    StateEffect::PublishAuthorization(authorized) => {
+                        self.authorized.send_replace(authorized);
+                    }
+                    StateEffect::PublishStep(step) => self.num_steps.store(step, Ordering::Release),
                     StateEffect::CancelTasks => cancel_tasks = true,
-                    StateEffect::GenerationDone => generation_done = true,
+                    StateEffect::GenerationDone { step } => generation_done = Some(step),
                 }
             }
             (transition.reply, cancel_tasks, generation_done)
@@ -288,8 +295,8 @@ impl SpeechHandle {
             self.transition(HandleInput::TasksCancelled)
                 .expect("cancelled-task completion cannot refuse");
         }
-        if generation_done {
-            let _ = self.mark_generation_done();
+        if let Some(step) = generation_done {
+            self.generation_cell(step).set(true);
         }
         Ok(reply)
     }
@@ -405,7 +412,9 @@ impl SpeechHandle {
 
     /// `speech_handle._num_steps += 1` on the tool-loop back edge.
     pub fn step(&self) -> u32 {
-        self.num_steps.fetch_add(1, Ordering::AcqRel) + 1
+        self.transition(HandleInput::Accepted(StateInput::AdvanceStep))
+            .expect("advancing a speech step cannot refuse")
+            .step()
     }
 
     /// The loop interrupted the speech: its playout, its tools and any follow-up step.
@@ -514,18 +523,19 @@ impl SpeechHandle {
     }
 
     pub fn authorized(&self) -> bool {
-        *self.authorized.borrow()
+        lock(&self.inner).state.authorized()
     }
 
     /// `_authorize_generation`: append a fresh generation cell, then set the authorize event.
     pub fn authorize_generation(&self) {
-        self.generations.lock().unwrap().push(Arc::new(Monotone::new(false)));
-        self.authorized.send_replace(true);
+        self.transition(HandleInput::Accepted(StateInput::AuthorizeGeneration))
+            .expect("authorizing a generation cannot refuse");
     }
 
     /// `_clear_authorization`, right after the gate; must not be a [`Monotone`].
     pub fn clear_authorization(&self) {
-        self.authorized.send_replace(false);
+        self.transition(HandleInput::Accepted(StateInput::ClearAuthorization))
+            .expect("clearing authorization cannot refuse");
     }
 
     /// `SpeechHandle._wait_for_authorization`.
@@ -538,7 +548,7 @@ impl SpeechHandle {
     /// Whether step `step` (counting as [`num_steps`](Self::num_steps) does) was authorized to
     /// play: each authorization opens one generation.
     pub fn step_authorized(&self, step: u32) -> bool {
-        self.generations.lock().unwrap().len() >= step as usize
+        lock(&self.inner).state.step_authorized(step)
     }
 
     /// Until [`step_authorized`](Self::step_authorized). Subscribed before the read: an
@@ -555,36 +565,32 @@ impl SpeechHandle {
     /// Wait for step `step`'s generation (absolute, from zero). `RunContext.wait_for_playout()`
     /// passes the step captured at tool-call time, so a long tool waits for its own step's playout.
     pub async fn wait_for_generation(&self, step: usize) -> Result<(), SpeechError> {
-        let cell = {
-            let gens = self.generations.lock().unwrap();
-            if gens.is_empty() {
-                return Err(SpeechError::NoActiveGeneration);
-            }
-            gens.get(step)
-                .cloned()
-                .ok_or(SpeechError::NoSuchGeneration { step, len: gens.len() })?
-        };
-        // The lock is released above, on purpose: never hold a lock across an await.
-        cell.wait_for(|d| *d).await;
+        let step = lock(&self.inner).state.generation(step)?;
+        self.generation_cell(step).wait_for(|done| *done).await;
         Ok(())
     }
 
     /// `_wait_for_generation()` with `step_idx=-1`: the step currently running.
     pub async fn wait_for_latest_generation(&self) -> Result<(), SpeechError> {
-        let cell = self.last_generation().ok_or(SpeechError::NoActiveGeneration)?;
-        cell.wait_for(|d| *d).await;
+        let step = lock(&self.inner).state.latest_generation()?;
+        self.generation_cell(step).wait_for(|done| *done).await;
         Ok(())
     }
 
     /// `_mark_generation_done`: always the last cell (only the newest generation is in flight).
     pub fn mark_generation_done(&self) -> Result<(), SpeechError> {
-        self.last_generation().ok_or(SpeechError::NoGenerationToMark)?.set(true);
+        self.transition(HandleInput::Accepted(StateInput::MarkGenerationDone))?;
         Ok(())
     }
 
     /// The lock is released before any await.
-    fn last_generation(&self) -> Option<Arc<Monotone<bool>>> {
-        self.generations.lock().unwrap().last().cloned()
+    fn generation_cell(&self, step: usize) -> Arc<Monotone<bool>> {
+        self.generations
+            .lock()
+            .unwrap()
+            .get(step)
+            .cloned()
+            .expect("the accepted generation was published")
     }
 
     /// `_mark_done`. The error is kept out of the completion signal so awaiting never raises; see

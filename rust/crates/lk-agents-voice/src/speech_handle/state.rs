@@ -18,9 +18,16 @@ pub struct SpeechState {
     watchdog_armed: bool,
     interrupted_at_done: bool,
     completing_after_cancel: bool,
+    authorized: bool,
+    num_steps: u32,
+    generations: Vec<bool>,
 }
 
 pub enum Input {
+    AdvanceStep,
+    AuthorizeGeneration,
+    ClearAuthorization,
+    MarkGenerationDone,
     ResetInterruptions { allow: bool },
     Interrupt { force: bool },
     SetAllowInterruptions { allow: bool },
@@ -41,19 +48,30 @@ pub enum Effect {
     PublishAcceptedView(SpeechView),
     PublishRequestFlag(bool),
     CancelTasks,
-    GenerationDone,
+    NewGeneration,
+    PublishAuthorization(bool),
+    PublishStep(u32),
+    GenerationDone { step: usize },
 }
 
 pub enum Reply {
     Unit,
     Flag(bool),
+    Step(u32),
 }
 
 impl Reply {
     pub fn flag(self) -> bool {
         match self {
             Self::Flag(value) => value,
-            Self::Unit => unreachable!("the speech transition returns a flag"),
+            Self::Unit | Self::Step(_) => unreachable!("the speech transition returns a flag"),
+        }
+    }
+
+    pub fn step(self) -> u32 {
+        match self {
+            Self::Step(value) => value,
+            Self::Unit | Self::Flag(_) => unreachable!("the speech transition returns a step"),
         }
     }
 }
@@ -77,6 +95,9 @@ impl SpeechState {
             watchdog_armed: false,
             interrupted_at_done: false,
             completing_after_cancel: false,
+            authorized: false,
+            num_steps: 1,
+            generations: Vec::new(),
         }
     }
 
@@ -84,6 +105,25 @@ impl SpeechState {
         let mut reply = Reply::Unit;
         let mut effects = Vec::new();
         match input {
+            Input::AdvanceStep => {
+                self.num_steps += 1;
+                effects.push(Effect::PublishStep(self.num_steps));
+                reply = Reply::Step(self.num_steps);
+            }
+            Input::AuthorizeGeneration => {
+                self.generations.push(false);
+                self.authorized = true;
+                effects.push(Effect::NewGeneration);
+                effects.push(Effect::PublishAuthorization(true));
+            }
+            Input::ClearAuthorization => {
+                self.authorized = false;
+                effects.push(Effect::PublishAuthorization(false));
+            }
+            Input::MarkGenerationDone => {
+                let step = self.finish_latest_generation()?;
+                effects.push(Effect::GenerationDone { step });
+            }
             Input::ResetInterruptions { allow } => {
                 self.view.allow_interruptions = allow;
                 self.holds = 0;
@@ -193,7 +233,38 @@ impl SpeechState {
         }
         self.watchdog_armed = false;
         effects.push(self.publish());
-        effects.push(Effect::GenerationDone);
+        if let Ok(step) = self.finish_latest_generation() {
+            effects.push(Effect::GenerationDone { step });
+        }
+    }
+
+    fn finish_latest_generation(&mut self) -> Result<usize, SpeechError> {
+        let step = self.generations.len().checked_sub(1).ok_or(SpeechError::NoGenerationToMark)?;
+        self.generations[step] = true;
+        Ok(step)
+    }
+
+    pub fn authorized(&self) -> bool {
+        self.authorized
+    }
+
+    pub fn step_authorized(&self, step: u32) -> bool {
+        self.generations.len() >= step as usize
+    }
+
+    pub fn generation(&self, step: usize) -> Result<usize, SpeechError> {
+        let len = self.generations.len();
+        if len == 0 {
+            return Err(SpeechError::NoActiveGeneration);
+        }
+        if step >= len {
+            return Err(SpeechError::NoSuchGeneration { step, len });
+        }
+        Ok(step)
+    }
+
+    pub fn latest_generation(&self) -> Result<usize, SpeechError> {
+        self.generations.len().checked_sub(1).ok_or(SpeechError::NoActiveGeneration)
     }
 
     fn publish(&self) -> Effect {
