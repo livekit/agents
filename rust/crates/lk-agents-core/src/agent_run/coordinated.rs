@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use lk_agents_abi::{ChatMessage, Ts};
 
 use super::{AgentRun, Effect, Next, Output, Phase, StepId};
+use crate::tool_calls::ToolCalls;
 
 /// How an invocation opens, and who owns its record and its requests.
 #[derive(Debug, Clone)]
@@ -46,6 +47,16 @@ pub enum StepVerdict {
 }
 
 impl AgentRun {
+    /// The person's latest answers: what a step that has not called yet grants with.
+    pub(super) fn answered(&mut self, approval_answers: BTreeSet<String>) {
+        if let Some(acting) = self.phase.acting()
+            && acting.calls.is_empty()
+        {
+            acting.calls = ToolCalls::new(approval_answers.clone());
+        }
+        self.approval_answers = approval_answers;
+    }
+
     /// The coordinator's verdict on a settled step: it may end or forbid what the run would do
     /// next, never undo a failure or an accepted output.
     pub(super) fn verdict(

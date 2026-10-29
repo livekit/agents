@@ -215,3 +215,62 @@ fn a_call_the_coordinator_made_keeps_its_item() {
     assert_eq!(items[0].id(), "voice_item_7");
     assert_eq!(items[1].id(), "voice_item_7_out");
 }
+
+fn approval_tool() -> FunctionToolInfo {
+    let mut t = string_tool("transfer", "to");
+    t.needs_approval = Some(lk_agents_abi::agent::ReadBack::Default);
+    t
+}
+
+/// A `transfer` call to `to` whose read-back was put to the person.
+fn asked(call_id: &str, to: &str) -> ChatItem {
+    let identity = lk_agents_abi::agent::ArgumentIdentity::Json(json!({"to": to}));
+    let mut call = lk_agents_abi::FunctionCall {
+        id: format!("item_{call_id}"),
+        call_id: call_id.into(),
+        arguments: json!({"to": to}).to_string(),
+        name: "transfer".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    let canonical = crate::approval::canonical(&identity);
+    crate::approval::set_mark(
+        &mut call,
+        lk_agents_abi::llm::tool_executor::Approval::Asked,
+        &canonical,
+    );
+    ChatItem::FunctionCall(call)
+}
+
+/// The model repeats `transfer(to)` on the first step; whether its body runs.
+fn repeat_runs(d: &mut Driver, to: &str) -> bool {
+    let request = d.plans()[0].request;
+    d.respond(request, "", &[("transfer", json!({"to": to}))]);
+    let (call, arguments) = d.prepares()[0].clone();
+    d.prepared(call, Value::Object(arguments));
+    !d.executes().is_empty()
+}
+
+// Catches: a coordinated step granting only with the answers it opened with, though the person
+// answered before it called (the session commits the answer after the reply exists).
+#[test]
+fn a_step_that_has_not_called_reads_the_latest_answers() {
+    let mut input = coordinated_input();
+    input.history.push(asked("asked_1", "billing"));
+    let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
+    d.send(Event::Answered { approval_answers: ["asked_1".to_owned()].into() });
+    assert!(repeat_runs(&mut d, "billing"));
+}
+
+// Catches: a read-back another reply put after this run opened ignored, so an answer to the
+// earlier question grants a call though the person was asked something else last.
+#[test]
+fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
+    let mut input = coordinated_input();
+    input.history.push(asked("asked_1", "billing"));
+    input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
+    let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
+    d.send(Event::Recorded { item: asked("asked_2", "sales") });
+    assert!(!repeat_runs(&mut d, "billing"));
+}

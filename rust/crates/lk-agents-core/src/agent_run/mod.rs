@@ -158,6 +158,16 @@ pub enum Event {
         step: StepId,
         verdict: StepVerdict,
     },
+    /// Coordinated: the person's latest message answered these read-backs; a step that has not
+    /// called yet reads them.
+    Answered {
+        approval_answers: BTreeSet<String>,
+    },
+    /// Coordinated: the coordinator recorded `item` outside this invocation (another reply's
+    /// call): approval reads it as asked or granted.
+    Recorded {
+        item: ChatItem,
+    },
     Cancel,
     /// The deadline from `wake_at()` is due.
     Wake,
@@ -564,6 +574,8 @@ impl AgentRun {
                 self.validated(validation, verdict, now, &mut fx)
             }
             Event::StepVerdict { step, verdict } => self.verdict(step, verdict, now, &mut fx),
+            Event::Answered { approval_answers } => self.answered(approval_answers),
+            Event::Recorded { item } => self.history.push(item),
         }
         fx
     }
