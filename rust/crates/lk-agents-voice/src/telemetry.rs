@@ -449,6 +449,15 @@ impl SessionTrace {
         self.end_with(open, now, Attrs::new(), error, Default::default(), out);
     }
 
+    /// The overlap ended: without a verdict yet, the speech was not an interruption.
+    pub(crate) fn overlap_ended(&mut self) {
+        if let Some((_, verdict)) = &mut self.user_speaking
+            && !verdict.0.contains_key(attrs::IS_INTERRUPTION)
+        {
+            *verdict = Attrs::new().set(attrs::IS_INTERRUPTION, "false");
+        }
+    }
+
     /// What `ev` opens or closes. `wall` dates a session instant; `now` is the step's wall time.
     pub(crate) fn observe(
         &mut self,
@@ -881,7 +890,8 @@ mod tests {
         assert_eq!(wait.attributes["lk.eou.wait_duration"], 1.0);
     }
 
-    // Catches: the adaptive interruption verdict missing from `user_speaking` (1.x parity).
+    // Catches: the adaptive interruption verdict missing from `user_speaking`, or an overlap
+    // ended without one not marked `false` (1.x parity).
     #[test]
     fn an_overlap_verdict_describes_the_user_speaking_span() {
         let mut t = opened();
@@ -913,5 +923,16 @@ mod tests {
         assert_eq!(speaking.attributes["lk.interruption.total_duration"], 0.2);
         assert_eq!(speaking.attributes["lk.interruption.prediction_duration"], 0.05);
         assert_eq!(speaking.attributes["lk.interruption.detection_delay"], 0.4);
+
+        out.clear();
+        t.observe(5.0, &|_| 5.0, "a", &edge(UserState::Listening, UserState::Speaking), &mut out);
+        t.overlap_ended();
+        t.observe(6.0, &|_| 6.0, "a", &edge(UserState::Speaking, UserState::Listening), &mut out);
+        let ended = out.iter().find_map(|e| match e {
+            SessionEvent::SpanEnded(s) if s.span_id.starts_with("user_speaking") => Some(s),
+            _ => None,
+        });
+        let speaking = ended.expect("user_speaking ends");
+        assert_eq!(speaking.attributes["lk.is_interruption"], "false");
     }
 }

@@ -698,6 +698,9 @@ impl Driver {
                         }
                     }
                     Planned::Op(StepOp::Interruption(signal)) => {
+                        if let InterruptionSignal::OverlapEnded { .. } = signal {
+                            self.session.trace.overlap_ended();
+                        }
                         let overlap = self.activity.audio_recognition.open_overlap();
                         effects.push(Effect::InterruptionSignal { overlap, signal });
                     }
