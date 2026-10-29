@@ -198,10 +198,15 @@ class _VADStream(vad.VADStream):
                 self._opts.prefix_padding_duration * self._input_sample_rate
             )
 
-            self._speech_buffer.resize(
+            new_buffer_size = (
                 int(self._opts.max_buffered_speech * self._input_sample_rate)
                 + self._prefix_padding_samples
             )
+            if new_buffer_size != len(self._speech_buffer):
+                old_buffer = self._speech_buffer
+                self._speech_buffer = np.zeros(new_buffer_size, dtype=old_buffer.dtype)
+                copy_size = min(len(old_buffer), new_buffer_size)
+                self._speech_buffer[:copy_size] = old_buffer[:copy_size]
 
             # Resizing may discard samples that the write cursor still counted.
             self._speech_buffer_index = min(self._speech_buffer_index, len(self._speech_buffer))
