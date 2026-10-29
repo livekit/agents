@@ -93,6 +93,9 @@ pub enum Effect {
         agent_name: String,
         invocation_id: String,
         context_scope: String,
+        /// The invocation reads its scope's application context; a separate child's own scope
+        /// starts without one.
+        reads_context: bool,
         execution_id: String,
         history: Vec<ChatItem>,
     },
@@ -450,6 +453,7 @@ impl TextSession {
             agent_name: frame.agent_name.clone(),
             invocation_id: invocation_id.clone(),
             context_scope: frame.context_scope.clone(),
+            reads_context: !(self.separate_contexts && frame.context_scope == frame.id.value),
             execution_id: self.state.execution_id.clone(),
             history,
         });
