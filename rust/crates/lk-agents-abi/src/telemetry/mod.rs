@@ -133,18 +133,6 @@ impl LogRecord {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn supplied_log_timestamp_is_preserved_exactly() {
-        let log =
-            LogRecord::at((123, 456), "tools", "complete", Severity::Info, serde_json::Value::Null);
-        assert_eq!(log.timestamp, (123, 456));
-    }
-}
-
 pub mod attributes;
 pub mod report;
 

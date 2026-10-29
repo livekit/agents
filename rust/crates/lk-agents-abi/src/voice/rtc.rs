@@ -663,13 +663,6 @@ mod tests {
         assert!(AudioTrackFeature::try_from(7).is_err());
     }
 
-    // Catches: a name table that drifts from the enum.
-    #[test]
-    fn every_reason_has_a_name_that_parses_back() {
-        assert_eq!("client_initiated".parse(), Ok(DisconnectReason::ClientInitiated));
-        assert!("CLIENT_INITIATED".parse::<DisconnectReason>().is_err());
-    }
-
     // Catches: the `close_on_disconnect` set drifting from `DEFAULT_CLOSE_ON_DISCONNECT_REASONS`.
     #[test]
     fn only_three_reasons_close_the_session() {

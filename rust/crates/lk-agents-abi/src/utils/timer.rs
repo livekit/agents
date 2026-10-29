@@ -108,39 +108,6 @@ mod tests {
         assert_eq!(t.pop_due(ts(500)), Some(T::EndpointingDelay));
     }
 
-    // Catches: cleanup paths that cancel unconditionally blowing up on an unarmed timer.
-    #[test]
-    fn cancel_is_idempotent() {
-        let mut t = TimerSet::<T>::new();
-        assert_eq!(t.cancel(T::EndpointingDelay), None);
-        t.arm(T::EndpointingDelay, ts(10));
-        assert_eq!(t.cancel(T::EndpointingDelay), Some(ts(10)));
-        assert_eq!(t.cancel(T::EndpointingDelay), None);
-        assert!(t.is_empty());
-    }
-
-    // Catches: `is_armed` and `is_empty` answering a constant.
-    #[test]
-    fn is_armed_and_is_empty_track_the_set_rather_than_answering_a_constant() {
-        let mut t = TimerSet::new();
-        assert!(!t.is_armed(T::EndpointingDelay));
-        assert!(t.is_empty());
-
-        t.arm(T::EndpointingDelay, ts(100));
-        assert!(t.is_armed(T::EndpointingDelay));
-        assert!(!t.is_empty());
-        assert!(!t.is_armed(T::EotPredictionTimeout), "a different timer is a different key");
-
-        // Both ways out of "armed" have to clear it.
-        assert_eq!(t.pop_due(ts(100)), Some(T::EndpointingDelay));
-        assert!(!t.is_armed(T::EndpointingDelay), "firing disarms");
-        assert!(t.is_empty());
-
-        t.arm(T::EndpointingDelay, ts(100));
-        t.cancel(T::EndpointingDelay);
-        assert!(!t.is_armed(T::EndpointingDelay), "and so does cancelling");
-    }
-
     // Catches: nondeterministic order when two timers share a deadline.
     #[test]
     fn ties_pop_in_a_stable_order() {

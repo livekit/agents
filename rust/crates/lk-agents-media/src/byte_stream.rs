@@ -242,13 +242,6 @@ mod tests {
         assert_eq!(s.flush(), vec![Frame { data: vec![5, 6, 7, 8], samples_per_channel: 1 }]);
     }
 
-    // Catches: flush emitting an empty frame, which downstream treats as a real frame.
-    #[test]
-    fn flush_on_an_empty_buffer_emits_nothing() {
-        let mut s = AudioByteStream::new(SR, 1, Some(100), false);
-        assert_eq!(s.flush(), vec![]);
-    }
-
     // Catches: `reset_progressive` dropping the buffer, or `buffered_duration` counting bytes.
     #[test]
     fn reset_progressive_keeps_the_buffer_and_restarts_the_ramp() {

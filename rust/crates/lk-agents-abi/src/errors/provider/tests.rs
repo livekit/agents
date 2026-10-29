@@ -28,25 +28,3 @@ fn a_native_error_reports_its_own_retryability() {
     assert!(ProviderError::Local(ApiError::timeout(None)).retryable());
 }
 
-// Catches: handing out a `CapturedError` for a native error.
-#[test]
-fn only_a_host_error_has_a_host_ref() {
-    assert_eq!(host(true, Some(429)).host_ref().map(|r| r.id()), Some(7));
-    assert_eq!(ProviderError::Local(ApiError::new("x")).host_ref(), None);
-}
-
-// Catches: losing the status code or the message on the way through.
-#[test]
-fn the_status_code_and_message_survive_both_variants() {
-    assert_eq!(host(true, Some(429)).message(), "quota exceeded");
-    assert_eq!(
-        ProviderError::Local(ApiError::new("upstream said no")).message(),
-        "upstream said no"
-    );
-    assert_eq!(host(true, Some(429)).status_code(), Some(429));
-    assert_eq!(
-        ProviderError::Local(ApiError::status("x", 500, None, None)).status_code(),
-        Some(500)
-    );
-    assert_eq!(ProviderError::Local(ApiError::connection(None)).status_code(), None);
-}

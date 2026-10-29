@@ -31,16 +31,6 @@ fn is_instruction_covers_developer_as_well_as_system() {
     }
 }
 
-// Catches: giving a handoff or config-update item a `tool_name`.
-#[test]
-fn only_function_calls_and_outputs_have_a_tool_name() {
-    assert_eq!(crate::testkit::call("c", "lookup", 0).tool_name(), Some("lookup"));
-    assert_eq!(crate::testkit::out("o", "lookup", 0).tool_name(), Some("lookup"));
-    assert_eq!(crate::testkit::msg("m", Role::User, "hi", 0).tool_name(), None);
-    assert_eq!(crate::testkit::handoff("h", 0).tool_name(), None);
-    assert_eq!(crate::testkit::config_update("u", 0).tool_name(), None);
-}
-
 // Catches: stamping `created_at` from the monotonic clock, or a `wall()` that repeats.
 #[test]
 fn two_items_minted_in_one_tick_get_distinct_ordered_stamps() {

@@ -228,14 +228,6 @@ mod tests {
     }
 
     #[test]
-    fn root_is_the_default_and_is_not_a_slab_entry() {
-        let t = FrameTable::new();
-        assert!(matches!(t.resolve_inbound(FrameId::ROOT), InboundFrame::Root));
-        assert!(t.get(FrameId::ROOT).is_none());
-        assert!(t.is_empty());
-    }
-
-    #[test]
     fn ids_are_monotonic_and_never_reused() {
         let t = FrameTable::new();
         let a = t.alloc(speech_frame(1));

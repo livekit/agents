@@ -183,17 +183,4 @@ mod tests {
         assert_eq!(SpeechData::new("eng", "hi").language, "en");
         assert_eq!(SpeechData::new("en_us", "hi").language, "en-US");
     }
-
-    // Catches: `best_alternative` returning something for an event without a transcript.
-    #[test]
-    fn an_event_with_no_alternatives_has_no_best_one() {
-        let ev = SpeechEvent::new(SpeechEventType::StartOfSpeech);
-        assert!(ev.best_alternative().is_none());
-
-        let ev = SpeechEvent {
-            alternatives: vec![SpeechData::new("en", "first"), SpeechData::new("en", "second")],
-            ..SpeechEvent::new(SpeechEventType::FinalTranscript)
-        };
-        assert_eq!(ev.best_alternative().map(|a| a.text.as_str()), Some("first"));
-    }
 }

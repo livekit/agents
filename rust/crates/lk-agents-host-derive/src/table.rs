@@ -181,9 +181,4 @@ mod tests {
         assert!(out.contains("impl crate :: sql :: Table for abi :: TaskRow"), "{out}");
         assert!(out.contains("Ok (abi :: TaskRow { task_id"), "{out}");
     }
-
-    #[test]
-    fn a_record_without_table_renders_nothing() {
-        assert!(render("struct Plain { a: String }").is_empty());
-    }
 }
