@@ -335,7 +335,7 @@ impl Pump<'_> {
         // Both legs end every segment, one whose words went down the transcript leg with no
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included.
-        let leg_state = text_out.map(|leg| *leg.state.lock().unwrap_or_else(|p| p.into_inner()));
+        let leg_state = text_out.map(|leg| *leg.state());
         if plan.end_unvoiced(&heard, leg_state) {
             end_unvoiced(
                 shared,
@@ -396,8 +396,12 @@ impl<'a> TextLeg<'a> {
         TextLeg { out, buffered, state: Default::default(), shared, speech }
     }
 
+    fn state(&self) -> std::sync::MutexGuard<'_, TextLegState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     fn handle(&self, event: TextLegEvent) -> Option<TextLegEffect> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).handle(event)
+        self.state().handle(event)
     }
 
     /// Errors are dropped: a text stream that will not open must not silence the agent.

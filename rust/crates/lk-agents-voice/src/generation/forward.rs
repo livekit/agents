@@ -85,7 +85,7 @@ impl PlaybackGate {
 /// A transcript segment flushes once even when several completion paths meet.
 #[derive(Clone, Copy, Default)]
 pub struct TextLegState {
-    pub forwarded: bool,
+    forwarded: bool,
     flushed: bool,
 }
 
