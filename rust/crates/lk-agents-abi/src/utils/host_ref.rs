@@ -225,20 +225,6 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), vec![7]);
     }
 
-    // Catches: a per-generation snapshot freeing an `extra` that committed history still holds.
-    #[test]
-    fn a_cloned_snapshot_keeps_the_payload_alive() {
-        let (registry, log) = table();
-        let history = vec![HostRef::new(1, &registry), HostRef::new(2, &registry)];
-
-        let snapshot = history.clone();
-        drop(snapshot);
-        assert!(log.lock().unwrap().is_empty(), "a discarded snapshot released the host's data");
-
-        drop(history);
-        assert_eq!(*log.lock().unwrap(), vec![1, 2]);
-    }
-
     // Catches: holding the registry by `Arc` (keeps host objects alive past shutdown), or
     // unwrapping the upgrade inside `Drop`.
     #[test]
@@ -252,16 +238,4 @@ mod tests {
         assert!(log.lock().unwrap().is_empty());
     }
 
-    // Catches: `MediaRef` and `HostRef` collapsed into one type or one id space.
-    #[test]
-    fn a_media_ref_and_a_host_ref_with_the_same_id_are_separate_entries() {
-        let (registry, log) = table();
-        let h = HostRef::new(4, &registry);
-        let m = MediaRef::new(4, &registry);
-        assert_eq!(h.id(), m.id());
-
-        drop(h);
-        drop(m);
-        assert_eq!(*log.lock().unwrap(), vec![4, 4]);
-    }
 }

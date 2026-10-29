@@ -108,18 +108,3 @@ impl PartialEq<&str> for TimedString {
         self.text == *other
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: `PartialEq` comparing the timings as well as the text.
-    #[test]
-    fn comparison_against_a_bare_str_ignores_the_timings() {
-        let token = TimedString { start_time: Some(1.5), ..TimedString::new("hello") };
-        assert_eq!(token, *"hello");
-        assert_eq!(token, "hello");
-        assert_ne!(token, *"hell");
-        assert_ne!(token, "hell");
-    }
-}

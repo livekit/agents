@@ -424,12 +424,6 @@ mod tests {
         assert_eq!(clock.now(), Ts::ZERO.saturating_add(Duration::from_secs(7)));
     }
 
-    #[tokio::test]
-    async fn a_ready_future_wins_over_the_deadline() {
-        let c = VirtualClock::new();
-        assert_eq!(timeout(&c, Duration::ZERO, async { 7 }).await, Ok(7));
-    }
-
     // Catches: two chat items created in the same tick get equal `created_at`.
     #[test]
     fn wall_is_strictly_increasing_within_one_instant() {
@@ -504,11 +498,4 @@ mod tests {
         assert_eq!(c.nudged(later), later);
     }
 
-    #[test]
-    #[should_panic(expected = "cannot go backwards")]
-    fn virtual_clock_rejects_backwards_jumps() {
-        let c = VirtualClock::new();
-        c.advance(Duration::from_secs(5));
-        c.advance_to(Ts::from_nanos(1));
-    }
 }

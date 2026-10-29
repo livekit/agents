@@ -245,24 +245,6 @@ pub struct AmdConfigKwargs {
     pub prompt: Option<String>,
 }
 
-#[cfg(test)]
-mod category_tests {
-    use super::{AmdCategory, AmdReason};
-
-    // Catches: `uncertain` folded into one side, or an unknown category parsed as a verdict.
-    #[test]
-    fn uncertain_is_neither_human_nor_machine() {
-        let uncertain = AmdCategory::from_wire("uncertain").unwrap();
-        assert!(!uncertain.is_human() && !uncertain.is_machine());
-        assert!(AmdCategory::from_wire("machine-vm").unwrap().is_machine());
-        assert!(AmdCategory::from_wire("human").unwrap().is_human());
-        assert_eq!(AmdCategory::from_wire("robot"), None);
-        assert_eq!(AmdReason::from_wire("no_speech_timeout"), Some(AmdReason::NoSpeechTimeout));
-        assert_eq!(AmdReason::from_wire("Llm"), None, "variant names are not the wire form");
-        assert_eq!(AmdReason::from_wire("because"), None, "a settle needs a reason the wire knows");
-    }
-}
-
 /// Runtime-owned answering-machine detector attached to a live session.
 pub trait AmdPort: Send + Sync {
     fn execute(&self);

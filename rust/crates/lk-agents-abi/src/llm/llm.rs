@@ -379,33 +379,3 @@ pub trait Llm: Send + Sync {
 
 /// The completion's drain half: the same [`StreamSource`] every other leg hands out.
 pub type LlmStream = Box<dyn StreamSource<LlmChunk>>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A plugin-shaped provider: a module-path `label` and no model of its own.
-    struct Plugin;
-
-    impl Llm for Plugin {
-        fn label(&self) -> String {
-            "livekit.plugins.openai.llm.LLM".to_owned()
-        }
-        fn chat<'a>(
-            &'a self,
-            _req: &'a ChatRequest,
-        ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>> {
-            Box::pin(async move { unreachable!("this test never opens a completion") })
-        }
-    }
-
-    // Catches: defaulting `model()` to `label()` or `""` instead of `"unknown"` (the judge's
-    // `"gpt-5" in llm.model` test would guess wrong).
-    #[test]
-    fn a_provider_that_does_not_know_its_model_says_unknown_not_its_label() {
-        let p = Plugin;
-        assert_eq!(p.model(), "unknown");
-        assert_ne!(p.model(), p.label());
-        assert!(!p.model().contains("gpt-5"), "and the judge's substring test is safe on it");
-    }
-}

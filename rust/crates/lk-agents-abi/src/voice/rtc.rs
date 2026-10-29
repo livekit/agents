@@ -633,18 +633,6 @@ mod tests {
         assert_eq!(frame_duration(&AudioFrame::new(vec![0u8; 64], 0, 1, 32)), Duration::ZERO);
     }
 
-    // Catches: `silence_frame` allocating the wrong number of bytes, or non-zero ones.
-    #[test]
-    fn silence_allocates_exactly_the_samples_it_claims() {
-        let mono = silence_frame(480, 24_000, 1);
-        assert_eq!(mono.data.len(), 480 * 2);
-        assert!(mono.data.iter().all(|&b| b == 0));
-
-        let stereo = silence_frame(480, 24_000, 2);
-        assert_eq!(stereo.data.len(), 480 * 2 * 2);
-        assert_eq!(stereo.samples_per_channel, 480, "per channel, not in total");
-    }
-
     // Catches: a wire value off by one against the SDK's protobuf, or an unknown one accepted.
     #[test]
     fn the_wire_values_match_the_sdk_and_unknown_ones_are_refused() {

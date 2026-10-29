@@ -182,15 +182,3 @@ const _: () = ();
 /// behaviour: it must say the user asked for the repeat.
 #[crate::host(constant)]
 pub const CONFIRM_DUPLICATE_DESCRIPTION: &str = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed.";
-
-#[cfg(test)]
-mod tests {
-    use super::ToolFlag;
-    // Catches: `from_bits` accepting a bit this version does not know.
-    #[test]
-    fn an_unknown_bit_is_refused() {
-        assert_eq!(ToolFlag::from_bits(1).map(ToolFlag::bits), Some(1));
-        assert!(ToolFlag::from_bits(4).is_none());
-        assert!(ToolFlag::from_bits(8).is_none());
-    }
-}

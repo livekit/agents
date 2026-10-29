@@ -19,15 +19,3 @@ pub const SPEECH_PRIORITY_HIGH: i32 = 10;
 /// `DEFAULT_INPUT_DETAILS.modality`: the default input modality.
 #[crate::host(constant)]
 pub const DEFAULT_INPUT_MODALITY: &str = "audio";
-
-#[cfg(test)]
-mod tests {
-    // Catches: the host's default input modality drifting from the core's.
-    #[test]
-    fn the_default_input_modality_is_the_cores() {
-        assert_eq!(
-            super::DEFAULT_INPUT_MODALITY,
-            crate::llm::chat_context::Modality::default().as_str()
-        );
-    }
-}

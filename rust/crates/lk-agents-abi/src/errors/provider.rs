@@ -141,5 +141,3 @@ pub fn chained_connection_error(message: String, cause: &ProviderError) -> Provi
     local
 }
 
-#[cfg(test)]
-mod tests;

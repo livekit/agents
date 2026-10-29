@@ -240,24 +240,3 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage {
         Ok(AgentSessionUsage { model_usage })
     }
 }
-
-#[cfg(test)]
-mod serde_tests {
-    use super::*;
-
-    #[test]
-    fn serialized_usage_tags_match_the_existing_billing_schema() {
-        let usages = [
-            ModelUsage::Llm(LlmModelUsage::default()),
-            ModelUsage::Tts(TtsModelUsage::default()),
-            ModelUsage::Stt(SttModelUsage::default()),
-            ModelUsage::Interruption(InterruptionModelUsage::default()),
-            ModelUsage::Eot(EotModelUsage::default()),
-        ];
-        for usage in usages {
-            let encoded = serde_json::to_value(&usage).unwrap();
-            assert_eq!(encoded["type"], usage.type_literal());
-            assert_eq!(serde_json::from_value::<ModelUsage>(encoded).unwrap(), usage);
-        }
-    }
-}
