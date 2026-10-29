@@ -4,7 +4,7 @@ import functools
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from . import _bindings, _core
 from ._core_view import to_core_items
@@ -22,6 +22,7 @@ from .log import logger
 from .telemetry import capture_content_enabled, trace_types, tracer
 
 if TYPE_CHECKING:
+    from ._generated.inference_llm import ChatCompletionOptions
     from .inference import LLMModels
 
 __all__ = [
@@ -86,7 +87,7 @@ class Evaluator(Protocol):
         *,
         chat_ctx: ChatContext,
         reference: ChatContext | None = None,
-        llm: LLM[Any] | None = None,
+        llm: LLM | None = None,
     ) -> JudgmentResult: ...
 
 
@@ -122,7 +123,7 @@ class Judge:
         *,
         chat_ctx: ChatContext,
         reference: ChatContext | None = None,
-        llm: LLM[Any] | None = None,
+        llm: LLM | None = None,
     ) -> JudgmentResult:
         """Evaluate a conversation and return a judgment.
 
@@ -134,7 +135,7 @@ class Judge:
 class _BuiltInJudge:
     """A built-in judge: the core frames the conversation and asks the model for a verdict."""
 
-    def __init__(self, name: str, llm: LLM[Any] | None) -> None:
+    def __init__(self, name: str, llm: LLM | None) -> None:
         self._name = name
         self._llm = llm
 
@@ -147,7 +148,7 @@ class _BuiltInJudge:
         *,
         chat_ctx: ChatContext,
         reference: ChatContext | None = None,
-        llm: LLM[Any] | None = None,
+        llm: LLM | None = None,
     ) -> JudgmentResult:
         (outcome,) = await _evaluate([self], chat_ctx, reference, llm or self._llm)
         if isinstance(outcome, JudgeOutcomeFailed):
@@ -155,7 +156,7 @@ class _BuiltInJudge:
         return _result(outcome.judgment)
 
 
-def task_completion_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def task_completion_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates if the agent completed its goal based on its instructions.
 
     Extracts the agent's instructions from AgentConfigUpdate items in the chat context
@@ -168,7 +169,7 @@ def task_completion_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("task_completion", llm)
 
 
-def handoff_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def handoff_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates context preservation across agent handoffs.
 
     Handoffs can be silent (seamless) or explicit ("transferring you to...").
@@ -181,7 +182,7 @@ def handoff_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("handoff", llm)
 
 
-def accuracy_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def accuracy_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates factual accuracy of information provided.
 
     Focuses on grounding - responses must be supported by function call outputs.
@@ -192,7 +193,7 @@ def accuracy_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("accuracy", llm)
 
 
-def tool_use_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def tool_use_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates if the agent used tools correctly.
 
     Checks tool selection, parameter accuracy, output interpretation, and error handling.
@@ -203,7 +204,7 @@ def tool_use_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("tool_use", llm)
 
 
-def safety_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def safety_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates if responses are safe, compliant, and appropriate.
 
     Checks for unauthorized advice, improper disclosure, failure to escalate,
@@ -214,7 +215,7 @@ def safety_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("safety", llm)
 
 
-def relevancy_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def relevancy_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates if responses are relevant and on-topic.
 
     Checks if the agent directly addresses what the user asked, stays focused
@@ -225,7 +226,7 @@ def relevancy_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("relevancy", llm)
 
 
-def coherence_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def coherence_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates if responses are coherent and logical.
 
     Checks if the agent presents ideas in an organized manner without
@@ -236,7 +237,7 @@ def coherence_judge(llm: LLM[Any] | None = None) -> Evaluator:
     return _BuiltInJudge("coherence", llm)
 
 
-def conciseness_judge(llm: LLM[Any] | None = None) -> Evaluator:
+def conciseness_judge(llm: LLM | None = None) -> Evaluator:
     """Judge that evaluates if responses are appropriately concise.
 
     Critical for voice AI where brevity matters. Checks for unnecessary
@@ -311,7 +312,7 @@ class JudgeGroup:
     def __init__(
         self,
         *,
-        llm: LLM[Any] | LLMModels | str,
+        llm: LLM | LLMModels | str,
         judges: list[Evaluator] | None = None,
     ) -> None:
         """Initialize a JudgeGroup.
@@ -328,22 +329,20 @@ class JudgeGroup:
             from .inference import LLM as InferenceLLM
             from .inference.llm import min_reasoning_effort
 
-            extra_kwargs: dict[str, Any] = {}
+            extra_kwargs: ChatCompletionOptions = {}
             if (effort := min_reasoning_effort(llm)) is not None:
                 extra_kwargs["reasoning_effort"] = effort
 
             # Judges run after the conversation, so no caller is waiting on them:
             # they must not compete with live voice traffic for gateway quota.
-            self._llm: LLM[Any] = InferenceLLM(
-                llm, inference_class="low", extra_kwargs=extra_kwargs
-            )
+            self._llm: LLM = InferenceLLM(llm, inference_class="low", extra_kwargs=extra_kwargs)
         else:
             self._llm = llm
 
         self._judges = judges or []
 
     @property
-    def llm(self) -> LLM[Any]:
+    def llm(self) -> LLM:
         """The LLM used for evaluation."""
         return self._llm
 
@@ -403,7 +402,7 @@ class _Evaluation:
     evaluator on the conversation, with the evaluation's model."""
 
     def __init__(
-        self, chat_ctx: ChatContext, reference: ChatContext | None, llm: LLM[Any] | None
+        self, chat_ctx: ChatContext, reference: ChatContext | None, llm: LLM | None
     ) -> None:
         self._chat_ctx = chat_ctx
         self._reference = reference
@@ -422,7 +421,7 @@ async def _evaluate(
     judges: Sequence[Evaluator],
     chat_ctx: ChatContext,
     reference: ChatContext | None,
-    llm: LLM[Any] | None,
+    llm: LLM | None,
 ) -> list[JudgeOutcome]:
     """Every judge's outcome, in judge order, under one span recording each judgment."""
     specs = [
@@ -452,14 +451,14 @@ async def _evaluate(
     return outcomes
 
 
-async def _judge_intent(llm: LLM[Any], intent: str, message: str) -> IntentJudgment:
+async def _judge_intent(llm: LLM, intent: str, message: str) -> IntentJudgment:
     """Whether ``message`` fulfills ``intent``; ``AssertionError`` when it cannot be judged."""
     return await _runner(llm, _Evaluation(ChatContext.empty(), None, llm)).judge_intent(
         intent, message
     )
 
 
-def _runner(llm: LLM[Any] | None, host: _Evaluation) -> _core._core_JudgeRunner:
+def _runner(llm: LLM | None, host: _Evaluation) -> _core._core_JudgeRunner:
     return _core._core_JudgeRunner(
         None if llm is None else _bindings.core_leg(llm), _judge_tools(), host
     )
@@ -472,7 +471,7 @@ def _judge_tools() -> list[Tool]:
     async def answer(raw_arguments: dict[str, object]) -> None:
         raise RuntimeError("judge tools are read by the core, never called")
 
-    schemas = cast("list[dict[str, Any]]", _core._core_judge_tool_schemas())
+    schemas = cast("list[dict[str, object]]", _core._core_judge_tool_schemas())
     return [function_tool(answer, raw_schema=s) for s in schemas]
 
 
