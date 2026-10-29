@@ -138,21 +138,17 @@ impl generated::Implementations for Selected {
     type EndpointCard = lk_agents_runtime::cores::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
-    type WorkerProcSupervisor =
-        lk_agents_runtime::worker::ipc::ProcessOwner<lk_agents_runtime::process::Process>;
-    type WorkerIpcClient =
-        lk_agents_runtime::worker::ipc::ChildChannel<lk_agents_runtime::process::Process>;
-    type WorkerProcPool =
-        lk_agents_runtime::worker::ipc::ProcessPool<lk_agents_runtime::process::Process>;
-    type WorkerJobRun = lk_agents_runtime::worker::ipc::JobRun<lk_agents_runtime::process::Process>;
+    type WorkerProcSupervisor = lk_agents_runtime::worker::ipc::ProcessOwner;
+    type WorkerIpcClient = lk_agents_runtime::worker::ipc::ChildChannel;
+    type WorkerProcPool = lk_agents_runtime::worker::ipc::ProcessPool;
+    type WorkerJobRun = lk_agents_runtime::worker::ipc::JobRun;
     type WorkerCli = lk_agents_runtime::worker::cli::Commands;
     type EndpointStream = lk_agents_runtime::worker::endpoint::host::NativeStream;
     type EndpointServer = lk_agents_runtime::worker::endpoint::host::Endpoints;
     type AsgiReceive = lk_agents_runtime::worker::endpoint::host::ReceiveCall;
     type AsgiSend = lk_agents_runtime::worker::endpoint::host::SendCall;
     type ServerConfig = lk_agents_runtime::worker::server_host::Configuration;
-    type ServerRuntime =
-        lk_agents_runtime::worker::server_host::AgentRuntime<lk_agents_runtime::process::Process>;
+    type ServerRuntime = lk_agents_runtime::worker::server_host::AgentRuntime;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;

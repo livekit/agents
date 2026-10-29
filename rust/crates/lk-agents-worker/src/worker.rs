@@ -153,7 +153,7 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     cfg: RuntimeConfig,
     state: WorkerState,
     host: Arc<P>,
-    pub(super) workers: crate::io::WorkerIo,
+    pub(super) workers: lk_agents_net::worker_io::WorkerIo,
     clock: C,
     default_load: DefaultLoadCalc,
     cpu: Option<CpuMonitor>,
@@ -477,7 +477,7 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
     pub fn new(
         options: crate::WorkerOptions,
         host: P,
-        workers: crate::io::WorkerIo,
+        workers: lk_agents_net::worker_io::WorkerIo,
     ) -> (Self, WorkerHandle) {
         let (config, connection, transport) = options.resolve();
         Self::with_components(
@@ -499,7 +499,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         state: WorkerState,
         host: P,
         clock: C,
-        workers: crate::io::WorkerIo,
+        workers: lk_agents_net::worker_io::WorkerIo,
     ) -> (Self, WorkerHandle) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());

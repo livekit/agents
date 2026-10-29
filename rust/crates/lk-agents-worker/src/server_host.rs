@@ -4,7 +4,6 @@
 //! reaches through the declared `ServerHost`), with the endpoint routes served natively.
 
 use std::any::Any;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -20,14 +19,14 @@ use lk_agents_abi::worker::server_host::{
 use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
 
 use crate::endpoint::host::{Endpoints, NativeStream};
-use crate::env::Env;
-use crate::io::WorkerIo;
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
 use crate::transport::AgentEndpointKind;
 use crate::{
     AcceptArguments, EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId,
     JobRequest, RunningJobInfo, TransportConfig, WorkerCommand, WorkerHost, protocol,
 };
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::worker_io::WorkerIo;
 
 pub struct Configuration {
     settings: Arc<Mutex<ServerSettings>>,
@@ -268,28 +267,33 @@ fn manifest_entry(route: EndpointRoute) -> Result<protocol::AgentEndpoint, Worke
     })
 }
 
-pub struct AgentRuntime<E> {
+pub struct AgentRuntime {
     settings: Arc<Mutex<ServerSettings>>,
     running: Arc<AtomicBool>,
     runtime: server::ServerRuntime,
     mounted: Mounted,
     io: WorkerIo,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E> AgentRuntime<E> {
+impl AgentRuntime {
     fn settings(&self) -> ServerSettings {
         self.settings.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 }
 
-impl<E: Env> ServerRuntime for AgentRuntime<E> {
-    fn new(config: Arc<dyn ServerConfiguration>, host: Arc<dyn Host>) -> Result<Self, WorkerError> {
+impl ServerRuntime for AgentRuntime {
+    type Env = ProcessEnv;
+
+    fn new(
+        env: &ProcessEnv,
+        config: Arc<dyn ServerConfiguration>,
+        host: Arc<dyn Host>,
+    ) -> Result<Self, WorkerError> {
         let config: Arc<dyn Any + Send + Sync> = config;
         let config = config
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
-        let io = E::worker_io().map_err(WorkerError::Failed)?;
+        let io = (env.worker_io)().map_err(WorkerError::Failed)?;
         let host = HostedServer::new(host);
         let mounted = host.mounted.clone();
         Ok(Self {
@@ -298,7 +302,6 @@ impl<E: Env> ServerRuntime for AgentRuntime<E> {
             runtime: server::ServerRuntime::new(host, Some(io.clone())),
             mounted,
             io,
-            env: PhantomData,
         })
     }
 

@@ -9,6 +9,7 @@ use lk_agents_abi::{Clock, Spawner};
 
 use crate::http::GatewayHttp;
 use crate::session_report::ReportAdmission;
+use crate::worker_io::WorkerIo;
 
 /// What the hosting process lends a declared class (decision 100): the generated bindings pass
 /// it to each declared constructor that takes it, and Rust callers and tests build their own.
@@ -26,6 +27,8 @@ pub struct ProcessEnv {
     pub http: fn() -> Result<Arc<GatewayHttp>, String>,
     /// The process's session report admission.
     pub report_admission: fn() -> Result<ReportAdmission, String>,
+    /// The process's worker I/O, on the runtime the worker's tasks and sockets run on.
+    pub worker_io: fn() -> Result<WorkerIo, String>,
 }
 
 impl ProcessEnv {
@@ -51,6 +54,7 @@ impl ProcessEnv {
                     LazyLock::new(ReportAdmission::default);
                 Ok(ADMISSION.clone())
             },
+            worker_io: || WorkerIo::new(runtime()?, 4).map_err(|error| error.to_string()),
         }
     }
 }

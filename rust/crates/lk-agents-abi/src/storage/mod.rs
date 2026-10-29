@@ -94,7 +94,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_VoiceStore"))]
     type VoiceStore: Send + Sync + 'static;
 
-    /// What the hosting process lends the constructor.
+    /// What the hosting process lends the class.
     #[host(env)]
     type Env;
 

@@ -5,7 +5,6 @@
 //! recording's setup.
 
 use std::collections::{BTreeMap, HashMap};
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -19,8 +18,8 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
 use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
-use crate::env::Env;
-use crate::io::WorkerIo;
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::worker_io::WorkerIo;
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -62,9 +61,8 @@ struct ShutdownCallback {
     name: String,
 }
 
-pub struct JobRun<E> {
+pub struct JobRun {
     inner: Arc<Inner>,
-    env: PhantomData<fn() -> E>,
 }
 
 struct Inner {
@@ -92,9 +90,9 @@ struct Inner {
     tasks_closed: watch::Sender<bool>,
 }
 
-impl<E: Env> JobExecution for JobRun<E> {}
+impl JobExecution for JobRun {}
 
-impl<E> JobRun<E> {
+impl JobRun {
     /// The job ends with `reason`; the first reason given is the one kept.
     pub(crate) fn end(&self, reason: String, user_initiated: bool) {
         self.inner.end(reason, user_initiated);
@@ -336,8 +334,11 @@ fn log_level(level: Level) -> log::Level {
     }
 }
 
-impl<E: Env> WorkerJobRun for JobRun<E> {
+impl WorkerJobRun for JobRun {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         fake_job: bool,
         session_end_timeout: f64,
         redaction: bool,
@@ -346,24 +347,26 @@ impl<E: Env> WorkerJobRun for JobRun<E> {
         session_end: Option<String>,
         session_aclose_timeout: f64,
     ) -> Result<Self, WorkerError> {
-        let env = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
+        let observability = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
         Ok(Self {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
                 parent: OnceLock::new(),
-                io: E::worker_io().map_err(WorkerError::Failed)?,
+                io: (env.worker_io)().map_err(WorkerError::Failed)?,
                 fake: fake_job,
                 session_end_timeout,
                 session_end,
                 session_aclose_timeout,
-                observability_url: lk_agents_net::strings::observability_url(&url, env.as_deref()),
+                observability_url: lk_agents_net::strings::observability_url(
+                    &url,
+                    observability.as_deref(),
+                ),
                 recording,
                 state: Mutex::new(State { redaction, ..State::default() }),
                 ended: watch::channel(false).0,
                 connecting: tokio::sync::Mutex::new(()),
                 tasks_closed: watch::channel(false).0,
             }),
-            env: PhantomData,
         })
     }
 

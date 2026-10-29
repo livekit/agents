@@ -4,7 +4,7 @@
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
 #[crate::host(class(name = "_core_EventRetention"))]
 pub trait EventRetention: Send + Sized + 'static {
-    /// What the hosting process lends the constructor.
+    /// What the hosting process lends the class.
     #[host(env)]
     type Env;
 

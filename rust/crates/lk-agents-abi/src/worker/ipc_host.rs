@@ -108,9 +108,14 @@ pub trait SupervisedProcess: Any + Send + Sync {}
 
 #[crate::host(class(name = "ProcSupervisor", native = SupervisedProcess))]
 pub trait WorkerProcSupervisor: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         fd: i64,
         host: Arc<dyn ProcessHost>,
         #[host(kw)] pid: u32,
@@ -285,9 +290,14 @@ pub trait ParticipantEntrypoint: Send + Sync {
 
 #[crate::host(class(name = "IpcClient"))]
 pub trait WorkerIpcClient: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// The handshake on the parent's socket, blocking before the process's loop exists.
     #[host(new, detach)]
     fn new(
+        env: &Self::Env,
         fd: i64,
         initialize: Arc<dyn ChildInitialize>,
         #[host(kw, default = false)] process: bool,
@@ -314,8 +324,13 @@ pub trait PoolHost: Send + Sync {
 
 #[crate::host(class(name = "ProcPool"))]
 pub trait WorkerProcPool: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         host: Arc<dyn PoolHost>,
         #[host(kw)] num_idle_processes: usize,
         initialize_timeout: f64,
@@ -350,9 +365,14 @@ pub trait JobExecution: Any + Send + Sync {}
 /// application calls in flight and the recording's setup.
 #[crate::host(class(name = "JobRun", native = JobExecution))]
 pub trait WorkerJobRun: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// `session_end` names the door's `on_session_end`, when it has one.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         #[host(kw)] fake_job: bool,
         session_end_timeout: f64,
         redaction: bool,

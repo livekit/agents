@@ -2,7 +2,6 @@
 //! launch the host performs, then initialization, supervision, exit observation and reaping,
 //! which continue whether or not the host still awaits them.
 
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,10 +20,10 @@ use super::{
     Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, MemoryError, PROTOCOL_VERSION,
     ProcHost, ProcSupervisor, SupervisorOptions, extra_fields, secs,
 };
-use crate::env::Env;
-use crate::io::WorkerIo;
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::worker_io::WorkerIo;
 
-pub struct ProcessOwner<E> {
+pub struct ProcessOwner {
     launch: watch::Sender<ProcessLaunch>,
     pub(crate) sup: ProcSupervisor,
     /// Taken by `run()`: the executor holds this object, so keeping it would be a cycle the
@@ -41,12 +40,11 @@ pub struct ProcessOwner<E> {
     ran: watch::Sender<Option<bool>>,
     killable: bool,
     process: watch::Sender<Option<Arc<ProcessControl>>>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E> SupervisedProcess for ProcessOwner<E> where E: Env {}
+impl SupervisedProcess for ProcessOwner {}
 
-impl<E: Env> ProcessOwner<E> {
+impl ProcessOwner {
     fn settle(&self, initialized: bool) {
         self.initialized.send_if_modified(|v| v.is_none() && v.replace(initialized).is_none());
     }
@@ -57,8 +55,11 @@ impl<E: Env> ProcessOwner<E> {
     }
 }
 
-impl<E: Env> WorkerProcSupervisor for ProcessOwner<E> {
+impl WorkerProcSupervisor for ProcessOwner {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         fd: i64,
         host: Arc<dyn ProcessHost>,
         pid: u32,
@@ -74,7 +75,7 @@ impl<E: Env> WorkerProcSupervisor for ProcessOwner<E> {
     ) -> Result<Self, WorkerError> {
         // Thread runners and direct supervisors need diagnostics before any OS launch.
         crate::diagnostics::initialize().map_err(WorkerError::Failed)?;
-        let io = E::worker_io().map_err(WorkerError::Failed)?;
+        let io = (env.worker_io)().map_err(WorkerError::Failed)?;
         let opts = SupervisorOptions {
             pid,
             initialize_timeout,
@@ -110,7 +111,6 @@ impl<E: Env> WorkerProcSupervisor for ProcessOwner<E> {
             ran: watch::channel(None).0,
             killable,
             process,
-            env: PhantomData,
         })
     }
 

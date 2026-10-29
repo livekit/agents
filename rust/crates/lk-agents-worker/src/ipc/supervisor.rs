@@ -96,7 +96,7 @@ impl ProcSupervisor {
         stream: S,
         host: H,
         opts: SupervisorOptions,
-        workers: crate::io::WorkerIo,
+        workers: lk_agents_net::worker_io::WorkerIo,
     ) -> Self {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (messages_tx, messages) = mpsc::channel(QUEUE);
@@ -239,7 +239,7 @@ struct Driver {
     state: Supervision,
     origin: Instant,
     host: Arc<dyn ProcHost>,
-    workers: crate::io::WorkerIo,
+    workers: lk_agents_net::worker_io::WorkerIo,
     writes: mpsc::Sender<(u64, ToChild)>,
     init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
     job: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
@@ -247,7 +247,7 @@ struct Driver {
     status: watch::Sender<Status>,
 }
 
-type Sampling = Option<crate::io::WorkerIoTask<Result<(f64, String), MemoryError>>>;
+type Sampling = Option<lk_agents_net::worker_io::WorkerIoTask<Result<(f64, String), MemoryError>>>;
 
 impl Driver {
     #[allow(clippy::too_many_arguments)]

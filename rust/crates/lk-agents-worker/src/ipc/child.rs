@@ -11,20 +11,20 @@ use tokio::sync::watch;
 
 use super::job_run::JobRun;
 use super::{IpcClient, PROTOCOL_VERSION, ToChild, ToParent};
-use crate::env::Env;
-use crate::io::WorkerIo;
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::worker_io::WorkerIo;
 
-pub struct ChildChannel<E> {
+pub struct ChildChannel {
     client: Arc<IpcClient>,
     io: WorkerIo,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
     /// The job the parent started, once it did.
-    run: Mutex<Option<Arc<JobRun<E>>>>,
+    run: Mutex<Option<Arc<JobRun>>>,
     asyncio_debug: bool,
 }
 
-impl<E: Env> ChildChannel<E> {
+impl ChildChannel {
     /// One message from the parent; `false` ends the serving.
     async fn on_message(&self, host: &dyn JobHost, msg: ToChild) -> Result<bool, WorkerError> {
         match msg {
@@ -74,7 +74,7 @@ impl<E: Env> ChildChannel<E> {
         }
         let run: Arc<dyn Any + Send + Sync> = host.start_job(job).await?;
         let run = run
-            .downcast::<JobRun<E>>()
+            .downcast::<JobRun>()
             .map_err(|_| WorkerError::Failed("the runner started a foreign JobRun".into()))?;
         run.report_to(self.client.clone());
         *lock(&self.run) = Some(run);
@@ -82,15 +82,18 @@ impl<E: Env> ChildChannel<E> {
     }
 }
 
-impl<E: Env> WorkerIpcClient for ChildChannel<E> {
+impl WorkerIpcClient for ChildChannel {
+    type Env = ProcessEnv;
+
     /// Once initialized, the child calls itself orphaned when the parent goes quiet past the
     /// health timeout the parent's `Hello` gave.
     fn new(
+        env: &ProcessEnv,
         fd: i64,
         initialize: Arc<dyn ChildInitialize>,
         process: bool,
     ) -> Result<Self, WorkerError> {
-        let io = E::worker_io().map_err(WorkerError::Failed)?;
+        let io = (env.worker_io)().map_err(WorkerError::Failed)?;
         let runtime = io.runtime_handle();
         let socket = {
             let _runtime = runtime.enter();

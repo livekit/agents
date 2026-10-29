@@ -29,6 +29,7 @@ pub mod token;
 pub mod transport;
 pub mod websocket;
 pub mod webtransport;
+pub mod worker_io;
 
 pub mod connection_pool;
 

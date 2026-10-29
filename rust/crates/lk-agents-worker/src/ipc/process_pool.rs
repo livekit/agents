@@ -2,7 +2,6 @@
 //! them warm and hands each job the next ready one; the host makes the executors.
 
 use std::any::Any;
-use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 
 use lk_agents_abi::HostRef;
@@ -13,8 +12,8 @@ use lk_agents_abi::worker::ipc_host::{PoolHost, ProcessHost, WorkerError, Worker
 use super::owner::{ProcessOwner, queue_diagnostic};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::{Level, ProcSupervisor, secs};
-use crate::env::Env;
-use crate::io::WorkerIo;
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::worker_io::WorkerIo;
 
 /// One executor and, once started, its native supervisor.
 #[derive(Clone)]
@@ -37,14 +36,13 @@ impl PartialEq for Executor {
 }
 
 /// The host's pool and the context its executors' steps run in (the pool's constructor's).
-struct HostExecutors<E> {
+struct HostExecutors {
     host: Arc<dyn PoolHost>,
     context: CallContext,
-    env: PhantomData<fn() -> E>,
 }
 
 #[async_trait::async_trait]
-impl<E: Env> Executors for HostExecutors<E> {
+impl Executors for HostExecutors {
     async fn create(&self) -> Result<Executor, HostError> {
         Ok(Executor::new(self.host.create().await?))
     }
@@ -52,7 +50,7 @@ impl<E: Env> Executors for HostExecutors<E> {
     async fn start(&self, proc: &Executor) -> Result<(), HostError> {
         let started: Arc<dyn Any + Send + Sync> = proc.host.start(&self.context).await?;
         let owner = started
-            .downcast::<ProcessOwner<E>>()
+            .downcast::<ProcessOwner>()
             .map_err(|_| HostError::new("the executor started a foreign ProcSupervisor"))?;
         proc.supervisor
             .set(owner.sup.clone())
@@ -126,14 +124,16 @@ impl<E: Env> Executors for HostExecutors<E> {
     }
 }
 
-pub struct ProcessPool<E: Env> {
+pub struct ProcessPool {
     pool: ProcPool,
     io: WorkerIo,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> WorkerProcPool for ProcessPool<E> {
+impl WorkerProcPool for ProcessPool {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         host: Arc<dyn PoolHost>,
         num_idle_processes: usize,
         initialize_timeout: f64,
@@ -145,11 +145,10 @@ impl<E: Env> WorkerProcPool for ProcessPool<E> {
             initialize_timeout: secs(initialize_timeout),
             close_timeout: secs(close_timeout),
         };
-        let executors = HostExecutors::<E> { host, context, env: PhantomData };
+        let executors = HostExecutors { host, context };
         Ok(Self {
             pool: ProcPool::new(Arc::new(executors), opts),
-            io: E::worker_io().map_err(WorkerError::Failed)?,
-            env: PhantomData,
+            io: (env.worker_io)().map_err(WorkerError::Failed)?,
         })
     }
 

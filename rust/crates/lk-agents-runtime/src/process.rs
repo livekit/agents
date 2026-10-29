@@ -25,7 +25,7 @@ struct Started {
     pid: u32,
     runtime: tokio::runtime::Runtime,
     workers: MediaWorkers,
-    worker_io: lk_agents_worker::io::WorkerIo,
+    worker_io: lk_agents_net::worker_io::WorkerIo,
     report_admission: lk_agents_net::session_report::ReportAdmission,
     http: Arc<lk_agents_net::http::GatewayHttp>,
 }
@@ -65,7 +65,7 @@ pub fn caller_handle() -> Result<tokio::runtime::Handle, ProcessError> {
 }
 
 /// Process-owned admission reserved for worker setup and health sampling.
-pub fn worker_io() -> Result<lk_agents_worker::io::WorkerIo, ProcessError> {
+pub fn worker_io() -> Result<lk_agents_net::worker_io::WorkerIo, ProcessError> {
     with_started(|started| started.worker_io.clone())
 }
 
@@ -91,7 +91,7 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .map_err(|e| ProcessError::Start(e.to_string()))?;
     let workers = MediaWorkers::new(MediaWorkerLimits::default())
         .map_err(|error| ProcessError::Start(error.to_string()))?;
-    let worker_io = lk_agents_worker::io::WorkerIo::new(runtime.handle().clone(), 4)
+    let worker_io = lk_agents_net::worker_io::WorkerIo::new(runtime.handle().clone(), 4)
         .map_err(|error| ProcessError::Start(error.to_string()))?;
     let report_admission = Default::default();
     let http = Arc::new(lk_agents_net::http::GatewayHttp::new().map_err(ProcessError::Start)?);
@@ -143,6 +143,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
             with_started(|started| started.report_admission.clone())
                 .map_err(|error| error.to_string())
         },
+        worker_io: || worker_io().map_err(|error| error.to_string()),
     }
 }
 
@@ -189,12 +190,6 @@ impl lk_agents_inference::env::Env for Process {
 
     fn strip_assistant_markup(text: &str) -> String {
         lk_agents_voice::tts::markup::strip_expr_markup(text)
-    }
-}
-
-impl lk_agents_worker::env::Env for Process {
-    fn worker_io() -> Result<lk_agents_worker::io::WorkerIo, String> {
-        worker_io().map_err(|error| error.to_string())
     }
 }
 

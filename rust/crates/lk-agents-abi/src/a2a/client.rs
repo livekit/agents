@@ -179,7 +179,7 @@ pub trait Reply: Send + Sync + Sized + 'static {
 pub trait AgentClient: Send + Sync + Sized + 'static {
     #[host(class(name = "Reply"))]
     type Reply;
-    /// What the hosting process lends the constructor.
+    /// What the hosting process lends the class.
     #[host(env)]
     type Env;
 

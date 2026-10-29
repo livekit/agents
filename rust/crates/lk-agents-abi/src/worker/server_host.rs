@@ -118,8 +118,13 @@ pub trait ServerHost: Send + Sync {
 
 #[crate::host(class(name = "ServerRuntime"))]
 pub trait ServerRuntime: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         config: Arc<dyn ServerConfiguration>,
         host: Arc<dyn ServerHost>,
     ) -> Result<Self, WorkerError>;

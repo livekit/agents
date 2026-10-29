@@ -164,7 +164,7 @@ type Outcome = watch::Sender<Option<Result<(), String>>>;
 #[derive(Clone)]
 pub struct ServerRuntime {
     host: HostedServer,
-    workers: Option<crate::io::WorkerIo>,
+    workers: Option<lk_agents_net::worker_io::WorkerIo>,
     control: watch::Sender<Control>,
     receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
     snapshot: watch::Sender<ServerSnapshot>,
@@ -174,7 +174,7 @@ pub struct ServerRuntime {
 }
 
 impl ServerRuntime {
-    pub fn new(host: HostedServer, workers: Option<crate::io::WorkerIo>) -> Self {
+    pub fn new(host: HostedServer, workers: Option<lk_agents_net::worker_io::WorkerIo>) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
@@ -460,7 +460,7 @@ impl ServerRuntime {
         let discover_cpus = settings.num_idle_processes.is_none();
         let workers = match &self.workers {
             Some(workers) => workers.clone(),
-            None => crate::io::WorkerIo::new(tokio::runtime::Handle::current(), 4)
+            None => lk_agents_net::worker_io::WorkerIo::new(tokio::runtime::Handle::current(), 4)
                 .map_err(|error| error.to_string())?,
         };
         let admission_deadline =
@@ -478,7 +478,7 @@ impl ServerRuntime {
                             ))
                         }));
                     }
-                    Err(crate::io::WorkerIoError::Exhausted) => {
+                    Err(lk_agents_net::worker_io::WorkerIoError::Exhausted) => {
                         tokio::time::sleep(crate::ipc::pool::REFILL_INTERVAL).await;
                     }
                     Err(error) => break Err(error.to_string()),
@@ -674,7 +674,9 @@ async fn pending_worker(
 
 #[derive(Default)]
 struct Resources {
-    setup: Option<crate::io::WorkerIoTask<Result<(Option<String>, Option<f32>), String>>>,
+    setup: Option<
+        lk_agents_net::worker_io::WorkerIoTask<Result<(Option<String>, Option<f32>), String>>,
+    >,
     worker: Option<WorkerHandle>,
     connection: Option<tokio::task::JoinHandle<Result<(), String>>>,
     load: Option<tokio::task::JoinHandle<Result<(), String>>>,

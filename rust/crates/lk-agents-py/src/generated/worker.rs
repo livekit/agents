@@ -435,9 +435,10 @@ impl ProcSupervisor {
     #[pyo3(signature = (fd, host, *, pid, initialize_timeout, close_timeout, memory_warn_mb, memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, killable = true))]
     fn new(#[pyo3(from_py_with = _extract_worker_proc_supervisor_new_fd)] fd: i64, host: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_pid)] pid: u32, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_initialize_timeout)] initialize_timeout: f64, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_close_timeout)] close_timeout: f64, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_memory_warn_mb)] memory_warn_mb: f64, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_memory_limit_mb)] memory_limit_mb: f64, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_ping_interval)] ping_interval: f64, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_ping_timeout)] ping_timeout: f64, #[pyo3(from_py_with = _extract_worker_proc_supervisor_new_high_ping_threshold)] high_ping_threshold: f64, killable: bool) -> PyResult<ProcSupervisor> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let host = crate::generated::worker::ProcessHostProxy::from_host(&host)?;
         let context = crate::host::entered();
-        let out = <ProcSupervisorImpl as ::lk_agents_abi::worker::ipc_host::WorkerProcSupervisor>::new(fd, host, pid, initialize_timeout, close_timeout, memory_warn_mb, memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, killable, context).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <ProcSupervisorImpl as ::lk_agents_abi::worker::ipc_host::WorkerProcSupervisor>::new(&env, fd, host, pid, initialize_timeout, close_timeout, memory_warn_mb, memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, killable, context).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(ProcSupervisor(::std::sync::Arc::new(out)))
     }
 
@@ -568,8 +569,9 @@ impl IpcClient {
     #[pyo3(signature = (fd, initialize, *, process = false))]
     fn new<'py>(py: Python<'py>, #[pyo3(from_py_with = _extract_worker_ipc_client_new_fd)] fd: i64, initialize: Bound<'_, PyAny>, process: bool) -> PyResult<IpcClient> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let initialize = crate::generated::worker::ChildInitializeProxy::from_host(&initialize)?;
-        let out = py.detach(|| <IpcClientImpl as ::lk_agents_abi::worker::ipc_host::WorkerIpcClient>::new(fd, initialize, process)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <IpcClientImpl as ::lk_agents_abi::worker::ipc_host::WorkerIpcClient>::new(&env, fd, initialize, process)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(IpcClient(::std::sync::Arc::new(out)))
     }
 
@@ -638,9 +640,10 @@ impl ProcPool {
     #[pyo3(signature = (host, *, num_idle_processes, initialize_timeout, close_timeout))]
     fn new(host: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_worker_proc_pool_new_num_idle_processes)] num_idle_processes: usize, #[pyo3(from_py_with = _extract_worker_proc_pool_new_initialize_timeout)] initialize_timeout: f64, #[pyo3(from_py_with = _extract_worker_proc_pool_new_close_timeout)] close_timeout: f64) -> PyResult<ProcPool> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let host = crate::generated::worker::PoolHostProxy::from_host(&host)?;
         let context = crate::host::entered();
-        let out = <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::WorkerProcPool>::new(host, num_idle_processes, initialize_timeout, close_timeout, context).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::WorkerProcPool>::new(&env, host, num_idle_processes, initialize_timeout, close_timeout, context).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(ProcPool(::std::sync::Arc::new(out)))
     }
 
@@ -747,7 +750,8 @@ impl JobRun {
     #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), recording = false, session_end = None, session_aclose_timeout = 60.0))]
     fn new(fake_job: bool, #[pyo3(from_py_with = _extract_worker_job_run_new_session_end_timeout)] session_end_timeout: f64, redaction: bool, url: ::std::string::String, recording: bool, session_end: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_worker_job_run_new_session_aclose_timeout)] session_aclose_timeout: f64) -> PyResult<JobRun> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::WorkerJobRun>::new(fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::WorkerJobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(JobRun(::std::sync::Arc::new(out)))
     }
 
@@ -1027,9 +1031,10 @@ impl ServerRuntime {
     #[pyo3(signature = (config, host))]
     fn new(config: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<ServerRuntime> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let config = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration>(&config).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("config", ": expected a native ServerConfig")))?;
         let host = crate::generated::worker::ServerHostProxy::from_host(&host)?;
-        let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::new(config, host).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::new(&env, config, host).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(ServerRuntime(::std::sync::Arc::new(out)))
     }
 
