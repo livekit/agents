@@ -1,10 +1,10 @@
 //! A real session with controlled dependencies, and one function that applies an [`Input`] to it.
 //!
 //! The only place that touches the product, and only as a host does: the session is assembled
-//! with `VoiceSession(...)` (`VoiceSession::host_new`) over the fake room and the fakes, started,
+//! with `VoiceSession(...)` (`VoiceSession::assemble`) over the fake room and the fakes, started,
 //! and every call is the host method a Python `AgentSession` makes, with its argument shapes;
 //! people join and leave through the fake room, which the real room io watches. What the host
-//! cannot do it does not do: the test-only probe (the `dst` feature) only watches the journal and
+//! cannot do it does not do: the test-only probe (the runtime's `dst` feature) only watches the journal and
 //! the host events, and hands the session's cores to the run, which steps them as its own queue
 //! while the real runtime owner performs their effects ([`executor`]).
 //! It decides nothing: rules read [`Recording`] and nothing else.

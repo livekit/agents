@@ -76,6 +76,7 @@ pub struct VoiceSession {
 }
 
 /// What a deterministic simulation needs from a session it drives, installed before `start()`.
+#[cfg(feature = "dst")]
 pub struct Probe {
     /// Every journal step, in order, from the first the session wrote.
     pub step: Box<dyn FnMut(&Step) + Send>,
@@ -83,6 +84,7 @@ pub struct Probe {
     pub host_event: HostEventProbe,
 }
 
+#[cfg(feature = "dst")]
 pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
 
 /// Decided before assembly but opened at `open`, on the runtime (opening spawns).
@@ -121,6 +123,7 @@ impl Stage {
 struct Ready {
     builder: DriverBuilder,
     interruption: Option<InterruptionPortFactory>,
+    #[cfg(feature = "dst")]
     probe: Option<HostEventProbe>,
 }
 
@@ -219,17 +222,20 @@ impl VoiceSession {
     }
 
     /// Every provider and leg the session still holds.
+    #[cfg(feature = "dst")]
     pub fn resources(&self) -> &Resources {
         &self.resources
     }
 
     /// Every step the driver journals, from the first, to `observer`. Before `start()`.
+    #[cfg(any(test, feature = "dst"))]
     pub fn observe(&self, observer: impl FnMut(&Step) + Send + 'static) {
         if let Stage::Ready(ready) = &mut *self.lock() {
             ready.builder.journal = lk_agents_voice::trace::Journal::observed(observer);
         }
     }
 
+    #[cfg(feature = "dst")]
     pub fn probe(&self, Probe { step, host_event }: Probe) {
         if let Stage::Ready(ready) = &mut *self.lock() {
             ready.builder.journal = lk_agents_voice::trace::Journal::observed(step);
@@ -266,7 +272,10 @@ impl VoiceSession {
         let anchor = self.anchor;
         let time = self.time.clone();
         Ok(async move {
+            #[cfg(feature = "dst")]
             let Ready { mut builder, interruption, probe } = ready;
+            #[cfg(not(feature = "dst"))]
+            let Ready { mut builder, interruption } = ready;
             if let Some(open_port) = interruption {
                 builder.interruption = Some(open_port(anchor));
             }
@@ -306,6 +315,7 @@ impl VoiceSession {
                 api: api.clone(),
                 drained: Some(drained_tx),
                 opening,
+                #[cfg(feature = "dst")]
                 host_event: probe,
             };
             loop_tasks.push(tasks.spawn(spawner.as_ref(), "host event drain", drain(runner)));
@@ -893,6 +903,7 @@ pub struct SessionRunner {
     api: Tx,
     drained: Option<tokio::sync::oneshot::Sender<()>>,
     opening: Opening,
+    #[cfg(feature = "dst")]
     host_event: Option<HostEventProbe>,
 }
 
@@ -913,6 +924,7 @@ impl SessionRunner {
         }
         let ev = self.events.recv().await?;
         self.opening.left = self.opening.left.saturating_sub(1);
+        #[cfg(feature = "dst")]
         if let Some(observe) = &mut self.host_event {
             observe(&ev);
         }

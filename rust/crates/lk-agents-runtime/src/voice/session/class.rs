@@ -254,6 +254,7 @@ impl VoiceSession {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
                 builder,
                 interruption,
+                #[cfg(feature = "dst")]
                 probe: None,
             })))),
             view,
