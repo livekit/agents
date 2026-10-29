@@ -97,8 +97,12 @@ pub const TAG_FAIL: &str = "lk.fail";
 /// ```
 #[crate::host(class(name = "Tagger"))]
 pub trait Tagger: Send + Sized + 'static {
+    /// What the hosting process lends the class: its clock stamps the tags.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new() -> Self;
+    fn new(env: &Self::Env) -> Self;
 
     /// Mark the session as successful; ``reason`` is kept apart from the tag.
     #[host(call)]

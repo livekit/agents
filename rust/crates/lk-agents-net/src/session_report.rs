@@ -12,16 +12,17 @@ pub mod projection;
 pub mod records;
 pub mod transcript;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
+use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::UploadGate as UploadGateApi;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
-use lk_agents_abi::{Clock, RealClock};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
 use tokio::io::AsyncReadExt;
@@ -67,6 +68,7 @@ pub struct SessionReportUploader {
     api_key: String,
     api_secret: String,
     admission: ReportAdmission,
+    clock: Arc<dyn Clock>,
     disabled: AtomicBool,
 }
 
@@ -74,7 +76,8 @@ impl SessionReportUpload for SessionReportUploader {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, api_key: String, api_secret: String) -> Result<Self, UploadError> {
-        Self::with_admission(api_key, api_secret, (env.report_admission)().map_err(UploadError)?)
+        let admission = (env.report_admission)().map_err(UploadError)?;
+        Self::with_admission(api_key, api_secret, admission, env.clock.clone())
     }
 
     fn bearer(&self) -> Result<String, UploadError> {
@@ -136,10 +139,11 @@ impl SessionReportUploader {
         api_key: String,
         api_secret: String,
         admission: ReportAdmission,
+        clock: Arc<dyn Clock>,
     ) -> Result<Self, UploadError> {
         // Validate credentials before retaining a report.
         crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
-        Ok(Self { api_key, api_secret, admission, disabled: AtomicBool::new(false) })
+        Ok(Self { api_key, api_secret, admission, clock, disabled: AtomicBool::new(false) })
     }
 
     async fn send(&self, mut recording: RecordingUpload) -> Result<bool, UploadError> {
@@ -185,7 +189,7 @@ impl SessionReportUploader {
         recording: RecordingUpload,
         url: reqwest::Url,
     ) -> Result<bool, UploadError> {
-        let clock = RealClock::new();
+        let clock = &*self.clock;
         let now = || clock.now();
         let mut steps = Vec::new();
         let mut attempts = Attempts::start(UPLOAD_ATTEMPTS, now(), &mut steps);

@@ -437,7 +437,8 @@ impl Tagger {
     #[new]
     fn new() -> PyResult<Tagger> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::new();
+        let env = crate::process::env();
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::new(&env);
         Ok(Tagger(out))
     }
 

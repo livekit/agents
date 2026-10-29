@@ -571,9 +571,11 @@ impl Tagger {
 }
 
 impl lk_agents_abi::telemetry::report::Tagger for Tagger {
+    type Env = crate::env::ProcessEnv;
+
     /// Timestamps are strictly increasing, so same-instant tags keep insertion order.
-    fn new() -> Self {
-        Tagger::new(Arc::new(lk_agents_abi::RealClock::new()))
+    fn new(env: &crate::env::ProcessEnv) -> Self {
+        Tagger::new(env.clock.clone())
     }
 
     // Clears any existing `lk.fail` first.

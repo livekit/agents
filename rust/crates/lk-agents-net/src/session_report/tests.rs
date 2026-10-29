@@ -230,9 +230,13 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
         drop(socket);
     });
     let admission = ReportAdmission::default();
-    let uploader =
-        SessionReportUploader::with_admission("key".into(), "secret".into(), admission.clone())
-            .unwrap();
+    let uploader = SessionReportUploader::with_admission(
+        "key".into(),
+        "secret".into(),
+        admission.clone(),
+        Arc::new(lk_agents_abi::RealClock::new()),
+    )
+    .unwrap();
     let mut upload =
         tokio::spawn(async move { uploader.send(recording(format!("http://{address}"))).await });
     let mut early_result = None;

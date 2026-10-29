@@ -63,6 +63,7 @@ pub struct Namespace {
     config: Config,
     backend: OnceCell<Backend>,
     a2a_tasks: Arc<TaskSet>,
+    clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
 /// The holder of a read-only handle: it never takes a lease.
@@ -291,7 +292,8 @@ impl HostStorageClass for Namespace {
                 ));
             }
         };
-        Ok(Self { config, backend: OnceCell::new(), a2a_tasks: Arc::default() })
+        let (backend, a2a_tasks, clock) = (OnceCell::new(), Arc::default(), env.clock.clone());
+        Ok(Self { config, backend, a2a_tasks, clock })
     }
 
     fn location(&self) -> String {
@@ -442,10 +444,8 @@ impl HostStorageClass for Namespace {
     }
 
     async fn aclose(&self) {
-        use lk_agents_abi::Clock as _;
-        let clock = lk_agents_abi::RealClock::new();
-        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        if !self.a2a_tasks.wait_empty(&clock, Some(deadline)).await {
+        let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if !self.a2a_tasks.wait_empty(&*self.clock, Some(deadline)).await {
             log::error!(target: "livekit.agents", "storage is closing while accepted A2A work settles");
         }
 
