@@ -579,7 +579,8 @@ async def test_a_call_holds_its_session_toolsets_across_agent_changes() -> None:
         while exited != ["first"]:
             await asyncio.sleep(0.01)
         session.update_agent(third)
-        while exited != ["first", "second"]:
+        # The left agent's toolset closes after its exit hook, not before it returns.
+        while exited != ["first", "second"] or shared.closes == 0:
             await asyncio.sleep(0.01)
         assert (session_toolset.setups, session_toolset.closes) == (1, 0)
         assert (shared.setups, shared.closes) == (1, 1)
