@@ -43,3 +43,23 @@ async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
         await session.start(agent)
         await session._run(user_input="hello")
     assert len(seen) == 1 and seen[0]
+
+
+async def test_a_call_keeps_one_execution_id_across_its_turns() -> None:
+    agent = Agent(instructions="Check.", name="desk")
+    seen: list[tuple[str, str]] = []
+
+    @agent.tool
+    async def check(ctx: RunContext) -> str:
+        """Check the caller's request."""
+        seen.append((ctx.execution_id, ctx.speech_handle.id))
+        return f"checked {len(seen) - 1}"
+
+    async with VoiceSession(
+        llm=_calls("hello", "again"), vad=None, turn_detection="manual"
+    ) as session:
+        await session.start(agent)
+        await session._run(user_input="hello")
+        await session._run(user_input="again")
+    (first, first_speech), (second, second_speech) = seen
+    assert first == second and first_speech != second_speech

@@ -83,7 +83,7 @@ from ..types import (
     NotGivenOr,
     TimedString,
 )
-from ..utils.misc import is_dev_mode, is_given, is_hosted
+from ..utils.misc import is_dev_mode, is_given, is_hosted, shortuuid
 from . import io
 from .agent import (
     Agent,
@@ -281,6 +281,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._context = context
         self._thread = thread
+        # `ctx.execution_id` on this call: one conversational task across its turns
+        self._execution_id = shortuuid("execution_")
         self._voice_store: Any = None
         self._store: ContextStore | None = None
         # the in-memory storage of a call with no loaded lane

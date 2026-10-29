@@ -325,10 +325,12 @@ class RunContext(Generic[Context_T]):
 
     @property
     def execution_id(self) -> str:
-        """The stored conversational execution; on A2A, its task id."""
-        if self._run is not None and self._run.execution_id is not None:
-            return self._run.execution_id
-        return self.speech_handle.id
+        """The conversational task across human turns: on A2A its task id, on a call one id
+        for the whole call."""
+        if self._run is None:
+            return self._call()._execution_id
+        assert self._run.execution_id is not None, "a run's callbacks run under its execution"
+        return self._run.execution_id
 
     @property
     def task_id(self) -> str | None:
