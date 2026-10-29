@@ -131,7 +131,12 @@ impl TaskMachine {
                     Operation::Checkpoint(tasks)
                 }
             }
-            (Step::Checkpoint, Completion::Checkpoint { other_waiting, canceled }) => {
+            (Step::Checkpoint, Completion::Checkpoint { holder, rows }) => {
+                // another holder marked itself waiting, or a client canceled one of the tasks
+                let other_waiting = rows.iter().any(|(waiter, _)| {
+                    waiter.as_ref().is_some_and(|w| !w.is_empty() && *w != holder)
+                });
+                let canceled = rows.iter().any(|(_, status)| *status == Some(TaskState::Canceled));
                 let turn = self.turning();
                 turn.stop = checkpoint_stop(turn.interrupt, other_waiting, canceled);
                 let verdict = if turn.stop.is_some() { Verdict::Yield } else { Verdict::Continue };

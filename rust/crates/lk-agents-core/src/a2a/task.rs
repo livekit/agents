@@ -103,8 +103,8 @@ pub enum Operation {
     /// Answers the handler's last checkpoint with the verdict, when it asked, then reads its
     /// next checkpoint or its output.
     Next(Option<Verdict>),
-    /// What a checkpoint reads: whether another holder waits for the lane, and whether a client
-    /// canceled one of the message's tasks (the answer, the receipt).
+    /// What a checkpoint reads for each of the message's tasks (the answer, the receipt): the
+    /// lane's waiter mark and the task's status.
     Checkpoint(Vec<String>),
     /// Commits the open run, reading `answer_task` back with the write.
     Commit {
@@ -190,9 +190,11 @@ pub enum Completion {
     Inbox(Vec<InboxRow>),
     Picked(Option<TaskState>),
     Event(HandlerEvent),
+    /// `holder` is this worker's lane holder; `rows` the waiter mark and task status read per
+    /// task.
     Checkpoint {
-        other_waiting: bool,
-        canceled: bool,
+        holder: String,
+        rows: Vec<(Option<String>, Option<TaskState>)>,
     },
     Committed {
         task: Option<TaskRow>,

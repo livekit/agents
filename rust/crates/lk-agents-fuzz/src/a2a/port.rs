@@ -540,10 +540,14 @@ impl Port {
                 Completion::Done
             }
             Operation::Checkpoint(task_ids) => Completion::Checkpoint {
-                other_waiting: self.waiter.is_some_and(|w| w != worker),
-                canceled: task_ids
+                holder: worker.to_string(),
+                rows: task_ids
                     .iter()
-                    .any(|t| self.tasks.get(t).is_some_and(|r| r.status == TaskState::Canceled)),
+                    .map(|t| {
+                        let waiter = self.waiter.map(|w| w.to_string());
+                        (waiter, self.tasks.get(t).map(|r| r.status))
+                    })
+                    .collect(),
             },
             Operation::Commit { answer_task, keep_lease, drained_id } => {
                 let open = run.take().expect("a run is open");

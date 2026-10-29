@@ -20,9 +20,7 @@ use lk_agents_core::a2a::{
 };
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Receive, ReceiveInput};
-use lk_agents_storage::run::{
-    ItemRow, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, TaskRow, TaskState,
-};
+use lk_agents_storage::run::{ItemRow, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, TaskRow};
 
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 
@@ -358,13 +356,11 @@ impl Turn {
             }
             Operation::Checkpoint(task_ids) => {
                 let holder = call.run()?.holder.clone();
-                let (mut other_waiting, mut canceled) = (false, false);
+                let mut rows = Vec::with_capacity(task_ids.len());
                 for task_id in &task_ids {
-                    let (waiter, status) = call.lane.db().checkpoint(task_id).await?;
-                    other_waiting |= waiter.is_some_and(|w| !w.is_empty() && w != holder);
-                    canceled |= status == Some(TaskState::Canceled);
+                    rows.push(db.checkpoint(task_id).await?);
                 }
-                Completion::Checkpoint { other_waiting, canceled }
+                Completion::Checkpoint { holder, rows }
             }
             Operation::Commit { answer_task, keep_lease, drained_id } => {
                 let run = call.run()?;
