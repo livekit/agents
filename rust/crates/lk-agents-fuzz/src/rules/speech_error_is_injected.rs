@@ -25,15 +25,11 @@ impl Rule for SpeechErrorIsInjected {
             failed_by_injection,
             failed_from_its_own_missing_playback,
             output_refusal_with_its_own_diagnostic,
-            transcription_refusal_with_its_own_diagnostic,
         ],
         counterexamples: &[
             failed_without_injection,
             playback_timeout_without_its_own_deadline,
             output_refusal_without_its_own_diagnostic,
-            transcription_refusal_for_another_speech,
-            transcription_refusal_for_another_resource,
-            transcription_refusal_without_diagnostic,
         ],
         probe: None,
     };
@@ -120,11 +116,6 @@ impl Rule for SpeechErrorIsInjected {
                 matches!(step, Step::Playout(PlayoutStep::OutputRefused { speech: refused, reason })
                     if refused.0 == speech.id && error.contains(&format!("output admission refused: {reason}")))
             });
-            let transcription_refused = internal.steps().iter().any(|(_, step)| {
-                matches!(step, Step::Playout(PlayoutStep::TranscriptionRefused { speech: refused, resource })
-                    if refused.0 == speech.id && error.contains(&format!("text output: {}",
-                        lk_agents_abi::voice::io::IoError::TranscriptionCapacity(resource.clone()))))
-            });
             let accounted = injected
                 || voice_failed
                 || voice_down
@@ -133,8 +124,7 @@ impl Rule for SpeechErrorIsInjected {
                 || refused_by_close
                 || refused_by_driver
                 || missing_playback
-                || output_refused
-                || transcription_refused;
+                || output_refused;
             check.expect(
                 &speech,
                 accounted,
@@ -210,37 +200,4 @@ fn output_refusal_with_its_own_diagnostic() -> Recording {
 
 fn output_refusal_without_its_own_diagnostic() -> Recording {
     output_refusal_record(false)
-}
-
-fn transcription_refusal_record(speech: Option<u64>, resource: &str) -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
-    let mut authored = Authored::new();
-    if let Some(speech) = speech {
-        authored = authored.journal(Step::Playout(PlayoutStep::TranscriptionRefused {
-            speech: SpeechId(speech),
-            resource: resource.into(),
-        }));
-    }
-    authored
-        .speech(
-            4,
-            Handle::finished().failed("text output: transcription streams capacity exceeded"),
-        )
-        .done()
-}
-
-fn transcription_refusal_with_its_own_diagnostic() -> Recording {
-    transcription_refusal_record(Some(4), "streams")
-}
-
-fn transcription_refusal_for_another_speech() -> Recording {
-    transcription_refusal_record(Some(5), "streams")
-}
-
-fn transcription_refusal_for_another_resource() -> Recording {
-    transcription_refusal_record(Some(4), "queued batches")
-}
-
-fn transcription_refusal_without_diagnostic() -> Recording {
-    transcription_refusal_record(None, "streams")
 }

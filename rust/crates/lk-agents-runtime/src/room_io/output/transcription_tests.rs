@@ -2,12 +2,12 @@
 
 use super::*;
 use crate::test_support_rtc::{FakeRoom, FakeRtc};
-use lk_agents_abi::ATTRIBUTE_TRANSCRIPTION_TRACK_ID;
 use lk_agents_abi::voice::rtc::{
     AudioSource, ByteStreamSender, ConnectionState, LocalParticipant, ParticipantKind,
     RemoteParticipant, RoomEventBus, RtcError, TextStreamSender, TrackPublication,
     TrackPublishOptions,
 };
+use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID};
 use lk_agents_abi::{Clock, RealClock, TokioSpawner};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
@@ -152,74 +152,94 @@ impl RtcRoom for StalledRoom {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Saturation {
-    TextBytes,
-    Streams,
-    Batches,
+fn stalled_output(
+    name: &str,
+    is_delta_stream: bool,
+) -> (Arc<ParticipantTranscriptionOutput>, Arc<FakeRoom>, Arc<Notify>, watch::Sender<bool>) {
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
+    let room = rtc.room(name);
+    room.add_participant("person", ParticipantKind::Standard).publish_microphone("microphone");
+    let started = Arc::new(Notify::new());
+    let (flowing, flow) = watch::channel(false);
+    let local = Arc::new(StalledLocal {
+        inner: room.local().clone(),
+        started: started.clone(),
+        flowing: flow,
+    });
+    let sdk = Arc::new(StalledRoom { inner: room.clone(), local, clock: clock.clone() });
+    let output = ParticipantTranscriptionOutput::new(
+        sdk,
+        Arc::new(TokioSpawner::current()),
+        clock,
+        Arc::new(SegmentIds::counting()),
+        is_delta_stream,
+        false,
+        None,
+    );
+    (output, room, started, flowing)
 }
 
 #[tokio::test(start_paused = true)]
-async fn saturated_transcription_refuses_the_whole_capture_and_closes_the_stalled_sdk_writer() {
-    use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
+async fn a_writer_stalled_past_the_text_bound_drops_the_transcript_not_the_caller() {
+    use lk_agents_voice::room_io::ingress::MAX_STREAM_BYTES;
 
-    for saturation in [Saturation::TextBytes, Saturation::Streams, Saturation::Batches] {
-        let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
-        let room = rtc.room("transcription-admission");
-        let person = room.add_participant("person", ParticipantKind::Standard);
-        person.publish_microphone("microphone");
-        let started = Arc::new(Notify::new());
-        let (_flowing, flow) = watch::channel(false);
-        let local = Arc::new(StalledLocal {
-            inner: room.local().clone(),
-            started: started.clone(),
-            flowing: flow,
-        });
-        let sdk = Arc::new(StalledRoom { inner: room.clone(), local, clock: clock.clone() });
-        let output = ParticipantTranscriptionOutput::new(
-            sdk,
-            Arc::new(TokioSpawner::current()),
-            clock,
-            Arc::new(SegmentIds::counting()),
-            !matches!(saturation, Saturation::Streams),
-            false,
-            None,
-        );
-        output.set_participant(Some("person".into())).await.unwrap();
-        output.capture_text("accepted prefix").await.unwrap();
-        started.notified().await;
-        let mut failure = None;
-        for _ in 0..=MAX_INCOMING_STREAMS + 1 {
-            let text = match saturation {
-                Saturation::TextBytes => "x".repeat(MAX_STREAM_BYTES / 2),
-                _ => "queued text".into(),
-            };
-            if let Err(error) = output.capture_text(&text).await {
-                failure = Some(error);
-                break;
-            }
-        }
-        let failure =
-            failure.expect("a stalled SDK writer must have a finite transcript admission bound");
-        assert!(failure.to_string().contains("capacity"), "{saturation:?}: {failure}");
-        assert!(output.capture_text("must be refused too").await.is_err());
-        let closed =
-            lk_agents_abi::timeout(&RealClock::new(), Duration::from_secs(1), output.aclose())
-                .await
-                .expect("the reserved cleanup path must bypass saturated transcript data");
-        assert!(closed.is_err(), "the overload remains observable after cleanup");
-        let streams = room.local_participant().text_streams();
-        assert_eq!(
-            streams.len(),
-            1,
-            "queued or rejected captures must not open extra streams after failure"
-        );
-        assert!(streams[0].closed, "the stalled SDK writer must be closed before cleanup returns");
-        assert!(
-            streams[0].text().is_empty(),
-            "the rejected capture must not partially reach the SDK"
-        );
+    let (output, room, started, _flowing) = stalled_output("transcription-bytes", true);
+    output.set_participant(Some("person".into())).await.unwrap();
+    output.capture_text("accepted prefix").await.unwrap();
+    started.notified().await;
+    for _ in 0..3 {
+        output
+            .capture_text(&"x".repeat(MAX_STREAM_BYTES / 2))
+            .await
+            .expect("a transcription failure is not the speech's error");
     }
+    output.capture_text("dropped").await.unwrap();
+    let closed = lk_agents_abi::timeout(&RealClock::new(), Duration::from_secs(1), output.aclose())
+        .await
+        .expect("the reserved cleanup path must bypass saturated transcript data");
+    assert!(
+        closed.is_err_and(|error| error.to_string().contains("capacity")),
+        "the overload stays observable at cleanup"
+    );
+    let streams = room.local_participant().text_streams();
+    assert_eq!(streams.len(), 1, "no stream opens after the failure");
+    assert!(streams[0].closed, "the stalled SDK writer must be closed before cleanup returns");
+    assert!(streams[0].text().is_empty(), "the refused text must not partially reach the SDK");
+}
+
+// Catches: a fifth batch queued behind the writer latching "queued batches", which failed the
+// transcript (and RoomIo with it) for the rest of the call.
+#[tokio::test(start_paused = true)]
+async fn a_transcript_backlog_behind_a_stalled_writer_is_delivered_coalesced() {
+    let (output, room, started, flowing) = stalled_output("transcription-backlog", false);
+    output.set_participant(Some("person".into())).await.unwrap();
+    output.capture_text("first").await.unwrap();
+    started.notified().await;
+    for turn in 0..6 {
+        for words in ["a", "a b", "a b c"] {
+            output.capture_text(&format!("{turn}: {words}")).await.unwrap();
+        }
+        output.flush();
+    }
+    flowing.send_replace(true);
+    lk_agents_abi::timeout(&RealClock::new(), Duration::from_secs(1), output.aclose())
+        .await
+        .unwrap()
+        .expect("a backlog is delivered, not failed");
+    let shown: Vec<_> = room
+        .local_participant()
+        .text_streams()
+        .into_iter()
+        .filter(|stream| {
+            stream.close_attributes.get(ATTRIBUTE_TRANSCRIPTION_FINAL).is_some_and(|f| f == "true")
+        })
+        .map(|stream| stream.text())
+        .collect();
+    assert_eq!(shown, (0..6).map(|turn| format!("{turn}: a b c")).collect::<Vec<_>>());
+    assert!(
+        room.local_participant().text_streams().len() < 6 * 4,
+        "superseded interim text is coalesced, not replayed"
+    );
 }
 
 #[tokio::test(start_paused = true)]

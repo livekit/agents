@@ -1,13 +1,13 @@
 //! Transcript visibility, segment framing and subject routing over supplied records.
 
-use super::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
+use super::ingress::MAX_STREAM_BYTES;
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
 use crate::transcription::{Visible, VisibleStream};
 use crate::tts::markup::expression_attribute;
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TimedString};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The microphone view observed by the performer when a transcript's subject changes.
 pub struct ParticipantTracks {
@@ -257,7 +257,7 @@ impl Writer {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Subject {
     pub participant: Option<ParticipantIdentity>,
     /// Who the deprecated leg publishes as: the avatar worker's track when one publishes for them.
@@ -354,31 +354,33 @@ pub fn cancellable(effect: &WriterEffect) -> bool {
     matches!(effect, WriterEffect::Write { .. } | WriterEffect::PublishLegacy { .. })
 }
 
-/// One admitted batch and the capacity it holds until performed.
+/// Effects captured for one subject, in order, and the text bytes they hold until performed.
 pub struct Batch {
     pub effects: Vec<WriterEffect>,
+    pub subject: Subject,
     pub ticket: Ticket,
 }
 
-/// Text bytes held until the batch is performed, and stream slots reserved for its opens. The
-/// close's final batch reserves its open's slot only when it opens.
+/// The text bytes a batch holds until [`Admission::performed`].
 #[derive(Debug)]
 pub struct Ticket {
     bytes: usize,
-    streams: Option<usize>,
 }
 
 fn capacity(resource: &str) -> IoError {
     IoError::TranscriptionCapacity(resource.into())
 }
 
-/// The bounded work the transcription performer holds: queued and in-flight text bytes, open and
-/// reserved streams, queued batches; and the first failure, after which nothing is admitted.
+/// The transcription performer's backlog, in capture order. Its length never refuses text: a
+/// queued replacement a later one supersedes is dropped and queued deltas merge, so only a writer
+/// stalled behind more than [`MAX_STREAM_BYTES`] of text fails the output. The first failure
+/// latches and drops the backlog; the performer streams one segment at a time.
 #[derive(Default)]
 pub struct Admission {
+    queue: VecDeque<Batch>,
+    /// Text bytes queued and in flight.
     bytes: usize,
-    streams: usize,
-    batches: usize,
+    closing: bool,
     failure: Option<IoError>,
 }
 
@@ -387,90 +389,130 @@ impl Admission {
         self.failure.as_ref()
     }
 
-    /// Latches the first failure and drops the writer's pending effects; returns the latched one.
-    pub fn fail(&mut self, writer: &mut Writer, error: IoError) -> IoError {
+    /// Latches the first failure, dropping the writer's pending effects and the backlog.
+    pub fn fail(&mut self, writer: &mut Writer, error: IoError) {
         writer.clear_effects();
         writer.reset(Writing::Closed);
-        self.failure.get_or_insert(error).clone()
-    }
-
-    /// The writer's pending effects as one batch, `None` when there are none.
-    pub fn admit(&mut self, writer: &mut Writer) -> Result<Option<Batch>> {
-        let admitted = self.try_admit(writer);
-        admitted.map_err(|error| self.fail(writer, error))
-    }
-
-    fn try_admit(&mut self, writer: &mut Writer) -> Result<Option<Batch>> {
-        if let Some(error) = &self.failure {
-            return Err(error.clone());
+        for batch in self.queue.drain(..) {
+            self.bytes -= batch.ticket.bytes;
         }
+        self.failure.get_or_insert(error);
+    }
+
+    /// Queue the writer's pending effects for `subject`, coalesced into the last queued batch of
+    /// the same subject. `Err` only when this submission fails the output.
+    pub fn submit(&mut self, writer: &mut Writer, subject: &Subject) -> Result<()> {
+        if self.failure.is_some() {
+            return Ok(());
+        }
+        let queued = self.try_submit(writer, subject);
+        queued.inspect_err(|error| self.fail(writer, error.clone()))
+    }
+
+    fn try_submit(&mut self, writer: &mut Writer, subject: &Subject) -> Result<()> {
         if writer.expression_bytes() > MAX_STREAM_BYTES {
             return Err(capacity("expression bytes"));
         }
-        let effects = writer.take_effects();
+        let mut effects = writer.take_effects();
         if effects.is_empty() {
-            return Ok(None);
+            return Ok(());
         }
+        let mut released = 0;
+        if let Some(last) = self.queue.back_mut().filter(|last| last.subject == *subject) {
+            effects = coalesce(std::mem::take(&mut last.effects).into_iter().chain(effects));
+            released = last.ticket.bytes;
+            self.queue.pop_back();
+        }
+        self.bytes -= released;
         let bytes = retained_bytes(&effects)
             .filter(|bytes| *bytes <= MAX_STREAM_BYTES.saturating_sub(self.bytes))
             .ok_or_else(|| capacity("queued text bytes"))?;
-        let opens = effects
-            .iter()
-            .filter(|effect| matches!(effect, WriterEffect::OpenStream { .. }))
-            .count();
-        if self.batches == MAX_INCOMING_STREAMS {
-            return Err(capacity("queued batches"));
-        }
-        if opens > MAX_INCOMING_STREAMS - self.streams {
-            return Err(capacity("streams"));
-        }
         self.bytes += bytes;
-        self.streams += opens;
-        self.batches += 1;
-        Ok(Some(Batch { effects, ticket: Ticket { bytes, streams: Some(opens) } }))
+        self.queue.push_back(Batch { effects, subject: subject.clone(), ticket: Ticket { bytes } });
+        Ok(())
     }
 
-    /// Close's final batch, allowed twice the byte bound since it carries the open segment's
-    /// closing text.
-    pub fn finish(&mut self, writer: &mut Writer) -> Result<Batch> {
-        if let Some(error) = &self.failure {
-            return Err(error.clone());
+    /// Close: the writer's final batch, allowed twice the byte bound since it carries the open
+    /// segment's closing text, ends the backlog.
+    pub fn finish(&mut self, writer: &mut Writer, subject: &Subject) -> Result<()> {
+        if self.failure.is_some() || self.closing {
+            return Ok(());
         }
+        self.closing = true;
         writer.close();
         let effects = writer.take_effects();
         if retained_bytes(&effects).is_none_or(|bytes| bytes > MAX_STREAM_BYTES * 2) {
-            return Err(self.fail(writer, capacity("final text bytes")));
+            let error = capacity("final text bytes");
+            self.fail(writer, error.clone());
+            return Err(error);
         }
-        Ok(Batch { effects, ticket: Ticket { bytes: 0, streams: None } })
+        self.queue.push_back(Batch {
+            effects,
+            subject: subject.clone(),
+            ticket: Ticket { bytes: 0 },
+        });
+        Ok(())
     }
 
-    /// A stream of `ticket`'s batch opens: it holds a slot until [`Self::stream_closed`].
-    pub fn open_stream(&mut self, ticket: &mut Ticket) -> Result<()> {
-        match &mut ticket.streams {
-            Some(reserved) => {
-                *reserved -= 1;
-                Ok(())
-            }
-            None if self.streams < MAX_INCOMING_STREAMS => {
-                self.streams += 1;
-                Ok(())
-            }
-            None => Err(capacity("streams")),
-        }
+    /// The oldest batch, to perform; its bytes stay held until [`Self::performed`].
+    pub fn next(&mut self) -> Option<Batch> {
+        self.queue.pop_front()
     }
 
-    pub fn stream_closed(&mut self) {
-        self.streams -= 1;
+    /// Nothing more will be queued and nothing is left to perform.
+    pub fn drained(&self) -> bool {
+        self.failure.is_some() || (self.closing && self.queue.is_empty())
     }
 
-    /// The batch was performed or abandoned: its bytes and unopened stream slots are free.
     pub fn performed(&mut self, ticket: Ticket) {
         self.bytes -= ticket.bytes;
-        if let Some(reserved) = ticket.streams {
-            self.streams -= reserved;
-            self.batches -= 1;
+    }
+}
+
+/// Drops what a later effect of the queue supersedes, a non-final replacement stream or legacy
+/// publication of a segment queued again later, and merges adjacent writes.
+fn coalesce(effects: impl Iterator<Item = WriterEffect>) -> Vec<WriterEffect> {
+    let effects: Vec<_> = effects.collect();
+    let mut superseded = vec![false; effects.len()];
+    let (mut opened, mut published) = (BTreeSet::new(), BTreeSet::new());
+    for (at, effect) in effects.iter().enumerate().rev() {
+        match effect {
+            WriterEffect::OpenStream { segment, is_final: false, .. }
+                if opened.contains(segment)
+                    && matches!(effects.get(at + 1), Some(WriterEffect::Write { .. }))
+                    && matches!(
+                        effects.get(at + 2),
+                        Some(WriterEffect::CloseStream { is_final: false, .. })
+                    ) =>
+            {
+                superseded[at..at + 3].fill(true);
+            }
+            WriterEffect::PublishLegacy { segment, is_final: false, .. }
+                if published.contains(segment) =>
+            {
+                superseded[at] = true;
+            }
+            _ => {}
+        }
+        match effect {
+            WriterEffect::OpenStream { segment, .. } => opened.insert(segment.clone()),
+            WriterEffect::PublishLegacy { segment, .. } => published.insert(segment.clone()),
+            _ => false,
+        };
+    }
+    let mut kept: Vec<WriterEffect> = Vec::with_capacity(effects.len());
+    for (effect, superseded) in effects.into_iter().zip(superseded) {
+        if superseded {
+            continue;
+        }
+        match (kept.last_mut(), effect) {
+            (Some(WriterEffect::Write { payload }), WriterEffect::Write { payload: more }) => {
+                payload.push_str(&more);
+            }
+            (_, effect) => kept.push(effect),
         }
     }
+    kept
 }
 
 pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
@@ -495,63 +537,100 @@ pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
 mod admission_tests {
     use super::*;
 
-    /// A writer with one new segment's text pending: a stream open and a write.
-    fn segment(writer: &mut Writer, n: usize) {
+    fn queued(admission: &mut Admission) -> Vec<WriterEffect> {
+        std::iter::from_fn(|| admission.next()).flat_map(|batch| batch.effects).collect()
+    }
+
+    // Catches: a fifth queued batch latching a capacity failure while the performer was busy,
+    // which ended the room's transcript (and RoomIo with it) for the rest of the call.
+    #[test]
+    fn a_replacement_backlog_keeps_only_the_latest_text_of_each_segment() {
+        let mut admission = Admission::default();
+        let mut writer = Writer::new(false, false);
+        let subject = Subject::default();
+        for (n, text) in ["the", "the cat", "the cat sat"].into_iter().enumerate() {
+            let visible = writer.visible_of(text);
+            writer.capture(visible, None, (n == 0).then(|| "SG_1".to_owned()));
+            admission.submit(&mut writer, &subject).unwrap();
+        }
+        for n in 0..8 {
+            let visible = writer.visible_of("next");
+            writer.end_segment(None);
+            writer.capture(visible, None, Some(format!("SG_{}", n + 2)));
+            admission.submit(&mut writer, &subject).unwrap();
+        }
+        let effects = queued(&mut admission);
+        let opened: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                WriterEffect::OpenStream { segment, is_final, .. } => {
+                    Some((segment.as_str(), *is_final))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(&opened[..2], [("SG_1", true), ("SG_2", true)]);
+        assert_eq!(opened.last(), Some(&("SG_9", false)), "the open segment's latest interim");
+        assert!(effects.contains(&WriterEffect::Write { payload: "the cat sat".into() }));
+        assert!(!effects.contains(&WriterEffect::Write { payload: "the cat".into() }));
+    }
+
+    #[test]
+    fn queued_deltas_merge_and_keep_every_word() {
+        let mut admission = Admission::default();
+        let mut writer = Writer::new(true, false);
+        let subject = Subject::default();
+        for (n, text) in ["one ", "two ", "three"].into_iter().enumerate() {
+            let visible = writer.visible_of(text);
+            writer.capture(visible, None, (n == 0).then(|| "SG_1".to_owned()));
+            admission.submit(&mut writer, &subject).unwrap();
+        }
+        assert_eq!(
+            queued(&mut admission),
+            [
+                WriterEffect::OpenStream {
+                    segment: "SG_1".into(),
+                    is_final: false,
+                    expression: None
+                },
+                WriterEffect::Write { payload: "one two three".into() },
+                WriterEffect::PublishLegacy {
+                    segment: "SG_1".into(),
+                    text: "one two three".into(),
+                    is_final: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn another_subjects_text_is_never_merged_into_the_queue() {
+        let mut admission = Admission::default();
+        let mut writer = Writer::new(true, false);
+        let first = Subject { participant: Some("first".into()), ..Subject::default() };
         let visible = writer.visible_of("hello");
-        writer.capture(visible, None, Some(format!("SG_{n}")));
-        writer.end_segment(Some(format!("SG_{}", n + 1)));
+        writer.capture(visible, None, Some("SG_1".into()));
+        admission.submit(&mut writer, &first).unwrap();
+        writer.end_segment(None);
+        admission.submit(&mut writer, &Subject::default()).unwrap();
+        assert!(admission.next().is_some_and(|batch| batch.subject == first));
+        assert!(admission.next().is_some_and(|batch| batch.subject == Subject::default()));
     }
 
     #[test]
-    fn open_streams_bound_admission_until_they_close() {
+    fn a_backlog_past_its_bytes_fails_the_output_once() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false);
-        let mut tickets = Vec::new();
-        for n in 0..MAX_INCOMING_STREAMS {
-            segment(&mut writer, n);
-            let mut batch = admission.admit(&mut writer).unwrap().unwrap();
-            admission.open_stream(&mut batch.ticket).unwrap();
-            tickets.push(batch.ticket);
+        let mut writer = Writer::new(false, false);
+        let subject = Subject::default();
+        let mut failures = 0;
+        for n in 0..4 {
+            let visible = writer.visible_of(&"x".repeat(MAX_STREAM_BYTES / 3));
+            writer.capture(visible, None, Some(format!("SG_{n}")));
+            writer.end_segment(None);
+            failures += usize::from(admission.submit(&mut writer, &subject).is_err());
         }
-        for ticket in tickets {
-            admission.performed(ticket);
-        }
-        segment(&mut writer, 99);
-        assert!(matches!(
-            admission.admit(&mut writer),
-            Err(IoError::TranscriptionCapacity(resource)) if resource == "streams"
-        ));
-        assert!(admission.failure().is_some(), "a refusal latches the output's failure");
-    }
-
-    #[test]
-    fn a_performed_batch_frees_its_bytes_and_unopened_slots() {
-        let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false);
-        segment(&mut writer, 0);
-        let batch = admission.admit(&mut writer).unwrap().unwrap();
-        admission.performed(batch.ticket);
-        for n in 1..=MAX_INCOMING_STREAMS {
-            segment(&mut writer, n);
-            let batch = admission.admit(&mut writer).unwrap().unwrap();
-            admission.performed(batch.ticket);
-        }
-    }
-
-    #[test]
-    fn the_final_batch_takes_its_stream_slot_when_it_opens() {
-        let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false);
-        let mut tickets = Vec::new();
-        for n in 0..MAX_INCOMING_STREAMS {
-            segment(&mut writer, n);
-            let mut batch = admission.admit(&mut writer).unwrap().unwrap();
-            admission.open_stream(&mut batch.ticket).unwrap();
-            tickets.push(batch.ticket);
-        }
-        let mut last = admission.finish(&mut writer).unwrap();
-        assert!(admission.open_stream(&mut last.ticket).is_err());
-        admission.stream_closed();
-        admission.open_stream(&mut last.ticket).unwrap();
+        assert_eq!(failures, 1, "the overflow fails the output; later text is dropped quietly");
+        assert!(admission.drained());
+        assert!(admission.next().is_none(), "a failed output performs nothing more");
     }
 }

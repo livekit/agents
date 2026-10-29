@@ -436,3 +436,36 @@ async fn a_rejoined_identity_gets_a_new_attachment_without_an_explicit_selection
     assert_eq!(io.audio_input_leg().unwrap().reading(), Some("new-track".into()));
     io.aclose().await;
 }
+
+// Catches: a burst of transcripts the performer had not drained yet latched a capacity failure,
+// and the next room event carried it into RoomIo::fail, closing the room's audio output: the
+// agent was mute for the rest of the call.
+#[tokio::test(start_paused = true)]
+async fn a_transcript_burst_leaves_the_room_audio_output_open() {
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
+    let room = rtc.room("transcript-burst");
+    room.add_participant("person", ParticipantKind::Standard);
+    let mut config = config();
+    config.text_output = Some(lk_agents_abi::voice::room_io::TextOutputConfig::default());
+    let io = room_io(room.clone(), clock, config);
+    io.start();
+    io.wait_for_ready().await.unwrap();
+    for n in 0..8 {
+        io.on_user_input_transcribed(&format!("word {n}"), n % 2 == 1)
+            .await
+            .expect("a transcript backlog is not the caller's error");
+    }
+    room.remove_participant(&"person".into(), DisconnectReason::ClientInitiated);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    let closing = io.is_closing();
+    io.aclose().await;
+    assert!(!closing, "a transcription backlog must not close the room's audio output");
+    let streams = room.local_participant().text_streams();
+    assert_eq!(
+        streams.last().map(|stream| stream.text()),
+        Some("word 7".into()),
+        "the backlog delivers the latest transcript"
+    );
+}

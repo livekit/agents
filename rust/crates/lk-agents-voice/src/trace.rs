@@ -431,11 +431,6 @@ pub enum PlayoutStep {
         speech: SpeechId,
         reason: crate::agent_session::output::OutputBindingError,
     },
-    /// A bounded transcription performer refused this speech's retained work.
-    TranscriptionRefused {
-        speech: SpeechId,
-        resource: String,
-    },
     OutputReplaced {
         audio: bool,
         transcription: bool,
@@ -947,7 +942,6 @@ impl Step {
                 | PlayoutStep::FinishDue { speech, .. }
                 | PlayoutStep::FinishLost { speech, .. }
                 | PlayoutStep::OutputRefused { speech, .. }
-                | PlayoutStep::TranscriptionRefused { speech, .. }
                 | PlayoutStep::TranscriptForwarded { speech, .. }
                 | PlayoutStep::TranscriptShown { speech, .. } => Some(*speech),
                 PlayoutStep::SinkCalled { speech, .. } => *speech,

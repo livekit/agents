@@ -14,7 +14,6 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, Clock, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner,
     SpawnerExt, TOPIC_TRANSCRIPTION, TimedString, Ts,
 };
-use lk_agents_voice::room_io::ingress::MAX_INCOMING_STREAMS;
 use lk_agents_voice::room_io::transcription::{
     Admission, Batch, ParticipantTracks, Subject, Writer, WriterEffect, cancellable,
     stream_attributes,
@@ -22,20 +21,12 @@ use lk_agents_voice::room_io::transcription::{
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::Notify;
 
 struct WriterState {
     core: Writer,
     admission: Admission,
-    sender: Option<mpsc::Sender<Queued>>,
-    finish: Option<Queued>,
     deadline: Option<Ts>,
-    subject: Subject,
-}
-
-/// An admitted batch with the subject it was captured for.
-struct Queued {
-    batch: Batch,
     subject: Subject,
 }
 
@@ -180,7 +171,6 @@ impl ParticipantTranscriptionOutput {
         json_format: bool,
         next_in_chain: Option<Arc<dyn TextOutput>>,
     ) -> Arc<Self> {
-        let (sender, receiver) = mpsc::channel(MAX_INCOMING_STREAMS);
         let output = Arc::new(Self {
             room: room.clone(),
             ids,
@@ -188,8 +178,6 @@ impl ParticipantTranscriptionOutput {
             writer: Mutex::new(WriterState {
                 core: Writer::new(is_delta_stream, json_format),
                 admission: Admission::default(),
-                sender: Some(sender),
-                finish: None,
                 deadline: None,
                 subject: Subject::default(),
             }),
@@ -200,42 +188,36 @@ impl ParticipantTranscriptionOutput {
         });
         let owner = output.clone();
         let task = spawner.spawn_unboxed(async move {
-            owner.run(receiver, Performer { room, writer: None }).await;
+            owner.run(Performer { room, writer: None }).await;
         });
         output.tasks.lock().unwrap().push(task);
         output
     }
 
-    fn reject(&self, writer: &mut WriterState, error: IoError) -> IoError {
-        let error = writer.admission.fail(&mut writer.core, error);
-        writer.finish.take();
-        writer.sender.take();
+    /// The output's own failure stays here: it is logged once, its text is dropped from then
+    /// on, and [`Self::aclose`] reports it. Neither the speech nor the room fails with it.
+    fn latched(&self, error: IoError) {
+        log::warn!(target: "livekit.agents", "room transcription output failed, dropping its text: {error}");
         self.changed.notify_waiters();
-        error
     }
 
     fn fail(&self, error: IoError) {
-        self.reject(&mut self.writer.lock().unwrap(), error);
-    }
-
-    fn submit(&self, writer: &mut WriterState) -> Result<()> {
-        let admitted = writer.admission.admit(&mut writer.core);
-        let Some(batch) = admitted.inspect_err(|_| self.reject_admitted(writer))? else {
-            return Ok(());
-        };
-        let queued = Queued { batch, subject: writer.subject.clone() };
-        let sent = writer.sender.as_ref().is_some_and(|sender| sender.try_send(queued).is_ok());
-        if !sent {
-            return Err(self.reject(writer, IoError::Rtc("transcription output is closed".into())));
+        let mut writer = self.writer.lock().unwrap();
+        if writer.admission.failure().is_some() {
+            return;
         }
-        Ok(())
+        let WriterState { core, admission, .. } = &mut *writer;
+        admission.fail(core, error.clone());
+        drop(writer);
+        self.latched(error);
     }
 
-    /// Admission latched its refusal; the queue stops with it.
-    fn reject_admitted(&self, writer: &mut WriterState) {
-        writer.finish.take();
-        writer.sender.take();
-        self.changed.notify_waiters();
+    fn submit(&self, writer: &mut WriterState) {
+        let WriterState { core, admission, subject, .. } = writer;
+        match admission.submit(core, subject) {
+            Ok(()) => self.changed.notify_waiters(),
+            Err(error) => self.latched(error),
+        }
     }
 
     fn status(&self) -> (Option<IoError>, Option<Ts>) {
@@ -285,25 +267,11 @@ impl ParticipantTranscriptionOutput {
         }
     }
 
-    async fn batch(&self, performer: &mut Performer, queued: Queued) -> Result<()> {
-        let Queued { batch: Batch { effects, mut ticket }, subject } = queued;
+    async fn batch(&self, performer: &mut Performer, batch: Batch) -> Result<()> {
+        let Batch { effects, subject, ticket } = batch;
         let mut result = Ok(());
         for effect in effects {
-            let opening = matches!(effect, WriterEffect::OpenStream { .. });
-            if opening
-                && let Err(error) = self.writer.lock().unwrap().admission.open_stream(&mut ticket)
-            {
-                result = Err(error);
-                break;
-            }
-            let was_open = performer.writer.is_some();
             result = self.effect(performer, effect, &subject).await;
-            // Slots taken minus streams still open: an open replaced or refused, or a close.
-            let released = usize::from(was_open) + usize::from(opening)
-                - usize::from(performer.writer.is_some());
-            for _ in 0..released {
-                self.writer.lock().unwrap().admission.stream_closed();
-            }
             if result.is_err() {
                 break;
             }
@@ -312,42 +280,29 @@ impl ParticipantTranscriptionOutput {
         result
     }
 
-    async fn run(self: Arc<Self>, mut receiver: mpsc::Receiver<Queued>, mut performer: Performer) {
+    async fn run(self: Arc<Self>, mut performer: Performer) {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if self.status().0.is_some() {
-                break;
-            }
-            let batch = tokio::select! {
-                biased;
-                () = &mut changed => continue,
-                batch = receiver.recv() => batch,
-            };
-            let Some(batch) = batch else {
-                let finish = self.writer.lock().unwrap().finish.take();
-                if let Some(finish) = finish
-                    && let Err(error) = self.batch(&mut performer, finish).await
-                {
-                    self.fail(error);
+            let next = {
+                let mut writer = self.writer.lock().unwrap();
+                if writer.admission.drained() {
+                    break;
                 }
-                break;
+                writer.admission.next()
+            };
+            let Some(batch) = next else {
+                changed.await;
+                continue;
             };
             if let Err(error) = self.batch(&mut performer, batch).await {
                 self.fail(error);
                 break;
             }
         }
-        receiver.close();
-        while receiver.try_recv().is_ok() {}
         // The worker, not a caller, owns this consuming close even beyond a waiter's deadline.
-        let open = performer.writer.is_some();
-        let closed = performer.close().await;
-        if open {
-            self.writer.lock().unwrap().admission.stream_closed();
-        }
-        if let Err(error) = closed {
+        if let Err(error) = performer.close().await {
             self.fail(error);
         }
         self.performer_done.set(true);
@@ -356,12 +311,9 @@ impl ParticipantTranscriptionOutput {
     pub async fn set_participant(&self, participant: Option<ParticipantIdentity>) -> Result<()> {
         let subject = subject_for_participant(self.room.as_ref(), participant)?;
         let mut writer = self.writer.lock().unwrap();
-        if let Some(error) = writer.admission.failure() {
-            return Err(error.clone());
-        }
         let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
         writer.core.end_segment(segment);
-        self.submit(&mut writer)?;
+        self.submit(&mut writer);
         writer.subject = subject;
         Ok(())
     }
@@ -388,12 +340,12 @@ impl ParticipantTranscriptionOutput {
             RoomEvent::ConnectionStateChanged { state } if !state.is_connected() => {
                 let mut writer = self.writer.lock().unwrap();
                 writer.core.disconnected();
-                self.submit(&mut writer)?;
+                self.submit(&mut writer);
             }
             RoomEvent::Close { .. } => {
                 let mut writer = self.writer.lock().unwrap();
                 writer.core.disconnected();
-                self.submit(&mut writer)?;
+                self.submit(&mut writer);
             }
             _ => {}
         }
@@ -404,15 +356,9 @@ impl ParticipantTranscriptionOutput {
         let requested_deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         let deadline = {
             let mut writer = self.writer.lock().unwrap();
-            if writer.sender.is_some() {
-                let WriterState { core, admission, .. } = &mut *writer;
-                match admission.finish(core) {
-                    Ok(batch) => {
-                        writer.finish = Some(Queued { batch, subject: writer.subject.clone() })
-                    }
-                    Err(_) => self.reject_admitted(&mut writer),
-                }
-                writer.sender.take();
+            let WriterState { core, admission, subject, .. } = &mut *writer;
+            if let Err(error) = admission.finish(core, subject) {
+                self.latched(error);
             }
             *writer.deadline.get_or_insert(requested_deadline)
         };
@@ -451,18 +397,22 @@ impl TextOutput for ParticipantTranscriptionOutput {
         Box::pin(async move {
             let shown = {
                 let mut writer = self.writer.lock().unwrap();
-                if let Some(error) = writer.admission.failure() {
-                    return Err(error.clone());
+                let WriterState { core, admission, .. } = &mut *writer;
+                match core.admit_text(&text.text) {
+                    Ok(()) => {
+                        let visible = core.visible_of(&text.text);
+                        let shown = visible.text.clone();
+                        let segment = core.needs_segment().then(|| self.ids.next_segment_id());
+                        core.capture(visible, Some(text), segment);
+                        self.submit(&mut writer);
+                        shown
+                    }
+                    Err(error) => {
+                        admission.fail(core, error.clone());
+                        self.latched(error);
+                        String::new()
+                    }
                 }
-                if let Err(error) = writer.core.admit_text(&text.text) {
-                    return Err(self.reject(&mut writer, error));
-                }
-                let visible = writer.core.visible_of(&text.text);
-                let shown = visible.text.clone();
-                let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
-                writer.core.capture(visible, Some(text), segment);
-                self.submit(&mut writer)?;
-                shown
             };
             if let Some(next) = &self.next_in_chain
                 && !shown.is_empty()
@@ -474,16 +424,13 @@ impl TextOutput for ParticipantTranscriptionOutput {
     }
 
     fn flush(&self) {
-        let accepted = {
+        {
             let mut writer = self.writer.lock().unwrap();
-            if writer.admission.failure().is_some() {
-                return;
-            }
             let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
             writer.core.end_segment(segment);
-            self.submit(&mut writer).is_ok()
-        };
-        if accepted && let Some(next) = &self.next_in_chain {
+            self.submit(&mut writer);
+        }
+        if let Some(next) = &self.next_in_chain {
             next.flush();
         }
     }

@@ -44,18 +44,6 @@ pub async fn pipeline_reply_task(
         Err(DriverError::TextOutput(lk_agents_abi::voice::io::IoError::Host(error))) => {
             ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
         }
-        Err(DriverError::TextOutput(lk_agents_abi::voice::io::IoError::TranscriptionCapacity(
-            resource,
-        ))) => {
-            shared.trace(crate::trace::PlayoutStep::TranscriptionRefused {
-                speech,
-                resource: resource.clone(),
-            });
-            fatal(format!(
-                "text output: {}",
-                lk_agents_abi::voice::io::IoError::TranscriptionCapacity(resource)
-            ))
-        }
         // Reachable from the host (`Agent(llm=None)` then `generate_reply()`).
         Err(DriverError::Missing(what)) => {
             fatal(format!("cannot generate a reply: the session has no {what}"))
