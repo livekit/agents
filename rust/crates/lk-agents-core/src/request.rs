@@ -127,7 +127,7 @@ mod tests {
 
     use super::*;
 
-    // Catches (decision 42): `IGNORE_ON_ENTER` withholding a tool outside `on_enter`, or offering it
+    // Catches: `IGNORE_ON_ENTER` withholding a tool outside `on_enter`, or offering it
     // inside; stored instructions reaching the model twice.
     #[test]
     fn ignore_on_enter_tools_are_withheld_only_inside_on_enter() {

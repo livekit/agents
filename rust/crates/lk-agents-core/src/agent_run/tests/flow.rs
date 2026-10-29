@@ -343,7 +343,7 @@ fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
     assert_eq!(outputs, pairs(&[("output", "Gold plan"), ("output", "covered")]));
 }
 
-// Catches (decision 47): an implicit loop cap ending a long, finite model/tool sequence.
+// Catches: an implicit loop cap ending a long, finite model/tool sequence.
 #[test]
 fn a_long_finite_tool_sequence_completes_without_a_loop_cap() {
     let mut d = Driver::new(text_agent(vec![string_tool("step", "n")]), "go", vec![]);

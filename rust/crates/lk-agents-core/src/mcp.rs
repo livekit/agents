@@ -1,4 +1,4 @@
-//! MCP tool logic (decision 71): option resolution, schemas, setup and transport choice, and the
+//! MCP tool logic: option resolution, schemas, setup and transport choice, and the
 //! interpretation of tool results. The session and its transports are the runtime's I/O.
 
 use std::sync::Arc;

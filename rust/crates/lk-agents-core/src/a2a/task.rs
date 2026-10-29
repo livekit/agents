@@ -1029,7 +1029,7 @@ impl TaskMachine {
             }
             (Phase::Run { step: RunStep::Commit, .. }, StorageError::Uncertain(_)) => {
                 // a lost acknowledgment is not a failure: the message's task stays as it is while
-                // the resolver finds the run (decision 39); once applied, it names its answer
+                // the resolver finds the run; once applied, it names its answer
                 self.answer = None;
                 self.resolve_later()
             }

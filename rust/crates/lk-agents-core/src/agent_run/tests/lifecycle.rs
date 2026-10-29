@@ -46,7 +46,7 @@ fn siblings_are_recognised_on_arrival_and_recorded_in_model_order() {
     );
 }
 
-// Catches (decision 17): concurrent terminal outcomes resolved by arrival instead of model
+// Catches: concurrent terminal outcomes resolved by arrival instead of model
 // order, or the losing question left waiting for an answer it will never get.
 #[test]
 fn the_first_terminal_outcome_in_model_order_decides() {
@@ -120,7 +120,7 @@ fn duplicate_calls_follow_the_tool_policy() {
             .starts_with("Same tool `lookup` is already running")
     );
 
-    // Catches (decision 109): the agent's or toolset's `duplicate_reject_template` ignored.
+    // Catches: the agent's or toolset's `duplicate_reject_template` ignored.
     let (calls, _, _, mut d) = run(DuplicateMode::Reject, DuplicateScope::Name, same.clone());
     let template = d.effects.iter().find_map(|e| match e {
         Effect::TemplateRender { call, template } if *call == calls[1] => Some(template.clone()),
@@ -181,7 +181,7 @@ fn cancel_settles_once_started_work_reports_back() {
     assert!(d.send(Event::ToolSettled { call: calls[0].0, outcome: value("late") }).is_empty());
 }
 
-// Catches (decision 14): a cancelled call that never settles holding the run forever, or the
+// Catches: a cancelled call that never settles holding the run forever, or the
 // deadline passing without an incomplete-cleanup observation; also the deadline not exposed.
 #[test]
 fn work_that_misses_the_cleanup_deadline_is_reported_incomplete() {

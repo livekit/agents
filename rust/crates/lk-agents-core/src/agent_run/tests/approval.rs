@@ -37,7 +37,7 @@ fn question(d: &Driver) -> String {
     }
 }
 
-// Catches (c7 defect 1, decision 15): a history-only continuation unable to grant (the waiting
+// Catches (c7 defect 1): a history-only continuation unable to grant (the waiting
 // output never replaced by the answer); approval decided on raw model JSON instead of the
 // validated arguments (a defaulted parameter spelled differently must not ask again); an
 // answer granting twice; the
