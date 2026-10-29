@@ -54,15 +54,8 @@ pub(super) fn signature(
                     ));
                 }
                 let required = pm.iter().any(|x| x.key == "required");
-                let ambient =
-                    pm.iter().any(|x| x.key == "ambient").then(|| quote(&t.ty).replace(' ', ""));
-                let ty = match rty(&format!("{at}({name})"), &t.ty, al) {
-                    Err(_) if ambient.is_some() => {
-                        RTy::Declared { name: quote(&t.ty).replace(' ', ""), by_ref: false }
-                    }
-                    ty => ty?,
-                };
-                params.push((Param { ty, name, ambient }, required));
+                let ty = rty(&format!("{at}({name})"), &t.ty, al)?;
+                params.push((Param { ty, name }, required));
             }
         }
     }
@@ -86,7 +79,6 @@ pub(super) fn signature(
     // An `Option<T>` whose followers all default is `None` unwritten: the expansion's rule.
     let host: Vec<lk_agents_bindgen::Shape> = params
         .iter()
-        .filter(|(p, _)| p.ambient.is_none())
         .map(|(p, required)| lk_agents_bindgen::Shape {
             name: &p.name,
             option: matches!(p.ty, RTy::Option(_)),

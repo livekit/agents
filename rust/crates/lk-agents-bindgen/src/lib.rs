@@ -19,9 +19,9 @@ mod shape;
 #[cfg(test)]
 mod tests;
 
-pub use python::{class, error, export_const, export_fn, export_impl, object, string, wire_enum};
 pub use kwargs::{client, kwargs};
 pub use native::native;
+pub use python::{class, error, export_const, export_fn, export_impl, object, string, wire_enum};
 pub use record::{RecordDefaults, record};
 
 pub use meta::{Meta, Metas, Value, doc, is_host, to_snake};
@@ -67,7 +67,6 @@ pub fn host_ident(name: &str) -> syn::Ident {
     }
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Receiver {
     None,
@@ -96,8 +95,6 @@ pub struct Param {
     pub ty: syn::Type,
     /// The name a conversion error gives the argument (default: its own).
     pub label: Option<String>,
-    /// The runtime's own value (`lk_agents_abi::python::Ambient`), not a host argument.
-    pub ambient: bool,
     /// Anything that does not extract reads as the type's default.
     pub lenient: bool,
     /// A `#[host(kwargs)]` struct spread into one keyword per field.
@@ -148,19 +145,30 @@ pub struct Method {
 pub enum Cell {
     /// `#[lk_agents_abi::class]` on the struct.
     Plain,
-    Mutex { rust_name: syn::Ident },
+    Mutex {
+        rust_name: syn::Ident,
+    },
     /// The cell an `async` method needs: the future outlives the borrow of `self`.
-    Arc { rust_name: syn::Ident },
+    Arc {
+        rust_name: syn::Ident,
+    },
     /// `T` by value, for types pyo3 cannot make a class of (an enum with data). `input`: the host
     /// constructs and passes it in, so no `IntoPyObject` for `T`.
-    Value { rust_name: syn::Ident, pyclass: Vec<String>, derive: Option<String>, input: bool },
+    Value {
+        rust_name: syn::Ident,
+        pyclass: Vec<String>,
+        derive: Option<String>,
+        input: bool,
+    },
 }
 
 impl Cell {
     pub fn class(&self) -> Option<&syn::Ident> {
         match self {
             Cell::Plain => None,
-            Cell::Mutex { rust_name } | Cell::Arc { rust_name } | Cell::Value { rust_name, .. } => Some(rust_name),
+            Cell::Mutex { rust_name } | Cell::Arc { rust_name } | Cell::Value { rust_name, .. } => {
+                Some(rust_name)
+            }
         }
     }
 }
@@ -222,7 +230,13 @@ fn unlink(line: &str) -> String {
 }
 
 /// One callable under the `head` group (`export`, `new`, `method`, `getter`, `static`).
-pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], object_pid: Option<bool>) -> syn::Result<Sig> {
+pub fn sig(
+    head: &str,
+    m: &Metas,
+    s: &syn::Signature,
+    attrs: &[syn::Attribute],
+    object_pid: Option<bool>,
+) -> syn::Result<Sig> {
     let at = &s.ident;
     if !s.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(at, "a generic fn does not expand in place"));
@@ -236,23 +250,34 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
                 let arc_self = r.colon_token.is_some()
                     && matches!(&*r.ty, syn::Type::Reference(rf) if quote::ToTokens::to_token_stream(&rf.elem).to_string().replace(' ', "") == "Arc<Self>");
                 if r.reference.is_none() && !arc_self {
-                    return Err(syn::Error::new_spanned(r, "a `self`-consuming method cannot be called on a shared host object"));
+                    return Err(syn::Error::new_spanned(
+                        r,
+                        "a `self`-consuming method cannot be called on a shared host object",
+                    ));
                 }
                 receiver = if r.mutability.is_some() { Receiver::Mut } else { Receiver::Ref };
             }
             syn::FnArg::Typed(t) => {
                 let pm = Metas::of(&t.attrs)?;
                 if let Some(bad) = pm.0.iter().find(|m| !PARAM_MARKERS.contains(&m.key.as_str())) {
-                    return Err(syn::Error::new_spanned(&t.pat, format!("the parameter marker `{}` has no in-place meaning: give the type a host shape of its own", bad.key)));
+                    return Err(syn::Error::new_spanned(
+                        &t.pat,
+                        format!(
+                            "the parameter marker `{}` has no in-place meaning: give the type a host shape of its own",
+                            bad.key
+                        ),
+                    ));
                 }
                 let syn::Pat::Ident(id) = &*t.pat else {
-                    return Err(syn::Error::new_spanned(&t.pat, "a destructuring parameter has no host name"));
+                    return Err(syn::Error::new_spanned(
+                        &t.pat,
+                        "a destructuring parameter has no host name",
+                    ));
                 };
                 params.push(Param {
                     name: id.ident.clone(),
                     ty: (*t.ty).clone(),
                     label: pm.text("label")?.map(str::to_owned),
-                    ambient: pm.flag("ambient"),
                     lenient: pm.flag("lenient"),
                     kwargs: pm.flag("kwargs"),
                     required: pm.flag("required"),
@@ -276,14 +301,23 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
     let mut defaults = Vec::new();
     for (p, v) in m.under(&prefix) {
         if !params.iter().any(|q| q.name == p) {
-            return Err(syn::Error::new_spanned(at, format!("defaults({p} = ..) names no parameter")));
+            return Err(syn::Error::new_spanned(
+                at,
+                format!("defaults({p} = ..) names no parameter"),
+            ));
         }
         let v = meta::rust_of(v).unwrap_or_default();
-        let expr: TokenStream = v.parse().map_err(|_| syn::Error::new_spanned(at, format!("defaults({p}): not a Rust expression")))?;
+        let expr: TokenStream = v.parse().map_err(|_| {
+            syn::Error::new_spanned(at, format!("defaults({p}): not a Rust expression"))
+        })?;
         defaults.push((p.to_owned(), expr));
     }
-    if let Some(p) = params.iter().find(|p| p.required && defaults.iter().any(|(d, _)| p.name == d)) {
-        return Err(syn::Error::new_spanned(at, format!("`{}` is `required` and has a default", p.name)));
+    if let Some(p) = params.iter().find(|p| p.required && defaults.iter().any(|(d, _)| p.name == d))
+    {
+        return Err(syn::Error::new_spanned(
+            at,
+            format!("`{}` is `required` and has a default", p.name),
+        ));
     }
     let key = format!("{head}.kw_only");
     let kw_only = match m.0.iter().find(|x| x.key == key).map(|x| &x.value) {
@@ -292,7 +326,10 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
         Some(_) => {
             let p = m.text(&key)?.unwrap_or_default();
             if !params.iter().any(|q| q.name == p) {
-                return Err(syn::Error::new_spanned(at, format!("kw_only = \"{p}\" names no parameter")));
+                return Err(syn::Error::new_spanned(
+                    at,
+                    format!("kw_only = \"{p}\" names no parameter"),
+                ));
             }
             KwOnly::From(p.to_owned())
         }
@@ -307,7 +344,11 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
         reply,
         // `set_x` sets `x`.
         name: m.text(&format!("{head}.name"))?.map(str::to_owned).unwrap_or_else(|| match head {
-            "setter" => rust.to_string().strip_prefix("set_").map(str::to_owned).unwrap_or_else(|| rust.to_string()),
+            "setter" => rust
+                .to_string()
+                .strip_prefix("set_")
+                .map(str::to_owned)
+                .unwrap_or_else(|| rust.to_string()),
             _ => rust.to_string(),
         }),
         rust,
@@ -326,7 +367,7 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
     Ok(sig)
 }
 
-pub const PARAM_MARKERS: [&str; 5] = ["label", "ambient", "lenient", "kwargs", "required"];
+pub const PARAM_MARKERS: [&str; 4] = ["label", "lenient", "kwargs", "required"];
 
 /// By the last path segment.
 pub fn is_named(t: &syn::Type, name: &str) -> bool {
@@ -357,11 +398,10 @@ pub fn implied_none<'a>(host: &[Shape<'a>]) -> Vec<&'a str> {
 }
 
 fn implied_defaults(s: &Sig) -> Vec<(String, TokenStream)> {
-    let names: Vec<String> = s.params.iter().filter(|p| !p.ambient).map(|p| p.name.to_string()).collect();
+    let names: Vec<String> = s.params.iter().map(|p| p.name.to_string()).collect();
     let host: Vec<Shape> = s
         .params
         .iter()
-        .filter(|p| !p.ambient)
         .zip(&names)
         .map(|(p, name)| Shape {
             name,
@@ -384,7 +424,9 @@ fn reply_of(t: &syn::Type) -> Option<syn::Type> {
         return None;
     }
     let syn::PathArguments::AngleBracketed(a) = &seg.arguments else { return None };
-    a.args.iter().find_map(|g| if let syn::GenericArgument::Type(t) = g { Some(t.clone()) } else { None })
+    a.args
+        .iter()
+        .find_map(|g| if let syn::GenericArgument::Type(t) = g { Some(t.clone()) } else { None })
 }
 
 fn result_ok(t: &syn::Type) -> Option<syn::Type> {
@@ -403,7 +445,10 @@ fn result_ok(t: &syn::Type) -> Option<syn::Type> {
 const SIG_KEYS: [&str; 7] = ["name", "defaults.", "kw_only", "err", "pid", "detach", ""];
 
 fn sig_keys(head: &str) -> Vec<String> {
-    SIG_KEYS.iter().map(|k| if k.is_empty() { head.to_owned() } else { format!("{head}.{k}") }).collect()
+    SIG_KEYS
+        .iter()
+        .map(|k| if k.is_empty() { head.to_owned() } else { format!("{head}.{k}") })
+        .collect()
 }
 
 pub fn read_export(attr: TokenStream, f: &syn::ItemFn) -> syn::Result<Sig> {
@@ -420,27 +465,46 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
         return Err(syn::Error::new_spanned(&imp.self_ty, "#[host(object)] is for `impl Type`"));
     };
     if imp.trait_.is_some() || !imp.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(&imp.self_ty, "#[host(object)] is for an inherent, non-generic impl"));
+        return Err(syn::Error::new_spanned(
+            &imp.self_ty,
+            "#[host(object)] is for an inherent, non-generic impl",
+        ));
     }
     let core = p.path.segments.last().expect("a path").ident.to_string();
     // `stub`/`stub_import` are the codegen's (the `.pyi`).
     m.only(
         &format!("impl {core}"),
         &[
-            "object", "object.name", "object.module", "object.cell", "object.rust_name", "object.pid", "object.stub",
-            "object.stub_import", "object.as_dyn.", "object.pyclass.", "object.derive.",
+            "object",
+            "object.name",
+            "object.module",
+            "object.cell",
+            "object.rust_name",
+            "object.pid",
+            "object.stub",
+            "object.stub_import",
+            "object.as_dyn.",
+            "object.pyclass.",
+            "object.derive.",
         ],
     )?;
     let name = m.text("object.name")?.map(str::to_owned).unwrap_or_else(|| core.clone());
     let rust_name = m.ident("object.rust_name")?;
-    let wrapper = || rust_name.clone().unwrap_or_else(|| syn::Ident::new(&format!("Py{name}"), Span::call_site()));
+    let wrapper = || {
+        rust_name
+            .clone()
+            .unwrap_or_else(|| syn::Ident::new(&format!("Py{name}"), Span::call_site()))
+    };
     let words = |prefix: &str| m.under(prefix).map(|(w, _)| w.to_owned()).collect::<Vec<_>>();
     let (pyclass, derive) = (words("object.pyclass."), words("object.derive."));
     let cell = match m.text("object.cell")? {
         None | Some("plain") => match &rust_name {
             // The class is the type: a `rust_name` can only repeat it.
             Some(r) if *r != core => {
-                return Err(syn::Error::new_spanned(&imp.self_ty, "`rust_name` names the class a `mutex`/`arc` cell wraps; a plain object is its own class"));
+                return Err(syn::Error::new_spanned(
+                    &imp.self_ty,
+                    "`rust_name` names the class a `mutex`/`arc` cell wraps; a plain object is its own class",
+                ));
             }
             _ => Cell::Plain,
         },
@@ -453,18 +517,29 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
             derive: (!derive.is_empty()).then(|| derive.join(", ")),
         },
         Some(other) => {
-            return Err(syn::Error::new_spanned(&imp.self_ty, format!("cell = \"{other}\": plain, mutex, arc, value or input")));
+            return Err(syn::Error::new_spanned(
+                &imp.self_ty,
+                format!("cell = \"{other}\": plain, mutex, arc, value or input"),
+            ));
         }
     };
     if !matches!(cell, Cell::Value { .. }) && !(pyclass.is_empty() && derive.is_empty()) {
-        return Err(syn::Error::new_spanned(&imp.self_ty, "`pyclass(..)`/`derive(..)` are a `value` cell's class options; a plain object's are its #[lk_agents_abi::class]"));
+        return Err(syn::Error::new_spanned(
+            &imp.self_ty,
+            "`pyclass(..)`/`derive(..)` are a `value` cell's class options; a plain object's are its #[lk_agents_abi::class]",
+        ));
     }
     let mut as_dyn = Vec::new();
     for (tr, method) in m.under("object.as_dyn.") {
-        let tr: syn::Path = syn::parse_str(tr).map_err(|_| syn::Error::new_spanned(&imp.self_ty, "as_dyn(Trait = method)"))?;
-        let method: syn::Ident = meta::rust_of(method)
-            .and_then(|v| syn::parse_str(&v).ok())
-            .ok_or_else(|| syn::Error::new_spanned(&imp.self_ty, "as_dyn(Trait = method): the method is an identifier"))?;
+        let tr: syn::Path = syn::parse_str(tr)
+            .map_err(|_| syn::Error::new_spanned(&imp.self_ty, "as_dyn(Trait = method)"))?;
+        let method: syn::Ident =
+            meta::rust_of(method).and_then(|v| syn::parse_str(&v).ok()).ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &imp.self_ty,
+                    "as_dyn(Trait = method): the method is an identifier",
+                )
+            })?;
         as_dyn.push((tr, method));
     }
     let object_pid = m.bool("object.pid")?;
@@ -479,7 +554,10 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
                 consts.push(ConstExport {
                     path: quote::quote!(<#p>::#c.ident),
                     rust: c.ident.clone(),
-                    name: cm.text("const.name")?.map(str::to_owned).unwrap_or_else(|| c.ident.to_string()),
+                    name: cm
+                        .text("const.name")?
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| c.ident.to_string()),
                     ty: c.ty.clone(),
                     pid: false,
                     doc: doc(&c.attrs),
@@ -496,14 +574,20 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
         let head = fm.head().to_owned();
         // `method`'s kind is the signature's: async, receiver-less (static), or `Reply<T>`.
         if !["new", "method", "getter", "setter"].contains(&head.as_str()) {
-            return Err(syn::Error::new_spanned(&sig_in.ident, format!("host({head}) on a method: new, method, getter or setter")));
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                format!("host({head}) on a method: new, method, getter or setter"),
+            ));
         }
         let mut keys = sig_keys(&head);
         if head == "method" {
             // Consumed by `fill_sends`, which wrote the body.
             keys.push("method.send".to_owned());
         }
-        fm.only(&format!("{core}::{}", sig_in.ident), &keys.iter().map(String::as_str).collect::<Vec<_>>())?;
+        fm.only(
+            &format!("{core}::{}", sig_in.ident),
+            &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        )?;
         let s = sig(&head, &fm, sig_in, attrs, object_pid)?;
         let kind = match head.as_str() {
             "new" => MethodKind::New,
@@ -513,17 +597,34 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
             _ => MethodKind::Method,
         };
         if s.is_async && !matches!(cell, Cell::Arc { .. }) {
-            return Err(syn::Error::new_spanned(&sig_in.ident, "an `async fn` needs cell = \"arc\": the future outlives the borrow of self"));
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                "an `async fn` needs cell = \"arc\": the future outlives the borrow of self",
+            ));
         }
         let wants_self = matches!(kind, MethodKind::Getter | MethodKind::Setter);
-        if wants_self && s.receiver == Receiver::None || kind == MethodKind::New && s.receiver != Receiver::None {
-            return Err(syn::Error::new_spanned(&sig_in.ident, format!("host({head}) {}", if wants_self { "needs a receiver" } else { "takes no receiver" })));
+        if wants_self && s.receiver == Receiver::None
+            || kind == MethodKind::New && s.receiver != Receiver::None
+        {
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                format!(
+                    "host({head}) {}",
+                    if wants_self { "needs a receiver" } else { "takes no receiver" }
+                ),
+            ));
         }
         if kind == MethodKind::New && !returns_self(&s.ret) {
-            return Err(syn::Error::new_spanned(&sig_in.ident, "#[host(new)] returns Self or Result<Self, E>"));
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                "#[host(new)] returns Self or Result<Self, E>",
+            ));
         }
         if kind == MethodKind::Getter && (!s.params.is_empty() || s.detach) {
-            return Err(syn::Error::new_spanned(&sig_in.ident, "#[host(getter)] takes only the receiver"));
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                "#[host(getter)] takes only the receiver",
+            ));
         }
         let unit = |t: &syn::Type| matches!(t, syn::Type::Tuple(tu) if tu.elems.is_empty());
         let returns_nothing = match &s.ret {
@@ -532,10 +633,16 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
             Ret::Plain(_) => false,
         };
         if kind == MethodKind::Setter && (s.params.len() != 1 || !returns_nothing) {
-            return Err(syn::Error::new_spanned(&sig_in.ident, "#[host(setter)] takes one value and returns nothing, or refuses (`Result<(), E>`)"));
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                "#[host(setter)] takes one value and returns nothing, or refuses (`Result<(), E>`)",
+            ));
         }
         if matches!(cell, Cell::Arc { .. }) && s.receiver == Receiver::Mut {
-            return Err(syn::Error::new_spanned(&sig_in.ident, "a `&mut self` method in an `arc` cell: use cell = \"mutex\", or take &self"));
+            return Err(syn::Error::new_spanned(
+                &sig_in.ident,
+                "a `&mut self` method in an `arc` cell: use cell = \"mutex\", or take &self",
+            ));
         }
         methods.push(Method { kind, sig: s });
     }
@@ -585,16 +692,29 @@ pub fn fill_sends(imp: &mut syn::ItemImpl) -> syn::Result<()> {
         match item {
             syn::ImplItem::Fn(f) => {
                 if send_of(&f.attrs)?.is_some() {
-                    return Err(syn::Error::new_spanned(&f.sig.ident, "`send` writes the body: declare the method without one (`fn f(..) -> R;`)"));
+                    return Err(syn::Error::new_spanned(
+                        &f.sig.ident,
+                        "`send` writes the body: declare the method without one (`fn f(..) -> R;`)",
+                    ));
                 }
             }
             syn::ImplItem::Verbatim(tokens) => {
-                let Ok(Bodiless { mut attrs, vis, sig }) = syn::parse2::<Bodiless>(tokens.clone()) else { continue };
-                let Some(send) = send_of(&attrs)? else {
-                    return Err(syn::Error::new_spanned(&sig.ident, "a method without a body needs #[host(method(send = <expr>))], which writes it"));
+                let Ok(Bodiless { mut attrs, vis, sig }) = syn::parse2::<Bodiless>(tokens.clone())
+                else {
+                    continue;
                 };
-                if !matches!(sig.inputs.first(), Some(syn::FnArg::Receiver(r)) if r.reference.is_some()) {
-                    return Err(syn::Error::new_spanned(&sig.ident, "`send` calls `self.send(..)`: the method takes `&self`"));
+                let Some(send) = send_of(&attrs)? else {
+                    return Err(syn::Error::new_spanned(
+                        &sig.ident,
+                        "a method without a body needs #[host(method(send = <expr>))], which writes it",
+                    ));
+                };
+                if !matches!(sig.inputs.first(), Some(syn::FnArg::Receiver(r)) if r.reference.is_some())
+                {
+                    return Err(syn::Error::new_spanned(
+                        &sig.ident,
+                        "`send` calls `self.send(..)`: the method takes `&self`",
+                    ));
                 }
                 let block: syn::Block = match &sig.output {
                     syn::ReturnType::Default => syn::parse_quote!({ let _ = self.send(#send); }),
@@ -604,10 +724,19 @@ pub fn fill_sends(imp: &mut syn::ItemImpl) -> syn::Result<()> {
                         syn::parse_quote!({ ::core::result::Result::Ok(self.send(#send)?) })
                     }
                     syn::ReturnType::Type(..) => {
-                        return Err(syn::Error::new_spanned(&sig.output, "a `send` method returns nothing (the refusal dropped) or a `Result` (the refusal returned)"));
+                        return Err(syn::Error::new_spanned(
+                            &sig.output,
+                            "a `send` method returns nothing (the refusal dropped) or a `Result` (the refusal returned)",
+                        ));
                     }
                 };
-                *item = syn::ImplItem::Fn(syn::ImplItemFn { attrs, vis, defaultness: None, sig, block });
+                *item = syn::ImplItem::Fn(syn::ImplItemFn {
+                    attrs,
+                    vis,
+                    defaultness: None,
+                    sig,
+                    block,
+                });
             }
             _ => {}
         }
@@ -648,11 +777,15 @@ pub fn read_const(
         Some(t) => quote::quote!(<#t>::#ident),
         None => quote::quote!(#ident),
     };
-    let name = m.text("export.name")?.map(str::to_owned).unwrap_or_else(|| ident.to_string().to_lowercase());
+    let name = m
+        .text("export.name")?
+        .map(str::to_owned)
+        .unwrap_or_else(|| ident.to_string().to_lowercase());
     Ok(ConstExport {
         path,
         rust: ident.clone(),
-        attr: name.chars().any(|c| c.is_ascii_uppercase()) && !name.chars().any(|c| c.is_ascii_lowercase()),
+        attr: name.chars().any(|c| c.is_ascii_uppercase())
+            && !name.chars().any(|c| c.is_ascii_lowercase()),
         name,
         ty: ty.clone(),
         pid: m.bool("export.pid")?.unwrap_or(true),
@@ -664,16 +797,28 @@ pub fn read_export_impl(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<V
     let m = Metas::parse(attr)?;
     m.only("impl", &["export"])?;
     if imp.trait_.is_some() || !imp.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(&imp.self_ty, "#[host(export)] is for an inherent, non-generic impl"));
+        return Err(syn::Error::new_spanned(
+            &imp.self_ty,
+            "#[host(export)] is for an inherent, non-generic impl",
+        ));
     }
     let mut out = Vec::new();
     for item in &imp.items {
         match item {
             syn::ImplItem::Const(c) if c.attrs.iter().any(is_host) => {
-                out.push(read_const(&Metas::of(&c.attrs)?, &c.ident, &c.ty, &c.attrs, Some(&imp.self_ty))?);
+                out.push(read_const(
+                    &Metas::of(&c.attrs)?,
+                    &c.ident,
+                    &c.ty,
+                    &c.attrs,
+                    Some(&imp.self_ty),
+                )?);
             }
             syn::ImplItem::Fn(f) if f.attrs.iter().any(is_host) => {
-                return Err(syn::Error::new_spanned(&f.sig.ident, "an `#[host(export)] impl` exports its consts; a method belongs to a #[host(object)]"));
+                return Err(syn::Error::new_spanned(
+                    &f.sig.ident,
+                    "an `#[host(export)] impl` exports its consts; a method belongs to a #[host(object)]",
+                ));
             }
             _ => {}
         }
@@ -683,7 +828,10 @@ pub fn read_export_impl(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<V
 
 pub fn read_class(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<Class> {
     let m = Metas::parse(attr)?;
-    m.only(&format!("struct {}", st.ident), &["name", "module", "mutable", "from_py_object", "eq", "subclass"])?;
+    m.only(
+        &format!("struct {}", st.ident),
+        &["name", "module", "mutable", "from_py_object", "eq", "subclass"],
+    )?;
     if !st.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(&st.generics, "a host class is a concrete type"));
     }

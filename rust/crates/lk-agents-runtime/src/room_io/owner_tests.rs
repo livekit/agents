@@ -102,12 +102,6 @@ struct StreamingRoom {
     text: watch::Sender<Option<lk_agents_abi::voice::rtc::TextStreamSender>>,
 }
 
-impl lk_agents_abi::utils::clock::HostClock for StreamingRoom {
-    fn host_clock(&self) -> Arc<dyn Clock> {
-        self.room.host_clock()
-    }
-}
-
 struct TextChunks(mpsc::Receiver<String>);
 impl StreamSource<String> for TextChunks {
     fn next<'a>(

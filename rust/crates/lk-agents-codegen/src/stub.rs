@@ -282,11 +282,7 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
 /// In order, once each.
 fn imports(x: &Exposed) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for l in x
-        .objects
-        .iter()
-        .flat_map(|o| &o.stub_imports)
-    {
+    for l in x.objects.iter().flat_map(|o| &o.stub_imports) {
         if !out.contains(l) {
             out.push(l.clone());
         }
@@ -338,14 +334,10 @@ pub(crate) fn signature_parts(
     Ok((args(cx, sig)?, py_ty(cx, &sig.ret, false)?))
 }
 
-/// `(name: type [= default], star before it)`: an ambient parameter has none, a keyword record
-/// one per field.
+/// `(name: type [= default], star before it)`: a keyword record one per field.
 fn args(cx: Cx, sig: &Sig) -> Result<Vec<(String, bool)>, String> {
     let mut out = Vec::new();
     for (i, p) in sig.params.iter().enumerate() {
-        if p.ambient.is_some() {
-            continue;
-        }
         let star =
             sig.kw_only == KwOnly::All && i == 0 || sig.kw_only == KwOnly::From(p.name.clone());
         let explicit = sig.defaults.iter().find(|(k, _)| k == &p.name).map(|(_, v)| v.clone());
@@ -353,7 +345,7 @@ fn args(cx: Cx, sig: &Sig) -> Result<Vec<(String, bool)>, String> {
             && let Some(k) = cx.x.kwargs.iter().find(|k| &k.name == name)
         {
             for (j, f) in k.fields.iter().enumerate() {
-                let fp = Param { name: f.name.clone(), ty: f.ty.clone(), ambient: None };
+                let fp = Param { name: f.name.clone(), ty: f.ty.clone() };
                 out.push((one(cx, &fp, f.default.clone())?, star && j == 0));
             }
             continue;

@@ -343,15 +343,6 @@ fn loop_clock(py: Python<'_>) -> Option<Arc<dyn lk_agents_abi::Clock>> {
     loop_time::LoopRuntime::current(py).map(|rt| rt.clock())
 }
 
-/// The running loop's executor on virtual time, else the process runtime's.
-fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
-    loop_spawner().unwrap_or_else(|| {
-        Arc::new(lk_agents_runtime::net::task::TokioSpawner::new(
-            process_handle().expect("the process runtime"),
-        ))
-    })
-}
-
 fn loop_spawner() -> Option<Arc<dyn lk_agents_abi::Spawner>> {
     Python::try_attach(loop_time::LoopRuntime::current).flatten().map(|rt| rt.spawner())
 }
@@ -360,10 +351,9 @@ fn loop_spawner() -> Option<Arc<dyn lk_agents_abi::Spawner>> {
 pub struct HostTime;
 
 impl lk_agents_runtime::process::HostTime for HostTime {
-    /// The scope a proxy call opened, else the running loop's on virtual time, else the wall
-    /// clock: the in-place expansions' ambient clock.
+    /// The running loop's clock on virtual time, else the wall clock.
     fn clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
-        <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient()
+        lk_agents_abi::python::loop_clock()
     }
 
     fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>> {
@@ -380,7 +370,6 @@ lk_agents_abi::python::inventory::submit! {
     lk_agents_abi::python::HostRuntime {
         future_into_py: erased_future_into_py,
         loop_clock,
-        spawner,
     }
 }
 

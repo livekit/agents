@@ -335,10 +335,6 @@ class GetDOBResult:
     def __repr__(self) -> str: ...
 
 
-class SessionClock:
-    def __repr__(self) -> str: ...
-
-
 class ChatContent:
     """One element of `ChatMessage.content`: `str | ImageContent | AudioContent`, built by the host one
     constructor per arm so Rust never reads attributes or dispatches on `.type`.

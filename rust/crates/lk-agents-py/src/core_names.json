@@ -102,7 +102,6 @@
     "SentencePacer",
     "ServerConfig",
     "ServerRuntime",
-    "SessionClock",
     "SessionOptions",
     "SessionRecorder",
     "SpeechHandle",

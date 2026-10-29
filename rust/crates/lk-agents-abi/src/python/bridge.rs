@@ -48,8 +48,7 @@ pub trait HostBridge: Send + Sync + 'static {
     }
 }
 
-/// The binding's async runtime, submitted by `lk-agents-py`: the in-place expansions await on it
-/// and take their ambient clock and spawner from it.
+/// The binding's async runtime, submitted by `lk-agents-py`: the in-place expansions await on it.
 pub struct HostRuntime {
     /// A future resolving to a host value as the awaitable a `_core` coroutine method returns.
     pub future_into_py: for<'py> fn(
@@ -58,14 +57,20 @@ pub struct HostRuntime {
     ) -> PyResult<Bound<'py, PyAny>>,
     /// The running loop's clock when it is on virtual time.
     pub loop_clock: fn(Python<'_>) -> Option<std::sync::Arc<dyn crate::Clock>>,
-    /// The running loop's executor when it is on virtual time, else the process runtime's.
-    pub spawner: fn() -> std::sync::Arc<dyn crate::Spawner>,
 }
 
 inventory::collect!(HostRuntime);
 
 fn linked() -> Option<&'static HostRuntime> {
     inventory::iter::<HostRuntime>.into_iter().next()
+}
+
+/// The running loop's clock on virtual time, else the wall clock: what a host stream an in-place
+/// export takes is closed against.
+pub fn loop_clock() -> std::sync::Arc<dyn crate::Clock> {
+    linked()
+        .and_then(|runtime| Python::try_attach(runtime.loop_clock).flatten())
+        .unwrap_or_else(|| std::sync::Arc::new(crate::RealClock::new()))
 }
 
 fn host_runtime() -> &'static HostRuntime {
@@ -79,80 +84,6 @@ pub fn future_into_py(
     fut: impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
 ) -> PyResult<Bound<'_, PyAny>> {
     (host_runtime().future_into_py)(py, Box::pin(fut))
-}
-
-/// A parameter marked `#[host(ambient)]`: the runtime's own clock and spawner, never the host's.
-pub trait Ambient {
-    fn ambient() -> Self;
-}
-
-/// The scoped clock ([`HostClock`]), else the running loop's when it is on virtual time, else the
-/// wall clock.
-impl Ambient for std::sync::Arc<dyn crate::Clock> {
-    fn ambient() -> Self {
-        CLOCK_SCOPE
-            .with(|s| s.borrow().last().cloned())
-            .or_else(|| linked().and_then(|runtime| Python::try_attach(runtime.loop_clock).flatten()))
-            .unwrap_or_else(|| std::sync::Arc::new(crate::RealClock::new()))
-    }
-}
-
-thread_local! {
-    static CLOCK_SCOPE: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::Clock>>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-pub use crate::utils::clock::HostClock;
-
-/// Popped on drop.
-pub struct ClockScope(bool);
-
-impl ClockScope {
-    /// `clock` is the ambient one until the scope drops: a core object the host builds meanwhile
-    /// (inside a proxy's call) runs on the proxy's clock.
-    pub fn push(clock: std::sync::Arc<dyn crate::Clock>) -> ClockScope {
-        CLOCK_SCOPE.with(|s| s.borrow_mut().push(clock));
-        ClockScope(true)
-    }
-}
-
-impl Drop for ClockScope {
-    fn drop(&mut self) {
-        if self.0 {
-            CLOCK_SCOPE.with(|s| s.borrow_mut().pop());
-        }
-    }
-}
-
-/// Autoref probe: `(&&ClockOf(v)).scope()` opens `v`'s clock when it is a [`HostClock`].
-pub struct ClockOf<'a, T: ?Sized>(pub &'a T);
-
-pub trait ClockDeclared {
-    fn scope(&self) -> ClockScope;
-}
-
-impl<T: ?Sized + HostClock> ClockDeclared for &ClockOf<'_, T> {
-    fn scope(&self) -> ClockScope {
-        let clock = self.0.host_clock();
-        CLOCK_SCOPE.with(|s| s.borrow_mut().push(clock));
-        ClockScope(true)
-    }
-}
-
-pub trait ClockNone {
-    fn scope(&self) -> ClockScope;
-}
-
-impl<T: ?Sized> ClockNone for ClockOf<'_, T> {
-    fn scope(&self) -> ClockScope {
-        ClockScope(false)
-    }
-}
-
-/// [`HostRuntime::spawner`]: one runtime, so a chain's tasks never split from its awaited futures.
-impl Ambient for std::sync::Arc<dyn crate::Spawner> {
-    fn ambient() -> Self {
-        (host_runtime().spawner)()
-    }
 }
 
 // --------------------------------------------------------------------- the host stream bridge

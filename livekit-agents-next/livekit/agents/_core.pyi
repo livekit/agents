@@ -79,7 +79,6 @@ from ._generated._core_classes import (
     RoomVideoInput as RoomVideoInput,
     RpcHandler as RpcHandler,
     RunningJobInfo as RunningJobInfo,
-    SessionClock as SessionClock,
     SpeechHandle as SpeechHandle,
     StaleHandle as StaleHandle,
     StartJobFields as StartJobFields,

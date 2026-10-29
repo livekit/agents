@@ -365,12 +365,6 @@ impl FakeRoom {
     }
 }
 
-impl lk_agents_abi::utils::clock::HostClock for FakeRoom {
-    fn host_clock(&self) -> Arc<dyn Clock> {
-        self.local.clock.clone()
-    }
-}
-
 impl RtcRoom for FakeRoom {
     fn name(&self) -> Result<String> {
         Ok(self.name.clone())

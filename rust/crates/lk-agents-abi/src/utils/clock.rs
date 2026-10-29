@@ -77,7 +77,6 @@ impl Ts {
 }
 
 /// The core's only source of time: `now` drives scheduling, `wall` stamps chat items.
-#[crate::host(native)]
 pub trait Clock: Send + Sync {
     /// Monotonic. Repeated calls at the same instant return the same value.
     fn now(&self) -> Ts;
@@ -88,37 +87,6 @@ pub trait Clock: Send + Sync {
     /// For `ChatItem::created_at` only. Strictly increasing even within one instant: `ChatContext`
     /// orders by `created_at` (the reference nudges 1 µs, `tests/virtual_time.py:57`).
     fn wall(&self) -> SystemTime;
-}
-
-/// A value that says which clock the host objects handed with it are on (a session, a fake room):
-/// a binding scopes it over the conversions after it, so a proxy built next uses that clock.
-pub trait HostClock {
-    fn host_clock(&self) -> std::sync::Arc<dyn Clock>;
-}
-
-impl<T: HostClock + ?Sized> HostClock for std::sync::Arc<T> {
-    fn host_clock(&self) -> std::sync::Arc<dyn Clock> {
-        (**self).host_clock()
-    }
-}
-
-/// `_core.SessionClock`: the handle a session hands the native clients a host provider is built
-/// on (`obj._bind_session_clock(clock)`), so a session on a virtual clock times a stalled gateway
-/// out in its own seconds, not wall ones.
-#[crate::class(name = "SessionClock")]
-#[derive(Clone)]
-pub struct SessionClock(pub std::sync::Arc<dyn Clock>);
-
-#[crate::host(object(name = "SessionClock", pid = false, as_dyn(Clock = clock)))]
-impl SessionClock {
-    pub fn clock(&self) -> std::sync::Arc<dyn Clock> {
-        self.0.clone()
-    }
-
-    #[host(method(name = "__repr__"))]
-    pub fn host_repr(&self) -> String {
-        format!("SessionClock(now={:?})", self.0.now())
-    }
 }
 
 /// 2024-01-01T00:00:00Z.
@@ -526,7 +494,6 @@ mod tests {
         let later = first + Duration::from_secs(10);
         assert_eq!(c.nudged(later), later);
     }
-
 }
 
 #[cfg(test)]

@@ -110,12 +110,6 @@ pub trait SessionRoom: Send + Sync {
     fn room_io(&self, spawner: Arc<dyn Spawner>, config: RoomIoConfig) -> Arc<dyn RoomIo>;
 }
 
-impl crate::utils::clock::HostClock for dyn SessionRoom {
-    fn host_clock(&self) -> Arc<dyn Clock> {
-        self.clock()
-    }
-}
-
 #[derive(Clone)]
 pub struct RoomSession(pub Arc<dyn SessionRoom>);
 

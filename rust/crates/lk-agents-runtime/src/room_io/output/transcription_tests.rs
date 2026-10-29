@@ -2,13 +2,13 @@
 
 use super::*;
 use crate::test_support_rtc::{FakeRoom, FakeRtc};
+use lk_agents_abi::RealClock;
 use lk_agents_abi::voice::rtc::{
     AudioSource, ByteStreamSender, ConnectionState, LocalParticipant, ParticipantKind,
     RemoteParticipant, RoomEventBus, RtcError, TextStreamSender, TrackPublication,
     TrackPublishOptions,
 };
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID};
-use lk_agents_abi::{Clock, RealClock};
 use lk_agents_net::task::TokioSpawner;
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
@@ -98,13 +98,6 @@ impl LocalParticipant for StalledLocal {
 struct StalledRoom {
     inner: Arc<FakeRoom>,
     local: Arc<dyn LocalParticipant>,
-    clock: Arc<dyn Clock>,
-}
-
-impl lk_agents_abi::utils::clock::HostClock for StalledRoom {
-    fn host_clock(&self) -> Arc<dyn Clock> {
-        self.clock.clone()
-    }
 }
 
 impl RtcRoom for StalledRoom {
@@ -167,7 +160,7 @@ fn stalled_output(
         started: started.clone(),
         flowing: flow,
     });
-    let sdk = Arc::new(StalledRoom { inner: room.clone(), local, clock: clock.clone() });
+    let sdk = Arc::new(StalledRoom { inner: room.clone(), local });
     let output = ParticipantTranscriptionOutput::new(
         sdk,
         Arc::new(TokioSpawner::current()),
@@ -256,7 +249,7 @@ async fn queued_transcript_keeps_its_subject_and_track_through_replacement() {
         started: started.clone(),
         flowing: flow,
     });
-    let sdk = Arc::new(StalledRoom { inner: room.clone(), local, clock: clock.clone() });
+    let sdk = Arc::new(StalledRoom { inner: room.clone(), local });
     let output = ParticipantTranscriptionOutput::new(
         sdk,
         Arc::new(TokioSpawner::current()),

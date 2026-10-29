@@ -270,7 +270,7 @@ impl<T> HostSource<T> {
     }
 }
 
-/// A host async iterable handed to the core as an argument (`say(AsyncIterable[str])`), drained on
+/// A host async iterable handed to the core as an argument (an in-place RTC stream port), drained on
 /// the running loop in the caller's context.
 impl<'a, 'py, T> FromPyObject<'a, 'py> for Box<dyn crate::StreamSource<T>>
 where
@@ -283,8 +283,8 @@ where
     fn extract(obj: pyo3::Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let py = obj.py();
         let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?;
-        let clock = <Arc<dyn crate::Clock> as super::Ambient>::ambient();
         let convert: Convert<T> = Box::new(|i| i.extract::<T>().map_err(Into::into));
+        let clock = super::loop_clock();
         Ok(Box::new(HostSource::returned(obj.to_owned().unbind(), locals, convert, clock)))
     }
 }

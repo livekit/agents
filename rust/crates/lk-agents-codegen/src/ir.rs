@@ -325,8 +325,6 @@ pub enum KwOnly {
 pub struct Param {
     pub name: String,
     pub ty: RTy,
-    /// `#[host(ambient)]`: supplied by the runtime (`crate::runtime::Ambient`), not the host.
-    pub ambient: Option<String>,
 }
 
 /// A Rust type as the wrapper must spell it.
