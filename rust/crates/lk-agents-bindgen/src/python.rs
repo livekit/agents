@@ -193,7 +193,7 @@ pub fn wire_enum(name: &syn::Ident) -> TokenStream {
 /// `#[host(error ..)]`: `HostException`, picked by `lk_agents_abi::python`'s autoref dispatch.
 pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
     let m = crate::Metas::parse(attr)?;
-    m.only("error", &["error", "error.kind", "error.with", "error.original", "error.declare"])?;
+    m.only("error", &["error", "error.kind", "error.with", "error.original", "error.declare", "error.by", "error.kinds."])?;
     let (ident, generics, variants, attrs) = match item {
         syn::Item::Enum(e) => (&e.ident, &e.generics, Some(&e.variants), &e.attrs),
         syn::Item::Struct(s) => (&s.ident, &s.generics, None, &s.attrs),
@@ -240,7 +240,21 @@ pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
     }
     // The kind table's own reading, for a binding that names the class instead of raising it.
     let mut host_kind = None;
-    let body = if m.flag("error.original") {
+    let body = if let Some(by) = m.ident("error.by")? {
+        if kind.is_some() || with.is_some() || m.flag("error.original") || variants.is_some() {
+            return Err(syn::Error::new_spanned(ident, "`by` selects a struct's class by one of its fields, alone"));
+        }
+        let field = match item {
+            syn::Item::Struct(st) => st.fields.iter().find(|f| f.ident.as_ref() == Some(&by)),
+            _ => None,
+        };
+        let Some(field) = field else {
+            return Err(syn::Error::new_spanned(ident, format!("`by = {by}` names a field of this struct")));
+        };
+        let (arms, kind_arms) = kind_selected(ident, &field.ty, &m)?;
+        host_kind = Some(quote!(match self.#by { #(#kind_arms)* }));
+        quote!(match self.#by { #(#arms)* })
+    } else if m.flag("error.original") {
         if kind.is_some() || with.is_some() {
             return Err(syn::Error::new_spanned(ident, "`original`, `kind` and `with` are three answers to one question"));
         }
@@ -263,6 +277,15 @@ pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
             }
             vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate", "kwargs"])?;
             let vi = &v.ident;
+            // `delegate = field`: a named variant raises as that field's error.
+            if let Some(field) = vm.ident("delegate")? {
+                if !matches!(&v.fields, syn::Fields::Named(n) if n.named.iter().any(|f| f.ident.as_ref() == Some(&field))) {
+                    return Err(syn::Error::new_spanned(vi, "`delegate = field` names a field of this named variant"));
+                }
+                arms.push(quote!(Self::#vi { #field, .. } => ::lk_agents_abi::python::HostException::to_py_err(#field),));
+                kind_arms.push(quote!(Self::#vi { #field, .. } => #field.host_kind(),));
+                continue;
+            }
             if vm.flag("delegate") {
                 if !matches!(&v.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1) {
                     return Err(syn::Error::new_spanned(vi, "`delegate` wraps one error, in a one-field tuple variant"));
@@ -328,6 +351,54 @@ pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
         }
         #host_kind
     })
+}
+
+/// `error(by = field, kinds(Variant(class = "module.Class", kwargs(a, b)), ..))` on a struct: the
+/// class `field`'s variant names, called with the message and the listed fields as keyword
+/// arguments. Every variant of the field's enum is listed (the match is exhaustive).
+fn kind_selected(
+    ident: &syn::Ident,
+    ty: &syn::Type,
+    m: &crate::Metas,
+) -> syn::Result<(Vec<TokenStream>, Vec<TokenStream>)> {
+    let mut variants: Vec<&str> = Vec::new();
+    for (key, _) in m.under("error.kinds.") {
+        let variant = key.split('.').next().unwrap_or(key);
+        if !variants.contains(&variant) {
+            variants.push(variant);
+        }
+    }
+    if variants.is_empty() {
+        return Err(syn::Error::new_spanned(ident, "`by` takes `kinds(Variant(class = \"module.Class\"), ..)`"));
+    }
+    let (mut arms, mut kind_arms) = (Vec::new(), Vec::new());
+    for variant in variants {
+        let prefix = format!("error.kinds.{variant}.");
+        let class = m.text(&format!("{prefix}class"))?.ok_or_else(|| {
+            syn::Error::new_spanned(ident, format!("`kinds({variant}(..))` names its `class = \"module.Class\"`"))
+        })?;
+        let Some((module, name)) = class.rsplit_once('.') else {
+            return Err(syn::Error::new_spanned(ident, format!("`{class}`: a kind-selected class is dotted")));
+        };
+        let mut fields = Vec::new();
+        for (key, value) in m.under(&prefix) {
+            match (key, value) {
+                ("class", _) => {}
+                (kwarg, crate::meta::Value::Word) if kwarg.starts_with("kwargs.") => {
+                    fields.push(format_ident!("{}", &kwarg["kwargs.".len()..]));
+                }
+                _ => return Err(syn::Error::new_spanned(ident, format!("`kinds({variant}(..))`: `{key}` is not a key here"))),
+            }
+        }
+        let names = fields.iter().map(|f| f.to_string());
+        let v = format_ident!("{variant}");
+        arms.push(quote!(<#ty>::#v => ::lk_agents_abi::python::host_exception_with(#module, #name, ::std::string::ToString::to_string(self), |kwargs| {
+            #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, ::std::clone::Clone::clone(&self.#fields))?; )*
+            ::std::result::Result::Ok(())
+        }),));
+        kind_arms.push(quote!(<#ty>::#v => #class,));
+    }
+    Ok((arms, kind_arms))
 }
 
 /// A builtin (`ValueError`) or a dotted host class the runtime imports and instantiates.

@@ -302,6 +302,36 @@ fn an_error_is_a_host_exception_by_its_kind_table() {
     assert!(out.contains("host_exception (\"livekit.agents.llm\" , \"ToolError\" , e . to_string ())"), "{out}");
 }
 
+// Catches: a kind-selected struct raising one class for every kind, a listed field not passed as
+// that class's keyword argument (or an unlisted one passed), a named variant's `delegate = field`
+// not raising through that field, or a kind table missing a variant accepted.
+#[test]
+fn a_struct_error_selects_its_class_by_a_field() {
+    let e: syn::Item = syn::parse2(quote! {
+        pub struct ApiError { pub kind: Kind, pub message: String, pub retryable: bool, pub code: Option<i64> }
+    })
+    .unwrap();
+    let attr = quote!(error(by = kind, kinds(A(class = "m.A", kwargs(retryable)), B(class = "m.sub.B", kwargs(retryable, code)))));
+    let out = text(crate::error(attr, &e).unwrap());
+    assert!(out.contains("match self . kind"), "{out}");
+    assert!(out.contains("< Kind > :: A => :: lk_agents_abi :: python :: host_exception_with (\"m\" , \"A\""), "{out}");
+    assert!(out.contains("< Kind > :: B => :: lk_agents_abi :: python :: host_exception_with (\"m.sub\" , \"B\""), "{out}");
+    assert_eq!(out.matches("\"code\"").count(), 1, "{out}");
+    assert_eq!(out.matches("\"retryable\"").count(), 2, "{out}");
+    assert!(out.contains("< Kind > :: B => \"m.sub.B\""), "{out}");
+    assert!(crate::error(quote!(error(by = kind, kinds(A(kwargs(retryable))))), &e).is_err());
+    assert!(crate::error(quote!(error(by = nope, kinds(A(class = "m.A")))), &e).is_err());
+    let e: syn::Item = syn::parse2(quote! {
+        pub enum ProviderError { #[host(delegate = error)] Host { error: HostError, retryable: bool }, #[host(delegate)] Local(ApiError) }
+    })
+    .unwrap();
+    let out = text(crate::error(quote!(error), &e).unwrap());
+    assert!(out.contains("Self :: Host { error , .. } => :: lk_agents_abi :: python :: HostException :: to_py_err (error)"), "{out}");
+    assert!(out.contains("Self :: Host { error , .. } => error . host_kind ()"), "{out}");
+    let bad: syn::Item = syn::parse2(quote! { pub enum E { #[host(delegate = nope)] Host { error: HostError } } }).unwrap();
+    assert!(crate::error(quote!(error), &bad).is_err());
+}
+
 // Catches: a keyword record's fields not reaching the wrapper's signature (the struct and the
 // method expand separately, so the spread goes through the struct's macro), the `*` of `kw_only`
 // landing inside the fields instead of before them, or the record rebuilt after the call.
