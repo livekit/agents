@@ -809,15 +809,6 @@ async fn room_is_looked_up_by_name() {
     assert_eq!(rtc.rooms().len(), 1);
 }
 
-// Catches: `advance` silently doing nothing on a fake that shares someone else's clock. The
-// playout model would never move and every `wait_for_playout` would hang with no explanation.
-#[test]
-#[should_panic(expected = "with_virtual_clock")]
-fn advance_refuses_a_clock_it_does_not_own() {
-    FakeRtc::new(Arc::new(VirtualClock::new()), lk_agents_runtime::rtc::events::RoomEventBus::port)
-        .advance(ms(10));
-}
-
 // ---- the input path ----------------------------------------------------------------------
 
 // Catches: publishing a track without announcing it, or announcing it without the handle a

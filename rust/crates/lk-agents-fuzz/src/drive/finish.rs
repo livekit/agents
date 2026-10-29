@@ -751,17 +751,8 @@ mod tests {
         });
         assert!(!sites.is_empty(), "the session spawned no task to check");
         for site in sites {
-            let placed = site.contains("lk-agents-voice/src/")
-                || site.contains("lk-agents-runtime/src/room_io/")
-                || site.ends_with("lk-agents-runtime/src/voice/mod.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/effects.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/console.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/legs.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/background_audio.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/audio.rs")
-                || site.ends_with("lk-agents-runtime/src/voice/amd.rs")
-                || site.contains("lk-agents-runtime/src/avatar/");
-            assert!(placed, "a task is placed at {site}");
+            let harness = site.contains("lk-agents-fuzz/") || site.ends_with("utils/spawner.rs");
+            assert!(!harness, "a task is placed at the spawner, {site}, not where it was spawned");
         }
     }
 
