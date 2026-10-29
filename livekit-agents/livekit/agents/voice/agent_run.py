@@ -279,8 +279,7 @@ class TextTools:
         self._queue.append((task_id, out, True))
 
     async def ended(self, ctx: RunContext[Any, Any], output: Any) -> None:
-        # as in the turn: the model reads why, and may retry
-        self._end(ctx, ToolError(output.message) if isinstance(output, ModelRetry) else output)
+        self._end(ctx, output)
 
     def _end(self, ctx: RunContext[Any, Any], output: Any) -> None:
         task_id = self._released.pop(ctx.function_call.call_id)
@@ -1186,8 +1185,6 @@ class AgentRun(Generic[Run_T]):
                     return make_tool_output(fnc_call=fnc_call, output=None, exception=error)
         except TaskAwaited as e:
             return e.task
-        except ModelRetry as e:
-            return make_tool_output(fnc_call=fnc_call, output=None, exception=ToolError(e.message))
         except Exception as e:
             if not isinstance(e, (ToolError, StopResponse)):
                 logger.exception(

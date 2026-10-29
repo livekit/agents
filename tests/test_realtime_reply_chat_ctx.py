@@ -51,6 +51,7 @@ class _FakeActivity(SimpleNamespace):
             _tool_choice=None,
             _agent=SimpleNamespace(),
             _chat_ctx=llm.ChatContext.empty(),
+            _answer_pending_input=lambda msg: None,
             _session=SimpleNamespace(
                 _conversation_item_added=lambda msg: None,
                 _update_agent_state=lambda state: None,

@@ -56,6 +56,10 @@ INTERRUPT = "livekit/interrupt"
 stopping it; absent is ``true``. A delegation sends ``false``."""
 INTERRUPTED = "livekit/interrupted"
 INTERRUPTION_REASON = "livekit/interruptionReason"
+BACKGROUND = "livekit/background"
+"""On a ``working`` task: ``true`` while work its turn let go on runs, ``false`` once it ended."""
+ANSWERED_BY_VOICE = "livekit/answeredByVoice"
+"""``true`` on a text's task the voice call answered: the call's transcription has the answer."""
 MERGED_INTO = "livekit/mergedInto"
 REASON = "livekit/reason"
 QUEUED = "livekit/queued"
@@ -202,7 +206,9 @@ def _add_security(
 
 
 __all__ = [
+    "ANSWERED_BY_VOICE",
     "ANSWER_ARTIFACT_NAME",
+    "BACKGROUND",
     "EXTENSIONS_HEADER",
     "EXTENSION_URI",
     "INTERRUPTED",

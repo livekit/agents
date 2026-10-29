@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterable, Callable
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, LiveSession, NotGivenOr, utils
@@ -11,6 +11,9 @@ from livekit.agents.llm import (
     ChatContext,
     FunctionCall,
     GenerationCreatedEvent,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
+    InputTranscriptionCompleted,
     MessageGeneration,
     RealtimeCapabilities,
     RealtimeModel,
@@ -21,6 +24,9 @@ from livekit.agents.llm.tool_context import Tool, ToolChoice, ToolContext
 from livekit.agents.metrics import RealtimeModelMetrics
 
 from .fake_io import FakeAudioOutput
+
+if TYPE_CHECKING:
+    from .a2a_driver import Reply
 
 
 def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
@@ -194,6 +200,162 @@ class FakeRealtimeModel(RealtimeModel):
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+REPLY_DELAY = 0.05
+"""How long after the person's turn the provider starts its own reply."""
+
+
+class ScriptedRealtimeSession(FakeRealtimeSession):
+    """Answers each ``generate_reply`` and ``say`` at once, and each turn ``hear`` plays, with
+    the model's next scripted reply; it keeps what was said in its context, as a provider does."""
+
+    _realtime_model: ScriptedRealtimeModel
+
+    async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        self._chat_ctx = chat_ctx.copy()
+
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        fut = super().generate_reply(instructions=instructions, tool_choice=tool_choice)
+        said = instructions if isinstance(instructions, str) else ""
+        fut.set_result(self._answer(said, user_initiated=True))
+        return fut
+
+    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
+        fut = super().say(text)
+        assert isinstance(text, str)
+        self._chat_ctx.add_message(role="assistant", content=text)
+        fut.set_result(_generation(text, [], user_initiated=True, hold=None))
+        return fut
+
+    def hear(self, transcript: str) -> None:
+        """The person says ``transcript``: the provider transcribes it and, a moment later,
+        replies on its own."""
+        self.emit("input_speech_started", InputSpeechStartedEvent())
+        self.emit("input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=True))
+        item_id = utils.shortuuid("item_")
+        self._chat_ctx.add_message(role="user", content=transcript, id=item_id)
+        self.emit(
+            "input_audio_transcription_completed",
+            InputTranscriptionCompleted(item_id=item_id, transcript=transcript, is_final=True),
+        )
+        self._reply_later()
+
+    def noise(self) -> None:
+        """A sound on the line the provider takes for speech: no transcript, and a moment later
+        a reply of its own."""
+        self.emit("input_speech_started", InputSpeechStartedEvent())
+        self.emit("input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False))
+        self._reply_later()
+
+    def _reply_later(self) -> None:
+        def reply() -> None:
+            self.emit("generation_created", self._answer("", user_initiated=False))
+
+        asyncio.get_running_loop().call_later(REPLY_DELAY, reply)
+
+    def _answer(self, instructions: str, *, user_initiated: bool) -> GenerationCreatedEvent:
+        model = self._realtime_model
+        ctx = self._chat_ctx.copy()
+        if instructions:
+            ctx.add_message(role="developer", content=instructions)
+        model.requests.append(ctx)
+        reply = next((r for r in model.replies if r.when is None or r.when(ctx)), None)
+        if reply is not None:
+            model.replies.remove(reply)
+        text = reply.content if reply is not None else ""
+        calls = [
+            FunctionCall(call_id=c.call_id, name=c.name, arguments=c.arguments)
+            for c in (reply.tool_calls if reply is not None else [])
+        ]
+        if text:
+            self._chat_ctx.add_message(role="assistant", content=text)
+        self._chat_ctx.insert(calls)
+        hold = reply.hold if reply is not None else None
+        return _generation(text, calls, user_initiated=user_initiated, hold=hold)
+
+
+class ScriptedRealtimeModel(FakeRealtimeModel):
+    """A realtime model that says what ``replies`` script (``a2a_driver.Reply``, taken as
+    ``ScriptedLLM`` takes them) and keeps, in ``requests``, the context of each reply with its
+    instructions as a last ``developer`` message. It leaves the reply to a tool's output to
+    the agent, and with ``say=False`` it has no voice of its own."""
+
+    def __init__(self, *replies: Reply, say: bool = True) -> None:
+        super().__init__(
+            capabilities=fake_capabilities(auto_tool_reply_generation=False, supports_say=say)
+        )
+        self.replies = list(replies)
+        self.requests: list[ChatContext] = []
+
+    @property
+    def active_session(self) -> ScriptedRealtimeSession:
+        session = self.created_sessions[-1]
+        assert isinstance(session, ScriptedRealtimeSession)
+        return session
+
+    def session(self, *, turn_detection_disabled: bool = False) -> ScriptedRealtimeSession:
+        sess = ScriptedRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
+        self.created_sessions.append(sess)
+        return sess
+
+
+_held: set[asyncio.Task[object]] = set()
+
+
+def _generation(
+    text: str, calls: list[FunctionCall], *, user_initiated: bool, hold: asyncio.Event | None
+) -> GenerationCreatedEvent:
+    """A generation of ``text`` with a short audio of it, then ``calls``; complete at once, or
+    under way until ``hold`` is set."""
+    message_ch = utils.aio.Chan[MessageGeneration]()
+    function_ch = utils.aio.Chan[FunctionCall]()
+    text_ch = utils.aio.Chan[str]()
+    audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+    modalities: asyncio.Future[list[Literal["text", "audio"]]] = asyncio.Future()
+    modalities.set_result(["audio", "text"])
+    if text:
+        message_ch.send_nowait(
+            MessageGeneration(
+                message_id=utils.shortuuid("msg_"),
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        text_ch.send_nowait(text)
+        audio_ch.send_nowait(_audio_frame(0.1))
+    for call in calls:
+        function_ch.send_nowait(call)
+
+    def end() -> None:
+        text_ch.close()
+        audio_ch.close()
+        message_ch.close()
+        function_ch.close()
+
+    def ended(task: asyncio.Task[object]) -> None:
+        _held.discard(task)
+        end()
+
+    if hold is None:
+        end()
+    else:
+        task: asyncio.Task[object] = asyncio.create_task(hold.wait())
+        _held.add(task)
+        task.add_done_callback(ended)
+    return GenerationCreatedEvent(
+        message_stream=message_ch,
+        function_stream=function_ch,
+        user_initiated=user_initiated,
+        response_id=utils.shortuuid("resp_"),
+    )
 
 
 _SAMPLE_RATE = 24000

@@ -267,7 +267,7 @@ async def test_a_nested_experts_question_is_answered_through_each_task(
     assert len(model_of(desk_agent).requests) == len(model_of(first).requests) == 1
 
 
-@pytest.mark.rule("R32", "R40")
+@pytest.mark.rule("R32", "R40", "R38", "B37")
 async def test_on_a_call_the_answer_to_an_experts_question_continues_its_task(
     expert: Callable[..., A2ADelegate],
 ) -> None:

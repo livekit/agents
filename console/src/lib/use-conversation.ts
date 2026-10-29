@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { A2AClient, interpret, uuid } from "./a2a";
 import { HttpError, createSession, getConfig, getGrant, getHistory, listSessions, nameSession } from "./api";
 import { listExamples, sameExample, type Example } from "./examples";
@@ -97,8 +97,10 @@ export function toolUpdate(output: string): string | null | undefined {
  * that failed under the turn. A session that no longer exists is not a
  * fault at all: it is dropped and the page starts a new conversation,
  * quietly, and `onSessionLost` lets the room close what it had opened for it.
+ * `inCall` says a call is connected: a text's answer the call spoke is the
+ * call's transcription, not a bubble of its own.
  */
-export function useConversation({ onSessionLost }: { onSessionLost?: () => void } = {}) {
+export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () => void; inCall?: RefObject<boolean> } = {}) {
   const [config, setConfig] = useState<ConsoleConfig | null>(null);
   const [grant, setGrant] = useState<Grant | null>(null);
   /** Every example the API knows, and the one this conversation talks to. */
@@ -355,6 +357,11 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
                 });
                 break;
               case "artifact":
+                /* During a call the answer waits for the end: the call may have spoken it. */
+                if (inCall?.current && !reply) {
+                  artifactText = event.append ? artifactText + event.text : event.text || artifactText;
+                  break;
+                }
                 if (!reply) reply = append({ kind: "agent", text: "", taskId: taskId ?? undefined, streaming: true });
                 patch(reply, (entry) =>
                   entry.kind === "agent"
@@ -369,10 +376,11 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
                 write(PENDING_KEY, null);
                 /* The turn's delegation, if any, is over with it. */
                 setEntries((list) => list.map((entry) => (entry.kind === "delegation" && entry.endedAt === undefined ? { ...entry, endedAt: Date.now() } : entry)));
-                if (artifactText && !reply) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
-                if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
                 /* The plan's spelling of the A2A states: input-required, not INPUT_REQUIRED. */
                 const state = event.state.replace("TASK_STATE_", "").toLowerCase().replace(/_/g, "-");
+                const spoken = event.meta.answeredByVoice === true && inCall?.current;
+                if (artifactText && !reply && !spoken) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
+                if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
                 const meta = Object.entries(event.meta)
                   .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
                   .join(" ");
@@ -406,7 +414,7 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
         void settleDelegations();
       }
     },
-    [append, grant, name, patch, refreshSessions, setSession, settleDelegations],
+    [append, grant, inCall, name, patch, refreshSessions, setSession, settleDelegations],
   );
 
   const send = useCallback(

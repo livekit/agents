@@ -261,10 +261,81 @@ async def door(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., D
         await d.http.aclose()
 
 
+class StreamedASGI(httpx.AsyncBaseTransport):
+    """An in-process ASGI app whose response body reaches the client as it is sent, as from a
+    server: ``httpx.ASGITransport`` holds it to its end, so an expert's progress would arrive
+    only with its answer."""
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": request.method,
+            "headers": [(k.lower(), v) for (k, v) in request.headers.raw],
+            "scheme": request.url.scheme,
+            "path": request.url.path,
+            "raw_path": request.url.raw_path.split(b"?")[0],
+            "query_string": request.url.query,
+            "server": (request.url.host, request.url.port),
+            "client": ("127.0.0.1", 123),
+            "root_path": "",
+        }
+        started: asyncio.Future[tuple[int, Any]] = asyncio.get_running_loop().create_future()
+        chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
+        closed = asyncio.Event()
+        sent = False
+
+        async def receive() -> dict[str, Any]:
+            nonlocal sent
+            if sent:
+                await closed.wait()
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: Mapping[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                started.set_result((message["status"], message.get("headers", [])))
+            elif message["type"] == "http.response.body":
+                if message.get("body"):
+                    chunks.put_nowait(message["body"])
+                if not message.get("more_body", False):
+                    chunks.put_nowait(None)
+
+        async def run() -> None:
+            try:
+                await self._app(scope, receive, send)
+            except Exception as e:
+                if not started.done():
+                    started.set_exception(e)
+            finally:
+                chunks.put_nowait(None)
+
+        app = asyncio.create_task(run())
+
+        class Body(httpx.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                while (chunk := await chunks.get()) is not None:
+                    yield chunk
+
+            async def aclose(self) -> None:
+                closed.set()
+                await app
+
+        status, headers = await started
+        return httpx.Response(status, headers=headers, stream=Body())
+
+
 @pytest.fixture
 async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., A2ADelegate]]:
-    """``expert(handler, name=, announce=, tool=)``: an ``A2ADelegate`` to an expert's door, its
-    own lane, on the same store; ``tool`` names its tool."""
+    """``expert(handler, name=, announce=, tool=, streamed=)``: an ``A2ADelegate`` to an
+    expert's door, its own lane, on the same store; ``tool`` names its tool, and ``streamed``
+    hands the expert's progress on as it is made."""
     clients: list[httpx.AsyncClient] = []
     delegates: list[A2ADelegate] = []
 
@@ -273,6 +344,7 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
         name: str = EXPERT,
         announce: bool = True,
         tool: str | None = None,
+        streamed: bool = False,
         **kw: Any,
     ) -> A2ADelegate:
         server = AgentServer(
@@ -280,9 +352,10 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
         )
         kw.setdefault("description", "Answers what the front desk cannot.")
         server.a2a_session(endpoint=name, **kw)(handler)
+        app = server.http.app
         clients.append(
             httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=server.http.app),
+                transport=StreamedASGI(app) if streamed else httpx.ASGITransport(app=app),
                 base_url="http://experts.test",
                 timeout=30.0,
             )

@@ -83,6 +83,7 @@ ignored.
 | `livekit/mergedInto`         | the final `TaskStatusUpdateEvent` of a `completed` task | the server | string: a task id |
 | `livekit/queued`             | a `working` task | the server | `true`: its question waits, unshown, behind the one in front of the person; asked when that one is answered |
 | `livekit/background`         | a `working` `TaskStatusUpdateEvent` | the server | `true`: the task's turn ended and a tool of it runs on in the background: its updates are `working` frames at once, its end is delivered to the task. `false` once all of it ended |
+| `livekit/answeredByVoice`    | a task the thread's voice call answered | the server | `true`: the call's transcription has the answer; set on every status update of the task |
 | `livekit/verbatim`           | a text `Part` of a `working` status message, of the answer artifact, or of an `input-required` status message | the server | `true`: this part reaches the person exactly as written; the agent facing them words every other part |
 
 ### Exact text

@@ -109,10 +109,11 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from .._generated.storage import InboxRow
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
-    from ..storage.live import LiveLane
+    from ..storage.live import LiveLane, TextAnswer
     from ..storage.resolve import Thread
     from .transcription.text_transforms import TextTransforms
 
@@ -734,6 +735,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._thread = thread
         # the agent's lane on the storage, opened at start() (storage/live.py)
         self._live_lane: LiveLane | None = None
+        # the one take of the lane in flight, or the last: the history it reloaded, if it moved
+        self._lane_turn: asyncio.Future[ChatContext | None] | None = None
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
@@ -1369,12 +1372,28 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
+                from ..storage.live import OpenQuestion
+
+                # the questions the call leaves open stay on its lane for the next door
+                left = [
+                    OpenQuestion(
+                        q.transition.question,
+                        q.transition.verbatim,
+                        q.output,
+                        q.transition._answer_ref,
+                    )
+                    for q in (self._activity._questions if self._activity is not None else [])
+                    if q.row is None
+                ]
                 await self._teardown_activity(reason=reason, drain=drain)
 
                 self._started = False
 
                 if self._live_lane is not None:
-                    await self._live_lane.close()
+                    # cancelling the take would leave its acquire's lease taken
+                    if self._lane_turn is not None:
+                        await self._lane_turn
+                    await self._live_lane.close(left)
                     self._live_lane = None
 
                 self.emit("close", CloseEvent(error=error, reason=reason))
@@ -1923,6 +1942,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent_name=thread.agent_name or agent.id,
             history=self._chat_ctx,
             state=self._state,
+            live=thread.call_holds_lane,
+            on_texts=self._answer_texts,
         )
         self._state = await self._live_lane.open()
 
@@ -1932,6 +1953,38 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 ev.speech_handle.add_done_callback(lambda _: lane.turn_ended())
 
         self.on("speech_created", on_speech_created)
+
+    async def _answer_texts(self, rows: list[InboxRow]) -> TextAnswer:
+        """Texts that arrived during the call under ``live``, one turn of it: the model reads them
+        at once, and their answer is what the call said in that turn, cut off or not. While work
+        the turn let go on runs, the second is what the call says when it ends."""
+        texts = [
+            str(part.get("text", ""))
+            for row in rows
+            if isinstance(row.message, dict)
+            for part in row.message.get("parts", [])
+            if isinstance(part, dict) and part.get("text")
+        ]
+        handle = self.generate_reply(user_input="\n".join(texts))
+        await handle
+        said = (
+            "\n".join(
+                t
+                for i in handle.chat_items
+                if i.type == "message" and i.role == "assistant" and (t := i.text_content)
+            )
+            or None
+        )
+        replies = list(handle._background_tool_replies.values())
+        if not replies:
+            return said, None, handle.interrupted
+
+        async def told() -> str | None:
+            # one reply can tell several tools' results
+            messages = {m.id: m for reply in await asyncio.gather(*replies) for m in reply}
+            return "\n".join(t for m in messages.values() if (t := m.text_content)) or None
+
+        return said, asyncio.ensure_future(told()), False
 
     def _continued_chat_ctx(self) -> llm.ChatContext:
         """The history a new activity continues: the current activity's, or the session's.
@@ -2422,13 +2475,44 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
         if message.role == "user" and self._live_lane is not None:
             # the person's turn ended: the lane is held until the reply is committed
-            self._live_lane.turn_started()
+            self._take_lane()
         if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
                 extra={"role": message.role, "lk.pii.text": text},
             )
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    def _take_lane(self) -> asyncio.Future[ChatContext | None]:
+        """Takes the lane for the reply; when a text turn moved it, the agent's context gets the
+        lane's new items, each item it had unchanged, and the result is the stored history.
+
+        Outside ``live`` a realtime model reads them from its next reply on: the provider
+        usually starts the current one before the acquire returns.
+        """
+        lane = self._live_lane
+        assert lane is not None
+
+        async def take() -> ChatContext | None:
+            from ..storage.live import merge_history
+
+            try:
+                stored = await lane.turn_started()
+                activity = self._activity
+                # a closing activity gets no history: the call's lane commits what it said
+                if stored is not None and activity is not None and not self._closing:
+                    chat_ctx = activity.chat_ctx.copy()
+                    merge_history(chat_ctx, stored, turns_only=True)
+                    await activity.update_chat_ctx(chat_ctx)
+            except Exception:
+                logger.exception("the voice turn could not take its lane")
+                return None
+            return stored
+
+        if self._lane_turn is not None and not self._lane_turn.done():
+            return self._lane_turn
+        self._lane_turn = asyncio.ensure_future(take())
+        return self._lane_turn
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         for item in items:
