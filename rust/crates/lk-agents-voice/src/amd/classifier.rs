@@ -885,6 +885,14 @@ impl lk_agents_abi::voice::amd::AmdFunctions for AmdRules {
     ) -> Duration {
         resolve_max_endpointing_delay(provided, activity, MAX_ENDPOINTING_DELAY)
     }
+
+    fn amd_prediction_is_human(prediction: lk_agents_abi::voice::amd::AmdPrediction) -> bool {
+        prediction.is_human()
+    }
+
+    fn amd_prediction_is_machine(prediction: lk_agents_abi::voice::amd::AmdPrediction) -> bool {
+        prediction.is_machine()
+    }
 }
 
 /// The model tools used by answering-machine classification.

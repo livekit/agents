@@ -75,14 +75,6 @@ pub trait InferenceModels {
     #[host(function)]
     fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, InvalidOption>;
 
-    /// `AMDPredictionEvent.is_human` for a category's wire value.
-    #[host(function)]
-    fn amd_category_is_human(category: String) -> Result<bool, InvalidOption>;
-
-    /// `AMDPredictionEvent.is_machine` for a category's wire value.
-    #[host(function)]
-    fn amd_category_is_machine(category: String) -> Result<bool, InvalidOption>;
-
     /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
     /// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
     /// `reasoning`.

@@ -40,8 +40,10 @@ impl AmdCategory {
     }
 }
 
-/// A closed set of the reference's five call sites.
+/// A closed set of the reference's five call sites. The wire string, not the variant name, crosses:
+/// public API (`ATTR_AMD_REASON`, the job tagger).
 // `from_wire` is `None` rather than a fallback: `reason` is public API.
+#[crate::host(string)]
 #[crate::host(wire_strs(msg = format!("unknown amd reason {s:?}")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AmdReason {
@@ -56,15 +58,12 @@ pub enum AmdReason {
     ParticipantMissing,
 }
 
-// The wire string, not the variant name: public API (`ATTR_AMD_REASON`, the job tagger).
-#[cfg(feature = "python")]
-crate::python::into_host_str!(AmdReason, |v| v.as_str());
-
 // `classifier.py:36`. Also the `amd_result` session event.
 #[crate::host(record(
     module = "amd",
     name = "AMDPredictionEvent",
     emit,
+    extract,
     constant(type = "amd_prediction")
 ))]
 #[python(property(name = "is_human", ret = "bool"), property(name = "is_machine", ret = "bool"))]
@@ -185,6 +184,12 @@ pub trait AmdFunctions {
         provided: Option<Duration>,
         activity: Option<Duration>,
     ) -> Duration;
+    /// `AMDPredictionEvent.is_human`.
+    #[host(function)]
+    fn amd_prediction_is_human(prediction: AmdPrediction) -> bool;
+    /// `AMDPredictionEvent.is_machine`.
+    #[host(function)]
+    fn amd_prediction_is_machine(prediction: AmdPrediction) -> bool;
 }
 
 // --- the user's tuning, as the host takes it ---------------------------------------------------

@@ -6,7 +6,6 @@ mod detector;
 
 pub use detector::{
     DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL, EVALUATED_LLM_MODELS, EVALUATED_STT_MODELS,
-    auto_select_models, category_is_human, category_is_machine, is_evaluated_model,
-    is_evaluated_model_of_kind,
+    auto_select_models, is_evaluated_model, is_evaluated_model_of_kind,
 };
 pub use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdCategory, AmdPrediction, AmdReason};

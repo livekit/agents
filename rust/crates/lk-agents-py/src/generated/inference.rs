@@ -118,22 +118,6 @@ pub fn amd_is_evaluated_model(model: ::std::string::String, kind: ::std::string:
     Ok(out)
 }
 
-/// `AMDPredictionEvent.is_human` for a category's wire value.
-#[pyfunction]
-#[pyo3(signature = (category))]
-pub fn amd_category_is_human(category: ::std::string::String) -> PyResult<bool> {
-    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_category_is_human(category).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
-}
-
-/// `AMDPredictionEvent.is_machine` for a category's wire value.
-#[pyfunction]
-#[pyo3(signature = (category))]
-pub fn amd_category_is_machine(category: ::std::string::String) -> PyResult<bool> {
-    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_category_is_machine(category).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
-}
-
 /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
 /// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
 /// `reasoning`.

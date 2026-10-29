@@ -1,8 +1,6 @@
 //! The provider half of `AMD`: model selection. The classifier machine and the room wait live in
 //! `lk_agents_voice::amd`.
 
-use lk_agents_abi::voice::amd::AmdCategory;
-
 pub use lk_agents_abi::voice::amd::{
     DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL, EVALUATED_LLM_MODELS, EVALUATED_STT_MODELS,
 };
@@ -29,21 +27,6 @@ pub fn is_evaluated_model_of_kind(model: &str, kind: &str) -> Result<bool, Strin
         other => return Err(format!("unknown model kind {other:?}")),
     };
     Ok(is_evaluated_model(model, table))
-}
-
-/// An [`AmdCategory`] by its wire value; an unknown one is refused by name.
-fn parse_category(category: &str) -> Result<AmdCategory, String> {
-    AmdCategory::from_wire(category).ok_or_else(|| format!("unknown AMD category {category:?}"))
-}
-
-/// `AMDPredictionEvent.is_human`, over [`AmdCategory::is_human`].
-pub fn category_is_human(category: &str) -> Result<bool, String> {
-    Ok(parse_category(category)?.is_human())
-}
-
-/// `AMDPredictionEvent.is_machine`, over [`AmdCategory::is_machine`].
-pub fn category_is_machine(category: &str) -> Result<bool, String> {
-    Ok(parse_category(category)?.is_machine())
 }
 
 /// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).

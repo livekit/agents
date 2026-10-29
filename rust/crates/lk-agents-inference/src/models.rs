@@ -88,14 +88,6 @@ impl InferenceModels for Models {
         crate::amd::is_evaluated_model_of_kind(&model, &kind).map_err(InvalidOption)
     }
 
-    fn amd_category_is_human(category: String) -> Result<bool, InvalidOption> {
-        crate::amd::category_is_human(&category).map_err(InvalidOption)
-    }
-
-    fn amd_category_is_machine(category: String) -> Result<bool, InvalidOption> {
-        crate::amd::category_is_machine(&category).map_err(InvalidOption)
-    }
-
     fn llm_unsupported_params(
         model: String,
         has_tools: bool,

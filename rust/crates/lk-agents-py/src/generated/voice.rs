@@ -33,6 +33,24 @@ pub fn amd_resolve_max_endpointing_delay<'py>(py: Python<'py>, provided: Option<
     Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(out.as_secs_f64(), py)?)
 }
 
+/// `AMDPredictionEvent.is_human`.
+#[pyfunction]
+#[pyo3(signature = (prediction))]
+pub fn amd_prediction_is_human(prediction: Bound<'_, PyAny>) -> PyResult<bool> {
+    let prediction = crate::generated::records::amd::a_m_d_prediction_event_from_py(&prediction)?;
+    let out = <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_prediction_is_human(prediction);
+    Ok(out)
+}
+
+/// `AMDPredictionEvent.is_machine`.
+#[pyfunction]
+#[pyo3(signature = (prediction))]
+pub fn amd_prediction_is_machine(prediction: Bound<'_, PyAny>) -> PyResult<bool> {
+    let prediction = crate::generated::records::amd::a_m_d_prediction_event_from_py(&prediction)?;
+    let out = <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_prediction_is_machine(prediction);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 type DataStreamAudioOutputImpl = <crate::Selected as super::Implementations>::DataStreamAudioOutput;
 

@@ -198,8 +198,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::min_reasoning_effort, m)?)?;
     m.add_function(wrap_pyfunction!(inference::amd_auto_select_models, m)?)?;
     m.add_function(wrap_pyfunction!(inference::amd_is_evaluated_model, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::amd_category_is_human, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::amd_category_is_machine, m)?)?;
     m.add_function(wrap_pyfunction!(inference::llm_unsupported_params, m)?)?;
     m.add_function(wrap_pyfunction!(inference::eot_select, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_resolve_vad_for_model, m)?)?;
@@ -342,6 +340,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<vad::InferenceVadStream>()?;
     m.add_function(wrap_pyfunction!(voice::amd_constants, m)?)?;
     m.add_function(wrap_pyfunction!(voice::amd_resolve_max_endpointing_delay, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::amd_prediction_is_human, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::amd_prediction_is_machine, m)?)?;
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;
     m.add_class::<voice::AvatarRunner>()?;

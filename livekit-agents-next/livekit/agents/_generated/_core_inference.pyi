@@ -61,12 +61,6 @@ def amd_auto_select_models(livekit_url: str, api_key: str, api_secret: str) -> b
 def amd_is_evaluated_model(model: str, kind: str) -> bool:
     """Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table."""
 
-def amd_category_is_human(category: str) -> bool:
-    """`AMDPredictionEvent.is_human` for a category's wire value."""
-
-def amd_category_is_machine(category: str) -> bool:
-    """`AMDPredictionEvent.is_machine` for a category's wire value."""
-
 def llm_unsupported_params(
     model: str,
     *,

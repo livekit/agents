@@ -48,7 +48,7 @@ from .._core import (
     _core_VoiceStore,
 )
 from ..types import NotGivenOr
-from .amd import AmdConstants
+from .amd import AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
@@ -70,6 +70,12 @@ def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | 
     else the default. `provided` is `None` only when the key was absent: an explicit default
     still beats a disagreeing activity.
     """
+
+def amd_prediction_is_human(prediction: AMDPredictionEvent) -> bool:
+    """`AMDPredictionEvent.is_human`."""
+
+def amd_prediction_is_machine(prediction: AMDPredictionEvent) -> bool:
+    """`AMDPredictionEvent.is_machine`."""
 
 class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""

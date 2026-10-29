@@ -1015,12 +1015,26 @@ pub mod amd {
     static A_M_D_PREDICTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
+    pub fn a_m_d_prediction_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::amd::AmdPrediction> {
+        let py = obj.py();
+            if !obj.is_instance(A_M_D_PREDICTION_EVENT.import(py, "livekit.agents._generated.amd", "AMDPredictionEvent")?)? {
+                return Err(super::not_a(obj, "AMDPredictionEvent"));
+            }
+            Ok(::lk_agents_abi::voice::amd::AmdPrediction {
+                speech_duration: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "speech_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "AMDPredictionEvent.speech_duration").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("AMDPredictionEvent.speech_duration: {e}")))))?,
+                category: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "category", |v| v.extract::<::lk_agents_abi::voice::amd::AmdCategory>().map_err(::std::convert::Into::<PyErr>::into))?,
+                reason: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "reason", |v| v.extract::<::lk_agents_abi::voice::amd::AmdReason>().map_err(::std::convert::Into::<PyErr>::into))?,
+                transcript: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "transcript", |v| v.extract::<::std::string::String>())?,
+                delay: ::lk_agents_abi::python::attr_with(obj, "AMDPredictionEvent", "delay", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "AMDPredictionEvent.delay").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("AMDPredictionEvent.delay: {e}")))))?,
+            })
+    }
+
     pub fn a_m_d_prediction_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::amd::AmdPrediction) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::amd::AmdPrediction { speech_duration, category, reason, transcript, delay } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration.as_secs_f64(), py)?)?;
             kwargs.set_item("category", ::pyo3::IntoPyObjectExt::into_bound_py_any(category, py)?)?;
-            kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason.as_str(), py)?)?;
+            kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
             kwargs.set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
             kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay.as_secs_f64(), py)?)?;
             crate::host::construct(A_M_D_PREDICTION_EVENT.import(py, "livekit.agents._generated.amd", "AMDPredictionEvent")?.as_any(), (), Some(&kwargs))
