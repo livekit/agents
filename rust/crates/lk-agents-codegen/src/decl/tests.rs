@@ -372,7 +372,7 @@ fn mutable_classes_and_functions_are_their_own_forms() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
         llm.contains("#[pyclass(name = \"Parser\"")
-            && llm.contains("pub struct Parser(pub(crate) ParserImpl);"),
+            && llm.contains("pub struct Parser(ParserImpl);"),
         "{llm}"
     );
     assert!(
