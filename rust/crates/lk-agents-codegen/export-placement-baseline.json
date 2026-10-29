@@ -1,6 +1,5 @@
 [
   "host|rust/crates/lk-agents-voice/src/agent_activity/options.rs|fn resolve_interruption_detector_for_host|lk_agents_abi :: host (export (name = \"resolve_interruption_detector\" , kw_only))",
-  "host|rust/crates/lk-agents-voice/src/agent_activity/options.rs|fn resolve_recording_options_for_host|lk_agents_abi :: host (export (name = \"resolve_recording_options\"))",
   "host|rust/crates/lk-agents-voice/src/agent_activity/options.rs|fn rt_server_turn_detection_for_host|lk_agents_abi :: host (export (name = \"rt_server_turn_detection\" , kw_only))",
   "host|rust/crates/lk-agents-voice/src/agent_activity/options.rs|impl  for HostOptions::new|host (new)",
   "host|rust/crates/lk-agents-voice/src/agent_activity/options.rs|impl  for HostOptions::resolved|host (method)",

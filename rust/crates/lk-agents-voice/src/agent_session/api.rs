@@ -2,9 +2,7 @@
 //! the host's arguments, opened at `start()`, commanded, and closed; with the host-side traits and
 //! errors it speaks through. Its host methods are in `host`.
 
-use crate::agent_activity::options::{
-    RECORDING_ALL_OFF, RecordingRequest, records_anything, resolve_recording_options,
-};
+use crate::agent_activity::options::{RECORDING_ALL_OFF, RECORDING_ALL_ON, records_anything};
 use crate::agent_session::builder::DriverBuilder;
 use crate::agent_session::commands::{
     AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText,
@@ -624,59 +622,27 @@ impl SessionApi {
     }
 }
 
-pub use lk_agents_abi::voice::session_effects::NotPrimary;
-
 /// The session's start planning (`_core.plan_session_start`).
 pub struct SessionStartPlans;
 
 impl lk_agents_abi::voice::session_effects::SessionStart for SessionStartPlans {
+    /// The job's recording setting, held by its primary session only: a second session in the
+    /// job neither records nor hosts.
     fn plan_session_start(
         job_default: bool,
         has_job_context: bool,
         another_session_is_primary: bool,
-    ) -> Result<StartPlan, NotPrimary> {
-        plan_session_start(
-            None,
-            job_default,
-            has_job_context,
-            another_session_is_primary,
-            None,
-            false,
-        )
-    }
-}
-
-/// `{recording, is_primary, hosting, records}`; an explicit request a second session cannot
-/// honour is refused.
-pub fn plan_session_start(
-    requested: Option<RecordingRequest>,
-    job_default: bool,
-    has_job_context: bool,
-    another_session_is_primary: bool,
-    session_host: Option<bool>,
-    text_only: bool,
-) -> Result<StartPlan, NotPrimary> {
-    // The reference's order: absent `record` takes the job's setting; `text_only` forces audio off
-    // after; primacy is claimed unless held; a non-primary recorder is refused if asked, downgraded
-    // if defaulted.
-    let mut recording =
-        resolve_recording_options(requested.unwrap_or(RecordingRequest::All(job_default)));
-    if text_only {
-        recording.audio = false;
-    }
-    let is_primary = !has_job_context || !another_session_is_primary;
-    if !is_primary && records_anything(&recording) {
-        if requested.is_some() {
-            return Err(NotPrimary);
+    ) -> StartPlan {
+        let is_primary = !has_job_context || !another_session_is_primary;
+        let recording =
+            if job_default && is_primary { RECORDING_ALL_ON } else { RECORDING_ALL_OFF };
+        StartPlan {
+            recording,
+            is_primary,
+            hosting: is_primary,
+            records: records_anything(&recording),
         }
-        recording = RECORDING_ALL_OFF;
     }
-    Ok(StartPlan {
-        recording,
-        is_primary,
-        hosting: is_primary && session_host.unwrap_or(true),
-        records: records_anything(&recording),
-    })
 }
 
 // A binding is argument extraction and serialisation only: `host_new` assembles, `start()` opens

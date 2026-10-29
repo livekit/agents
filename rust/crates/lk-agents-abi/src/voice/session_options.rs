@@ -678,26 +678,6 @@ pub struct InterruptionGateVerdict {
 // Declared in `telemetry::report`; re-exported so the generated `session_options` module resolves.
 pub use crate::telemetry::report::RecordingOptions;
 
-/// The sparse `RecordingOptions` for `start(record={...})`, merged onto all-on:
-/// `record={"traces": False}` is everything except traces.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(extract, from_items, default)]
-pub struct RecordingOverrides {
-    pub audio: Option<bool>,
-    pub traces: Option<bool>,
-    pub logs: Option<bool>,
-    pub transcript: Option<bool>,
-    pub redaction: Option<bool>,
-}
-
-/// `start(record=True | False | {...})`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(extract, untagged)]
-pub enum RecordingRequest {
-    All(bool),
-    Granular(RecordingOverrides),
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Instructions {
     pub common: String,

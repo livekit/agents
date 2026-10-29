@@ -66,21 +66,6 @@ fn an_unhonourable_mode_falls_as_auto() {
     );
 }
 
-// Catches: `record={...}` merged onto all-off instead of all-on, so `{"traces": False}` records
-// nothing.
-#[test]
-fn a_granular_record_merges_onto_all_on() {
-    let traces_off =
-        resolve_recording_options_for_host(RecordingRequest::Granular(RecordingOverrides {
-            traces: Some(false),
-            ..Default::default()
-        }));
-    assert!(!traces_off.traces && traces_off.audio && traces_off.logs && traces_off.transcript);
-    assert!(records_anything(&traces_off));
-    assert!(!records_anything(&resolve_recording_options(RecordingRequest::All(false))));
-    assert!(records_anything(&resolve_recording_options(RecordingRequest::All(true))));
-}
-
 fn gate(
     allow_interruptions: bool,
     asked: Option<InterruptionMode>,

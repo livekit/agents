@@ -15,15 +15,6 @@ pub struct StartPlan {
     pub records: bool,
 }
 
-/// A second session asked to record, explicitly. The reference raises with how to proceed.
-#[crate::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "Only one `AgentSession` can be the primary at a time. If you want to ignore primary \
-     designation, use session.start(record=False)."
-)]
-pub struct NotPrimary;
-
 /// How a job's session starts, decided before its loop opens.
 #[crate::host(functions)]
 pub trait SessionStart {
@@ -34,7 +25,7 @@ pub trait SessionStart {
         #[host(kw)] job_default: bool,
         has_job_context: bool,
         another_session_is_primary: bool,
-    ) -> Result<StartPlan, NotPrimary>;
+    ) -> StartPlan;
 }
 
 /// What a filler's callable answered: nothing, its text to say, or anything else (a speech it

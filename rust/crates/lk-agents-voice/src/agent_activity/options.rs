@@ -11,8 +11,7 @@ use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
     DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive, HostValue,
-    InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions, RecordingOverrides,
-    RecordingRequest, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
+    InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
     ResolvedSessionOptions, ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet,
     TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
 };
@@ -429,25 +428,6 @@ pub fn resolved_session_options(
     }
 }
 
-/// `_resolve_recording_options`. A dict merges onto **all-on** (`{"traces": False}` is everything
-/// but traces), while `record=False` records nothing.
-pub fn resolve_recording_options(record: RecordingRequest) -> RecordingOptions {
-    match record {
-        RecordingRequest::All(true) => RECORDING_ALL_ON,
-        RecordingRequest::All(false) => RECORDING_ALL_OFF,
-        RecordingRequest::Granular(o) => {
-            let base = RECORDING_ALL_ON;
-            RecordingOptions {
-                audio: o.audio.unwrap_or(base.audio),
-                traces: o.traces.unwrap_or(base.traces),
-                logs: o.logs.unwrap_or(base.logs),
-                transcript: o.transcript.unwrap_or(base.transcript),
-                redaction: o.redaction.unwrap_or(base.redaction),
-            }
-        }
-    }
-}
-
 /// Does a *resolved* `RecordingOptions` record anything? `redaction` is not a capture key.
 pub fn records_anything(options: &RecordingOptions) -> bool {
     options.audio || options.traces || options.logs || options.transcript
@@ -658,13 +638,6 @@ pub fn aec_warmup_layer(duration: Option<f64>) -> AgentSessionOptions {
     let mut p = AgentSessionOptions::default();
     p.timers.aec_warmup = Maybe::Given(duration.map(secs));
     p
-}
-
-/// `voice/agent_session.py::_resolve_recording_options`. A dict merges onto all-on, so
-/// `record={"traces": False}` means everything except traces.
-#[lk_agents_abi::host(export(name = "resolve_recording_options"))]
-pub fn resolve_recording_options_for_host(record: RecordingRequest) -> RecordingOptions {
-    resolve_recording_options(record)
 }
 
 /// `AgentActivity._rt_turn_detection_enabled`: [`server_turn_detection_enabled`] from the host's

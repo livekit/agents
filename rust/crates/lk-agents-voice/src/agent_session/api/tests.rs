@@ -250,22 +250,15 @@ fn assembled(
     api.expect("valid native room ports")
 }
 
-// Catches: a second session in one job recording, or hosting the remote session, or a requested
-// recording on it silently dropped instead of refused.
+// Catches: a second session in one job recording, or hosting the remote session.
 #[test]
 fn only_the_primary_session_records_or_hosts() {
-    let plan = |requested, primary_taken, text_only| {
-        plan_session_start(requested, true, true, primary_taken, None, text_only)
-    };
-    let first = plan(None, false, false).unwrap();
+    use lk_agents_abi::voice::session_effects::SessionStart as _;
+    let plan = |primary_taken| SessionStartPlans::plan_session_start(true, true, primary_taken);
+    let first = plan(false);
     assert!(first.is_primary && first.hosting && first.records && first.recording.audio);
-    assert!(!plan(None, false, true).unwrap().recording.audio, "a text-only session records audio");
-    let second = plan(None, true, false).unwrap();
+    let second = plan(true);
     assert!(!second.is_primary && !second.hosting && !second.records);
-    assert!(plan(Some(RecordingRequest::All(true)), true, false).is_err());
-    assert!(plan(Some(RecordingRequest::All(false)), true, false).is_ok());
-    let declined = plan_session_start(None, true, true, false, Some(false), false).unwrap();
-    assert!(declined.is_primary && !declined.hosting);
 }
 
 struct NoRegistry;

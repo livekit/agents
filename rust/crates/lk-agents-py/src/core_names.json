@@ -278,7 +278,6 @@
     "resolve_interruption_detector",
     "resolve_keyterm_detection",
     "resolve_mcp_tool_options",
-    "resolve_recording_options",
     "resolve_ref",
     "rt_server_turn_detection",
     "rtc_wire_names",

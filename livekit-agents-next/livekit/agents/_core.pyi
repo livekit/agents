@@ -107,7 +107,6 @@ from ._generated._core_classes import (
     remove_instructions as remove_instructions,
     resolve_interruption_detector as resolve_interruption_detector,
     resolve_keyterm_detection as resolve_keyterm_detection,
-    resolve_recording_options as resolve_recording_options,
     rt_server_turn_detection as rt_server_turn_detection,
     rtc_wire_names as rtc_wire_names,
     session_messages_topic as session_messages_topic,
