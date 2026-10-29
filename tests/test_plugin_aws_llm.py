@@ -21,6 +21,23 @@ async def _inference_config(model: str, **kwargs: object) -> dict:
     return opts
 
 
+async def test_extra_kwargs_reach_the_converse_request() -> None:
+    instance = BedrockLLM(model="us.anthropic.claude-sonnet-4-6", temperature=0.5)
+    guardrail = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
+    stream = instance.chat(
+        chat_ctx=ChatContext(),
+        extra_kwargs={
+            "guardrailConfig": guardrail,
+            "requestMetadata": {"session": "s1"},
+        },
+    )
+    opts = stream._opts
+    await stream.aclose()
+
+    assert opts["guardrailConfig"] == guardrail
+    assert opts["requestMetadata"] == {"session": "s1"}
+
+
 async def test_temperature_sent_for_supporting_models() -> None:
     config = await _inference_config("us.anthropic.claude-sonnet-4-6", temperature=0.5, top_p=0.9)
 

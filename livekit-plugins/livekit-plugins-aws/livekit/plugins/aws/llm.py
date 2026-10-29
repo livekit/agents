@@ -292,6 +292,10 @@ class LLM(llm.LLM):
         if is_given(self._opts.additional_request_fields):
             opts["additionalModelRequestFields"] = self._opts.additional_request_fields
 
+        # Per-call overrides for any converse_stream parameter (guardrailConfig,
+        # requestMetadata, performanceConfig, ...); they win over the values above.
+        opts.update(extra_kwargs)
+
         return LLMStream(
             self,
             chat_ctx=chat_ctx,
