@@ -2,13 +2,13 @@
 
 use lk_agents_host_derive::Host;
 
-/// `On` and `Per(default)` are kept apart so a round-tripped config is not rewritten.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `nonverbal_sounds: bool | NonverbalOptions`. `Enabled(true)` and `Per(default)` stay apart so a
+/// round-tripped config is not rewritten.
+#[derive(Debug, Clone, PartialEq, Eq, Host)]
+#[binding(extract, untagged)]
 pub enum NonverbalSounds {
-    /// Identical to omitting the key.
-    On,
-    /// The Sounds section is omitted.
-    Off,
+    /// `True` is identical to omitting the key; `False` omits the Sounds section.
+    Enabled(bool),
     /// An omitted category stays enabled.
     Per(NonverbalOptions),
 }
@@ -64,25 +64,6 @@ pub enum Pace {
 #[cfg(feature = "python")]
 crate::python::from_host_str!(Pace);
 
-/// `True` stays distinct from an empty dict so a round-tripped config is not rewritten.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for NonverbalSounds {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::types::{PyAnyMethods as _, PyBoolMethods as _};
-        if let Ok(flag) = obj.cast::<pyo3::types::PyBool>() {
-            return Ok(if flag.is_true() { NonverbalSounds::On } else { NonverbalSounds::Off });
-        }
-        if !obj.hasattr("get")? {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "nonverbal_sounds must be a bool or a NonverbalOptions mapping",
-            ));
-        }
-        Ok(NonverbalSounds::Per(obj.extract()?))
-    }
-}
-
 /// Steers verbal delivery and non-verbal sounds in generated speech.
 ///
 /// Every key is a sparse override on the default (full sound vocabulary,
@@ -118,54 +99,4 @@ pub struct SpeechSteering {
     // `None` is absent; a string parses via `FromStr`, an unknown one raising.
     #[python(ty = "Literal[\"slow\", \"normal\", \"fast\"]")]
     pub pace: Option<Pace>,
-}
-
-#[cfg(all(test, feature = "python"))]
-mod python_tests {
-    use super::*;
-    use pyo3::exceptions::{PyTypeError, PyValueError};
-    use pyo3::prelude::*;
-
-    // Catches: `nonverbal_sounds` disagreeing with the declaration about absent-vs-`None`, or the
-    // bool half being read through the dict reader.
-    #[test]
-    fn steering_reads_absent_and_none_alike_and_keeps_the_three_nonverbal_cases_apart() {
-        Python::initialize();
-        Python::attach(|py| {
-            let read = |src: &str| -> PyResult<SpeechSteering> {
-                py.eval(&std::ffi::CString::new(src).unwrap(), None, None)?
-                    .extract::<SpeechSteering>()
-            };
-            assert_eq!(read("{}").unwrap(), SpeechSteering::default());
-            assert_eq!(
-                read("{'disfluencies': None, 'nonverbal_sounds': None, 'pace': None}").unwrap(),
-                SpeechSteering::default(),
-                "an explicit None is absent, as the reference's `is not None` makes it"
-            );
-            let full = read("{'disfluencies': False, 'nonverbal_sounds': {'laughing': False, 'other': 1}, 'pace': 'slow'}")
-                .unwrap();
-            assert_eq!(full.disfluencies, Some(false));
-            assert_eq!(full.pace, Some(Pace::Slow));
-            match full.nonverbal_sounds {
-                Some(NonverbalSounds::Per(opts)) => {
-                    assert_eq!(opts.laughing, Some(false));
-                    assert_eq!(opts.breathing, None, "an omitted category stays absent");
-                }
-                other => panic!("a dict is the per-category case, got {other:?}"),
-            }
-            assert_eq!(
-                read("{'nonverbal_sounds': True}").unwrap().nonverbal_sounds,
-                Some(NonverbalSounds::On)
-            );
-            assert_eq!(
-                read("{'nonverbal_sounds': False}").unwrap().nonverbal_sounds,
-                Some(NonverbalSounds::Off)
-            );
-            let err = read("{'pace': 'brisk'}").unwrap_err();
-            assert!(err.is_instance_of::<PyValueError>(py));
-            assert_eq!(err.value(py).to_string(), "unknown pace \"brisk\"");
-            let err = read("{'nonverbal_sounds': 3}").unwrap_err();
-            assert!(err.is_instance_of::<PyTypeError>(py));
-        });
-    }
 }

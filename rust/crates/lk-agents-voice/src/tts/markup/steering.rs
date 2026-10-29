@@ -32,8 +32,8 @@ fn steering_removed(
         return Vec::new();
     }
     match nonverbals {
-        None | Some(NonverbalSounds::On) => Vec::new(),
-        Some(NonverbalSounds::Off) => table.iter().flat_map(|(_, l)| l.iter().copied()).collect(),
+        None | Some(NonverbalSounds::Enabled(true)) => Vec::new(),
+        Some(NonverbalSounds::Enabled(false)) => table.iter().flat_map(|(_, l)| l.iter().copied()).collect(),
         Some(NonverbalSounds::Per(flags)) => table
             .iter()
             .filter(|(f, _)| !enabled(flags, *f))

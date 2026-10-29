@@ -466,7 +466,7 @@ fn break_durations_bucket_at_one_second_and_parse_the_way_pythons_float_does() {
 #[test]
 fn silencing_every_sound_removes_the_section_for_each_provider_that_has_one() {
     // Each builder's `if sounds:` guard: all-off must drop the Sounds section.
-    let off = SpeechSteering { nonverbal_sounds: Some(NonverbalSounds::Off), ..Default::default() };
+    let off = SpeechSteering { nonverbal_sounds: Some(NonverbalSounds::Enabled(false)), ..Default::default() };
     for provider in [Provider::Inworld, Provider::Xai, Provider::FishAudio] {
         let on = Markup::from_provider(provider).llm_instructions(None).unwrap();
         let quiet = Markup::from_provider(provider).llm_instructions(Some(&off)).unwrap();
