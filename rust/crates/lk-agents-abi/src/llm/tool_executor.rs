@@ -112,6 +112,7 @@ pub const ASK_IN_OWN_WORDS: &str =
 /// only classifies; the outcome table in `lk-agents-core` decides what it means.
 #[crate::host(record(module = "tool_report", extract, emit))]
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ToolOutcome {
     /// A value the model reads: `text` is a string as written, anything else as its JSON.
     /// `ToolResult(..)` sets `reply_required` and `verbatim`; `more` is what a delegate's

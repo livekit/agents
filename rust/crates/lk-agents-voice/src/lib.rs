@@ -17,6 +17,7 @@ pub mod background_audio;
 pub mod data_plane;
 pub mod endpointing;
 pub mod events;
+pub mod experts;
 pub mod filler_scheduler;
 pub mod generation;
 pub mod io;
