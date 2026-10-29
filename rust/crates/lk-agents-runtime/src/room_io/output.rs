@@ -269,8 +269,6 @@ impl Shared {
             if self.lock().playback.closed() {
                 return;
             }
-            // Summed over waits: a pause can make the source run dry more than once.
-            let mut info = PlaybackInfo::default();
             let segment = self.lock().playback.segment();
             loop {
                 self.wait_until(|s| s.playback.closed() || s.playback.drained()).await;
@@ -281,7 +279,7 @@ impl Shared {
                     }
                     st.source.clone()
                 };
-                let more = match src {
+                let window = match src {
                     Some(src) => {
                         let Some(info) =
                             self.source_result(src.as_ref(), src.wait_for_playout().await)
@@ -292,13 +290,10 @@ impl Shared {
                     }
                     None => PlaybackInfo::default(),
                 };
-                info.played += more.played;
-                info.discarded += more.discarded;
-                if !self.lock().playback.settled(segment, more) {
+                if !self.lock().playback.settled(segment, window) {
                     break;
                 }
-                // A pause holds the finish until the sink plays again or the pause becomes a cut,
-                // unless the pause put audio back; then measure again until nothing is queued.
+                // A pause holds the finish until the sink plays again or the pause becomes a cut.
                 self.wait_until(|s| s.playback.closed() || !s.playback.finish_held()).await;
                 let (drained, src) = {
                     let st = self.lock();
@@ -310,17 +305,20 @@ impl Shared {
                 if !drained {
                     continue;
                 }
-                if let Some(src) = src {
-                    let Some(queued) = self.source_result(src.as_ref(), src.queued_duration())
-                    else {
-                        break;
-                    };
-                    if !queued.is_zero() {
-                        continue;
+                let queued = match src {
+                    Some(src) => {
+                        let Some(queued) = self.source_result(src.as_ref(), src.queued_duration())
+                        else {
+                            break;
+                        };
+                        queued
                     }
-                }
+                    None => Duration::ZERO,
+                };
                 let now = self.clock.now();
-                let reports = self.lock().playback.finish(segment, info, now);
+                let Some(reports) = self.lock().playback.finish(segment, queued, now) else {
+                    continue;
+                };
                 for report in reports {
                     self.report(Some(report));
                 }

@@ -403,6 +403,8 @@ impl Playback {
         self.ledger.dry_at = Some(now.saturating_add(queued));
     }
 
+    /// One `wait_for_playout` window of `segment` drained. False when the segment is no longer
+    /// the one finishing.
     pub fn settled(&mut self, segment: Option<PlaybackSegment>, info: PlaybackInfo) -> bool {
         if self.segment != segment {
             return false;
@@ -412,32 +414,38 @@ impl Playback {
         true
     }
 
+    /// `_wait_for_playout`'s finish over every window settled so far (a pause can make the source
+    /// run dry more than once). `None` while the source still holds `queued` audio: the pause put
+    /// some back, so the watcher waits for playout again.
     pub fn finish(
         &mut self,
         segment: Option<PlaybackSegment>,
-        info: PlaybackInfo,
+        queued: Duration,
         now: Ts,
-    ) -> Vec<PlaybackReport> {
+    ) -> Option<Vec<PlaybackReport>> {
+        if !queued.is_zero() {
+            return None;
+        }
         if self.segment != segment || !self.ready_to_finish() || self.finish_held() {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let interrupted = self.phase == Phase::Cutting;
-        let run = self.ledger.report_run(playhead(info), now, None);
+        let run = self.ledger.report_run(self.ledger.window_base, now, None);
         let mut reports = self.report(run).into_iter().collect::<Vec<_>>();
-        let played = std::mem::take(&mut self.ledger).played;
+        let ledger = std::mem::take(&mut self.ledger);
         self.handed.clear();
         self.phase = Phase::Idle;
         if let Some(segment) = self.segment.take() {
             reports.push(PlaybackReport::Finished {
                 segment,
                 event: PlaybackFinished {
-                    playback_position: played.max(info.played),
+                    playback_position: ledger.played.max(ledger.settled_played),
                     interrupted,
                     synchronized_transcript: None,
                 },
             });
         }
-        reports
+        Some(reports)
     }
 
     pub fn flush(&mut self) -> bool {
