@@ -152,6 +152,33 @@ def test_sent_tokenizer_non_latin_terminators(
     assert tokenizer.tokenize(text=text) == expected
 
 
+TERMINATOR_RUN_CASES = [
+    ("Really?! Yes it is.", ["Really?!", "Yes it is."]),
+    ("Wow!!! That was great.", ["Wow!!!", "That was great."]),
+    ("What?? No way.", ["What??", "No way."]),
+    ('She asked "really?!" and left.', ['She asked "really?!"', "and left."]),
+]
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [basic.SentenceTokenizer(min_sentence_len=1), blingfire.SentenceTokenizer(min_sentence_len=1)],
+)
+@pytest.mark.parametrize("text, expected", TERMINATOR_RUN_CASES)
+def test_sent_tokenizer_terminator_runs(
+    tokenizer: tokenize.SentenceTokenizer, text: str, expected: list[str]
+):
+    assert tokenizer.tokenize(text=text) == expected
+
+
+def test_basic_sent_tokenizer_keeps_terminator_runs_unspaced():
+    # with the default min_sentence_len the pieces were merged back with spaces
+    text = "That is amazing!!! I cannot believe it happened today."
+    assert basic.SentenceTokenizer().tokenize(text=text) == [
+        "That is amazing!!! I cannot believe it happened today."
+    ]
+
+
 async def test_streamed_sent_tokenizer_emits_hindi_before_end_of_input():
     # the first sentence must reach TTS while the LLM is still generating
     stream = blingfire.SentenceTokenizer().stream()
@@ -306,6 +333,46 @@ def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[
     assert tokenizer.tokenize(text=text) == expected
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("好的，我可以帮您。需要提醒吗？", ["好的，", "我可以帮您。", "需要提醒吗？"]),
+        ("はい、できます。", ["はい、", "できます。"]),
+        ("「はい」。わかりました。", ["「はい」。", "わかりました。"]),
+        # spaces still split, and a mark followed by a space adds no empty word
+        (
+            "LiveKit是一个平台， 用于 voice agents",
+            ["LiveKit是一个平台，", "用于", "voice", "agents"],
+        ),
+        # a full-width number keeps its separators, and a sentence ending in one still ends
+        (
+            "お会計は１，０００。会議は１０：３０から。",
+            ["お会計は１，０００。", "会議は１０：３０から。"],
+        ),
+        # a mark that doesn't follow CJK text, e.g. in an SSML attribute, doesn't end a
+        # word, since ElevenLabs rejoins the words of a tag with spaces
+        (
+            'Say <phoneme alphabet="ipa" ph="ni，hao">hello</phoneme>',
+            ["Say", "<phoneme", 'alphabet="ipa"', 'ph="ni，hao">hello</phoneme>'],
+        ),
+    ],
+)
+def test_word_tokenizer_splits_cjk_at_clause_punctuation(text: str, expected: list[str]):
+    tokenizer = basic.WordTokenizer(ignore_punctuation=False)
+    assert tokenizer.tokenize(text=text) == expected
+
+
+async def test_streamed_word_tokenizer_releases_cjk_before_end_of_input():
+    # TTS plugins such as Deepgram send the LLM text through this stream. A CJK reply has
+    # no spaces, so it used to come out only once the whole reply had arrived
+    stream = basic.WordTokenizer(ignore_punctuation=False).stream()
+    stream.push_text("好的，我可以")
+    first = await asyncio.wait_for(anext(stream), timeout=1)
+    assert first.token == "好的，"
+    stream.end_input()
+    assert [ev.token async for ev in stream] == ["我可以"]
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
@@ -396,6 +463,23 @@ async def test_replace_words_async():
 
     replaced = "".join(replaced_chunks)
     assert replaced == REPLACE_EXPECTED
+
+
+async def test_replace_words_matches_keys_across_full_width_punctuation():
+    # replace_words keeps whitespace-only words, so a key spanning a full-width mark
+    # still matches the CJK text it covers
+    replacements = {"你好，世界": "hello"}
+    assert tokenize.utils.replace_words(text="你好，世界", replacements=replacements) == "hello"
+
+    async def _chunks():
+        for chunk in ("你好", "，世", "界"):
+            yield chunk
+
+    replaced = [
+        chunk
+        async for chunk in tokenize.utils.replace_words(text=_chunks(), replacements=replacements)
+    ]
+    assert "".join(replaced) == "hello"
 
 
 PARAGRAPH_TEST_CASES = [

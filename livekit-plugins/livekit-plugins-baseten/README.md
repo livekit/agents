@@ -20,7 +20,7 @@ The STT plugin connects to Baseten's [Whisper Streaming](https://docs.baseten.co
 
 ### Recommended model
 
-[Whisper v3 Turbo – WebSocket](https://www.baseten.co/library/whisper-streaming-large-v3/)
+[Whisper Large V3 Turbo](https://www.baseten.co/library/whisper-large-turbo/) (real-time deployment)
 
 ### Endpoint URL formats
 
@@ -184,7 +184,7 @@ Several defaults follow the selected model, matching each deployment's own:
 | `partial_transcript_interval_s` | `1.0` | `0.5` |
 | `vad_min_silence_duration_ms` | `300` | `500` |
 | `vad_speech_pad_ms` | `30` | `100` |
-| `show_word_timestamps` | on | off (needs `STREAM_ALIGNER=mms` on the deployment) |
+| `show_word_timestamps` | on | off (needs `STREAM_ALIGNER=mms` and `STREAM_ALIGNER_DEVICE=cuda` on the deployment) |
 | `voice` | `tara` | required — a registered clone |
 
 ### Qwen3 TTS voices
