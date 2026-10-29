@@ -2,7 +2,8 @@
 
 use lk_agents_abi::voice::io::{IoError, PlaybackFinished, PlaybackSegment, Result};
 use lk_agents_abi::voice::rtc::{PlaybackInfo, frame_duration};
-use lk_agents_abi::{AudioByteStream, AudioFrame, Ts};
+use lk_agents_abi::{AudioFrame, Ts};
+use lk_agents_media::AudioByteStream;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::time::Duration;

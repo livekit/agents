@@ -10,6 +10,87 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/utils/byte_stream.rs.
+type AudioByteStreamImpl = <crate::Selected as super::Implementations>::AudioByteStream;
+
+fn _extract_audio_byte_stream_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+}
+
+fn _extract_audio_byte_stream_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
+    ::lk_agents_abi::python::number_from_py::<u16>(&obj, "num_channels")
+}
+
+fn _extract_audio_byte_stream_new_samples_per_channel(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "samples_per_channel")).map(Some) }
+}
+
+fn _extract_audio_byte_stream_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
+}
+
+fn _extract_audio_byte_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
+}
+
+/// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
+/// the target) to cut TTS time-to-first-audio.
+#[pyclass(name = "AudioByteStream", module = "livekit.agents.utils.audio")]
+pub struct AudioByteStream(AudioByteStreamImpl);
+
+#[pymethods]
+impl AudioByteStream {
+    /// ``samples_per_channel=None`` means 100 ms, as in the reference.
+    #[new]
+    #[pyo3(signature = (sample_rate, num_channels, samples_per_channel = None, progressive = false))]
+    fn new(#[pyo3(from_py_with = _extract_audio_byte_stream_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_audio_byte_stream_new_num_channels)] num_channels: u16, #[pyo3(from_py_with = _extract_audio_byte_stream_new_samples_per_channel)] samples_per_channel: ::std::option::Option<u32>, progressive: bool) -> PyResult<AudioByteStream> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::new(sample_rate, num_channels, samples_per_channel, progressive);
+        Ok(AudioByteStream(out))
+    }
+
+    /// Buffer ``data`` and emit every whole frame it completes.
+    #[pyo3(signature = (data))]
+    fn push(&mut self, #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::push(&mut self.0, data);
+        Ok(out)
+    }
+
+    /// Public alias of ``push`` in the reference.
+    #[pyo3(signature = (data))]
+    fn write(&mut self, #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::write(&mut self.0, data);
+        Ok(out)
+    }
+
+    /// Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
+    /// for the next push.
+    fn flush(&mut self) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::flush(&mut self.0);
+        Ok(out)
+    }
+
+    /// Seconds of audio waiting for the next frame.
+    #[getter]
+    fn buffered_duration(&self) -> PyResult<f64> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::buffered_duration(&self.0);
+        Ok(out)
+    }
+
+    /// Restart progressive sizing, keeping the buffered audio: after a mid-stream flush, the
+    /// next burst starts with small frames without losing a partial sample.
+    fn reset_progressive(&mut self) -> PyResult<()> {
+        <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::reset_progressive(&mut self.0);
+        Ok(())
+    }
+
+    /// Drop everything buffered and restart progressive sizing (called on interruption, so the
+    /// next word is not a full frame late).
+    fn clear(&mut self) -> PyResult<()> {
+        <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::clear(&mut self.0);
+        Ok(())
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/utils/connection_pool.rs.
 type ConnectionPoolStateImpl = <crate::Selected as super::Implementations>::ConnectionPoolState;
 

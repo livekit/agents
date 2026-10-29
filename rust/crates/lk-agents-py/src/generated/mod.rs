@@ -101,6 +101,7 @@ pub trait Implementations: 'static {
     type EotStream: ::lk_agents_abi::turn::inference::EotStream;
     type InterruptionDetector: ::lk_agents_abi::turn::inference::InterruptionDetector;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
+    type AudioByteStream: ::lk_agents_abi::utils::byte_stream::AudioByteStream;
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
@@ -290,6 +291,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<turn::EotStream>()?;
     m.add_class::<turn::InterruptionDetector>()?;
     m.add_class::<types::_core_ProviderAttempts>()?;
+    m.add_class::<utils::AudioByteStream>()?;
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;
     m.add_class::<utils::MovingAverage>()?;

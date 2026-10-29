@@ -6,6 +6,7 @@
 
 #[cfg(feature = "blingfire")]
 pub mod blingfire;
+pub mod byte_stream;
 pub mod decoder;
 pub mod emitter;
 pub mod error;
@@ -26,6 +27,7 @@ pub mod stream_buffer;
 pub mod wav;
 pub mod workers;
 
+pub use byte_stream::{AudioByteStream, Frame};
 pub use decoder::Decoder;
 pub use error::{CodecError, Result};
 pub use filters::{ExpFilter, MovingAverage};

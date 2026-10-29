@@ -14,12 +14,12 @@ use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, PushAudio, Ts,
     errors::ApiError,
     llm::realtime::{Event, Interrupt, RealtimeModelError},
-    utils::byte_stream::AudioByteStream,
 };
 use lk_agents_inference::realtime::{
     ConnectionEffect, INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions,
     Step, TurnDetection,
 };
+use lk_agents_media::AudioByteStream;
 use lk_agents_net::transport::{TransportError, connect_error};
 
 pub use lk_agents_abi::RealtimeCommand as Command;

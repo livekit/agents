@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
-use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Frame, Spawner, SpawnerExt, TimedString, Ts};
+use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, TimedString, Ts};
+use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{DecodePlan, Decoder};

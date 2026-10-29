@@ -9,7 +9,8 @@ use crate::agent_session::{DriverError, Input};
 use crate::audio::{AudioChannel, DEFAULT_FRAME_MS, Feed};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::rtc::silence_frame;
-use lk_agents_abi::{AudioByteStream, AudioFrame, Ts};
+use lk_agents_abi::{AudioFrame, Ts};
+use lk_agents_media::AudioByteStream;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 
 /// Control inputs to the microphone fan-out. External commands enter through the owner's queue;

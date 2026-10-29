@@ -35,13 +35,14 @@ pub fn snapshot_buffer(
 }
 
 /// Exactly one copy into an owned vector: exact bytes with the GIL released, any other exporter
-/// while attached.
+/// while attached. A 16-bit PCM view (`rtc.AudioFrame.data`) is its bytes, a partial sample
+/// included: a chunker reassembles samples across calls.
 pub fn owned_bytes(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<Vec<u8>> {
     if obj.is_exact_instance_of::<PyBytes>() {
         let bytes = obj.extract::<pyo3::pybacked::PyBackedBytes>()?;
         return Ok(obj.py().detach(move || bytes.to_vec()));
     }
-    validated(obj, BufferFormat::Bytes, path, None)?.to_vec(obj.py())
+    validated(obj, BufferFormat::PcmChunk, path, None)?.to_vec(obj.py())
 }
 
 /// The exporter's bytes, acquired once and checked against `format`.

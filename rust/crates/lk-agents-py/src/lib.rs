@@ -88,6 +88,7 @@ impl generated::Implementations for Selected {
     type SearchIndex = lk_agents_runtime::cores::Bm25;
     type ToolSearch = lk_agents_runtime::cores::ToolDiscovery;
 
+    type AudioByteStream = lk_agents_runtime::media::AudioByteStream;
     type ExpFilter = lk_agents_runtime::media::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::media::filters::MovingAverage;
     type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<

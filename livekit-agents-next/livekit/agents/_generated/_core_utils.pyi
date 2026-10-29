@@ -5,7 +5,41 @@
 
 from __future__ import annotations
 
+from livekit.rtc import AudioFrame
+
 from ..types import NotGivenOr
+
+class AudioByteStream:
+    """Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
+    the target) to cut TTS time-to-first-audio.
+    """
+    def __init__(
+        self,
+        sample_rate: int,
+        num_channels: int,
+        samples_per_channel: int | None = None,
+        progressive: bool = False,
+    ) -> None:
+        """``samples_per_channel=None`` means 100 ms, as in the reference."""
+    def push(self, data: bytes | bytearray | memoryview | list[int]) -> list[AudioFrame]:
+        """Buffer ``data`` and emit every whole frame it completes."""
+    def write(self, data: bytes | bytearray | memoryview | list[int]) -> list[AudioFrame]:
+        """Public alias of ``push`` in the reference."""
+    def flush(self) -> list[AudioFrame]:
+        """Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
+        for the next push.
+        """
+    @property
+    def buffered_duration(self) -> float:
+        """Seconds of audio waiting for the next frame."""
+    def reset_progressive(self) -> None:
+        """Restart progressive sizing, keeping the buffered audio: after a mid-stream flush, the
+        next burst starts with small frames without losing a partial sample.
+        """
+    def clear(self) -> None:
+        """Drop everything buffered and restart progressive sizing (called on interruption, so the
+        next word is not a full frame late).
+        """
 
 class ConnectionPoolState:
     def __init__(self, maximum_age: float | None, refresh_on_get: bool) -> None: ...

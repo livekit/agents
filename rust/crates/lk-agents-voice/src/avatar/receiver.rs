@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
-use lk_agents_abi::{AudioByteStream, AudioFrame};
+use lk_agents_abi::AudioFrame;
+use lk_agents_media::AudioByteStream;
 
 use super::{
     FinishedPayload, LOG, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received, ReceiverEnd,
@@ -237,7 +238,7 @@ impl ReceiverState {
         }
         true
     }
-    fn frame(&mut self, reader: &mut ReaderState, frame: lk_agents_abi::utils::byte_stream::Frame) {
+    fn frame(&mut self, reader: &mut ReaderState, frame: lk_agents_media::Frame) {
         let starts = !std::mem::replace(&mut reader.started, true);
         self.push(
             reader,

@@ -50,7 +50,6 @@ from ._generated._core_classes import (
     TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
     AcceptArguments as AcceptArguments,
-    AudioByteStream as AudioByteStream,
     AudioOutputCapabilities as AudioOutputCapabilities,
     AudioStreamOptions as AudioStreamOptions,
     ByteStreamSender as ByteStreamSender,
@@ -329,6 +328,7 @@ from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,
 )
 from ._generated._core_utils import (
+    AudioByteStream as AudioByteStream,
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,

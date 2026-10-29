@@ -134,7 +134,6 @@ pub use metrics::base::{EotInferenceMetrics, InterruptionMetrics};
 pub use tts::timed::TimedString;
 
 pub use utils::bound_clock::BoundClock;
-pub use utils::byte_stream::{AudioByteStream, Frame};
 pub use utils::clock::{
     Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, simulated_epoch,
     timeout, unix_now, unix_secs,

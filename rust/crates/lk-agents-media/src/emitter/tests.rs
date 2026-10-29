@@ -6,7 +6,8 @@
 //! 20 + 40 + (40 held).
 
 use lk_agents_abi::media::emitter::EmitterError;
-use lk_agents_abi::{Frame, SynthesizedAudio, TimedString, Ts};
+use crate::Frame;
+use lk_agents_abi::{SynthesizedAudio, TimedString, Ts};
 
 use super::{AudioEmitter, Effects, HostEffect};
 
