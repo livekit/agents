@@ -105,6 +105,9 @@ class _FakeWebSocket:
     async def send_str(self, message: str) -> None:
         pass
 
+    async def ping(self) -> None:
+        pass
+
     async def receive(self) -> _FakeMessage:
         return _FakeMessage(await self.incoming.get())
 
@@ -242,5 +245,26 @@ async def test_vad_start_of_speech_is_off_by_default():
             SpeechEventType.START_OF_SPEECH,
             SpeechEventType.INTERIM_TRANSCRIPT,
         ]
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_vad_start_of_speech_with_vad_bucket_zero():
+    """vad_bucket=0 selects the first horizon, it does not disable the VAD start of speech."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session, vad_bucket=0, vad_start_threshold=0.4)
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        step = _step(0.9)
+        step["vad"][0]["inactivity_prob"] = 0.2
+        session.ws.incoming.put_nowait(step)
+
+        events = await collector.wait_for(1)
+        assert [ev.type for ev in events] == [SpeechEventType.START_OF_SPEECH]
     finally:
         await stream.aclose()

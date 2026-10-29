@@ -339,7 +339,7 @@ class SpeechStream(stt.SpeechStream):
                             # steps sent before any audio was processed carry a warm-up
                             # estimate that reads as activity, ignore them
                             if (
-                                vad_bucket
+                                vad_bucket is not None
                                 and start_threshold is not None
                                 and data.get("total_duration_s", 0.0) > 0
                                 and data["vad"][vad_bucket]["inactivity_prob"] < start_threshold
