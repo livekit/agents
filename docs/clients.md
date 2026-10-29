@@ -55,8 +55,9 @@ preview. A thread per chat with the user as scope is how a sidebar works.
 ## A thread handle
 
 A handle addresses a conversation in the platform's threads service, using
-the project credential or a thread grant. Sending a message separately names
-the agent endpoint through `AgentClient`:
+the project's key or a thread grant. Sending a message is a call to an agent
+endpoint, through `AgentClient`, under the token
+[that call carries](#a-client-for-an-endpoint):
 
 ```python
 from livekit import api
@@ -163,9 +164,18 @@ reads the card once and speaks JSON-RPC over HTTP with server-sent events.
 a `Message` (`from livekit.agents.a2a import Message`), the typed A2A message
 record: `parts` (text, data or file), `metadata` (typed LiveKit keys and an
 application map) and an optional `message_id`. With no `thread_id` it
-continues the thread of its last reply, and with none it starts a new one. The
-endpoint accepts a `thread_id` only
-when the token it verifies covers that thread ([tokens](protocol/a2a.md#tokens)).
+continues the thread of its last reply, and with none it starts a new one.
+
+Every request carries `token` as `Authorization: Bearer`; with no token it
+carries none. The endpoint admits a message or a task method only under an
+`agentThread` grant covering the thread, and a first message only under one
+with `create` and `write` in its scope ([tokens](protocol/a2a.md#tokens)). A
+project credential (`agentEndpoint.call` alone) reads the card but is refused
+403 for messages, so a backend sends with a thread grant it minted.
+`RemoteAgent(url, token=)` sends the token it was given; given none, for an
+endpoint on the project's own origin (`LIVEKIT_URL`, with `LIVEKIT_API_KEY`
+and `LIVEKIT_API_SECRET` set) it mints a one-hour project credential, identity
+`delegate`, and otherwise sends no token.
 `chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
 extension ([conversation data](protocol/a2a.md#conversation-data-part)). Each update is a
 `TaskUpdate`: `state`, `text`, `task_id`, `context_id`, `metadata` with the
