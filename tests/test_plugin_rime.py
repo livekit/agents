@@ -64,9 +64,7 @@ if HAS_REALTIME_SDK:
 
     from livekit.plugins.rime.realtime import (
         PrismError,
-        PrismGenerationCreatedEvent,
         PrismModelError,
-        PrismSpeechStoppedEvent,
         PrismUnsupported,
     )
 
@@ -3353,6 +3351,13 @@ async def completed_message(peer, session):
     return item_id
 
 
+def collect_payloads(session, payload_type, received):
+    @session.on("rime_server_event_received")
+    def on_event(event):
+        if isinstance(event.payload, payload_type):
+            received.append(event.payload)
+
+
 async def acknowledge(peer, item_id, kept_text, *, content_index=0):
     await peer.emit(
         "conversation.item.truncated",
@@ -3504,7 +3509,7 @@ class TestRealtime:
             assert [i.text_content for i in session.chat_ctx.items] == ["old", "accepted"]
             assert not any(not error.recoverable for error in errors)
             await session.update_chat_ctx(target)
-            assert [i.text for i in await model.get_history()] == ["old", "accepted", "rejected"]
+            assert [i.text for i in await model._get_history()] == ["old", "accepted", "rejected"]
             assert len(peer.history_operations) == 4
 
     @pytest.mark.parametrize("refused_at", [1, 2])
@@ -3527,7 +3532,7 @@ class TestRealtime:
                 await peer.end(response)
                 await pending
             await session.update_chat_ctx(target)
-            assert len(await model.get_history()) == 2
+            assert len(await model._get_history()) == 2
             assert len(peer.history_operations) == 3
             pending = session.generate_reply()
             response = await peer.start(await peer.next())
@@ -4036,8 +4041,8 @@ class TestRealtime:
                 "type": "text",
                 "text": "Checking your order.",
             }
-            assert model.session_info.request_id == "livekit-validation"
-            assert model.session_info.response_metadata == {"workflow": "billing"}
+            assert model._session._sdk.info.request_id == "livekit-validation"
+            assert model._session._sdk.info.response_metadata == {"workflow": "billing"}
 
     async def test_settings_updates_and_rejection_preserve_session(self):
         async with peer_model() as (peer, model, _):
@@ -4046,23 +4051,48 @@ class TestRealtime:
             await session._update_session(instructions="Billing", tools=[lookup])
             assert peer.settings["instructions"] == "Billing"
             assert peer.updates[-1]["tools"][0]["function"]["name"] == "lookup"
-            await model.update_session(voice="new-voice")
-            assert model.session_info.voice == "new-voice"
-            assert model.session_info.interrupt_on_speech is True
-            await model.update_session(response_metadata={"step": "2"})
-            assert model.session_info.response_metadata == {"step": "2"}
-            old_revision = model.session_info.settings_revision
+            await model.update_options(voice="new-voice")
+            assert model._session._sdk.info.voice == "new-voice"
+            assert model._session._sdk.info.interrupt_on_speech is True
+            await model.update_options(response_metadata={"step": "2"})
+            assert model._session._sdk.info.response_metadata == {"step": "2"}
+            old_revision = model._session._sdk.info.settings_revision
             peer.refusals["session.update"] = ("invalid_session", "event")
             with pytest.raises(PrismError) as raised:
                 await session.update_instructions("Rejected")
             assert raised.value.code == "invalid_session"
             assert raised.value.retryable is False
             assert peer.settings["instructions"] == "Billing"
-            assert model.session_info.settings_revision == old_revision
+            assert model._session._sdk.info.settings_revision == old_revision
             await session._update_session(instructions="", tools=[])
             assert peer.settings["instructions"] == ""
             assert peer.settings["tools"] == []
             assert peer.connections == 1
+
+    @pytest.mark.parametrize(
+        "options", [{"voice": "new-voice"}, {"response_metadata": {"step": "2"}}]
+    )
+    async def test_model_update_options_waits_for_acknowledgment(self, options):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            before = session._sdk.info
+            peer.update_started.clear()
+            peer.update_release.clear()
+            change = asyncio.create_task(model.update_options(**options))
+            try:
+                await asyncio.wait_for(peer.update_started.wait(), 3)
+                assert not change.done()
+                assert session._sdk.info == before
+                peer.update_release.set()
+                await asyncio.wait_for(change, 3)
+                for name, value in options.items():
+                    assert getattr(session._sdk.info, name) == value
+                    assert getattr(model, f"_{name}") == value
+            finally:
+                peer.update_release.set()
+                change.cancel()
+                await asyncio.gather(change, return_exceptions=True)
 
     @pytest.mark.parametrize("cancellations", [1, 2])
     async def test_cancelled_update_waits_for_acknowledged_settings(self, cancellations):
@@ -4122,16 +4152,30 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("Help")
 
-            def refuse_next_update(info):
-                if info.voice == "new-voice":
+            emit = peer.emit
+
+            async def refuse_next_update(kind, **body):
+                await emit(kind, **body)
+                if kind == "session.updated" and body["session"]["voice"] == "new-voice":
                     peer.refusals["session.update"] = ("invalid_session", "event")
 
-            model.on("session_updated", refuse_next_update)
-            with pytest.raises(PrismError, match="invalid_session"):
-                await model.update_session(voice="new-voice", response_metadata={"step": "2"})
+            with (
+                patch.object(peer, "emit", side_effect=refuse_next_update),
+                pytest.raises(PrismError, match="invalid_session"),
+            ):
+                await model.update_options(voice="new-voice", response_metadata={"step": "2"})
 
-            assert model.session_info.voice == model._voice == peer.settings["voice"] == "new-voice"
-            assert model.session_info.response_metadata == model._response_metadata == {"step": "1"}
+            assert (
+                model._session._sdk.info.voice
+                == model._voice
+                == peer.settings["voice"]
+                == "new-voice"
+            )
+            assert (
+                model._session._sdk.info.response_metadata
+                == model._response_metadata
+                == {"step": "1"}
+            )
             assert session._failure is None
 
     async def test_agent_handoff_reuses_conversation_and_updates_tools(self):
@@ -4226,8 +4270,9 @@ class TestRealtime:
         async with peer_model(request_id="diagnostics") as (peer, model, _):
             session = model.session()
             await session._update_session(instructions="Help")
-            generations, stopped, transcripts = [], [], []
-            model.on("generation_created", generations.append)
+            events, generations, stopped, transcripts = [], [], [], []
+            session.on("rime_server_event_received", events.append)
+            session.on("generation_created", generations.append)
             session.on("input_speech_stopped", stopped.append)
             session.on("input_audio_transcription_completed", transcripts.append)
             await peer.emit(
@@ -4247,6 +4292,7 @@ class TestRealtime:
             )
             await peer.emit(
                 "response.created",
+                event_id="diagnostic-event",
                 response={
                     "id": "diagnostic-response",
                     "metadata": {"prism_cause": "user_audio", "workflow": "billing"},
@@ -4257,18 +4303,34 @@ class TestRealtime:
             await wait_until(lambda: generations and stopped and len(transcripts) == 2)
             assert [event.transcript for event in transcripts] == ["Hel", "Hello"]
             assert all(not event.is_final for event in transcripts)
-            assert isinstance(stopped[0], PrismSpeechStoppedEvent)
-            assert stopped[0].end_reason == "semantic"
-            assert isinstance(generations[0], PrismGenerationCreatedEvent)
-            assert generations[0].metadata == {"workflow": "billing"}
-            assert generations[0].input_item_ids == ("input-1",)
-            assert generations[0].provider_request_id == "diagnostics"
-            assert generations[0].settings_revision == peer.revision
+            assert len(stopped) == len(generations) == 1
+            assert type(stopped[0]) is llm.InputSpeechStoppedEvent
+            assert stopped[0].user_transcription_enabled
+            assert type(generations[0]) is llm.GenerationCreatedEvent
+            assert generations[0].response_id == "diagnostic-response"
+            assert not generations[0].user_initiated
+            speech_events = [e for e in events if isinstance(e.payload, r.SpeechStopped)]
+            assert len(speech_events) == 1
+            assert speech_events[0].payload.end_reason == "semantic"
+            response_events = [e for e in events if isinstance(e.payload, r.ResponseStarted)]
+            assert len(response_events) == 1
+            event = response_events[0]
+            assert isinstance(event, r.SessionEvent)
+            assert event.session_id == "session-1"
+            assert event.event_id == "diagnostic-event"
+            assert event.request_id is None
+            assert event.payload.response.response_id == generations[0].response_id
+            assert event.payload.metadata == {"workflow": "billing"}
+            assert event.payload.input_item_ids == ("input-1",)
+            assert event.payload.settings_revision == peer.revision
 
     async def test_reply_labels_and_saved_instruction_deletion(self):
         async with peer_model(response_metadata={"call": "shared"}) as (peer, model, _):
             session = model.session()
             await session._update_session(instructions="Help")
+            events, generations = [], []
+            session.on("rime_server_event_received", events.append)
+            session.on("generation_created", generations.append)
             labels = {"call": "this-reply", "step": "2"}
             pending = session.generate_reply(instructions="Check in", metadata=labels)
             labels["step"] = "changed"
@@ -4284,18 +4346,30 @@ class TestRealtime:
             )
             response_id = await peer.start(request)
             created = await pending
-            assert created.instruction_item_id == "saved-instruction"
+            assert type(created) is llm.GenerationCreatedEvent
+            assert created.user_initiated
+            assert created.response_id == response_id
+            assert generations == []
+            response_events = [e for e in events if isinstance(e.payload, r.ResponseStarted)]
+            assert len(response_events) == 1
+            event = response_events[0]
+            assert event.session_id == "session-1"
+            assert event.event_id == "server"
+            assert event.request_id == request["event_id"]
+            assert event.payload.metadata == {"call": "this-reply", "step": "2"}
+            instruction_item_id = event.payload.instruction_item_id
+            assert instruction_item_id == "saved-instruction"
             with pytest.raises(RimeInputError, match="before its reply ends"):
-                await model.delete_instruction_item(created.instruction_item_id)
+                await model._delete_instruction_item(instruction_item_id)
             await peer.message(response_id)
             await peer.end(response_id)
             await wait_until(lambda: session._generations[response_id].ended)
             session._generations.pop(response_id)
-            await model.delete_instruction_item(created.instruction_item_id)
+            await model._delete_instruction_item(instruction_item_id)
             assert peer.history_operations[-1]["item_id"] == "saved-instruction"
             assert all(item["id"] != "saved-instruction" for item in peer.server_items)
             with pytest.raises(RimeInputError, match="Unknown saved"):
-                await model.delete_instruction_item("saved-instruction")
+                await model._delete_instruction_item("saved-instruction")
 
     @pytest.mark.parametrize(
         "code,retryable",
@@ -4628,13 +4702,13 @@ class TestRealtime:
                 await session._update_session(instructions="Help")
                 if policy is None:
                     assert "truncation" not in peer.settings
-                    assert model.session_info.truncation is None
+                    assert model._session._sdk.info.truncation is None
                 else:
-                    assert model.session_info.truncation == policy
-                await model.update_session(truncation=r.RetentionRatio(0.7))
-                assert model.session_info.truncation == r.RetentionRatio(0.7)
+                    assert model._session._sdk.info.truncation == policy
+                await model.update_options(truncation=r.RetentionRatio(0.7))
+                assert model._session._sdk.info.truncation == r.RetentionRatio(0.7)
                 await fallback.restart_session()
-                assert model.session_info.truncation == r.RetentionRatio(0.7)
+                assert model._session._sdk.info.truncation == r.RetentionRatio(0.7)
             finally:
                 await session.aclose()
 
@@ -4644,10 +4718,10 @@ class TestRealtime:
             await session.update_instructions("test")
             peer.refusals["session.update"] = ("invalid_session", "event")
             with pytest.raises(PrismError):
-                await model.update_session(truncation="disabled")
-            assert model.session_info.truncation == "auto"
-            await model.update_session(truncation="disabled")
-            assert model.session_info.truncation == "disabled"
+                await model.update_options(truncation="disabled")
+            assert model._session._sdk.info.truncation == "auto"
+            await model.update_options(truncation="disabled")
+            assert model._session._sdk.info.truncation == "disabled"
 
     async def test_initial_history_accepts_all_supported_types_without_executing_tools(self):
         ran = []
@@ -4662,7 +4736,7 @@ class TestRealtime:
             async with AgentSession(llm=model) as session:
                 ctx = tool_history()
                 await session.start(Agent(instructions="Help", tools=[lookup], chat_ctx=ctx))
-                history = await model.get_history()
+                history = await model._get_history()
                 assert [type(i) for i in history] == [
                     r.HistoryMessage,
                     r.HistoryMessage,
@@ -4701,7 +4775,7 @@ class TestRealtime:
                 target.items.reverse()
             before = len(peer.history_operations)
             await session.update_chat_ctx(target)
-            history = await model.get_history()
+            history = await model._get_history()
             assert [i.text for i in history] == [i.text_content for i in target.items]
             assert [i.id for i in session.chat_ctx.items] == [i.id for i in target.items]
             assert peer.requests.empty()
@@ -4710,7 +4784,7 @@ class TestRealtime:
                 assert accepted_operations == before
             await session.update_chat_ctx(target)
             assert len(peer.history_operations) == accepted_operations
-            assert [i.text for i in await model.get_history()] == [
+            assert [i.text for i in await model._get_history()] == [
                 i.text_content for i in target.items
             ]
 
@@ -4721,10 +4795,10 @@ class TestRealtime:
             try:
                 await session._update_session(chat_ctx=tool_history())
                 await fallback.restart_session()
-                assert len(await model.get_history()) == 5
+                assert len(await model._get_history()) == 5
                 target = session.chat_ctx.copy(exclude_function_call=True)
                 await session.update_chat_ctx(target)
-                history = await model.get_history()
+                history = await model._get_history()
                 assert all(isinstance(i, r.HistoryMessage) for i in history)
                 assert len(history) == 3
                 assert peer.requests.empty()
@@ -4761,7 +4835,7 @@ class TestRealtime:
                 await session.update_chat_ctx(target)
             assert len(peer.history_operations) == before
             assert session.chat_ctx.is_equivalent(original)
-            assert len(await model.get_history()) == 1
+            assert len(await model._get_history()) == 1
 
     async def test_rejected_first_operation_leaves_history_unchanged(self):
         async with peer_model() as (peer, model, _):
@@ -4774,9 +4848,9 @@ class TestRealtime:
             with pytest.raises(PrismError):
                 await session.update_chat_ctx(target)
             assert session.chat_ctx.is_equivalent(original)
-            assert len(await model.get_history()) == 1
+            assert len(await model._get_history()) == 1
             await session.update_chat_ctx(target)
-            assert len(await model.get_history()) == 2
+            assert len(await model._get_history()) == 2
 
     async def test_partial_history_failure_closes_uncertain_conversation(self):
         async with peer_model() as (peer, model, _):
@@ -4813,7 +4887,7 @@ class TestRealtime:
             with pytest.raises(asyncio.CancelledError):
                 await change
             assert session.chat_ctx.is_equivalent(target)
-            assert len(await model.get_history()) == 2
+            assert len(await model._get_history()) == 2
 
     async def test_running_reply_snapshot_does_not_remove_live_local_items(self):
         async with peer_model() as (peer, model, _):
@@ -4826,14 +4900,14 @@ class TestRealtime:
             response_id = await peer.start(await peer.next())
             await pending
             await peer.message(response_id)
-            assert [item.text for item in await model.get_history()] == ["question"]
+            assert [item.text for item in await model._get_history()] == ["question"]
             assert session.chat_ctx.get_by_id(message.id) is not None
             with pytest.raises(llm.RealtimeError, match="active replies"):
                 await session.update_chat_ctx(messages("replacement"))
             await peer.end(response_id)
             await wait_until(lambda: len(session.chat_ctx.items) == 2)
             await session.update_chat_ctx(llm.ChatContext.empty())
-            assert await model.get_history() == ()
+            assert await model._get_history() == ()
 
     @pytest.mark.parametrize("removed_type", [llm.FunctionCall, llm.FunctionCallOutput])
     async def test_deleting_half_a_tool_pair_is_rejected_before_mutation(self, removed_type):
@@ -4846,7 +4920,7 @@ class TestRealtime:
             with pytest.raises(llm.RealtimeError):
                 await session.update_chat_ctx(target)
             assert len(peer.history_operations) == before
-            assert len(await model.get_history()) == 5
+            assert len(await model._get_history()) == 5
 
     async def test_history_read_refusal_uses_the_adapter_error_and_keeps_session(self):
         async with peer_model() as (peer, model, _):
@@ -4854,9 +4928,9 @@ class TestRealtime:
             await session.update_instructions("test")
             peer.refusals["prism.conversation.get"] = ("invalid_request", "event")
             with pytest.raises(PrismError) as raised:
-                await model.get_history()
+                await model._get_history()
             assert raised.value.code == "invalid_request"
-            assert await model.get_history() == ()
+            assert await model._get_history() == ()
 
     async def test_reply_waiting_for_readiness_does_not_block_live_tool_results(self):
         async with peer_model() as (peer, model, _):
@@ -4976,7 +5050,7 @@ class TestRealtime:
             valid.items.insert(0, llm.ChatMessage(role="system", content=["before"]))
             await session.update_chat_ctx(valid)
             assert session.chat_ctx.is_equivalent(valid)
-            assert [type(item) for item in await model.get_history()] == [
+            assert [type(item) for item in await model._get_history()] == [
                 r.HistoryMessage,
                 r.HistoryFunctionCall,
                 r.HistoryFunctionResult,
@@ -4994,7 +5068,7 @@ class TestRealtime:
             before = len(peer.history_operations)
             await session.update_chat_ctx(snapshot)
             assert len(peer.history_operations) == before + 2
-            assert (await model.get_history())[0].text == "edited"
+            assert (await model._get_history())[0].text == "edited"
             snapshot.items[0].content[:] = ["changed again"]
             assert session.chat_ctx.items[0].text_content == "edited"
 
@@ -5069,7 +5143,7 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             events = []
-            model.on("item_truncated", events.append)
+            collect_payloads(model._session, r.ItemTruncated, events)
             item_id = await completed_message(peer, session)
             before = session.chat_ctx.get_by_id(item_id)
             await acknowledge(peer, item_id, kept_text)
@@ -5091,7 +5165,7 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             events = []
-            model.on("item_truncated", events.append)
+            collect_payloads(model._session, r.ItemTruncated, events)
             response_id = await peer.start()
             item_id = await peer.message(response_id, text="Generated words")
             await acknowledge(peer, item_id, None)
@@ -5107,8 +5181,8 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             events, ended = [], []
-            model.on("item_truncated", events.append)
-            model.on("response_ended", ended.append)
+            collect_payloads(model._session, r.ItemTruncated, events)
+            collect_payloads(model._session, r.ResponseEnded, ended)
             response_id = await peer.start()
             item_id = await peer.message(response_id, text="The full generated answer")
             await wait_until(
@@ -5141,7 +5215,7 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             events = []
-            model.on("item_truncated", events.append)
+            collect_payloads(model._session, r.ItemTruncated, events)
             item_id = await completed_message(peer, session)
             target = session.chat_ctx
             if edit == "delete":
@@ -5159,7 +5233,7 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             events = []
-            model.on("item_truncated", events.append)
+            collect_payloads(model._session, r.ItemTruncated, events)
             item_id = await completed_message(peer, session)
             target = session.chat_ctx
             if edit == "append":
@@ -5189,7 +5263,7 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             events = []
-            model.on("item_truncated", events.append)
+            collect_payloads(model._session, r.ItemTruncated, events)
             item_id = await completed_message(peer, session)
             before = session.chat_ctx
             await acknowledge(peer, "unknown", "Unrelated")
@@ -5209,19 +5283,27 @@ class TestRealtime:
             item_id = await completed_message(peer, session)
             before = session.chat_ctx
             events = []
-            model.on("response_ended", events.append)
+            collect_payloads(model._session, r.ResponseEnded, events)
             response_id = await peer.start()
+            usage = {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "context_window": 100,
+            }
             await peer.emit(
                 "response.done",
                 response={
                     "id": response_id,
                     "status": status,
+                    "usage": usage,
                     **({} if summary is None else {"prism_truncation": summary}),
                 },
             )
             await wait_until(lambda: events)
             assert events[0].response.response_id == response_id
             assert events[0].status == status
+            assert events[0].usage == r.ResponseUsage(**usage)
             assert events[0].truncation == (
                 None if summary is None else r.ResponseTruncation(**summary)
             )
@@ -5229,7 +5311,7 @@ class TestRealtime:
             # A completed response reference is not required to process a later acknowledgment.
             session._generations.clear()
             truncated = []
-            model.on("item_truncated", truncated.append)
+            collect_payloads(model._session, r.ItemTruncated, truncated)
             await acknowledge(peer, item_id, "Retained")
             await wait_until(lambda: truncated)
             assert session.chat_ctx.get_by_id(item_id).text_content == "Retained"
@@ -5253,7 +5335,7 @@ class TestRealtime:
                 await asyncio.wait_for(peer.truncations.get(), 3)
                 before = session.history.to_dict()
                 events = []
-                model.on("item_truncated", events.append)
+                collect_payloads(model._session, r.ItemTruncated, events)
                 await acknowledge(peer, item_id, "All words retained by the server")
                 await wait_until(
                     lambda: events and events[-1].kept_text == "All words retained by the server"

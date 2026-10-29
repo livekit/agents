@@ -24,7 +24,7 @@ from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._realtime_history import HistoryUpdateError, PrismHistory
+from ._history import HistoryUpdateError, PrismHistory
 
 
 class PrismUnsupported(llm.RealtimeError):
@@ -43,24 +43,6 @@ class PrismError(llm.RealtimeError):
         self.scope = fault.scope
 
 
-@dataclass
-class PrismGenerationCreatedEvent(llm.GenerationCreatedEvent):
-    """A LiveKit generation with Prism response diagnostics."""
-
-    metadata: dict[str, Any] = field(default_factory=dict)
-    input_item_ids: tuple[str, ...] = ()
-    settings_revision: int | None = None
-    provider_request_id: str | None = None
-    instruction_item_id: str | None = None
-
-
-@dataclass
-class PrismSpeechStoppedEvent(llm.InputSpeechStoppedEvent):
-    """A stopped-speech event with Prism's end-of-turn reason."""
-
-    end_reason: str | None = None
-
-
 class PrismModelError(llm.RealtimeModelError):
     """A LiveKit model error with Prism's separate retry classification."""
 
@@ -68,18 +50,7 @@ class PrismModelError(llm.RealtimeModelError):
     """Whether the unchanged request may succeed again; does not initiate a retry."""
 
 
-class RealtimeModel(
-    llm.RealtimeModel,
-    rtc.EventEmitter[
-        Literal[
-            "session_updated",
-            "generation_created",
-            "speech_stopped",
-            "item_truncated",
-            "response_ended",
-        ]
-    ],
-):
+class RealtimeModel(llm.RealtimeModel):
     """Prism for one AgentSession. Requires the Rime SDK realtime extra and Python 3.11.
 
     Omit endpoint to use public Prism. An injected Rime client stays caller-owned.
@@ -114,7 +85,6 @@ class RealtimeModel(
                 mutable_tools=True,
             )
         )
-        rtc.EventEmitter.__init__(self)
         self._endpoint = endpoint
         self._voice = voice
         self._turn_detection = turn_detection
@@ -127,14 +97,7 @@ class RealtimeModel(
         self._owns_client = client is None
         self._session: RealtimeSession | None = None
 
-    @property
-    def session_info(self) -> r.SessionInfo | None:
-        """Latest acknowledged session information, including Prism's request ID."""
-        if self._session is not None and self._session._sdk is not None:
-            return self._session._sdk.info
-        return None
-
-    async def update_session(
+    async def update_options(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -152,17 +115,17 @@ class RealtimeModel(
             truncation=truncation,
         )
 
-    async def get_history(self) -> tuple[r.HistoryItem, ...]:
+    async def _get_history(self) -> tuple[r.HistoryItem, ...]:
         """Read completed server history. Running replies are not included."""
         if self._session is None:
             raise llm.RealtimeError("Prism session is not open")
-        return await self._session.get_history()
+        return await self._session._get_history()
 
-    async def delete_instruction_item(self, item_id: str) -> None:
+    async def _delete_instruction_item(self, item_id: str) -> None:
         """Remove a saved nudge instruction after its reply ends."""
         if self._session is None:
             raise llm.RealtimeError("Prism session is not open")
-        await self._session.delete_instruction_item(item_id)
+        await self._session._delete_instruction_item(item_id)
 
     @property
     def model(self) -> str:
@@ -209,16 +172,19 @@ class _Message:
 @dataclass
 class _Generation:
     ref: r.ResponseRef
-    event: PrismGenerationCreatedEvent
+    event: llm.GenerationCreatedEvent
     messages: utils.aio.Chan[llm.MessageGeneration]
     functions: utils.aio.Chan[llm.FunctionCall]
+    instruction_item_id: str | None = None
     outputs: dict[str, _Message] = field(default_factory=dict)
     ended: bool = False
     abandoned: bool = False
     tools_disabled: bool = False
 
 
-class RealtimeSession(llm.RealtimeSession):
+class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]):
+    """A Prism session that emits SDK SessionEvent objects before processing them."""
+
     def __init__(self, model: RealtimeModel):
         super().__init__(model)
         self._model = model
@@ -263,9 +229,6 @@ class RealtimeSession(llm.RealtimeSession):
             raise RimeInputError(f"Tool fillers name unregistered tools: {sorted(unknown)}")
         return definitions
 
-    def _record_settings(self) -> None:
-        self._model.emit("session_updated", self._require().info)
-
     @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._history.chat_ctx if self._history is not None else llm.ChatContext.empty()
@@ -302,7 +265,6 @@ class RealtimeSession(llm.RealtimeSession):
                 self._shutdown_task = asyncio.create_task(self._shutdown())
                 return
             self._history = PrismHistory(self._sdk)
-            self._record_settings()
             self._spawn(self._read_events())
             self._initialized.set_result(None)
             self._spawn(self._send_audio())
@@ -388,11 +350,9 @@ class RealtimeSession(llm.RealtimeSession):
                             self._model._voice = voice
                         if is_given(truncation):
                             self._model._truncation = cast(r.Truncation, truncation)
-                        self._record_settings()
                     if is_given(response_metadata):
                         await sdk.set_response_metadata(dict(response_metadata))
                         self._model._response_metadata = dict(response_metadata)
-                        self._record_settings()
                 except r.RimeRealtimeError as error:
                     raise PrismError(error.fault) from error
 
@@ -405,7 +365,7 @@ class RealtimeSession(llm.RealtimeSession):
             raise PrismUnsupported("Prism supports only tool_choice='auto' or 'none'")
         self._tool_choice = "none" if tool_choice == "none" else "auto"
 
-    async def get_history(self) -> tuple[r.HistoryItem, ...]:
+    async def _get_history(self) -> tuple[r.HistoryItem, ...]:
         """Read Prism's completed history without changing LiveKit's conversation record."""
         await asyncio.shield(self._initialized)
         self._require()
@@ -415,7 +375,7 @@ class RealtimeSession(llm.RealtimeSession):
         except r.RimeRealtimeError as error:
             raise PrismError(error.fault) from error
 
-    async def delete_instruction_item(self, item_id: str) -> None:
+    async def _delete_instruction_item(self, item_id: str) -> None:
         """Delete an instruction observed in this session without changing LiveKit history."""
         await asyncio.shield(self._initialized)
         sdk = self._require()
@@ -608,7 +568,6 @@ class RealtimeSession(llm.RealtimeSession):
                             oldest = min(self._suppressed_revisions)
                             self._suppressed_revisions.remove(oldest)
                             self._tool_policy_floor = oldest + 1
-                    self._record_settings()
                     # Shield admission through response creation. Restoring the tools
                     # before an accepted late response starts changes its settings.
                     task = self._spawn(
@@ -629,7 +588,6 @@ class RealtimeSession(llm.RealtimeSession):
                     if not self._closed and self._failure is None:
                         try:
                             await sdk.update(tools=restore)
-                            self._record_settings()
                         except BaseException:
                             self._fatal(RuntimeError("Prism tool restoration did not complete"))
                             raise
@@ -764,6 +722,7 @@ class RealtimeSession(llm.RealtimeSession):
             raise ConnectionError("Prism session ended")
 
     def _on_event(self, event: r.SessionEvent) -> None:
+        self.emit("rime_server_event_received", event)
         payload = event.payload
         assert self._history is not None
         if isinstance(payload, r.InputCommitted):
@@ -785,11 +744,8 @@ class RealtimeSession(llm.RealtimeSession):
                 llm.InputSpeechStartedEvent(),
             )
         elif isinstance(payload, r.SpeechStopped):
-            stopped = PrismSpeechStoppedEvent(
-                user_transcription_enabled=True, end_reason=payload.end_reason
-            )
+            stopped = llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             self.emit("input_speech_stopped", stopped)
-            self._model.emit("speech_stopped", stopped)
         elif isinstance(payload, r.TranscriptDelta):
             text = self._transcript_deltas.get(payload.item_id, "") + payload.delta
             if len(text) > 65536 or (
@@ -837,22 +793,18 @@ class RealtimeSession(llm.RealtimeSession):
                 self._generations.popitem(last=False)
             messages = utils.aio.Chan[llm.MessageGeneration](maxsize=128)
             functions = utils.aio.Chan[llm.FunctionCall](maxsize=128)
-            created = PrismGenerationCreatedEvent(
+            created = llm.GenerationCreatedEvent(
                 message_stream=messages,
                 function_stream=functions,
                 user_initiated=event.request_id is not None,
                 response_id=payload.response.response_id,
-                metadata=dict(payload.metadata),
-                input_item_ids=payload.input_item_ids,
-                settings_revision=payload.settings_revision,
-                provider_request_id=self._require().info.request_id,
-                instruction_item_id=payload.instruction_item_id,
             )
             self._generations[payload.response.response_id] = _Generation(
                 payload.response,
                 created,
                 messages,
                 functions,
+                instruction_item_id=payload.instruction_item_id,
                 # A speculative speech reply can arrive after a settings update
                 # while still using the older revision's registered tools.
                 tools_disabled=(
@@ -871,7 +823,6 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             self._latest = self._active = payload.response
             self._parent = self._report = None
-            self._model.emit("generation_created", created)
             if event.request_id is None:
                 self.emit("generation_created", created)
         elif isinstance(payload, r.ResponseAbandoned):
@@ -933,7 +884,7 @@ class RealtimeSession(llm.RealtimeSession):
         elif isinstance(payload, r.ResponseEnded):
             instruction_item_id = self._generations[
                 payload.response.response_id
-            ].event.instruction_item_id
+            ].instruction_item_id
             if instruction_item_id is not None:
                 state = self._instruction_items.get(instruction_item_id)
                 if state is not None and state[0] == payload.response.response_id:
@@ -941,7 +892,6 @@ class RealtimeSession(llm.RealtimeSession):
             self._end(self._generations[payload.response.response_id])
             if self._active == payload.response:
                 self._active = None
-            self._model.emit("response_ended", payload)
         elif isinstance(payload, r.ItemTruncated):
             if payload.kept_text is not None and payload.content_index == 0:
                 for generation in self._generations.values():
@@ -950,7 +900,6 @@ class RealtimeSession(llm.RealtimeSession):
                     ):
                         truncated_message.retained_text = payload.kept_text
                         break
-            self._model.emit("item_truncated", payload)
         elif isinstance(payload, r.FaultEvent) and payload.error.request_id is None:
             self._emit_error(
                 PrismError(payload.error), recoverable=payload.error.scope != "session"

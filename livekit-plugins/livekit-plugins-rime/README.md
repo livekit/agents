@@ -239,22 +239,21 @@ native per-response tool selection. Rejecting these choices leaves the session o
 Use `agent.update_instructions()` and `agent.update_tools()` for agent settings.
 Updates wait for Prism acknowledgments. Handoff uses the normal LiveKit sequence;
 instructions, history, and tools are separate updates. There is no atomic handoff.
-Use `await model.update_session(voice="...")` for the voice or
-`await model.update_session(response_metadata={"step": "2"})` for response labels.
+Use `await model.update_options(voice="...")` for the voice or
+`await model.update_options(response_metadata={"step": "2"})` for response labels.
 For one explicit reply on a direct Prism `RealtimeSession`, call
 `await session.generate_reply(instructions="Check in", metadata={"step": "3"})`.
 The per-reply labels replace matching session labels. Replies that Prism starts from
 caller speech use session labels.
-`model.session_info` reports acknowledged settings and the provider request ID.
 When one call changes both settings and response labels, it sends two separate
-requests. If the label update fails, the earlier accepted settings remain applied
-and are reflected in `model.session_info`.
+requests. If the label update fails, the earlier accepted settings remain applied.
+A successful return confirms that Prism acknowledged all updates in the call.
 
 Tool fillers are optional. Pass
 `tool_fillers={"lookup": PrismFiller(type="text", text="Checking your order.")}`,
 with `PrismFiller` imported from `rimelabs_sdk.realtime`. The keys must name
 registered tools. Use `type="none"` to suppress filler or `type="auto"` for generated
-filler. Change them with `model.update_session(tool_fillers=...)`.
+filler. Change them with `model.update_options(tool_fillers=...)`.
 
 ### History and recovery
 
@@ -278,17 +277,9 @@ replies are still controlled by Prism.
 An unknown request outcome, session failure, or partially applied deletion or
 replacement still ends the session. Standard fallback replays the current agent
 context, which can already contain the requested edit even when Prism rejected it.
-`await model.get_history()` returns completed server items. Running replies may
-be absent from that snapshot.
-`PrismGenerationCreatedEvent.instruction_item_id` names a saved instruction from
-an explicit reply. After that reply ends, call
-`await model.delete_instruction_item(event.instruction_item_id)` to remove it from
-later Prism history. This method accepts only saved instruction IDs observed in
-the current session while they remain among the last 128 saved instruction IDs
-that the adapter observed. It does not change LiveKit's local chat history.
 
 Set `truncation="auto"`, `truncation="disabled"`, or
-`truncation=RetentionRatio(0.9)` at construction or through `model.update_session()`.
+`truncation=RetentionRatio(0.9)` at construction or through `model.update_options()`.
 Import `RetentionRatio` from `rimelabs_sdk.realtime`. Automatic truncation retains
 0.8 of the available history capacity. Disabling it reports an error when the
 context no longer fits. This setting requires deployment support and does not
@@ -309,17 +300,22 @@ the plugin does not add its own history rollback or startup failover logic.
 
 ### Events and limits
 
-The model emits `session_updated`, `generation_created`, and `speech_stopped`.
-`PrismGenerationCreatedEvent` includes response labels, input item IDs when
-provided, the settings revision, the provider request ID, and an optional saved
-instruction item ID.
-`PrismSpeechStoppedEvent` includes the speech end reason. Interim and final input
-transcripts use LiveKit's standard transcription events.
+The Prism `RealtimeSession` emits `rime_server_event_received` with each SDK
+`SessionEvent`, before the plugin processes it. The event contains `session_id`,
+`event_id`, `request_id`, and a typed `payload`. The `request_id` correlates an event
+with a client request; it is not the provider request ID set at connection time.
+Read `ResponseStarted` payloads for response labels, input item IDs, settings
+revisions, and saved instruction IDs. Read `SpeechStopped.end_reason` for the
+speech end reason. Standard LiveKit speech, transcription, and generation events
+remain available on the session.
 
-The model also emits SDK `ItemTruncated` payloads as `item_truncated` and
-`ResponseEnded` payloads as `response_ended`. `ResponseEnded.usage` has token
-counts when Prism reports them. Available retained text updates
-the plugin's history only while the server item ID still matches. `kept_text=None`
+The SDK handles settings acknowledgments internally and does not expose them in
+this event stream. Await `model.update_options()` to confirm a settings update.
+There is no separate `session_updated` event.
+
+Read `ItemTruncated` and `ResponseEnded` from `event.payload`.
+`ResponseEnded.usage` has token counts when Prism reports them. Available retained
+text updates the plugin's history only while the server item ID still matches. `kept_text=None`
 means unavailable; an empty string means no words remain. This text describes
 server history, not necessarily what was heard, and does not replace LiveKit's
 playback transcript. Acknowledgments during generation may have no retained text,
