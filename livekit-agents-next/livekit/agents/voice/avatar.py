@@ -365,6 +365,7 @@ class _QueuedAudioSegment:
     epoch: int
     key: PlaybackSegment
     yielded: bool = False
+    started: bool = False
     discarded: bool = False
 
 
@@ -455,26 +456,32 @@ class QueueAudioOutput(
         *,
         segment: AvatarPlaybackSegment | None = None,
     ) -> None:
-        if segment is None:
-            raise RuntimeError("playback completion requires its captured segment key")
+        # A consumer reading the queue reports in delivery order: without a key, the report
+        # belongs to the oldest delivered segment and settles the key captured for it.
         if (
             not self._segments
-            or self._segments[0].key != segment.playback
             or not self._segments[0].yielded
+            or (segment is not None and self._segments[0].key != segment.playback)
         ):
             return
-        self._segments.popleft()
+        settled = self._segments.popleft()
         self.on_playback_finished(
-            segment=segment.playback, playback_position=playback_position, interrupted=interrupted
+            segment=settled.key, playback_position=playback_position, interrupted=interrupted
         )
         self._finish_discarded()
 
     def notify_playback_started(self, *, segment: AvatarPlaybackSegment | None = None) -> None:
         if not self._wait_playback_start:
             return
-        if segment is None:
-            raise RuntimeError("playback start requires its captured segment key")
-        self.on_playback_started(segment=segment.playback, created_at=time.time())
+        if segment is not None:
+            self.on_playback_started(segment=segment.playback, created_at=time.time())
+            return
+        # without a key: the oldest delivered segment whose start was not reported yet
+        queued = next((s for s in self._segments if s.yielded and not s.started), None)
+        if queued is None:
+            return
+        queued.started = True
+        self.on_playback_started(segment=queued.key, created_at=time.time())
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self
