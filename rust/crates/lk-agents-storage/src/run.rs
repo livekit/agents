@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::StorageError;
 use crate::TaskWrite;
 use crate::db::{Commit, EventWrite};
-use crate::schema::{EventRow, RunEnded, RunEvent, RunStarted};
+use crate::schema::{EventRow, RUN_ENDED_EVENT, RUN_STARTED_EVENT, RunEnded, RunStarted};
 pub use crate::schema::{ItemRow, LaneRow, TaskRow};
 use livekit_protocol::agent::chat_context::ChatItem;
 
@@ -151,7 +151,13 @@ impl RunSummary {
     pub fn from_events(events: &[EventRow]) -> Vec<RunSummary> {
         let mut runs: Vec<RunSummary> = Vec::new();
         for ev in events {
-            match ev.run_event() {
+            let payload = ev.payload.clone();
+            let event = match ev.r#type.as_str() {
+                RUN_STARTED_EVENT => serde_json::from_value(payload).ok().map(RunEvent::Started),
+                RUN_ENDED_EVENT => serde_json::from_value(payload).ok().map(RunEvent::Ended),
+                _ => None,
+            };
+            match event {
                 Some(RunEvent::Started(started)) => {
                     let summary = RunSummary {
                         run_id: ev.run_id.clone(),
@@ -180,6 +186,11 @@ impl RunSummary {
         }
         runs
     }
+}
+
+enum RunEvent {
+    Started(RunStarted),
+    Ended(RunEnded),
 }
 
 /// How many rows a lookup by id or `messageId` scans.

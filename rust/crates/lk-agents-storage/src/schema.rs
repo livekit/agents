@@ -2,7 +2,7 @@ use livekit_protocol::agent::chat_context::ChatItem;
 /// The thread database's tables, as livekit-protocol defines them (version 1). Every `#[table]`
 /// record below is checked against them when the crate compiles.
 pub use livekit_protocol::agent::{THREAD_SCHEMA_V1 as THREAD_SCHEMA, THREAD_SCHEMA_VERSION};
-use lk_agents_host_derive::{Host, Table};
+use lk_agents_host_derive::Table;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,7 +11,7 @@ use crate::sql::SqlValue;
 use crate::sql::{FromCell, json_cell, statement};
 
 pub use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskData, TaskRow};
-pub use lk_agents_abi::storage::{Ask, TaskInternal};
+pub use lk_agents_abi::storage::{Ask, EventRow, LaneRow, TaskInternal};
 
 /// The `items` columns of [`ItemRow`].
 #[derive(Table)]
@@ -56,58 +56,35 @@ struct InboxColumns {
     received_at: i64,
 }
 
-/// One lane: a registered agent's state, lease and inbox cursor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[table("lanes")]
-pub struct LaneRow {
-    pub lane: String,
-    /// The fencing token: a run loaded at `v` commits only `WHERE version = v`.
-    pub version: i64,
-    /// The application's typed state, one snapshot per run.
-    #[serde(default)]
-    pub state: Option<Value>,
-    pub lease_holder: Option<String>,
-    /// Unix seconds on agent-db's clock; `0` is released.
-    pub lease_until: i64,
-    /// A worker that failed the lease under `interrupt` and is polling for it.
-    pub waiter: Option<String>,
-    /// The id of the last inbox row a drain consumed.
-    pub drained_id: i64,
+/// The `lanes` columns of [`LaneRow`].
+#[derive(Table)]
+#[table("lanes", remote = LaneRow)]
+#[expect(dead_code, reason = "a column declaration")]
+struct LaneColumns {
+    lane: String,
+    version: i64,
+    state: Option<Value>,
+    lease_holder: Option<String>,
+    lease_until: i64,
+    waiter: Option<String>,
+    drained_id: i64,
 }
 
-/// One journal entry: every `AgentSessionEvent`, plus `run_started` and `run_ended`, tagged with
-/// the lane. Append-only, owned by the framework.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[table("events")]
-pub struct EventRow {
-    pub id: i64,
-    pub ts_ms: i64,
-    pub lane: String,
-    pub run_id: String,
-    #[host(rename = "type")]
-    pub r#type: String,
-    pub payload: Value,
-}
-
-impl EventRow {
-    /// The run bracket this event is, if it is one.
-    pub fn run_event(&self) -> Option<RunEvent> {
-        let payload = self.payload.clone();
-        match self.r#type.as_str() {
-            RUN_STARTED_EVENT => serde_json::from_value(payload).ok().map(RunEvent::Started),
-            RUN_ENDED_EVENT => serde_json::from_value(payload).ok().map(RunEvent::Ended),
-            _ => None,
-        }
-    }
+/// The `events` columns of [`EventRow`].
+#[derive(Table)]
+#[table("events", remote = EventRow)]
+#[expect(dead_code, reason = "a column declaration")]
+struct EventColumns {
+    id: i64,
+    ts_ms: i64,
+    lane: String,
+    run_id: String,
+    r#type: String,
+    payload: Value,
 }
 
 pub const RUN_STARTED_EVENT: &str = "run_started";
 pub const RUN_ENDED_EVENT: &str = "run_ended";
-
-pub enum RunEvent {
-    Started(RunStarted),
-    Ended(RunEnded),
-}
 
 /// `run_started`'s payload.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
