@@ -61,7 +61,6 @@ from ._generated._core_classes import (
     AudioOutputCapabilities as AudioOutputCapabilities,
     AudioStreamOptions as AudioStreamOptions,
     AvatarRunner as AvatarRunner,
-    BackgroundAudioPlayer as BackgroundAudioPlayer,
     ByteStreamSender as ByteStreamSender,
     ChatContent as ChatContent,
     ChatItem as ChatItem,
@@ -86,7 +85,6 @@ from ._generated._core_classes import (
     ModelUsageCollector as ModelUsageCollector,
     PlaybackInfo as PlaybackInfo,
     PlaybackTracker as PlaybackTracker,
-    PlayState as PlayState,
     ProcessPoolOptions as ProcessPoolOptions,
     ProcessStartOptions as ProcessStartOptions,
     RoomAudioInput as RoomAudioInput,
@@ -353,10 +351,12 @@ from ._generated._core_vad import (
     InferenceVadStream as InferenceVadStream,
 )
 from ._generated._core_voice import (
+    BackgroundAudioPlayer as BackgroundAudioPlayer,
     ConsoleIo as ConsoleIo,
     DataStreamAudioOutput as DataStreamAudioOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     PlayoutLedger as PlayoutLedger,
+    PlayState as PlayState,
     _core_create_room_event_bus as _core_create_room_event_bus,
     _core_create_room_session as _core_create_room_session,
     _core_playback_begin as _core_playback_begin,

@@ -606,13 +606,20 @@ pub struct FakeSoundStream {
 }
 
 impl FakeSoundStream {
-    pub fn sound(frames: u32) -> lk_agents_voice::background_audio::Sound {
+    pub fn sound(frames: u32) -> lk_agents_abi::voice::background_audio::Sound {
         let stream = Arc::new(FakeSoundStream { left: Mutex::new(frames) });
-        lk_agents_voice::background_audio::Sound::for_host(None, Some(stream), 0.8, 1.0, 0.1, 0.1)
+        lk_agents_abi::voice::background_audio::Sound::for_host(
+            None,
+            Some(stream),
+            0.8,
+            1.0,
+            0.1,
+            0.1,
+        )
     }
 }
 
-impl lk_agents_voice::background_audio::FrameStream for FakeSoundStream {
+impl lk_agents_abi::voice::background_audio::FrameStream for FakeSoundStream {
     fn next(
         &self,
     ) -> lk_agents_abi::BoxFuture<

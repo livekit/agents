@@ -4,6 +4,7 @@
 
 pub mod amd;
 pub mod audio;
+pub mod background_audio;
 pub mod console;
 mod effects;
 mod legs;

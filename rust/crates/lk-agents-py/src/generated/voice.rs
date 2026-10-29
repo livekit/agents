@@ -185,6 +185,154 @@ impl DataStreamAudioReceiver {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
+type PlayStateImpl = <crate::Selected as super::Implementations>::PlayState;
+
+fn _extract_play_state_new_fade_out(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "fade_out")
+}
+
+/// A sound's monotone stop and completion handle.
+#[pyclass(frozen, name = "PlayState", module = "livekit.agents._core")]
+pub struct PlayState(pub(crate) ::std::sync::Arc<PlayStateImpl>);
+
+#[pymethods]
+impl PlayState {
+    #[new]
+    #[pyo3(signature = (fade_out = 0.0))]
+    fn new(#[pyo3(from_py_with = _extract_play_state_new_fade_out)] fade_out: f64) -> PyResult<PlayState> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <PlayStateImpl as ::lk_agents_abi::voice::background_audio::PlayState>::new(fade_out);
+        Ok(PlayState(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn done(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <PlayStateImpl as ::lk_agents_abi::voice::background_audio::PlayState>::done(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn stop_requested(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <PlayStateImpl as ::lk_agents_abi::voice::background_audio::PlayState>::stop_requested(&self.0);
+        Ok(out)
+    }
+
+    fn stop(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <PlayStateImpl as ::lk_agents_abi::voice::background_audio::PlayState>::stop(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(name = "mark_playout_done")]
+    fn finish(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <PlayStateImpl as ::lk_agents_abi::voice::background_audio::PlayState>::finish(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(name = "wait_for_playout")]
+    fn wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <PlayStateImpl as ::lk_agents_abi::voice::background_audio::PlayState>::wait(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
+type BackgroundAudioPlayerImpl = <crate::Selected as super::Implementations>::BackgroundAudioPlayer;
+
+fn _extract_background_audio_player_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+}
+
+fn _extract_background_audio_player_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
+    ::lk_agents_abi::python::number_from_py::<u16>(&obj, "num_channels")
+}
+
+fn _extract_background_audio_player_new_blocksize(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "blocksize")
+}
+
+fn _extract_background_audio_player_new_stream_timeout_ms(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "stream_timeout_ms")
+}
+
+fn _extract_background_audio_player_start_draw(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "draw")
+}
+
+fn _extract_background_audio_player_play_draw(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "draw")
+}
+
+fn _extract_background_audio_player_on_agent_state_draw(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "draw")
+}
+
+/// Runtime-owned mixer and published background track.
+#[pyclass(frozen, name = "BackgroundAudioPlayer", module = "livekit.agents._core")]
+pub struct BackgroundAudioPlayer(pub(crate) ::std::sync::Arc<BackgroundAudioPlayerImpl>);
+
+#[pymethods]
+impl BackgroundAudioPlayer {
+    #[new]
+    #[pyo3(signature = (sample_rate = 48000, num_channels = 1, *, blocksize = 4800, stream_timeout_ms = 200))]
+    fn new(#[pyo3(from_py_with = _extract_background_audio_player_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_background_audio_player_new_num_channels)] num_channels: u16, #[pyo3(from_py_with = _extract_background_audio_player_new_blocksize)] blocksize: usize, #[pyo3(from_py_with = _extract_background_audio_player_new_stream_timeout_ms)] stream_timeout_ms: u64) -> PyResult<BackgroundAudioPlayer> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::new(sample_rate, num_channels, blocksize, stream_timeout_ms);
+        Ok(BackgroundAudioPlayer(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (room, draw, *, ambient, choose, source = None))]
+    fn start<'py>(&self, py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, #[pyo3(from_py_with = _extract_background_audio_player_start_draw)] draw: f64, ambient: ::std::vec::Vec<::lk_agents_abi::voice::background_audio::Sound>, choose: bool, source: ::std::option::Option<::lk_agents_abi::voice::room_io::TrackSource>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::start(&this, room, draw, ambient, choose, source)
+                .await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (sounds, draw, *, looping = false, ambient = false, choose = true))]
+    fn play(&self, sounds: ::std::vec::Vec<::lk_agents_abi::voice::background_audio::Sound>, #[pyo3(from_py_with = _extract_background_audio_player_play_draw)] draw: f64, looping: bool, ambient: bool, choose: bool) -> PyResult<super::voice::PlayState> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::play(&self.0, sounds, draw, looping, ambient, choose).map_err(|e: ::lk_agents_abi::voice::background_audio::PlaybackError| <::lk_agents_abi::voice::background_audio::PlaybackError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(super::voice::PlayState(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (sounds, draw, thinking, *, choose = true))]
+    fn on_agent_state(&self, sounds: ::std::vec::Vec<::lk_agents_abi::voice::background_audio::Sound>, #[pyo3(from_py_with = _extract_background_audio_player_on_agent_state_draw)] draw: f64, thinking: bool, choose: bool) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::on_agent_state(&self.0, sounds, draw, thinking, choose).map_err(|e: ::lk_agents_abi::voice::background_audio::PlaybackError| <::lk_agents_abi::voice::background_audio::PlaybackError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[getter]
+    fn closed(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::closed(&self.0);
+        Ok(out)
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
 type PlaybackReportsImpl = <crate::Selected as super::Implementations>::PlaybackReports;
 

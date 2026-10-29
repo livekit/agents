@@ -33,6 +33,8 @@ use crate::{
 
 pub mod amd;
 mod avatar;
+mod background_audio;
+pub use background_audio::FakeBackgroundAudioPlayer;
 mod console;
 pub use console::{FakeCli, FakeConsolePort};
 mod eot;

@@ -530,61 +530,6 @@ class Sound:
     ) -> None: ...
 
 
-class PlayState:
-    """`_core.PlayState`: what `PlayHandle` wraps."""
-
-    def __init__(self, fade_out: float = 0.0) -> None: ...
-    @property
-    def done(self) -> bool: ...
-    @property
-    def stop_requested(self) -> bool: ...
-    def stop(self) -> bool: ...
-    def mark_playout_done(self) -> bool: ...
-    async def wait_for_playout(self) -> None: ...
-
-
-class BackgroundAudioPlayer:
-    """`_core.BackgroundAudioPlayer`: the mixer and the published track, under `background_audio.py`."""
-
-    def __init__(
-        self,
-        sample_rate: int = 48000,
-        num_channels: int = 1,
-        *,
-        blocksize: int = 4800,
-        stream_timeout_ms: int = 200,
-    ) -> None: ...
-    async def start(
-        self,
-        room: Any,
-        draw: float,
-        *,
-        ambient: list[Sound],
-        choose: bool,
-        source: str | None = None,
-    ) -> str: ...
-    def play(
-        self,
-        sounds: list[Sound],
-        draw: float,
-        *,
-        looping: bool = False,
-        ambient: bool = False,
-        choose: bool = True,
-    ) -> PlayState: ...
-    def on_agent_state(
-        self,
-        sounds: list[Sound],
-        draw: float,
-        thinking: bool,
-        *,
-        choose: bool = True,
-    ) -> None: ...
-    @property
-    def closed(self) -> bool: ...
-    async def aclose(self) -> None: ...
-
-
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
     configuration comes back as the dict `session.options` views.

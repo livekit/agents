@@ -392,10 +392,10 @@ impl Run {
         }
         // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
         if setup.background_audio {
-            let player = Arc::new(BackgroundAudioPlayer::for_host(SAMPLE_RATE, 1, 2_400, 200));
+            let player = Arc::new(FakeBackgroundAudioPlayer::new(run.registry.world.clone()));
             let room = Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone() });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
-            let _ = player.start_for_host(room, fakes::HALF, ambient, true, None).await;
+            let _ = player.start(room, ambient, fakes::HALF).await;
             run.background = Some(player);
         }
         if setup.avatar {

@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from livekit.agents.voice.avatar import AudioReceiver
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 
-from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, _core_RoomSession
+from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, Sound, _core_RoomSession
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 
 class DataStreamAudioOutput:
@@ -53,6 +55,57 @@ class DataStreamAudioReceiver:
         interrupted: bool,
     ) -> None: ...
     def aclose(self) -> None: ...
+
+class PlayState:
+    """A sound's monotone stop and completion handle."""
+    def __init__(self, fade_out: float = 0.0) -> None: ...
+    @property
+    def done(self) -> bool: ...
+    @property
+    def stop_requested(self) -> bool: ...
+    def stop(self) -> bool: ...
+    def mark_playout_done(self) -> bool: ...
+    async def wait_for_playout(self) -> None: ...
+
+class BackgroundAudioPlayer:
+    """Runtime-owned mixer and published background track."""
+    def __init__(
+        self,
+        sample_rate: int = 48000,
+        num_channels: int = 1,
+        *,
+        blocksize: int = 4800,
+        stream_timeout_ms: int = 200,
+    ) -> None: ...
+    async def start(
+        self,
+        room: _core_RoomSession,
+        draw: float,
+        *,
+        ambient: Sequence[Sound],
+        choose: bool,
+        source: str | None = None,
+    ) -> str: ...
+    def play(
+        self,
+        sounds: Sequence[Sound],
+        draw: float,
+        *,
+        looping: bool = False,
+        ambient: bool = False,
+        choose: bool = True,
+    ) -> PlayState: ...
+    def on_agent_state(
+        self,
+        sounds: Sequence[Sound],
+        draw: float,
+        thinking: bool,
+        *,
+        choose: bool = True,
+    ) -> None: ...
+    @property
+    def closed(self) -> bool: ...
+    async def aclose(self) -> None: ...
 
 def _core_playback_begin(tracker: PlaybackTracker, segment: PlaybackSegment) -> bool: ...
 

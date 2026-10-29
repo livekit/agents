@@ -1,12 +1,11 @@
 use super::*;
-use crate::test_support::FixedRoom;
+use lk_agents_test_support::room_io::FixedRoom;
 
 fn file(path: &str, probability: f64) -> Sound {
     Sound::for_host(Some(path.to_owned()), None, 1.0, probability, 0.0, 0.0)
 }
 
 /// A host stream of `frames` short frames.
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Frames(Mutex<u32>);
 
 impl FrameStream for Frames {
@@ -29,7 +28,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
     let room = rtc.room("background");
     let fixed = FixedRoom {
         rtc: room.clone(),
-        time: crate::agent_session::time::Timebase::from_virtual(clock),
+        time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
     };
     let player = Arc::new(BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200));
     player.start_for_host(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();
@@ -38,7 +37,6 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
 
 // Catches: a sound played before `start()` or after `aclose()` queued where nothing mixes it, and
 // a looping iterator accepted (it can only play once).
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn play_refuses_what_cannot_play() {
     let idle = BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200);

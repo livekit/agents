@@ -101,6 +101,8 @@ pub trait Implementations: 'static {
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
+    type PlayState: ::lk_agents_abi::voice::background_audio::PlayState;
+    type BackgroundAudioPlayer: ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer<State = Self::PlayState>;
     type PlaybackReports: ::lk_agents_abi::voice::io::PlaybackReports;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
@@ -277,6 +279,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<vad::InferenceVadStream>()?;
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;
+    m.add_class::<voice::PlayState>()?;
+    m.add_class::<voice::BackgroundAudioPlayer>()?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_begin, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_current_segment, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_note_capture, m)?)?;
