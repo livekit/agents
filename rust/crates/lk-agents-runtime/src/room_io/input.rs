@@ -13,7 +13,7 @@ use lk_agents_abi::{
 };
 use lk_agents_voice::room_io::input_state::{
     AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, Publication, TrackReaders, VIDEO_SOURCES,
-    end_of_track,
+    end_of_track, replayed_head,
 };
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -391,10 +391,8 @@ impl ParticipantAudioInput {
         let (Some(input_stream), Some(handler)) = (input_stream, &self.pre_connect) else {
             return true;
         };
-        let frames = match handler.wait_for_data(sid).await {
+        let frames = match replayed_head(handler.wait_for_data(sid).await) {
             Ok(frames) => frames,
-            // An absent or expired head doesn't invalidate the live subscription.
-            Err(IoError::PreConnectTimeout(_)) => return true,
             Err(error) => {
                 self.readers.deliver(generation, Err(error));
                 return false;

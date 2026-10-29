@@ -6,6 +6,7 @@
 
 use std::collections::BTreeSet;
 
+use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource, silence_frame};
 use lk_agents_abi::{AudioFrame, Closed};
 
@@ -227,6 +228,15 @@ impl TrackReaders {
 /// progress can end.
 pub fn end_of_track(sample_rate: u32, num_channels: u16) -> AudioFrame {
     silence_frame(sample_rate / 2, sample_rate, num_channels)
+}
+
+/// The pre-connect head a reader replays ahead of the live frames. A missing or expired head is
+/// no head, so the live track plays on; any other failure stops the reader with it.
+pub fn replayed_head(head: Result<Vec<AudioFrame>>) -> Result<Vec<AudioFrame>> {
+    match head {
+        Err(IoError::PreConnectTimeout(_)) => Ok(Vec::new()),
+        head => head,
+    }
 }
 
 #[cfg(test)]
