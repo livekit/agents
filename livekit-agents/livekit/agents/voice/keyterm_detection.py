@@ -229,6 +229,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
         # bound per agent activity (see start/aclose)
         self._stt: STT | None = None
+        self._owner: object | None = None  # activity that currently owns the binding
         self._llm: LLM | None = options["llm"] if isinstance(options["llm"], LLM) else None
         self._session: AgentSession | None = None
         self._turn_count = 0
@@ -248,8 +249,14 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if self._stt is not None:
             self._stt._update_session_keyterms(self.keyterms)
 
-    def start(self, session: AgentSession, stt: STT) -> None:
-        """Bind this activity's STT (always) and start detection (if enabled)."""
+    def start(self, session: AgentSession, stt: STT, *, owner: object | None = None) -> None:
+        """Bind this activity's STT (always) and start detection (if enabled).
+
+        ``owner`` identifies the activity that binds the detector. A late ``aclose`` from
+        a different owner is stale and leaves the current binding untouched.
+        """
+        self._owner = owner
+
         # static keyterms must reach the recognizer even with detection disabled
         if stt is not self._stt:
             self._stt = stt
@@ -289,8 +296,17 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if stt is not None and self.keyterms:
             stt._update_session_keyterms(self.keyterms)
 
-    async def aclose(self) -> None:
-        """Stop detection for the current activity; keyterm state is kept."""
+    async def aclose(self, *, owner: object | None = None) -> None:
+        """Stop detection for the current activity; keyterm state is kept.
+
+        When ``owner`` is given, only the activity that currently owns the binding may
+        release it: an activity closed late (such as a superseded ``AgentTask`` activity
+        closed from a detached task) must not disable detection for its replacement.
+        """
+        if owner is not None and self._owner is not owner:
+            return
+
+        self._owner = None
         if self._llm is not None:
             self._llm.off("metrics_collected", self._forward_metrics)
         if self._session is not None:

@@ -1373,7 +1373,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.stt, stt.STT):
             # bind the session's keyterm detector to this activity's STT (detection uses its
             # own LLM, configured via stt_context_options, not the agent's)
-            self._session._keyterm_detector.start(self._session, stt=self.stt)
+            self._session._keyterm_detector.start(self._session, stt=self.stt, owner=self)
 
             # forward conversation turns to STTs that consume context natively; gated by the STT's
             # capability and the session's forward_chat_context toggle. stateless, activity-scoped.
@@ -1398,6 +1398,10 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
+            if self._closed:
+                # aclose() already ran on_exit and released this activity
+                return None
+
             if self._on_exit_task is None:
                 self._on_exit_task = task = self._create_speech_task(
                     _traceable_on_exit(), name="AgentTask_on_exit"
@@ -1430,7 +1434,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused:
             return
 
-        await self._session._keyterm_detector.aclose()
+        await self._session._keyterm_detector.aclose(owner=self)
 
         self._scheduling_paused = True
         self._scheduling_resumed.clear()
@@ -1657,7 +1661,7 @@ class AgentActivity(RecognitionHooks):
             self._closed = True
             self._scheduling_resumed.set()
             self._cancel_preemptive_generation()
-            await self._session._keyterm_detector.aclose()
+            await self._session._keyterm_detector.aclose(owner=self)
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
