@@ -40,12 +40,37 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
     return _core.inference_quota_usage(list(headers.items()))  # type: ignore[no-any-return]
 
 
-def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:
-    """The inference key and secret: explicit, else ``LIVEKIT_INFERENCE_*``, else ``LIVEKIT_*``."""
-    key, secret = (
-        _core.inference_resolve_api_key(api_key),
-        _core.inference_resolve_api_secret(api_secret),
+def _from_job(explicit: str | None, override: str, setting: str) -> str | None:
+    """``explicit``, else, unless ``override`` is set, the running job's server ``setting``."""
+    if explicit is not None or override in os.environ:
+        return explicit
+    from ..job import get_job_context
+
+    try:
+        return get_job_context()._server_env.get(setting)
+    except RuntimeError:
+        return None
+
+
+def default_api_key(explicit: str | None) -> str:
+    """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the job's server key, else
+    ``LIVEKIT_API_KEY``; ``""`` when nothing resolves."""
+    return _core.inference_resolve_api_key(
+        _from_job(explicit, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY")
     )
+
+
+def default_api_secret(explicit: str | None) -> str:
+    """The same ladder for the secret."""
+    return _core.inference_resolve_api_secret(
+        _from_job(explicit, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET")
+    )
+
+
+def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:
+    """The inference key and secret (``default_api_key``, ``default_api_secret``); raises
+    when either is missing."""
+    key, secret = default_api_key(api_key), default_api_secret(api_secret)
     if not key:
         raise ValueError(
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"

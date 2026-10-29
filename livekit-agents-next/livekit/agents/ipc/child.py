@@ -89,6 +89,7 @@ def job_main(args: JobArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
         preload_modules=args.preload_modules,
         setup_fnc=args.setup_fnc,
+        server_env=args.env,
     )
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
     serve_parent(cast(socket.socket, args.mp_cch), job_proc)
@@ -142,8 +143,10 @@ class _JobProc:
         simulation_end_fnc: Callable[[Any], Any] | None = None,
         preload_modules: Sequence[str] = (),
         setup_fnc: Callable[[JobProcess], None] | None = None,
+        server_env: Sequence[tuple[str, str]] = (),
     ) -> None:
         self._executor_type = executor_type
+        self._server_env = dict(server_env)
         self._user_arguments = user_arguments
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
@@ -235,6 +238,7 @@ class _JobProc:
             info=info,
             room=self._room,
             run=self._run,
+            server_env=self._server_env,
         )
         # Reachable from the remote session port (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
@@ -422,6 +426,7 @@ def thread_main(args: JobArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
         preload_modules=args.preload_modules,
         setup_fnc=args.setup_fnc,
+        server_env=args.env,
     )
     serve_parent(cast(socket.socket, args.mp_cch), job_proc)
 

@@ -207,8 +207,12 @@ class JobContext:
         info: RunningJobInfo,
         room: rtc.Room,
         run: _core.JobRun,
+        server_env: dict[str, str],
     ) -> None:
         self._proc = proc
+        # the server's settings by variable name (``AgentServer(ws_url=, api_key=, ...)`` or the
+        # worker's environment): a job thread reads options given in code only from here
+        self._server_env = server_env
         self._info = info
         self._room = room
         # the participant entrypoints, the connection, the API calls and the recording's setup
@@ -488,14 +492,17 @@ class JobContext:
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
-        """Returns an LiveKitAPI for making API calls to LiveKit.
-
-        Credentials are sourced from environment variables if not provided explicitly.
-        When starting via the worker, values passed to `AgentServer` are exported to
-        LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
-        usable inside job entrypoints.
+        """Returns an LiveKitAPI for making API calls to LiveKit, with the server's URL and key
+        pair: the values passed to `AgentServer`, else LIVEKIT_URL, LIVEKIT_API_KEY and
+        LIVEKIT_API_SECRET.
         """
-        return api.LiveKitAPI(session=http_context.http_session())
+        env = self._server_env
+        return api.LiveKitAPI(
+            env.get("LIVEKIT_URL"),
+            env.get("LIVEKIT_API_KEY"),
+            env.get("LIVEKIT_API_SECRET"),
+            session=http_context.http_session(),
+        )
 
     @property
     def proc(self) -> JobProcess:

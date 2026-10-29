@@ -19,7 +19,12 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import is_given
-from ._utils import get_default_inference_url, get_inference_headers
+from ._utils import (
+    default_api_key,
+    default_api_secret,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 __all__ = ["TurnDetector", "TurnDetectorStream", "TurnDetectorModels", "TurnDetectorVersions"]
 
@@ -80,10 +85,8 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         """
         super().__init__()
         self._base_url = base_url if is_given(base_url) else get_default_inference_url()
-        self._api_key = _core.inference_resolve_api_key(api_key if is_given(api_key) else None)
-        self._api_secret = _core.inference_resolve_api_secret(
-            api_secret if is_given(api_secret) else None
-        )
+        self._api_key = default_api_key(api_key if is_given(api_key) else None)
+        self._api_secret = default_api_secret(api_secret if is_given(api_secret) else None)
         model, self._cloud, warnings = _core.eot_select(
             version if is_given(version) else None,
             utils.is_hosted(),
