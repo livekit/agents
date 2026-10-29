@@ -7,7 +7,7 @@ use crate::agent_activity::options::TurnDetection;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::{Close, ClosePhase, Closing, Driver, SpeechCall, Tx};
+use crate::agent_session::{Close, ClosePhase, Closing, Driver, SpeechCall};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
@@ -19,7 +19,7 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
-    AudioFrame, ChatMessage, Role, Spawner, StreamSink, ToolChoice, Ts, llm::realtime as rt,
+    AudioFrame, ChatMessage, Role, StreamSink, ToolChoice, Ts, llm::realtime as rt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -100,22 +100,6 @@ pub enum RealtimeWake {
         speech: SpeechId,
         cuts: Vec<rt::Truncate>,
     },
-}
-
-pub(crate) fn spawn_event_pump(
-    spawner: &Arc<dyn Spawner>,
-    session: Arc<dyn RealtimeSession>,
-    tx: Tx,
-) -> lk_agents_abi::AbortHandle {
-    use lk_agents_abi::SpawnerExt;
-    spawner.spawn_unboxed(async move {
-        while let Some(ev) = session.next_event().await {
-            if tx.send(RealtimeWake::Event(ev)).is_err() {
-                return; // the loop is gone; nothing to tell it
-            }
-        }
-        let _ = tx.send(RealtimeWake::Ended);
-    })
 }
 
 impl Driver {

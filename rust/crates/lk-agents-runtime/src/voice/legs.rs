@@ -153,6 +153,20 @@ pub(super) enum PendingLeg {
 }
 
 impl Runtime {
+    /// Preserve the provider's event order, including failures and its final end notification.
+    pub(super) fn pump_realtime(&self, session: Arc<dyn lk_agents_abi::RealtimeSession>) {
+        let tx = self.reports.clone();
+        self.shared.spawner.spawn_unboxed(async move {
+            use lk_agents_voice::agent_activity::realtime::RealtimeWake;
+            while let Some(event) = session.next_event().await {
+                if tx.send(RealtimeWake::Event(event)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(RealtimeWake::Ended);
+        });
+    }
+
     /// The legs the session opens with: the opening streams' drains and the interruption
     /// detector's verdicts join the queue until `Closing`.
     pub(super) fn start_legs(&mut self, opening: Vec<OpeningLeg>) {

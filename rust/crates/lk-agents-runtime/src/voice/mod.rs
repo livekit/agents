@@ -92,6 +92,7 @@ impl Runtime {
             source,
             eot,
             interruption,
+            realtime_events,
             room_events: (room, room_io),
             video: video_in,
             shared,
@@ -127,6 +128,9 @@ impl Runtime {
             predictions: Vec::new(),
             interruption,
         };
+        if let Some(session) = realtime_events {
+            runtime.pump_realtime(session);
+        }
         let ivr_detection = runtime.shared.view.borrow().config.effective.turn.ivr_detection();
         ivr::start(runtime.peer.clone(), ivr_detection);
         if let Some(room_io) = room_io {

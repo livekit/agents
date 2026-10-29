@@ -34,6 +34,8 @@ pub struct SessionCores {
     pub eot: Option<Arc<dyn EotDetector>>,
     /// The interruption detector, whose verdicts the executor pumps into the queue.
     pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
+    /// The opened realtime session whose events are read after the executor adopts the cores.
+    pub realtime_events: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
     /// The room's events and the room IO's, forwarded into the queue until `Closing`.
     pub room_events:
         (Option<Rx<RoomEvent>>, Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>),
@@ -223,7 +225,8 @@ impl DriverBuilder {
         let opened =
             executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone()).await?;
         self.install_legs(&mut sinks, opened);
-        let realtime = self.open_realtime(&mut sinks, &queue).await?;
+        let realtime = self.open_realtime(&mut sinks).await?;
+        let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));
         let Sinks { by_channel: sinks, forwarder } = sinks;
 
         // The microphone, read by the runtime.
@@ -319,6 +322,7 @@ impl DriverBuilder {
             source: audio_in,
             eot,
             interruption,
+            realtime_events,
             room_events: (self.room_events.take(), self.room_io_events.take()),
             video: self.video_in.take(),
             shared,
@@ -401,7 +405,6 @@ impl DriverBuilder {
     async fn open_realtime(
         &mut self,
         sinks: &mut Sinks,
-        queue: &Tx,
     ) -> Result<Option<RealtimeStart>, DriverError> {
         let Some(model) = &self.realtime else {
             return Ok(None);
@@ -427,13 +430,6 @@ impl DriverBuilder {
         let session = model.session(disabled).await?;
         let sink = crate::agent_activity::realtime::RealtimeAudioSink::new(Arc::clone(&session));
         sinks.install(&self.resources, AudioChannel::Realtime, Arc::new(sink));
-        // The opening agent is sent ungated by `mutable_*` (they govern mid-session changes)
-        // through `push_frame` once the driver exists.
-        crate::agent_activity::realtime::spawn_event_pump(
-            &self.spawner,
-            Arc::clone(&session),
-            queue.clone(),
-        );
         Ok(Some(RealtimeStart { session, caps, disabled, resolved: side.turn_detection_mode }))
     }
 }
