@@ -902,7 +902,7 @@ impl Resolver<'_> {
             let from_items = words.iter().any(|w| w == "from_items");
             let host = match (
                 external,
-                module_name.or_else(|| file_module(&k.modules[module].items)),
+                module_name.or_else(|| file_default(&k.modules[module].items, "module")),
             ) {
                 (Some(path), _) => {
                     let (module, name) = path
@@ -1201,17 +1201,8 @@ fn python_target(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>, b
     (name, module, typed_dict)
 }
 
-/// The `#[host(file(module = ".."))]` default of the records in a file.
-fn file_module(items: &[syn::Item]) -> Option<String> {
-    file_text(items, "module")
-}
-
-/// The `#[host(file(path = ".."))]` default public module of the records in a file.
-fn file_path(items: &[syn::Item]) -> Option<String> {
-    file_text(items, "path")
-}
-
-fn file_text(items: &[syn::Item], key: &str) -> Option<String> {
+/// `key` of a file's `#[host(file(module = "..", path = ".."))]`: its records' defaults.
+fn file_default(items: &[syn::Item], key: &str) -> Option<String> {
     items.iter().find_map(|i| {
         let syn::Item::Const(c) = i else { return None };
         let entries = voc::read(&c.attrs).ok()?;

@@ -127,8 +127,8 @@ impl Resolver<'_> {
         // The file's public path covers the records of the file's own module only.
         let path = match voc::text(at, &record.nested, "path")? {
             Some(path) => Some(path),
-            None if super::file_module(&module.items).as_ref() == Some(&py_module) => {
-                super::file_path(&module.items)
+            None if super::file_default(&module.items, "module").as_ref() == Some(&py_module) => {
+                super::file_default(&module.items, "path")
             }
             None => None,
         };
