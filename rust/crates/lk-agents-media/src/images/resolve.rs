@@ -36,6 +36,14 @@ impl Images {
 
 /// How a realtime model prepares its images: on the image worker it already runs on.
 impl ImageResolver for Images {
+    fn prepare(
+        &self,
+        input: ImageInput,
+        options: ImageEncodeOptions,
+    ) -> Result<PreparedImage, String> {
+        Images::prepare(self, input, options)
+    }
+
     fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
         let input = match &image.image {
             ImageSource::Url(url) => {

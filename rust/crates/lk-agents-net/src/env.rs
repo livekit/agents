@@ -1,4 +1,4 @@
-//! What the hosting process lends the async crates' clients (decisions 88, 100): its Tokio runtime,
+//! What the hosting process lends the async crates' clients: its Tokio runtime,
 //! the executor its host awaits on, the host's clock, its pools and admissions and the voice core's
 //! text algorithms, as one [`ProcessEnv`] value. Internal constructors take the handles they need;
 //! a class the host constructs receives the runtime's value from the generated bindings.

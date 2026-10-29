@@ -54,6 +54,17 @@ impl SerializedImage {
 /// Implemented above the purity line. A `String` error so the encoder need not know `FormatError`.
 pub trait ImageResolver {
     fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String>;
+
+    /// Encodes `input` as the host asked (`encode_image`, `serialize_image`): CPU work for an
+    /// admitted image worker.
+    fn prepare(
+        &self,
+        input: crate::media::images::ImageInput,
+        options: crate::media::images::ImageEncodeOptions,
+    ) -> Result<crate::media::images::PreparedImage, String> {
+        let _ = (input, options);
+        Err("no image preparation in this process".into())
+    }
 }
 
 /// Tagged bytes leaf consumed by generated provider-value conversions.

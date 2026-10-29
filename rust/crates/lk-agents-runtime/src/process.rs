@@ -131,7 +131,7 @@ pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
     }
 }
 
-/// What this process lends the declared classes (decision 100). Reading it starts nothing: the
+/// What this process lends the declared classes. Reading it starts nothing: the
 /// runtime-bound handles start the process runtime on first use.
 pub fn env() -> lk_agents_net::env::ProcessEnv {
     lk_agents_net::env::ProcessEnv {

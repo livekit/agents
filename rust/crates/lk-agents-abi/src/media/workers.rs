@@ -22,7 +22,7 @@ pub enum WorkerError {
     Unavailable(String),
 }
 
-/// The process's admitted native worker pool as the runtime lends it (decisions 84, 100);
+/// The process's admitted native worker pool as the runtime lends it;
 /// `lk_agents_media::workers::MediaWorkers` is its typed face.
 pub trait MediaPool: Send + Sync {
     /// Reserve a slot of `class`, or refuse at once.

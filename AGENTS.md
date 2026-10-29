@@ -259,9 +259,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   OpenTelemetry SDK through HostInvoker. The LiveKit Cloud session report and recording upload
   is not user telemetry; it is async Rust in `lk-agents-net`.
 - The runtime owns the process Tokio runtime, fork guard and media pool and lends them as one
-  `lk_agents_net::env::ProcessEnv` value (decision 100): a declared class declares
-  `#[host(env)] type Env;` and the generated binding passes the runtime's value to it; no `Env`
-  type parameters, and no field is a callback slot for another layer.
+  `lk_agents_net::env::ProcessEnv` value: a declared class declares `#[host(env)] type Env;` and
+  the generated binding passes the runtime's value to it; no `Env` type parameters. Its only
+  functions from another layer are the voice core's text algorithms, lent as plain functions.
 - Runtime executor modules (`voice/`, `room_io/`, `avatar/`, `rtc/`) use no Tokio runtime
   (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`, `Runtime`): they spawn and sleep only
   through the injected `Spawner` and `Clock`, so the DST runs them on its deterministic

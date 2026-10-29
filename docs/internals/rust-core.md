@@ -96,8 +96,8 @@ adapters select. Async I/O crates depend on ABI and never on the runtime,
 and HostInvoker's declared port.
 
 The runtime owns the process-wide Tokio runtime, the fork guard and the media
-pool instance, and lends them as one value, `lk_agents_net::env::ProcessEnv`
-(decision 100), never through a dependency on the runtime. It is a plain struct:
+pool instance, and lends them as one value, `lk_agents_net::env::ProcessEnv`,
+never through a dependency on the runtime. It is a plain struct:
 
 | Field | Lends |
 | --- | --- |
@@ -106,7 +106,7 @@ pool instance, and lends them as one value, `lk_agents_net::env::ProcessEnv`
 | `http`, `report_admission` | The shared HTTP pool and the session report admission |
 | `workers` | The media worker pool, as the ABI-declared `MediaPool` handle (`lk_agents_media::workers::MediaWorkers` is its typed face) |
 | `worker_io` | The worker I/O on the process runtime |
-| `images`, `strip_assistant_markup`, `speech_text` | Image preparation and the voice core's text algorithms providers and judges apply |
+| `images`, `strip_assistant_markup`, `speech_text` | Image preparation and encoding, and the voice core's text algorithms providers and judges apply |
 
 A declared class that needs the process declares `#[host(env)] type Env;` and
 takes `env: &Self::Env` in its constructor or function; the generated binding
@@ -114,9 +114,10 @@ passes the runtime's value (`lk_agents_runtime::process::env()`), hidden from th
 host's signature. Internal constructors take the handles they need; there is no
 `Env` type parameter. Runtime-bound handles are read on use, so constructing a
 class starts nothing. Rust callers and tests build their own value
-(`ProcessEnv::current_runtime()`, with fakes as needed). No field is a callback
-slot for another layer (the A2A door is a runtime-implemented declared class
-with its own constructor).
+(`ProcessEnv::current_runtime()`, with fakes as needed). The voice core's text
+algorithms (`strip_assistant_markup`, `speech_text`) are the only functions it
+lends from another layer: plain functions the runtime selects, so providers and
+judges need no voice dependency; nothing registers into it at run time.
 
 The sans-I/O crates and ABI have no runtime, executor, Tokio, futures,
 async-trait or pyo3 dependency. Async I/O crates use Tokio, process and database

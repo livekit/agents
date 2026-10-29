@@ -435,7 +435,9 @@ mod bench {
             resize_strategy: resize.then(|| "center_aspect_fit".into()),
         };
         let workers = lk_agents_runtime::process::workers()?;
-        let images = lk_agents_media::images::Images::default();
+        let images: std::sync::Arc<
+            dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync,
+        > = std::sync::Arc::new(lk_agents_media::images::Images::default());
         let (stop, heartbeat, observations) = start_heartbeat().await;
         let mut encoded = 0;
         let mut waves = 0;

@@ -11,6 +11,7 @@ use lk_agents_media::images::Images;
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 
 use crate::process::Process;
+use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_net::env::ProcessEnv;
 
 pub struct ImageFunctions;
@@ -72,13 +73,13 @@ async fn prepare(
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, ImageError> {
     let workers = (env.workers)().map(MediaWorkers::from).map_err(ImageError)?;
-    prepare_on(&workers, Process::images(), input, options).await.map_err(ImageError)
+    prepare_on(&workers, env.images.clone(), input, options).await.map_err(ImageError)
 }
 
 /// Prepares `input` on an admitted image worker, keeping the caller's loop serviceable.
 pub async fn prepare_on(
     workers: &MediaWorkers,
-    images: Images,
+    images: Arc<dyn ImageResolver + Send + Sync>,
     input: ImageInput,
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, String> {
@@ -117,7 +118,7 @@ mod tests {
         let workers = crate::process::workers().unwrap();
         let mut encoding = Box::pin(prepare_on(
             &workers,
-            Images::default(),
+            Arc::new(Images::default()),
             ImageInput::Frame(frame),
             ImageEncodeOptions { format: "JPEG".into(), ..Default::default() },
         ));
