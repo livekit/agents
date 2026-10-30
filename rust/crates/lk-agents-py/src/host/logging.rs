@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lk_agents_runtime::net::lock::Mutex;
 use log::{Level, LevelFilter, Log, Metadata, Record};
@@ -16,6 +16,8 @@ use pyo3::types::PyDict;
 
 const QUEUE: usize = 4096;
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a logger's cached level filters lines before one line is let through to reread it.
+const LEVEL_TTL: Duration = Duration::from_secs(1);
 
 struct Line {
     level: Level,
@@ -41,9 +43,10 @@ struct Queue {
 struct Forwarder {
     queue: Mutex<Option<Queue>>,
     dropped: AtomicU64,
-    /// Each logger's effective level, as the drain last read it: `enabled` reads it without the
-    /// GIL. A target not read yet is enabled.
-    levels: Mutex<BTreeMap<String, LevelFilter>>,
+    /// Each logger's effective level and when the drain last read it: `enabled` reads it without
+    /// the GIL. A target not read yet, or read more than [`LEVEL_TTL`] ago, is enabled, so the
+    /// next line refreshes a level the host raised since.
+    levels: Mutex<BTreeMap<String, (LevelFilter, Instant)>>,
 }
 
 static FORWARDER: OnceLock<Forwarder> = OnceLock::new();
@@ -123,7 +126,9 @@ pub fn flush() {
 impl Forwarder {
     fn enabled(&self, metadata: &Metadata) -> bool {
         let levels = self.levels.lock();
-        levels.get(metadata.target()).is_none_or(|filter| metadata.level() <= *filter)
+        levels.get(metadata.target()).is_none_or(|(filter, read)| {
+            metadata.level() <= *filter || read.elapsed() > LEVEL_TTL
+        })
     }
 
     fn queue(&self, record: &Record) {
@@ -224,7 +229,7 @@ fn emit(py: Python<'_>, line: &Line) -> PyResult<()> {
         Level::Trace => 5,
     };
     let effective: u32 = logger.call_method0("getEffectiveLevel")?.extract()?;
-    forwarder().levels.lock().insert(line.target.clone(), filter(effective));
+    forwarder().levels.lock().insert(line.target.clone(), (filter(effective), Instant::now()));
     if level < effective {
         return Ok(());
     }
