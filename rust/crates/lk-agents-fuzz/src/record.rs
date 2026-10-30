@@ -643,6 +643,8 @@ pub struct Recording {
     /// When the product was handed each source's first chunk of audio: a synthesis stream's, once
     /// the voice's time to first audio passed, or a realtime generation's first delta.
     delivered: BTreeMap<(Kind, u32), Observed>,
+    /// When each synthesis stream's voice produces its first audio, in ms of the run.
+    first_audio_due: BTreeMap<u32, u64>,
     /// What each realtime socket's server refused or answered wrongly, by socket.
     breaches: Vec<(Observed, u32, Breach)>,
     /// Realtime audio the person heard, by generation (`Tag::generated`'s id) and milliseconds:
@@ -834,6 +836,11 @@ impl Recording {
         &self.delivered
     }
 
+    /// When each synthesis stream's first audio is due, by its `Kind::Tts` index, in ms.
+    pub fn first_audio_due(&self) -> &BTreeMap<u32, u64> {
+        &self.first_audio_due
+    }
+
     /// What reached each provider stream from the microphone, in order.
     pub fn forwarded(&self) -> &[(Observed, Kind, u32, Vec<Tag>)] {
         &self.forwarded
@@ -950,6 +957,10 @@ impl Recording {
         if chunk == 0 {
             self.delivered.entry((Kind::Generation, generation)).or_insert(at);
         }
+    }
+
+    pub fn record_first_audio_due(&mut self, nth: u32, at_ms: u64) {
+        self.first_audio_due.insert(nth, at_ms);
     }
 
     /// The product was handed a source's first audio.

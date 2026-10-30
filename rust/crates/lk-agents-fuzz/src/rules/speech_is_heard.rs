@@ -41,8 +41,17 @@ impl Rule for SpeechIsHeard {
     const CONTRACT: Contract = Contract {
         id: "speech_is_heard",
         guarantee: "A speech plays within a bound of its creation, ends, or waits on something that still holds: an unanswered provider, tool or hook, the floor held by a playing speech or the developer, authorization held, the person speaking, the close.",
-        examples: &[played_in_time, waited_on_the_model, waited_behind_the_persons_utterance],
-        counterexamples: &[silent_behind_a_paused_speech, silent_after_the_persons_utterance],
+        examples: &[
+            played_in_time,
+            waited_on_the_model,
+            waited_behind_the_persons_utterance,
+            waited_on_a_stalled_voice,
+        ],
+        counterexamples: &[
+            silent_behind_a_paused_speech,
+            silent_after_the_persons_utterance,
+            silent_with_the_voice_due,
+        ],
         probe: None,
     };
 
@@ -289,9 +298,11 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
         return Some("owed by the case");
     }
     // A voice asked before the bound whose first audio comes on its own clock after it: the
-    // model answered late, and the voice's time to first audio is still running (seed 62764).
+    // model answered late, and the voice's time to first audio is still running (seed 62764), or
+    // the voice stalls past the bound and the speech is cut before its audio comes (seed 12082).
     let voicing = r.opened().iter().filter(|o| o.kind == Kind::Tts && before(&o.at)).any(|o| {
         r.delivered().get(&(Kind::Tts, o.nth)).is_some_and(|at| !before(at))
+            || r.first_audio_due().get(&o.nth).is_some_and(|due| *due > deadline)
     });
     if voicing {
         return Some("the voice's first audio");
@@ -511,6 +522,30 @@ fn waited_on_the_model() -> Recording {
         .speech_created(4, SpeechKind::GenerateReply)
         .speech(4, Handle::live())
         .chat(4)
+        .later(BOUND_MS * 2)
+        .done()
+}
+
+/// A `say` whose voice stalls past the bound before its first audio, cut before that audio came.
+fn waited_on_a_stalled_voice() -> Recording {
+    voiced(BOUND_MS * 3)
+}
+
+/// The same voice due long before the bound, its audio never handed to the speaker.
+fn silent_with_the_voice_due() -> Recording {
+    voiced(100)
+}
+
+fn voiced(first_audio_ms: u64) -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    Authored::new()
+        // The case's own speaker, not the room's: nobody need subscribe.
+        .output(true)
+        .speech_created(4, SpeechKind::Say)
+        .speech(4, Handle::live())
+        .tts()
+        .first_audio_due(0, first_audio_ms)
+        .closed(Kind::Tts, 0)
         .later(BOUND_MS * 2)
         .done()
 }

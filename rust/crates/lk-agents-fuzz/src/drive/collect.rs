@@ -173,6 +173,9 @@ impl Run {
                 Record::Delivered { at, slot } => {
                     self.record.record_delivered(at, slot.kind, slot.nth);
                 }
+                Record::FirstAudioDue { at, slot, after_ms } => {
+                    self.record.record_first_audio_due(slot.nth, at.at_ms + after_ms);
+                }
                 Record::Generated { at, generation, chunk } => {
                     self.record.record_generated(at, generation % 255, chunk);
                 }

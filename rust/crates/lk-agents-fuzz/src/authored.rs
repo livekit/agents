@@ -220,6 +220,13 @@ impl Authored {
         self
     }
 
+    /// The n-th synthesis stream's voice produces its first audio `after_ms` from now.
+    pub fn first_audio_due(mut self, nth: u32, after_ms: u64) -> Self {
+        let at = self.next();
+        self.recording.record_first_audio_due(nth, at.at_ms + after_ms);
+        self
+    }
+
     /// The product was handed the first audio of the n-th source of `kind`.
     pub fn delivered(mut self, kind: Kind, nth: u32) -> Self {
         let at = self.next();

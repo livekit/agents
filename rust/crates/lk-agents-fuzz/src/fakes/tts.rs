@@ -247,6 +247,7 @@ impl Tts for FakeTts {
                 ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
             let first_audio = self.latency.as_ref().map(|rng| {
                 let ms = delay(&mut rng.lock().unwrap(), &FIRST_AUDIO, &self.timing);
+                self.registry.record_first_audio_due(slot, ms);
                 tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
             });
             if first_audio.is_some() {

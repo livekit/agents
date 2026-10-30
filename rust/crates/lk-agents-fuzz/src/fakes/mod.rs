@@ -245,6 +245,12 @@ pub enum Record {
         at: Observed,
         slot: Slot,
     },
+    /// A synthesis stream opened whose first audio the voice produces this long after.
+    FirstAudioDue {
+        at: Observed,
+        slot: Slot,
+        after_ms: u64,
+    },
     /// The session opened one of an agent's nodes.
     Node {
         at: Observed,
@@ -492,6 +498,11 @@ impl Registry {
     pub(super) fn record_generated(&self, generation: u32, chunk: u16) {
         let at = self.stamps.next();
         self.write(Record::Generated { at, generation, chunk });
+    }
+
+    fn record_first_audio_due(&self, slot: Slot, after_ms: u64) {
+        let at = self.stamps.next();
+        self.write(Record::FirstAudioDue { at, slot, after_ms });
     }
 
     fn record_delivered(&self, slot: Slot) {
