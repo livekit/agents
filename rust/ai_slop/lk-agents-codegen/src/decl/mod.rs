@@ -43,7 +43,12 @@ pub struct RecordDecl {
     pub source: String,
     pub doc: Vec<String>,
     pub extract: bool,
+    /// `extract(py)`: the read is `lk-agents-py`'s hand-written `conversions::<record>_from_py`
+    /// (a field the model does not hold as such, like a frame's `userdata`).
+    pub extract_by_hand: bool,
     pub emit: bool,
+    /// `emit(py)`: the host value is `conversions::<record>_to_py`'s.
+    pub emit_by_hand: bool,
     /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
     /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
     pub transparent: bool,

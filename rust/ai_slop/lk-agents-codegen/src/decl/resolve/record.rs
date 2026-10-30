@@ -266,7 +266,9 @@ impl Resolver<'_> {
             source: module.file.clone(),
             doc: doc(item_attrs(item)),
             extract,
+            extract_by_hand: by_hand(at, &record.nested, "extract")?,
             emit,
+            emit_by_hand: by_hand(at, &record.nested, "emit")?,
             transparent,
             typed_dict,
             enumeration,
@@ -565,6 +567,13 @@ pub(super) fn record_target(
         return Err(format!("{at}: a record crosses some way: extract, emit or both"));
     }
     Ok((module, name, extract, emit))
+}
+
+/// `extract(py)` / `emit(py)`: that direction is `lk-agents-py`'s hand-written conversion.
+fn by_hand(at: &str, entries: &[Entry], key: &str) -> Result<bool, String> {
+    let Some(e) = voc::find(entries, key) else { return Ok(false) };
+    voc::only(at, &e.nested, &["py"])?;
+    Ok(voc::find(&e.nested, "py").is_some())
 }
 
 /// A unit-only enum: it crosses as its string.

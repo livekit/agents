@@ -102,7 +102,7 @@ const NOT_A: &str = "\n/// `obj` is not an instance of the model(s) `expected` n
 pub(crate) fn holds_record(ty: &Ty) -> bool {
     match ty {
         Ty::Record(r) => {
-            matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs)
+            matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs | HostForm::Converted(_))
         }
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => {
             holds_record(t)
@@ -140,7 +140,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             let class = class_ref(&module, &r.name);
             // An emit-only record's fields need no reader (an emitted failure has none).
             let reads =
-                if r.extract { struct_reads(&r.name, fields, "obj")? } else { String::new() };
+                if r.extract && !r.extract_by_hand { struct_reads(&r.name, fields, "obj")? } else { String::new() };
             let check = format!(
                 "        if !obj.is_instance({class})? {{\n            return Err(super::not_a(obj, {name:?}));\n        }}\n",
                 name = r.name
@@ -174,7 +174,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                 )
             };
             // An extract-only record may hold what never returns to the host (a proxy).
-            let emit = if r.emit {
+            let emit = if r.emit && !r.emit_by_hand {
                 let (pattern, sets) = struct_emits(fields)?;
                 let built = construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)");
                 // A private attribute is set on the built model; `None` keeps its default.
@@ -267,11 +267,15 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             (extract, emit)
         }
     };
-    for c in &classes {
+    // A record crossing only by hand-written conversions names its class nowhere here.
+    let generated = (r.extract && !r.extract_by_hand) || (r.emit && !r.emit_by_hand);
+    for c in classes.iter().filter(|_| generated) {
         s.push_str(&format!("static {}: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =\n    ::pyo3::sync::PyOnceLock::new();\n", cell(c)));
     }
     let snake = cell(&r.name).to_lowercase();
-    if r.extract {
+    if r.extract_by_hand {
+        s.push_str(&format!("\npub use crate::conversions::{snake}_from_py;\n"));
+    } else if r.extract {
         let extract = extract
             .replace("Ok(Self {", &format!("Ok({rust} {{"))
             .replace("= Self {", &format!("= {rust} {{"))
@@ -281,7 +285,9 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             if classes.is_empty() || !uses_py(&extract) { "" } else { "    let py = obj.py();\n" }
         ));
     }
-    if r.emit {
+    if r.emit_by_hand {
+        s.push_str(&format!("\npub use crate::conversions::{snake}_to_py;\n"));
+    } else if r.emit {
         let emit = emit
             .replace("let Self {", &format!("let {rust} {{"))
             .replace("} = self;", "} = value;")
