@@ -465,3 +465,30 @@ fn a_sink_that_pushes_again_from_its_push_does_not_deadlock() {
     let heard = finished.recv_timeout(std::time::Duration::from_secs(5)).expect("deadlocked");
     assert_eq!(heard, [1, 2, 3, 4]);
 }
+
+// Catches: a frame refused by an attempt a later one already replaced held for the next failover,
+// so it is replayed after the frames the later attempt heard since, or never.
+#[test]
+fn a_frame_refused_by_a_replaced_attempt_goes_to_the_one_serving() {
+    let input = Arc::new(Input::default());
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&heard);
+    let next: Mutex<Option<SttSink>> = Mutex::new(Some(Box::new(Hook(move |rate| {
+        log.lock().push(rate);
+        Ok(())
+    }))));
+    let weak = Arc::downgrade(&input);
+    input.install(Box::new(Hook(move |_| {
+        // the attempt failed and the next one was installed before this refusal came back
+        let input = weak.upgrade().unwrap();
+        input.clear();
+        if let Some(sink) = next.lock().take() {
+            input.install(sink);
+        }
+        Err(ApiError::new("closed").into())
+    })));
+    input.send(frame(1)).unwrap();
+    input.send(frame(2)).unwrap();
+    assert_eq!(*heard.lock(), [1, 2]);
+    assert!(input.state.lock().held.is_empty());
+}

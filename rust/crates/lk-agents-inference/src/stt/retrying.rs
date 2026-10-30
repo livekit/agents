@@ -349,25 +349,28 @@ impl Input {
     }
 
     /// Held while no attempt takes it, a failed attempt's refusal included: the next one hears it.
+    /// Refused by an attempt a later one already replaced, it goes to that later one, so it is
+    /// not replayed behind what that attempt heard since.
     fn send(&self, item: Pushed) -> Result<(), ProviderError> {
-        let sink = {
+        loop {
+            let sink = {
+                let mut st = self.state.lock();
+                let Some(sink) = st.sink.clone() else {
+                    Self::hold(&mut st, item);
+                    return Ok(());
+                };
+                sink
+            };
+            let Err(error) = deliver(sink.as_ref(), item.clone()) else { return Ok(()) };
             let mut st = self.state.lock();
-            let Some(sink) = st.sink.clone() else {
+            if st.sink.as_ref().is_some_and(|current| Arc::ptr_eq(current, &sink)) {
+                st.sink = None;
+                st.failure = Some(error);
+                self.failed.notify_one();
                 Self::hold(&mut st, item);
                 return Ok(());
-            };
-            sink
-        };
-        let Err(error) = deliver(sink.as_ref(), item.clone()) else { return Ok(()) };
-        let mut st = self.state.lock();
-        // A later attempt may already serve: only the refusing one is dropped.
-        if st.sink.as_ref().is_some_and(|current| Arc::ptr_eq(current, &sink)) {
-            st.sink = None;
-            st.failure = Some(error);
-            self.failed.notify_one();
+            }
         }
-        Self::hold(&mut st, item);
-        Ok(())
     }
 
     fn hold(st: &mut InputState, item: Pushed) {
