@@ -388,6 +388,11 @@ pub trait Realtime: Send + Sync + 'static {
 
     fn label(&self) -> String;
 
+    /// The model and provider its responses are counted and labelled against.
+    fn id(&self) -> crate::ProviderId {
+        crate::types::identity::ProviderId::of_label(self.label())
+    }
+
     fn capabilities(&self) -> RealtimeCapabilities;
 
     /// `session(turn_detection_disabled=..)`: the session's choice, not the model's.

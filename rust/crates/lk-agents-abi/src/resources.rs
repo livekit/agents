@@ -58,6 +58,8 @@ pub struct TtsRef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RealtimeRef {
     pub id: ResourceId,
+    /// The model that opened it, which its responses are counted against.
+    pub provider: ProviderId,
     pub capabilities: RealtimeCapabilities,
 }
 
@@ -145,9 +147,13 @@ impl Resources {
         }
     }
 
-    pub fn register_realtime(&self, session: Arc<dyn RealtimeSession>) -> RealtimeRef {
+    pub fn register_realtime(
+        &self,
+        session: Arc<dyn RealtimeSession>,
+        provider: ProviderId,
+    ) -> RealtimeRef {
         let capabilities = session.capabilities();
-        RealtimeRef { id: self.insert(Resource::Realtime(session)), capabilities }
+        RealtimeRef { id: self.insert(Resource::Realtime(session)), provider, capabilities }
     }
 
     pub fn realtime(&self, id: ResourceId) -> Option<Arc<dyn RealtimeSession>> {

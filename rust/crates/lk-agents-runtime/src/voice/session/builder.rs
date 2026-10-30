@@ -2,17 +2,19 @@
 //! its providers, legs and options. The [`SessionExecutor`] opens the streams and runs the tasks
 //! that feed them.
 
-use crate::voice::session::Tx;
 use super::calls::Calls;
 use super::shared::{PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
+use crate::voice::session::Tx;
 use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamSink, Stt, Tts, Vad};
 use lk_agents_voice::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
-use lk_agents_voice::agent_session::{Driver, DriverError, Event, HostEvent, InitialSession, Now, SessionParts};
+use lk_agents_voice::agent_session::{
+    Driver, DriverError, Event, HostEvent, InitialSession, Now, SessionParts,
+};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand};
 use lk_agents_voice::generation::Instructions;
@@ -288,9 +290,10 @@ impl DriverBuilder {
         let time = self.time.clone();
         let interruption = self.interruption.take();
         let eot = self.eot.take();
-        let (rt_session, rt_caps, rt_disabled, rt_resolved) = match realtime {
-            Some(realtime) => (
-                Some(self.resources.register_realtime(realtime.session)),
+        let rt_model = self.realtime.as_ref().map(|model| model.id());
+        let (rt_session, rt_caps, rt_disabled, rt_resolved) = match realtime.zip(rt_model) {
+            Some((realtime, model)) => (
+                Some(self.resources.register_realtime(realtime.session, model)),
                 realtime.caps,
                 realtime.disabled,
                 realtime.resolved,

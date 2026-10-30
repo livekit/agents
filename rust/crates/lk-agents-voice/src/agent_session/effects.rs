@@ -13,11 +13,11 @@ use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionM
 use crate::events::SessionEvent;
 use crate::run_result::Owned;
 use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, TurnStep};
-use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
 use lk_agents_abi::{FrameId, Ts};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -818,15 +818,24 @@ impl Driver {
             }));
         }
         if let SessionEvent::MetricsCollected { metrics, speech } = &ev {
-            // A model request the session saw start is measured by its record; others count here.
+            // A request the session saw start is measured by its record; others count here.
+            use lk_agents_abi::metrics::base::AgentMetrics;
+            use lk_agents_core::usage::ModelKind;
+            let s = &mut self.session;
             let started = match (&**metrics, speech) {
-                (lk_agents_abi::metrics::base::AgentMetrics::Llm(_), Some(speech)) => self
-                    .session
-                    .llm_requests
-                    .get_mut(speech)
-                    .and_then(std::collections::VecDeque::pop_front),
+                (AgentMetrics::Llm(_), Some(speech)) => {
+                    s.requests.get_mut(&(*speech, ModelKind::Llm))
+                }
+                (AgentMetrics::Tts(_), Some(speech)) => {
+                    s.requests.get_mut(&(*speech, ModelKind::Tts))
+                }
                 _ => None,
-            };
+            }
+            .and_then(std::collections::VecDeque::pop_front);
+            let started = started.or_else(|| match &**metrics {
+                AgentMetrics::RealtimeModel(m) => s.realtime_requests.remove(&m.request_id),
+                _ => None,
+            });
             match started {
                 Some(request) => self.session.usage.finish_measured(request, metrics),
                 None => self.session.usage.observe(metrics),

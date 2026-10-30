@@ -9,7 +9,7 @@ use lk_agents_abi::usage::{
     EotUsage, InterruptionUsage, LlmUsage, ModelUsage, SttUsage, TokenUsage, TtsUsage, Usage,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ModelKind {
     Llm,
     Stt,

@@ -58,6 +58,10 @@ impl Realtime for HostRealtimeModel {
         self.label.clone()
     }
 
+    fn id(&self) -> lk_agents_abi::ProviderId {
+        self.host.id()
+    }
+
     fn capabilities(&self) -> RealtimeCapabilities {
         self.caps
     }
@@ -236,7 +240,9 @@ impl HostRealtimeLeg {
     async fn update(&self, cmd: RealtimeCommand) {
         let host = &self.host;
         let updated = match cmd {
-            RealtimeCommand::UpdateInstructions(c) => host.update_instructions(c.instructions).await,
+            RealtimeCommand::UpdateInstructions(c) => {
+                host.update_instructions(c.instructions).await
+            }
             RealtimeCommand::UpdateChatCtx(c) => host.update_chat_ctx(c.chat_ctx.items).await,
             RealtimeCommand::PushItem(c) => host.push_item(*c.item).await,
             RealtimeCommand::UpdateTools(c) => {

@@ -61,6 +61,13 @@ pub(super) async fn perform_tts_inference(
         if !state.input_done {
             state.input_done = take_text(rx, &mut state.opening, text_out, false).await;
         }
+        let id = tts.id();
+        shared.report(GenEvent::RequestStarted {
+            speech: handle.id(),
+            kind: lk_agents_core::usage::ModelKind::Tts,
+            provider: id.provider,
+            model: id.model,
+        });
         let (error, produced) = match tts.stream(expressive).await {
             Err(error) => (DriverError::Provider(error), false),
             Ok((sink, mut source)) => {

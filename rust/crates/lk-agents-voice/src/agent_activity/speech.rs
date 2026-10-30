@@ -18,10 +18,10 @@ use crate::trace::{
     CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep, ToolStep,
     TurnStep,
 };
-use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use std::sync::Arc;
 
 /// A `say(stream)` the realtime model would speak itself (no TTS): the wire carries one text item.
@@ -552,12 +552,7 @@ impl Driver {
     /// Through the one write, in order with `thinking`.
     /// The single admission point for every speech. The runtime launches accepted work after
     /// this step settles.
-    pub(crate) fn start_speech(
-        &mut self,
-        now: Ts,
-        spec: SpeechSpec,
-        out: &mut Out,
-    ) -> SpeechId {
+    pub(crate) fn start_speech(&mut self, now: Ts, spec: SpeechSpec, out: &mut Out) -> SpeechId {
         let wall = self.step.wall();
         let user_metrics = spec.new_message.as_ref().map(|m| m.metrics.clone());
         let is_reply = matches!(spec.source, ReplySource::Llm);
@@ -597,7 +592,8 @@ impl Driver {
         // the record (the cut settles within the interruption watchdog). One created while a
         // speech plays is requested now, on the record as it stands, as the reference's reply
         // task copies the context at creation: the playing speech's item may be seconds away.
-        let after = self.current_speech().filter(|(_, s)| !s.done() && s.interrupted()).map(|(id, _)| id);
+        let after =
+            self.current_speech().filter(|(_, s)| !s.done() && s.interrupted()).map(|(id, _)| id);
 
         let (id, state) = self.new_speech(spec.host_speech, spec.allow_interruptions);
 
@@ -835,11 +831,9 @@ impl Driver {
                 };
                 out.trace(InterruptStep::PlayoutGate { speech, op: GateOp::Resume, cause })
             }
-            GenEvent::ChatStarted { speech, provider, model } => {
-                let s = &mut self.session;
-                s.next_request += 1;
-                s.usage.start(s.next_request, lk_agents_core::usage::ModelKind::Llm, &provider, &model);
-                s.llm_requests.entry(speech).or_default().push_back(s.next_request);
+            GenEvent::RequestStarted { speech, kind, provider, model } => {
+                let request = self.session.start_request(kind, &provider, &model);
+                self.session.requests.entry((speech, kind)).or_default().push_back(request);
             }
             GenEvent::ChatFinished { speech, step, error } => {
                 let failed = error.is_some();
@@ -1069,9 +1063,13 @@ impl Driver {
     }
 
     pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        for request in self.session.llm_requests.remove(&speech).unwrap_or_default() {
-            self.session.usage.finish(request, false);
-        }
+        let (requests, usage) = (&mut self.session.requests, &mut self.session.usage);
+        requests.retain(|(of, _), unmeasured| {
+            if *of == speech {
+                unmeasured.drain(..).for_each(|request| usage.finish(request, false));
+            }
+            *of != speech
+        });
         self.activity.spoke.remove(&speech);
         self.activity.launching.remove(&speech);
         // `_scheduling_task`'s post-await release: a finished speech that is the paused one drops

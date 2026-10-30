@@ -332,6 +332,13 @@ impl Generation<'_> {
             self.shared.time.now(),
         );
         let (sink, mut source) = loop {
+            let id = tts.id();
+            self.shared.report(GenEvent::RequestStarted {
+                speech: self.handle.id(),
+                kind: lk_agents_core::usage::ModelKind::Tts,
+                provider: id.provider,
+                model: id.model,
+            });
             let error = match tts.stream(self.ctx.request.expressive.is_some()).await {
                 Ok(pair) => break pair,
                 Err(error) => error,

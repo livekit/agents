@@ -17,6 +17,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities, RealtimeCommand, RealtimeError};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatMessage, Role, ToolChoice, Ts, llm::realtime as rt};
+use lk_agents_core::usage::ModelKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -540,6 +541,12 @@ impl Driver {
         req_id: Option<String>,
         out: &mut Out,
     ) {
+        // Every response the server created is a request, the discarded ones included.
+        if let Some(rt) = &self.activity.rt_session {
+            let (provider, model) = (rt.provider.provider.clone(), rt.provider.model.clone());
+            let request = self.session.start_request(ModelKind::Llm, &provider, &model);
+            self.session.realtime_requests.insert(response_id.clone(), request);
+        }
         let pending = req_id.as_deref().map(|id| self.take_pending(id, out));
         // The speech announced for it is over: nothing plays the answer.
         let players = &self.activity.realtime_players;

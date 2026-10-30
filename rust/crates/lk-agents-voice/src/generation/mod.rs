@@ -810,10 +810,11 @@ pub enum GenEvent {
     LaunchReleased {
         speech: SpeechId,
     },
-    /// A model request of `speech` was sent, to `provider`'s `model` (usage.md "Counting": a
+    /// A `kind` request of `speech` was sent, to `provider`'s `model` (usage.md "Counting": a
     /// request counts when it starts).
-    ChatStarted {
+    RequestStarted {
         speech: SpeechId,
+        kind: lk_agents_core::usage::ModelKind,
         provider: String,
         model: String,
     },
@@ -882,12 +883,12 @@ pub enum GenEvent {
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
-    use std::time::Duration;
     use lk_agents_abi::Modality;
     use lk_agents_abi::resources::{ResourceId, TtsRef};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
     use lk_agents_abi::{ChatContext, TtsCapabilities};
     use lk_agents_core::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
+    use std::time::Duration;
 
     fn tts(provider: &str, streaming: bool, lowers_markup: bool) -> TtsRef {
         TtsRef {

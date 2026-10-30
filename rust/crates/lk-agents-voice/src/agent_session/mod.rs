@@ -40,9 +40,15 @@ pub(crate) struct VoiceSession {
     /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
     /// sessions"), published with the view.
     pub(crate) usage: lk_agents_core::usage::Ledger,
-    /// The model requests each speech started and the ledger still holds unmeasured, oldest first:
-    /// its LLM metrics record measures the oldest; the speech's release leaves the rest unmeasured.
-    pub(crate) llm_requests: std::collections::BTreeMap<SpeechId, std::collections::VecDeque<u64>>,
+    /// The model and synthesis requests each speech started and the ledger still holds
+    /// unmeasured, oldest first: a metrics record of the speech measures the oldest of its kind;
+    /// the speech's release leaves the rest unmeasured.
+    pub(crate) requests: std::collections::BTreeMap<
+        (SpeechId, lk_agents_core::usage::ModelKind),
+        std::collections::VecDeque<u64>,
+    >,
+    /// The realtime responses created and not yet measured, by response id.
+    pub(crate) realtime_requests: std::collections::BTreeMap<String, u64>,
     pub(crate) next_request: u64,
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
@@ -133,7 +139,8 @@ impl VoiceSession {
         let cfg = &config.effective;
         VoiceSession {
             usage: Default::default(),
-            llm_requests: Default::default(),
+            requests: Default::default(),
+            realtime_requests: Default::default(),
             next_request: 0,
             states: AgentUserState::new(cfg.timers.user_away()),
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
@@ -169,6 +176,18 @@ impl VoiceSession {
 
     /// This turn's markup guide over the session's TTS. A reply that runs with it off scrubs the
     /// markup from the agent's history (`_pipeline_reply_task`).
+    /// A provider request started (usage.md "Counting"); returns its ledger id.
+    pub(crate) fn start_request(
+        &mut self,
+        kind: lk_agents_core::usage::ModelKind,
+        provider: &str,
+        model: &str,
+    ) -> u64 {
+        self.next_request += 1;
+        self.usage.start(self.next_request, kind, provider, model);
+        self.next_request
+    }
+
     pub(crate) fn expressive_guide(&mut self, reply: bool) -> Option<String> {
         let guide = self.expressive.guide(self.tts.as_ref(), lk_agents_abi::Modality::Audio);
         if guide.is_none() && reply {

@@ -862,6 +862,14 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
         OpenAIRealtime::label(self)
     }
 
+    fn id(&self) -> lk_agents_abi::ProviderId {
+        lk_agents_abi::ProviderId {
+            label: OpenAIRealtime::label(self),
+            model: self.model(),
+            provider: self.provider(),
+        }
+    }
+
     fn capabilities(&self) -> RealtimeCapabilities {
         OpenAIRealtime::capabilities(self)
     }

@@ -8,6 +8,7 @@ use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_core::attempts::{AttemptStep, Attempts};
 use lk_agents_core::telemetry::provider::Context;
+use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
 pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
@@ -144,7 +145,12 @@ async fn perform_llm_inference(
         });
         let started_at = shared.time.wall_secs();
         let id = llm.id();
-        shared.report(GenEvent::ChatStarted { speech, provider: id.provider, model: id.model });
+        shared.report(GenEvent::RequestStarted {
+            speech,
+            kind: ModelKind::Llm,
+            provider: id.provider,
+            model: id.model,
+        });
         // One `ChatFinished` per `ChatRequested`, a request that never became a stream included.
         let (error, data) = match llm.chat(&req).await {
             Err(error) => {
