@@ -220,7 +220,7 @@ impl Runtime {
                     }
                 }
             }
-            E::SpeechStart { speech, mut context, llm, tts } => {
+            E::SpeechStart { speech, mut context, llm, tts, stored } => {
                 let Some(handle) = self.shared.speeches.get(speech) else { return };
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
@@ -233,7 +233,7 @@ impl Runtime {
                 context.providers.tts = tts.and_then(|id| self.shared.resources.tts(id));
                 let shared = Arc::clone(&self.shared);
                 let task = Arc::clone(&handle);
-                let storage = self.storage.clone();
+                let storage = self.storage.clone().filter(|_| stored);
                 let queue = self.reports.clone();
                 let speeches = self.speeches.clone();
                 self.speeches.spawn(handle.id(), "speech", async move {
@@ -251,7 +251,6 @@ impl Runtime {
                                 log::warn!(target: "livekit.agents", "the voice lane could not be acquired: {error}");
                                 if storage.lease_lost() {
                                     let _ = queue.send(Input::StorageLost(task.id()));
-                                    return;
                                 }
                             }
                         }

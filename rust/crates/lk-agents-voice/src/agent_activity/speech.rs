@@ -687,16 +687,17 @@ impl Driver {
                 state.mark_scheduled();
             }
         }
-        if admitted && !past_edge && !self.session.storage.lost {
+        if admitted && !past_edge {
             self.storage_started(id);
             out.machine().push(crate::agent_session::effects::Effect::SpeechStart {
                 speech: id,
                 context: Box::new(ctx),
                 llm: self.session.llm.as_ref().map(|l| l.id),
                 tts: self.session.tts.as_ref().map(|t| t.id),
+                stored: self.session.storage.enabled,
             });
         }
-        if (!admitted || self.session.storage.lost) && self.activity.speech_scheduler.contains(id) {
+        if !admitted && self.activity.speech_scheduler.contains(id) {
             self.release_speech(now, id, out);
         }
         if let Some(info) = &spec.end_of_turn {

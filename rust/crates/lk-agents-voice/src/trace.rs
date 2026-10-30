@@ -168,6 +168,11 @@ pub enum SpeechStep {
     Authorized {
         speech: SpeechId,
     },
+    /// The voice lane's lease was lost under this speech: it is cancelled, and no later turn of
+    /// the session commits.
+    LaneLost {
+        speech: SpeechId,
+    },
     /// A reply step was spoken and marked done. The floor is released here, before its tools run,
     /// so a tool's `say()` isn't queued behind its own speech (#4534).
     StepSpoken {
@@ -873,6 +878,7 @@ impl Step {
                 | SpeechStep::ReplyFailed { speech, .. }
                 | SpeechStep::ScheduleRejected { speech, .. }
                 | SpeechStep::Authorized { speech }
+                | SpeechStep::LaneLost { speech }
                 | SpeechStep::StepSpoken { speech, .. }
                 | SpeechStep::AgentStartedSpeaking { speech }
                 | SpeechStep::ItemsRecorded { speech, .. }

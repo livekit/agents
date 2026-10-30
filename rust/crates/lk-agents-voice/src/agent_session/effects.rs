@@ -294,6 +294,9 @@ pub enum Effect {
         context: Box<crate::generation::ReplyContext>,
         llm: Option<ResourceId>,
         tts: Option<ResourceId>,
+        /// The speech takes the voice lane: the store reloads the history before the model reads
+        /// it and watches the lease.
+        stored: bool,
     },
     /// Per-frame `PushAudio` never comes this way.
     Realtime {

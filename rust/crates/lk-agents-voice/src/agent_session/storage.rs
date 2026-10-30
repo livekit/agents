@@ -19,7 +19,6 @@ pub(crate) const LANE_RELEASE_BOUND: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub(crate) struct StorageTurns {
     pub enabled: bool,
-    pub lost: bool,
     failures: BTreeMap<SpeechId, Box<lk_agents_abi::errors::ProviderError>>,
     pending: BTreeMap<SpeechId, (TurnOutcome, bool)>,
     /// The started speeches holding the lane until their turn is committed or abandoned.
@@ -86,9 +85,6 @@ impl Driver {
 
     pub(crate) fn storage_settled(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         if let Some((outcome, interrupted)) = self.session.storage.pending.remove(&speech) {
-            if self.session.storage.lost {
-                return;
-            }
             self.activity.set_tools_in_flight(speech, false);
             self.finish_reply(now, speech, outcome, interrupted, out);
         }
@@ -111,13 +107,17 @@ impl Driver {
         }
     }
 
-    pub(crate) fn storage_lost(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        self.session.storage.lost = true;
-        self.storage_reported(speech, out);
-        self.end_live_tools(now, speech, out);
-        if self.activity.speech_scheduler.contains(speech) {
-            out.machine().push(Effect::CancelSpeech(speech));
+    /// The lane's lease is lost: the call goes on in memory, as one whose thread could not be
+    /// loaded does (voice-session.md: storage failures never end the call). What its speeches
+    /// say is still heard; no turn from here on takes the lane or commits.
+    pub(crate) fn storage_lost(&mut self, speech: SpeechId, out: &mut Out) {
+        if self.session.storage.enabled {
+            log::warn!(target: "livekit.agents", "the voice lane lease was lost: the call continues without storage");
+            out.trace(crate::trace::SpeechStep::LaneLost { speech });
         }
-        self.release_speech(now, speech, out);
+        self.session.storage.enabled = false;
+        for speech in std::mem::take(&mut self.session.storage.holding) {
+            self.disarm(Timer::LaneRelease(speech), out);
+        }
     }
 }

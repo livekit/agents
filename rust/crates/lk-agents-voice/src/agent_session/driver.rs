@@ -364,7 +364,7 @@ impl Driver {
             Some(Input::StorageReloaded(history)) => self.storage_reloaded(history, &mut out),
             Some(Input::StorageSettled(speech)) => self.storage_settled(now, speech, &mut out),
             Some(Input::StorageAbandoned(speech)) => self.storage_abandoned(now, speech, &mut out),
-            Some(Input::StorageLost(speech)) => self.storage_lost(now, speech, &mut out),
+            Some(Input::StorageLost(speech)) => self.storage_lost(speech, &mut out),
             Some(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
             Some(Input::Eot(req, p, thresholds)) => {
                 self.activity.audio_recognition.set_thresholds(thresholds);
