@@ -6,6 +6,7 @@ use std::sync::Arc;
 use a2a::{JsonRpcId, StreamResponse};
 use lk_agents_abi::a2a::door::{DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnEvent;
+use lk_agents_abi::storage::StreamInfo;
 use lk_agents_core::a2a::TurnResult;
 use lk_agents_core::a2a::wire::{self, Cursor, Delivery, Publication};
 use lk_agents_storage::StorageError;
@@ -19,7 +20,7 @@ pub type Sender = mpsc::Sender<Result<DoorFrame, DoorError>>;
 
 pub struct Publisher {
     streams: Arc<dyn ResponseStreams>,
-    stream_id: String,
+    pub stream: StreamInfo,
     request_id: JsonRpcId,
     context: String,
     /// The task a continuation names, announced in place of its receipt.
@@ -30,7 +31,7 @@ pub struct Publisher {
 impl Publisher {
     pub fn new(
         streams: Arc<dyn ResponseStreams>,
-        stream_id: String,
+        stream: StreamInfo,
         request_id: JsonRpcId,
         context: String,
         continuing: Option<String>,
@@ -39,7 +40,7 @@ impl Publisher {
         let publication = Publication::new(shortuuid("art_"));
         Self {
             streams,
-            stream_id,
+            stream,
             request_id,
             context,
             continuing,
@@ -50,9 +51,9 @@ impl Publisher {
     async fn emit(&self, events: Vec<StreamResponse>, task_id: &str) -> Result<(), StorageError> {
         for event in events {
             let bytes = serde_json::to_vec(&event).expect("A2A event");
-            let offset = self.streams.append(&self.stream_id, &bytes).await?;
-            let cursor =
-                Cursor { task_id: task_id.into(), stream_id: self.stream_id.clone(), offset };
+            let stream_id = &self.stream.stream_id;
+            let offset = self.streams.append(stream_id, &bytes).await?;
+            let cursor = Cursor { task_id: task_id.into(), stream_id: stream_id.clone(), offset };
             let frame = wire::success(self.request_id.clone(), event, Some(&cursor.encode()));
             let mut state = self.state.lock().await;
             let Some(sender) = state.1.as_ref() else { continue };
@@ -75,7 +76,7 @@ impl Publisher {
     pub async fn finish(&self, result: &TurnResult) -> Result<(), StorageError> {
         let events = self.state.lock().await.0.finish(result, &self.context, unix_now_ms());
         self.emit(events, &result.task.task_id).await?;
-        self.streams.close(&self.stream_id).await
+        self.streams.close(&self.stream.stream_id).await
     }
 
     /// The message's task is durable, before admission waits or application work.

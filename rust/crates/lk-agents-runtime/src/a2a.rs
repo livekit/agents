@@ -11,7 +11,6 @@ use std::sync::Arc;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use serde_json::Value;
 
-use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
 use lk_agents_core::a2a::task::{
     Access, Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine,
@@ -56,9 +55,8 @@ pub struct Turn {
     /// The turn's clock: the machine's waits and the bound on closing the host stream.
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
-    /// The response stream, independent of task identity, recorded with submission.
-    stream: Option<StreamInfo>,
-    /// Its response stream, which watches the turn from outside.
+    /// The response stream, which watches the turn from outside; its identity is independent
+    /// of the task's and recorded with submission.
     publisher: Option<Arc<door::stream::Publisher>>,
     host_context: Option<lk_agents_abi::HostRef>,
     /// The resolvers of commits left uncertain, owned by the door.
@@ -79,7 +77,6 @@ impl Turn {
             host,
             clock,
             opts: options,
-            stream: None,
             publisher: None,
             host_context: None,
             resolvers: Arc::default(),
@@ -130,7 +127,7 @@ impl Turn {
             self.lane.clone(),
             msg,
             task_id,
-            self.stream.clone(),
+            self.publisher.as_ref().map(|p| p.stream.clone()),
             &self.opts,
             wall,
         );

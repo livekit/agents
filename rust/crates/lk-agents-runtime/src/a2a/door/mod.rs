@@ -338,22 +338,23 @@ impl Inner {
         let created = streams.create(None).await?;
         let publisher = Arc::new(stream::Publisher::new(
             streams.clone(),
-            created.stream_id.clone(),
+            created.clone(),
             id.clone(),
             context.clone(),
             continuing,
             streaming.then_some(sender.clone()),
         ));
         let turn = Turn {
-            thread: thread.clone(),
-            lane: self.lane.clone(),
-            host: self.host.clone(),
-            clock: self.clock.clone(),
-            opts: self.options.clone(),
-            stream: Some(created.clone()),
             publisher: Some(publisher.clone()),
             host_context,
             resolvers: self.owner.clone(),
+            ..Turn::new(
+                thread.clone(),
+                &self.lane,
+                self.host.clone(),
+                self.clock.clone(),
+                self.options.clone(),
+            )
         };
         let result = turn.run_message(message, None).await;
         thread.close().await;
