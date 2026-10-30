@@ -156,7 +156,6 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
-        self._markup = self.Markup(self)
         # Whether expressive is active for the current turn, set by the framework
         # before each synthesis. TTS implementations that tokenize their own input
         # read this to batch into larger chunks (continuous prosody); False (the
@@ -166,7 +165,8 @@ class TTS(
     @property
     def markup(self) -> Markup:
         """Access TTS markup capabilities (instructions for LLM, text stripping)."""
-        return self._markup
+        # built on each access: a cached markup would point back at this TTS and form a cycle
+        return self.Markup(self)
 
     def _set_expressive(self, enabled: bool) -> None:
         """Framework-internal: mark whether expressive is active for this turn.
