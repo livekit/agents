@@ -385,8 +385,12 @@ class AudioStreamDecoder:
     def _clear_wav_header(self) -> None:
         """Release replay storage, including any temporary file."""
         if self._wav_header is not None:
-            self._wav_header.close()
+            header = self._wav_header
             self._wav_header = None
+            try:
+                header.close()
+            except OSError:
+                pass
 
     def push(self, chunk: bytes) -> None:
         if self._closed:
@@ -395,7 +399,12 @@ class AudioStreamDecoder:
             if self._wav_decoder is None:
                 self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
             if self._wav_header is not None:
-                self._wav_header.write(chunk)
+                try:
+                    self._wav_header.write(chunk)
+                except OSError:
+                    # Replay is optional for PCM16; the inline parser can still
+                    # skip metadata when temporary storage is unavailable.
+                    self._clear_wav_header()
             try:
                 self._wav_decoder.push(chunk)
             except _UnsupportedWavFormat:
@@ -418,9 +427,16 @@ class AudioStreamDecoder:
                 return
 
             assert self._wav_header is not None
-            self._wav_header.seek(0)
-            chunk = self._wav_header.read()
-            self._clear_wav_header()
+            try:
+                self._wav_header.seek(0)
+                chunk = self._wav_header.read()
+            except OSError:
+                logger.exception("error decoding WAV audio")
+                self._output_ch.close()
+                self._closed = True
+                return
+            finally:
+                self._clear_wav_header()
             self._wav_decoder = None
             self._is_wav = False
             self._started = False

@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import struct
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -348,9 +349,10 @@ def test_stream_buffer_close_while_reading():
     assert result == [b""]
 
 
-def _make_wav(sample_rate: int, num_channels: int, num_samples: int) -> bytes:
-    """Generate a valid PCM16 WAV file in memory."""
-    bits_per_sample = 16
+def _make_wav(
+    sample_rate: int, num_channels: int, num_samples: int, bits_per_sample: int = 16
+) -> bytes:
+    """Generate a valid integer PCM WAV file in memory."""
     byte_rate = sample_rate * num_channels * bits_per_sample // 8
     block_align = num_channels * bits_per_sample // 8
     data_size = num_samples * num_channels * (bits_per_sample // 8)
@@ -490,7 +492,16 @@ async def test_parameterized_wav_preserves_pyav_formats(
 
 
 @pytest.mark.parametrize("metadata_size", [65536, 131072])
-async def test_wav_large_metadata_preserves_consecutive_segments(metadata_size: int):
+@pytest.mark.parametrize("temporary_storage_available", [True, False])
+async def test_wav_large_metadata_preserves_consecutive_segments(
+    metadata_size: int, temporary_storage_available: bool, monkeypatch: pytest.MonkeyPatch
+):
+    if not temporary_storage_available:
+
+        def fail_temporary_file(*args, **kwargs):
+            raise OSError("temporary storage unavailable")
+
+        monkeypatch.setattr(tempfile, "TemporaryFile", fail_temporary_file)
     wav = _make_wav(24000, 1, 2400)
     metadata = b"JUNK" + struct.pack("<I", metadata_size) + bytes(metadata_size)
     wav = (
@@ -511,6 +522,33 @@ async def test_wav_large_metadata_preserves_consecutive_segments(metadata_size: 
     actual = await decode("audio/wav; codecs=1")
     assert len(actual) == 2400 * 2 * 2
     assert not any(actual)
+
+
+@pytest.mark.parametrize("storage_failure", ["rollover", "read"])
+async def test_unsupported_wav_without_replay_storage_closes_cleanly(
+    storage_failure: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    def fail_temporary_file(*args, **kwargs):
+        raise OSError("temporary storage unavailable")
+
+    if storage_failure == "rollover":
+        monkeypatch.setattr(tempfile, "TemporaryFile", fail_temporary_file)
+    else:
+        monkeypatch.setattr(tempfile.SpooledTemporaryFile, "read", fail_temporary_file)
+    wav = _make_wav(24000, 1, 2400, bits_per_sample=24)
+    metadata = b"JUNK" + struct.pack("<I", 131072) + bytes(131072)
+    wav = (
+        wav[:4] + struct.pack("<I", len(wav) - 8 + len(metadata)) + wav[8:12] + metadata + wav[12:]
+    )
+    decoder = AudioStreamDecoder(sample_rate=24000, format="audio/wav; codecs=1")
+    try:
+        for start in range(0, len(wav), 1024):
+            decoder.push(wav[start : start + 1024])
+        decoder.end_input()
+        assert [frame async for frame in decoder] == []
+        assert "error decoding WAV audio" in caplog.text
+    finally:
+        await decoder.aclose()
 
 
 @pytest.mark.asyncio
