@@ -211,6 +211,12 @@ save_context can reject stale writes; saving an object that store did not load
 raises `ValueError`. Framework scope/revision metadata is not serialized as
 application fields.
 
+Storage failures raise a `StorageError` from `livekit.agents.storage`:
+`VersionConflict` (a stale save), `LeaseLost`, `ThreadNotFound`, `TooLarge`,
+`NotSerializable`, `StorageUnavailable` (retryable: the database was unreachable or
+busy) or `RunRejected` (a `reject` lane refused the run; `running_task_id` names the
+running turn).
+
 Top-level helpers are equivalent conveniences using the supplied store:
 
 ```python
@@ -312,6 +318,8 @@ async with ctx.store.independent_transaction() as tx:   # durable when the block
     rows = await tx.fetch("SELECT id, status FROM charges WHERE booking_id = ?", (booking_id,))
     charge = await tx.fetch_one("SELECT * FROM charges WHERE id = ?", (charge_id,))
 ```
+
+`tx` is a `Transaction`:
 
 | Method | Returns |
 | --- | --- |

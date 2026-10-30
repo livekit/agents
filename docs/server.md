@@ -97,6 +97,10 @@ state, passes it to `session.run()`, and saves the returned state.
 | `storage`                           | this endpoint's storage when it is not the server's                                                                                      |
 | `version`                           | the card's version                                                                                                                       |
 
+The decorator returns an `A2AEndpoint`: its `name`, its `url` once the server knows its
+project and deployment, and `card()`, the agent card as JSON. Pass it wherever a delegate
+or a client wants the endpoint.
+
 `AgentServer(preload_modules=[...], setup_fnc=...)` imports preload modules
 in the supplied order before job readiness. `setup_fnc` initializes
 process-local resources after preloading. Import failures stop initialization

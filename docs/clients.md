@@ -129,6 +129,9 @@ token = credentials.thread_grant_token(
 | `project_token(identity="worker", ttl_seconds=3600)` | a project credential carrying the `agentEndpoint` call grant, which passes the node to any endpoint of any agent in the project |
 | `verify(token)` | the `Principal`: `kind` (`project` or `grant`), `grant`, `identity`, `claims`; raises `Unauthorized` |
 
+`Unauthorized` (401) and `Forbidden` (403, a valid token without the needed grant) are the
+`AuthError`s an endpoint answers with, outside JSON-RPC.
+
 `AgentThreadGrant` takes `scope` or `thread_ids` and the flags `create`,
 `write` and `read` ([a2a.md](protocol/a2a.md), Tokens); `can_create()`,
 `can_list(scope)`, `can_read(thread)`, `can_write(thread)` and

@@ -372,11 +372,15 @@ call: `flags=ToolFlag.IGNORE_ON_ENTER`, which withholds the tool from replies
 generated inside the agent's `on_enter`, and `on_duplicate=` with
 `duplicate_scope=` for a call made while the same tool is still running
 (`"allow"`, `"reject"`, `"replace"`, or `"confirm"`, which asks the model to
-call again to confirm). See [voice-session.md](voice-session.md).
+call again to confirm). The `DuplicateScope` is `"name"` (any running call of the
+tool) or `"name_and_args"` (one with the same arguments). See
+[voice-session.md](voice-session.md).
 
 What the model reads around these calls comes from templates set with
-`Agent(tool_handling={"async_options": {...}})`. An `AsyncToolset(tool_handling=)`
-overrides them for its own tools; the most specific wins:
+`Agent(tool_handling={"async_options": {...}})`, a `ToolHandlingOptions` whose
+`async_options` is an `AsyncToolOptions` (from `livekit.agents.voice.tool_executor`).
+An `AsyncToolset(tool_handling=)` overrides them for its own tools; the most
+specific wins:
 
 | Template | Rendered for | Arguments |
 |---|---|---|
@@ -386,8 +390,9 @@ overrides them for its own tools; the most specific wins:
 | `reply_at_tail_template` | the deferred reply to background results, when the agent has not spoken since | `call_ids` |
 | `reply_maybe_covered_template` | the deferred reply, when newer items followed the results | `call_ids` |
 
-Each is a `str.format()` template or a callable taking the arguments and
-returning the text; an unset template keeps the framework's text. The deferred
+Each is a `str.format()` template or a callable taking the arguments (for
+`update_template`, an `UpdatePromptArgs`) and returning the text; an unset
+template keeps the framework's text. The deferred
 reply reads the templates of its latest result's tool.
 
 A tool whose result is a question for the person returns
@@ -398,6 +403,18 @@ that tool as its first string parameter, on a call and in text, with no model
 turn in between, and the model goes on from that tool's output. The delegate's
 tool does this for an expert's `input-required`
 ([multi-agent composition](agents.md#working-with-other-agents)).
+
+## Prebuilt tools
+
+`livekit.agents.beta` holds ready-made tools:
+
+| Name | What |
+|---|---|
+| `EndCallTool(extra_description=, delete_room=, end_instructions=, ignore_on_enter=, on_tool_called=, on_tool_completed=)` | a toolset whose `end_call` tool ends the call after the agent's goodbye; the callbacks receive a `ToolCalledEvent` and a `ToolCompletedEvent` |
+| `send_dtmf_events` | a tool that sends keypad (DTMF) tones on the call |
+| `ToolSearchToolset(id=, tools=, max_results=, search_strategy=)` | keeps a large tool collection out of the model's context: one `tool_search` tool loads the tools a search finds |
+| `ToolProxyToolset(id=, tools=, ...)` | the same collection behind two fixed tools, `tool_search` (returns schemas) and `call_tool`, so the tool list never changes |
+| `SearchStrategy`, `SearchItem` | the search the two toolsets run (`build_index`, `search`, `cleanup` over `SearchItem`s); `BM25SearchStrategy(k1=, b=)` is the default, `KeywordSearchStrategy` a simpler one |
 
 ## Idempotency
 

@@ -372,6 +372,14 @@ a session-managed agent tool, or the live session. History belongs to the conver
 hooks and tools, `agent.chat_ctx` is a read-only view of the history the
 current run works on, and outside them it raises.
 
+A history is a `ChatContext` of `ChatItem`s, exported from `livekit.agents.llm`:
+`ChatMessage` (`role`, a `ChatRole`; `content`, a list of `ChatContent`: text,
+`ImageContent` or `AudioContent`), `FunctionCall`, `FunctionCallOutput`,
+`AgentHandoff` (the speaking agent changed) and `AgentConfigUpdate` (its
+instructions or tools changed). An `ImageContent` takes a video frame as is, or
+the bytes of `livekit.agents.utils.images.encode(frame, EncodeOptions(...))`,
+whose `ResizeOptions` bound the image's size.
+
 ## Streaming runs
 
 `agent.run_stream(...)` runs the same model/tool loop as `agent.run(...)` and

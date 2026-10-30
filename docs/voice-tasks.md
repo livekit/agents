@@ -236,3 +236,14 @@ the authoritative booking/refund record used by the expert. The service enforces
 whether the receipt address can still change. Saving the address neither approves
 nor executes a refund. The host supplies the authenticated booking context to
 the live session. The frontend event queue is in-process and requires no DB.
+
+## Prebuilt building blocks
+
+`livekit.agents.beta.workflows` holds what a capture flow on a call builds on:
+
+| Name | What |
+|---|---|
+| `GetEmailTask()` | a `VoiceTask` that collects and confirms an email address; `.run()` returns a `GetEmailResult` (`email_address`) |
+| `WarmTransfer(sip_call_to, ...)`, `TwilioConnectorWarmTransfer(phone_number, ...)` | hand the caller to a human agent over SIP: the caller waits on hold while a briefing session dials and briefs the human agent, whose `run()`, awaited in a tool, returns a `WarmTransferResult` (`human_agent_identity`) or raises `ToolError` when they decline; `instructions=` takes a `WorkflowInstructions` (`persona`, `extra`) |
+| `receive_dtmf(room, num_digits=, timeout=, stop_event=)` | keypad digits as a `GetDtmfResult`, up to the `stop_event` `DtmfEvent` or an inter-digit timeout; `format_dtmf` and `dtmf_event_to_code` render them |
+| `validate_card_number`, `is_expired`, `normalize_date_of_birth`, `normalize_email_address`, `normalize_phone_number` | the checks a capture tool runs on what the model heard |

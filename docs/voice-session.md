@@ -27,8 +27,13 @@ again when left empty.
 |---|---|
 | `llm` | Session default when the agent does not select a model; supports a realtime model |
 | `stt`, `tts`, `vad` | Session-owned recognition, synthesis, and voice activity models |
-| `turn_detection`, `endpointing_opts` | Session-owned turn completion and endpointing policy |
-| `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`) and `preemptive_generation` in one dict |
+| `turn_detection`, `endpointing_opts` | Session-owned turn completion (a `TurnDetectionMode`) and endpointing policy |
+| `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`), `preemptive_generation` (`PreemptiveGenerationOptions`) and `user_turn_limit` (`UserTurnLimitOptions`) in one dict |
+| `conn_options` | a `SessionConnectOptions`: each leg's [connection policy](models.md#connection-options) (`stt_conn_options`, `llm_conn_options`, `tts_conn_options`) and `max_unrecoverable_errors` |
+| `video_sampler` | a `VoiceActivityVideoSampler(speaking_fps=, silent_fps=)`: how often camera frames reach the model; `None` sends every frame |
+| `stt_context_options` | an `STTContextOptions`; its `keyterm_detection` (`KeytermDetectionOptions`) biases recognition toward the conversation's key terms |
+| `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template) |
+| `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own |
 | `context` | the application object; marked fields require explicit loading and saving |
 | `thread` | the call's durable thread, `ctx.thread`; omitted, the history is kept in memory and not saved |
@@ -43,7 +48,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 
 | Member | What |
 |---|---|
-| `start(agent, room=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking |
+| `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `text_output` (`TextOutputOptions`), each `True`/`False` or its options |
 | `say(text)`, `generate_reply(instructions=, user_input=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle` |
 | `interrupt()` | stop the current speech |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
@@ -62,9 +67,15 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `"agent_state_changed"` | `AgentStateChangedEvent`: `old_state`, `new_state` | the agent moved between `initializing`, `idle`, `listening`, `thinking` and `speaking` |
 | `"user_state_changed"` | `UserStateChangedEvent`: `old_state`, `new_state` | the person moved between `speaking`, `listening` and `away` |
 | `"error"` | `ErrorEvent`: `error`, `source` | a provider failed; `error.recoverable` says whether the call goes on |
-| `"close"` | `CloseEvent`: `reason`, `error` | the session closed |
+| `"user_transcription_timeout"` | `UserTranscriptionTimeoutEvent`: `speech_duration` | the person spoke but recognition produced no transcript |
+| `"agent_false_interruption"` | `AgentFalseInterruptionEvent`: `resumed` | an interruption turned out not to be one |
+| `"overlapping_speech"` | `OverlappingSpeechEvent` | adaptive interruption detection classified overlapping speech |
+| `"tool_execution_updated"` | `ToolExecutionUpdatedEvent`: `update`, a `ToolCallStarted`, `ToolCallUpdated`, `ToolCallEnded` or `ToolReplyUpdated` | one step of a tool call's lifecycle on the call |
+| `"close"` | `CloseEvent`: `reason` (a `CloseReason`), `error` | the session closed |
 
-The event types are exported from `livekit.agents`.
+Every event type is exported from `livekit.agents.voice.events`, the common ones also from
+`livekit.agents`, with `AgentEvent` (their union), `EventTypes` (the event names) and the
+`AgentState` and `UserState` literals.
 
 Usage is read through `session.usage`, without an update event. Intermediate
 snapshots contain measurements received so far; after awaiting `aclose()`, the

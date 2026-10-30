@@ -20,6 +20,28 @@ agent = Agent(instructions="...", llm="google/gemma-4-31b-it")
 session = VoiceSession(stt="deepgram/nova-3:en", tts="cartesia/sonic-3:<voice>")
 ```
 
+The classes take `extra_kwargs=`, the provider's own options, and `fallback=`, models the
+gateway falls back to (a `FallbackModel` or a model string, `FallbackModelType`). Their
+typed forms:
+
+| Module | Model strings | Provider options |
+| --- | --- | --- |
+| `inference.llm` | `LLMModels`: `OpenAIModels`, `GoogleModels`, `KimiModels`, `DeepSeekModels`, `ZAIModels`, `XAIModels`; realtime `RealtimeModels`: `OpenAIRealtimeModels`, `XAIRealtimeModels` | `ChatCompletionOptions` |
+| `inference.stt` | `STTModels`: `AssemblyAIModels`, `CartesiaModels`, `DeepgramModels`, `DeepgramFluxModels`, `GoogleModels`, `InworldModels`, `SpeechmaticsModels`, `XaiModels`; `STTLanguages`, `STTEncoding` | `AssemblyaiOptions`, `CartesiaOptions`, `DeepgramOptions`, `DeepgramFluxOptions`, `GoogleOptions`, `InworldOptions`, `SpeechmaticsOptions`, `XaiOptions` |
+| `inference.tts` | `TTSModels`: `CartesiaModels`, `DeepgramModels`, `FishAudioModels`, `InworldModels`, `RimeModels`, `XaiModels`; `TTSEncoding` | `CartesiaOptions`, `DeepgramOptions`, `FishAudioOptions`, `InworldOptions`, `RimeOptions`, `XaiOptions` |
+| `inference` | `VADModels`; `TurnDetectorModels`, `TurnDetectorVersions` | `LemonSliceOptions`, for `AvatarSession` |
+
+`inference.TurnDetector()` is an end-of-turn model for `VoiceSession(turn_detection=)`.
+On a call with adaptive interruption, the session runs an
+`inference.AdaptiveInterruptionDetector`, which reports `OverlappingSpeechEvent`s and fails
+with `InterruptionDetectionError`. A realtime model's `inference_class` is an
+`InferenceClass`: `"priority"`, `"standard"` or `"low"`.
+
+`llm.FallbackAdapter`, `stt.FallbackAdapter`, `tts.FallbackAdapter` and
+`llm.RealtimeModelFallbackAdapter` try a list of models in order; each emits an
+`AvailabilityChangedEvent` when a model goes down or comes back. `tts.StreamAdapter` and
+`stt.StreamAdapter` give a non-streaming TTS or STT a streaming interface.
+
 ## Connection options
 
 `APIConnectOptions` is immutable and exported from `livekit.agents`.
@@ -80,11 +102,13 @@ plugin's classes, not these bases.
 
 | Module | Names |
 | --- | --- |
-| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk`, `ChoiceDelta`, `CompletionUsage`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events; duplex: `DuplexModel`, `DuplexSession`, `DuplexCapabilities`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
-| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent`, `STTCapabilities`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `AudioEmitter`, `TTSCapabilities`; each module's `FallbackAdapter` |
-| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause` |
-| `livekit.agents.utils` | `ConnectionPool`, `AudioBuffer`, `http_context`, `aio` |
-| `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)` |
+| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk`, `ChoiceDelta`, `CompletionUsage`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`), a server-side history mirrored in a `RemoteChatContext` (`llm.remote_chat_context`); duplex: `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
+| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`, `SpeakerContext`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `MarkupInfo`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
+| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause` |
+| `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `BufferedSentenceStream`, `BufferedWordStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
+| `livekit.agents.utils` | `ConnectionPool`, `AudioBuffer`, `merge_frames`, `http_context`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`, `gracefully_cancel`; `codecs.AudioStreamDecoder`; `images.encode` |
+| `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
+| `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TimedString` words) and `USERDATA_TTS_STARTED_TIME` |
 
 `ChoiceDelta.extra` and `FunctionToolCall.extra` carry provider data (such as
 Google thought signatures) as a JSON object: a value that is not JSON fails the
