@@ -14,6 +14,7 @@ import pytest
 from livekit.agents import Agent, InputRequired, LiveSession, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
+from livekit.agents.llm import InputSpeechStartedEvent
 from livekit.agents.llm.tool_context import SAY_EXACTLY
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.storage.resolve import Thread
@@ -337,3 +338,33 @@ async def test_a_transcript_of_a_turn_before_the_question_does_not_answer_it(
     (asked, _), (answered, text) = heard
     assert answered == asked and text == "yes"
     assert "ok, let me tell you" not in outputs(session.history)
+
+
+@pytest.mark.rule("B98")
+async def test_a_question_cut_before_any_of_it_played_is_asked_again(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="book sunday")], when=answering("book sunday")),
+        Reply("", hold=asyncio.Event(), when=lambda c: "Sunday at 14:00?" in instructed(c)),
+        Reply("Sunday at 14:00?", when=lambda c: "Sunday at 14:00?" in instructed(c)),
+        Reply("", [call("ask", "a2", request="yes")], when=answering("yes")),
+        say=False,
+    )
+    delegate = expert(asking("Sunday at 14:00?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        rt = model.active_session
+        rt.hear("book sunday")
+        await soon(lambda: any("Sunday" in instructed(r) for r in model.requests), "the asking")
+        cut = time.time()
+        rt.emit("input_speech_started", InputSpeechStartedEvent())  # before any of it played
+        await soon(lambda: "Sunday at 14:00?" in spoken(session), "the question asked again")
+        rt.hear("hold on", started_at=cut)  # the cutting turn's transcript, late
+        rt.hear("yes")
+        await soon(lambda: len(heard) > 1, "the answer")
+
+    (asked, _), (answered, text) = heard
+    assert answered == asked and text == "yes"

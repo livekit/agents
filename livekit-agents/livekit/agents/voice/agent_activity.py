@@ -540,7 +540,7 @@ class AgentActivity(RecognitionHooks):
         self._questions: list[_Question] = []
         # the expert task an answer went to, until its tool returns: its follow-up goes first
         self._floor: str | None = None
-        self._relays: set[asyncio.Task[None]] = set()
+        self._question_tasks: set[asyncio.Task[None]] = set()
         # a claimed question on a realtime model: its next reply calls the tool with the
         # person's words and reference
         self._forced_tool: str | None = None
@@ -3407,10 +3407,34 @@ class AgentActivity(RecognitionHooks):
             if (lane := self._session._live_lane) is not None:
                 lane.error(f"the question could not be asked: {e}")
             return
-        if claimed is not None and not transition.verbatim:
-            relay = claimed
-            handle.add_done_callback(lambda _: self._claim_next_turn(relay, question))
+
+        def on_asked(speech: SpeechHandle) -> None:
+            unheard = speech.interrupted and not any(
+                item.type == "message" and item.role == "assistant" and item.text_content
+                for item in speech.chat_items
+            )
+            if unheard and question.asked and question in self._questions:
+                # cut off before any of it played: it is unasked, and asked at the next idle
+                question.asked = False
+                if self._answering is not None and self._answering[1] is question:
+                    self._answering = None
+                    self._consume_next_turn()
+                self._turn_after_question.set()
+                task = asyncio.create_task(ask_when_idle(), name="AgentActivity.ask_again")
+                self._question_tasks.add(task)
+                task.add_done_callback(self._question_tasks.discard)
+            elif not unheard and claimed is not None and not transition.verbatim:
+                self._claim_next_turn(claimed, question)
+
+        async def ask_when_idle() -> None:
+            try:
+                await self.wait_for_idle()
+            except ActivityClosedError:
+                return
+            self._ask_next()
+
         question.asked = True
+        handle.add_done_callback(on_asked)
         self._turn_after_question.clear()
         if (run_state := self._session._global_run_state) is not None and not run_state.done():
             run_state._watch_handle(handle)
@@ -3461,8 +3485,8 @@ class AgentActivity(RecognitionHooks):
             self._continue_question(question, message, handle),
             name="AgentActivity.continue_question",
         )
-        self._relays.add(task)
-        task.add_done_callback(self._relays.discard)
+        self._question_tasks.add(task)
+        task.add_done_callback(self._question_tasks.discard)
         task.add_done_callback(
             lambda t: handle._mark_done(None if t.cancelled() else t.exception())
         )
