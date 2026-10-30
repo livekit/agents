@@ -60,6 +60,7 @@ impl generated::Implementations for Selected {
     type SynthesisChecks = lk_agents_runtime::inference::tts::checks::SynthesisChecks;
     type ImageFunctions = lk_agents_runtime::inference::images::ImageFunctions;
     type FrameReaderInstall = lk_agents_runtime::process::Process;
+    type Logging = crate::host::logging::Logging;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type TelemetryAdmission = lk_agents_runtime::cores::Admission;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
@@ -218,10 +219,10 @@ fn wait_without_the_gil(wait: &mut dyn FnMut()) {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nothing here may spawn, connect, or allocate a runtime. The core's `log` lines reach the
     // Python logger of the same name from import on (installing a logger starts nothing).
-    let _ = pyo3_log::try_init();
     lk_agents_runtime::net::lock::set_host_wait(wait_without_the_gil);
     runtime::register_all(m)?;
-    generated::register(m)
+    generated::register(m)?;
+    host::logging::install(m)
 }
 
 #[cfg(test)]
@@ -266,3 +267,40 @@ mod lock_tests {
     }
 }
 
+#[cfg(test)]
+mod logging_tests {
+    use pyo3::prelude::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Catches: a log line waiting for the GIL. The thread logging holds what a GIL holder waits
+    // for (a lock, here a reply), as review14's storage_lost warn under the Requests lock did.
+    #[test]
+    fn a_line_logged_while_a_gil_holder_waits_on_the_logger_completes_and_arrives() {
+        Python::initialize();
+        crate::host::logging::install_logger();
+        let seen = Python::attach(|py| {
+            let code = c"import logging\nseen = []\nclass H(logging.Handler):\n    def emit(self, r): seen.append(r.getMessage())\nlogging.getLogger('livekit.agents.logtest').addHandler(H())\nlogging.getLogger('livekit.agents.logtest').setLevel(logging.INFO)\n";
+            let globals = pyo3::types::PyDict::new(py);
+            py.run(code, Some(&globals), None).unwrap();
+            globals.get_item("seen").unwrap().unwrap().unbind()
+        });
+        let (attached, attaching) = mpsc::channel();
+        let (logged, logging) = mpsc::channel::<()>();
+        let waiter = std::thread::spawn(move || {
+            Python::attach(|_| {
+                attached.send(()).unwrap();
+                logging.recv_timeout(Duration::from_secs(10)).is_ok()
+            })
+        });
+        attaching.recv().unwrap();
+        log::warn!(target: "livekit.agents.logtest", "under a lock");
+        logged.send(()).unwrap();
+        assert!(waiter.join().unwrap(), "the line waited for the GIL");
+        crate::host::logging::flush();
+        Python::attach(|py| {
+            let seen: Vec<String> = seen.bind(py).extract().unwrap();
+            assert_eq!(seen, ["under a lock"]);
+        });
+    }
+}

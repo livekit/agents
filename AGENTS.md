@@ -262,8 +262,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   bindings or build tools.
 - pyo3 exists only in `lk-agents-py`. Every Rust-to-host call goes through HostInvoker with
   the Invocation captured at its operation's entry and its declared scopes; async I/O crates
-  hold only ABI-declared proxy traits. Log forwarding (`pyo3-log` in `lk-agents-py`) is the
-  one host entry outside HostInvoker.
+  hold only ABI-declared proxy traits. Log forwarding is the one host entry outside
+  HostInvoker: `log` lines are queued without the GIL and `lk-agents-py`'s drain thread forwards
+  them to Python's `logging`, so logging anywhere, under any lock, never waits for the GIL.
 - The I/O crates and py lock only through `lk_agents_net::lock`: a thread holding the GIL
   waits for a contended lock with the GIL released, so a host call under a lock (a log line, a
   proxy, an emit) cannot deadlock. The I/O Clippy policy (`rust/architecture/io/clippy.toml`)

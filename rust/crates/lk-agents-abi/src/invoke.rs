@@ -99,3 +99,12 @@ pub trait HostNotices: Send + Sync {
     /// Queues `call`; `lossy` lets it be dropped (and logged) while the host is far behind.
     fn notify(&self, context: HostRef, label: &'static str, lossy: bool, call: Self::Call);
 }
+
+/// The core's `log` lines reach the host's logging from a queue (they never wait for the host).
+#[crate::host(functions)]
+pub trait Logging {
+    /// Waits until every line the core logged so far has reached the host's logging. Tests call
+    /// it at their boundaries; the interpreter's exit calls it.
+    #[host(function, detach, pid = false)]
+    fn flush_logs();
+}

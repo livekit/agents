@@ -213,6 +213,7 @@
     "endpoint_url_base",
     "entrypoint_module",
     "eot_select",
+    "flush_logs",
     "format_dtmf",
     "format_log_record",
     "http_error_display",

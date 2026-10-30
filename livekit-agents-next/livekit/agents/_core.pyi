@@ -104,6 +104,9 @@ from ._generated._core_inference import (
     tts_normalize_fallback_str as tts_normalize_fallback_str,
     tts_parse_model_string as tts_parse_model_string,
 )
+from ._generated._core_invoke import (
+    flush_logs as flush_logs,
+)
 from ._generated._core_llm import (
     AdaptiveNoiseGate as AdaptiveNoiseGate,
     DuplexRealtimeModel as DuplexRealtimeModel,

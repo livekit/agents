@@ -70,9 +70,9 @@ pbjson-types = "0.9"
 # no processes, disks, networks or components.
 sysinfo      = { version = "0.39", default-features = false, features = ["system"] }
 # The log facade, with structured key-values: a crate logs `log::info!(target: "livekit.agents", job_id = id; "..")`
-# and the binding forwards it -- keys included, as `extra` -- into Python's `logging` (`pyo3-log`).
+# and the binding queues it, then forwards it -- keys included, as `extra` -- into Python's
+# `logging` from its drain thread (`lk-agents-py` `logging.rs`).
 log          = { version = "0.4", features = ["kv"] }
-pyo3-log     = { version = "0.13", features = ["kv"] }
 # `image`/`base64`: `lk-agents-media` only. Encoding sits below the purity line by design,
 # so nothing in tiers 0/1 may pull these -- `cargo-deny` should ban them everywhere else.
 # Default features off: no rayon, no decoders, no format probing. JPEG and PNG encode is the whole

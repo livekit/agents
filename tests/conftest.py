@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, _core, utils
 from livekit.agents.cli import NOISY_LOGGERS
 
 from . import concurrency
@@ -260,6 +260,14 @@ def configure_test():
         noisy = logging.getLogger(name)
         if noisy.level == logging.NOTSET:
             noisy.setLevel(logging.WARN)
+
+
+@pytest.fixture(autouse=True)
+def _core_logs() -> Iterator[None]:
+    """The core queues its log lines: a test's lines reach ``logging`` before the next test."""
+    _core.flush_logs()
+    yield
+    _core.flush_logs()
 
 
 @pytest.fixture(scope="session", autouse=True)

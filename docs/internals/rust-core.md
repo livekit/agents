@@ -1742,9 +1742,13 @@ the IPC control socket. Rust uses the structured `log` facade:
 log::warn!(target: "livekit.agents", lane = lane.as_str(); "the lease was lost");
 ```
 
-`lk-agents-py` forwards records to Python logging (`pyo3-log`) under their
-logger target, with structured keys as `extra`. This is the one host entry
-outside HostInvoker: a record carries no invocation and settles nothing. Logs are observations, not protocol messages or
+`lk-agents-py` queues each record without taking the GIL (bounded; a full queue
+drops records and the drain reports how many) and one drain thread per process
+forwards them, in order and stamped when they were logged, to the Python logger
+of their target, with structured keys as `extra`. So code anywhere, sans-I/O
+cores included, logs freely, even under a lock. `_core.flush_logs()` waits for
+the queue (tests at their boundaries; the interpreter at exit). This is the one
+host entry outside HostInvoker: a record carries no invocation and settles nothing. Logs are observations, not protocol messages or
 inputs to decision policy.
 
 ## Telemetry

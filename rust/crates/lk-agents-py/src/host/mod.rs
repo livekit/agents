@@ -29,6 +29,7 @@ mod cancellation_tests;
 mod node_tests;
 #[cfg(test)]
 mod parentage_tests;
+pub mod logging;
 pub mod source;
 pub mod stream;
 
