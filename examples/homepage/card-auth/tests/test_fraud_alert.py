@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from livekit.agents.llm import ToolError
@@ -11,6 +12,8 @@ from card_services import (
     outbound_caller_script,
     outbound_greeting,
 )
+
+CTX = SimpleNamespace(function_call=SimpleNamespace(call_id="call_tool"))
 
 
 @pytest.fixture
@@ -29,9 +32,7 @@ async def bank(published: dict) -> Bank:
 
 
 @pytest.fixture
-def agent(monkeypatch: pytest.MonkeyPatch, bank: Bank) -> FraudAlert:
-    monkeypatch.setenv("LIVEKIT_API_KEY", "unused")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "unused")
+def agent(bank: Bank) -> FraudAlert:
     return FraudAlert(bank)
 
 
@@ -65,27 +66,27 @@ async def test_a_date_that_cannot_be_a_birthday_is_asked_again(agent, published,
 
 async def test_nothing_is_recorded_before_verification(agent):
     with pytest.raises(ToolError):
-        await agent.report_purchase(made_by_cardholder=False)
+        await agent.report_purchase(CTX, made_by_cardholder=False)
 
 
 async def test_a_purchase_they_did_not_make_locks_the_card(agent, published):
     await confirm(agent)
-    result = json.loads(await agent.report_purchase(made_by_cardholder=False))
+    result = json.loads(await agent.report_purchase(CTX, made_by_cardholder=False))
     assert result["card"] == "locked"
     assert result["loss_prevention_case"] == LOSS_PREVENTION_CASE
     assert published["alert"]["madeByCardholder"] is False
     assert published["card"]["state"] == "locked"
     assert published["card"]["caseId"] == LOSS_PREVENTION_CASE
     with pytest.raises(ToolError):
-        await agent.set_travel_notice("Italy", str(today() + timedelta(days=7)))
+        await agent.set_travel_notice(CTX, "Italy", str(today() + timedelta(days=7)))
 
 
 async def test_a_purchase_they_made_takes_a_travel_notice(agent, published):
     await confirm(agent)
-    await agent.report_purchase(made_by_cardholder=True)
+    await agent.report_purchase(CTX, made_by_cardholder=True)
     assert published["card"]["state"] == "active"
     back = today() + timedelta(days=14)
-    said = await agent.set_travel_notice("Italy", back.isoformat())
+    said = await agent.set_travel_notice(CTX, "Italy", back.isoformat())
     assert "Italy" in said
     assert published["card"]["travel"] == {
         "destination": "Italy",
@@ -95,11 +96,11 @@ async def test_a_purchase_they_made_takes_a_travel_notice(agent, published):
 
 async def test_a_travel_notice_needs_a_return_date_that_makes_sense(agent):
     await confirm(agent)
-    await agent.report_purchase(made_by_cardholder=True)
+    await agent.report_purchase(CTX, made_by_cardholder=True)
     with pytest.raises(ToolError):
-        await agent.set_travel_notice("Italy", "2020-01-01")
+        await agent.set_travel_notice(CTX, "Italy", "2020-01-01")
     with pytest.raises(ToolError):
-        await agent.set_travel_notice("Italy", str(today() + timedelta(days=400)))
+        await agent.set_travel_notice(CTX, "Italy", str(today() + timedelta(days=400)))
 
 
 def test_the_greeting_explains_the_demo_and_asks_who_picked_up():
@@ -109,7 +110,7 @@ def test_the_greeting_explains_the_demo_and_asks_who_picked_up():
     assert greeting.endswith("Who am I speaking with?")
 
 
-def test_the_voice_model_only_learns_the_purchase_from_the_check(agent):
+def test_avery_only_learns_the_purchase_from_the_check(agent):
     assert FLAGGED.merchant not in agent.instructions
     assert FLAGGED.amount not in agent.instructions
 
@@ -120,7 +121,7 @@ async def test_script_follows_the_call_from_verification_to_the_travel_notice(
     assert "date of birth" in outbound_caller_script(bank)
     await confirm(agent)
     assert "that was them" in outbound_caller_script(bank)
-    await agent.report_purchase(made_by_cardholder=True)
+    await agent.report_purchase(CTX, made_by_cardholder=True)
     assert "two weeks" in outbound_caller_script(bank)
-    await agent.set_travel_notice("Italy", str(today() + timedelta(days=14)))
+    await agent.set_travel_notice(CTX, "Italy", str(today() + timedelta(days=14)))
     assert "goodbye" in outbound_caller_script(bank)
