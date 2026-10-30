@@ -1234,6 +1234,7 @@ class AgentActivity(RecognitionHooks):
     async def _start_session_impl(
         self, *, reuse_resources: _ReusableResources | None = None
     ) -> None:
+        """Hook up the models and start the scheduling and audio-recognition tasks."""
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
