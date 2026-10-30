@@ -922,7 +922,7 @@ async fn a_failed_build_leaves_the_held_override_for_the_retried_start() {
     // A remote session needs a room or a console: this build fails.
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),
-        room_io_config: Some(Default::default()),
+        room_io_config: Default::default(),
         remote_session: Some(Arc::new(UnusedRemotePort)),
         ..Default::default()
     };
