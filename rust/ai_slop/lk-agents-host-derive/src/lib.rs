@@ -1,62 +1,11 @@
-//! `#[derive(Host)]` -- **a host record, declared once: every host's view of it follows.**
-//!
-//! Two readers, one declaration:
-//!
-//! * **The Python binding, in place.** The derive expands (`lk_agents_bindgen::record`), under the
-//!   declaring crate's `python` feature, to the record's pyo3 shapes beside it: `binding(emit)` an
-//!   `IntoPyObject` dict, `binding(extract)` a `FromPyObject` reader, `binding(class)` the getters,
-//!   keyword constructor and `__repr__` of its `_core` class. Without the feature it expands to
-//!   nothing.
-//! * **The generator** (`lk-agents-codegen`) parses the source with `syn` for what a proc macro
-//!   cannot see -- source order, doc comments, `// ---` sections -- and writes the pydantic modules
-//!   (`#[python(..)]`) and the `.pyi` stub.
-//!
-//! The record's own vocabulary (kinds, tags, field words) is documented where it expands:
-//! `lk_agents_bindgen::record`. A value with a host shape of its own -- a `datetime`, a string
-//! type, a host object -- is not a word here: it implements `IntoPyObject`/`FromPyObject` in its
-//! own crate, and the record's field crosses by it.
-//!
-//! Type level, one attribute per host:
-//!
-//! ```ignore
-//! #[derive(Host)]
-//! #[python(pydantic, module = "events")]
-//! #[binding(emit)]
-//! pub struct AgentStateChanged { .. }
-//! ```
-//!
-//! Field level, for the generator: `#[host(rename = "type")]` (the host's name when the Rust one
-//! cannot be it), `#[python(literal = "..")]` (the discriminant), `#[python(default = "..")]` /
-//! `#[python(default_factory = "..")]`, `#[python(serializer = "..")]`, `#[python(exclude)]`,
-//! `#[python(ty = "..")]` (a type the generator does not declare). A typo in any of them fails
-//! `make generated`, and CI's regenerate-and-diff.
+//! Makes `#[host(..)]` legal Rust. `lk-agents-codegen` reads the attributes for every host's view;
+//! this crate strips the per-item markers rustc does not know and writes the Rust a declaration
+//! implies whatever the host (wire strings, declared defaults, `model_dump`, `send` bodies), plus
+//! the `Table` and `Vocabulary` derives.
 
 use proc_macro::TokenStream;
 
 mod table;
-
-/// See the module docs: the record's host shapes (`lk_agents_bindgen::record`), under the calling
-/// crate's `python` feature.
-#[proc_macro_derive(Host, attributes(host, python, binding, table))]
-pub fn host_derive(input: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(input as syn::DeriveInput);
-    derive_host(&input).unwrap_or_else(|e| e.to_compile_error()).into()
-}
-
-/// A unit enum's wire strings (whatever the feature: the core reads them too), then its binding.
-fn derive_host(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
-    let mut out = proc_macro2::TokenStream::new();
-    if let syn::Data::Enum(data) = &input.data
-        && data.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit))
-    {
-        let m = lk_agents_bindgen::Metas::of(&input.attrs)?;
-        m.only(&format!("#[host] on {}", input.ident), &["wire.err", "wire.msg"])?;
-        out.extend(wire_strs(&input.ident, &input.generics, data.variants.iter(), &m, "wire.")?);
-    }
-    out.extend(lk_agents_bindgen::record(input)?);
-    out.extend(table::table(input)?);
-    Ok(out)
-}
 
 /// `#[derive(Table)]`: a column declaration, `#[table("name", remote = path)]`, for a row record
 /// defined in another crate (see [`table`]).
@@ -803,13 +752,6 @@ mod tests {
             "{out}"
         );
         assert!(!out.contains("IntoPyObject"), "wire_strs binds nothing: {out}");
-        let input: syn::DeriveInput = syn::parse_quote! {
-            // Spaced so the layout check does not read the fixture as a declaration.
-            # [host(wire(msg = format!("unknown mode {s:?}")))]
-            enum Mode { #[host(rename = "a")] A }
-        };
-        let out = super::derive_host(&input).expect("expands").to_string();
-        assert!(out.contains("Mode :: A => \"a\"") && out.contains("unknown mode {s:?}"), "{out}");
         let out =
             super::expand_host(quote!(wire_enum), quote! { enum E { A(u8) } }, false).to_string();
         assert!(out.contains("compile_error") && out.contains("carries no data"), "{out}");

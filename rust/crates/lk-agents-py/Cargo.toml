@@ -48,8 +48,3 @@ extension-module = ["pyo3/extension-module"]
 # The audio decoder's ffmpeg path and the ogg/opus recorder. Enabled by maturin (pyproject.toml
 # `features`), never by the workspace build.
 ffmpeg = ["lk-agents-runtime/media-ffmpeg"]
-
-# `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
-# a feature this crate does not have: name the value so check-cfg does not warn.
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))'] }

@@ -110,8 +110,6 @@ broken_dict = BrokenDict(field=1, value='')
         .unwrap_err();
         assert!(err.value(py).is(&m.getattr("key_failure").unwrap()));
         assert!(err.cause(py).unwrap().value(py).is(&m.getattr("cause").unwrap()));
-        let generated = m.getattr("broken_dict").unwrap().extract::<NullableUpdate>().unwrap_err();
-        assert!(generated.value(py).is(&m.getattr("key_failure").unwrap()));
         let missing = PyDict::new(py);
         assert_eq!(item_or(&missing, "Record", "field", |v| v.extract::<u32>(), || 7).unwrap(), 7);
         let obj = module(py, "class Empty: pass\nempty = Empty()\n").getattr("empty").unwrap();
@@ -295,58 +293,6 @@ broken = Broken()
         .unwrap_err();
         assert!(err.value(py).is(&obj.getattr("failure").unwrap()));
     });
-}
-
-#[derive(Debug, lk_agents_host_derive::Host)]
-#[binding(extract, emit, from_items)]
-struct ScalarRecord {
-    count: u32,
-    values: std::collections::HashMap<u32, Vec<f64>>,
-    #[binding(default)]
-    labels: Vec<String>,
-}
-
-#[test]
-fn generated_collections_validate_typed_keys_and_nested_values_in_both_directions() {
-    attach(|py| {
-        let m = module(py, "source = {'count': 7, 'values': {9: [0.125]}}\n");
-        let source = m.getattr("source").unwrap();
-        let mut record = source.extract::<ScalarRecord>().unwrap();
-        let sibling = source.extract::<ScalarRecord>().unwrap();
-        record.labels.push("first only".into());
-        assert!(sibling.labels.is_empty(), "mutable defaults belong to each instance");
-        source
-            .get_item("values")
-            .unwrap()
-            .get_item(9)
-            .unwrap()
-            .call_method1("append", (2.0,))
-            .unwrap();
-        let output = (&record).into_pyobject(py).unwrap();
-        assert_eq!(
-            output
-                .get_item("values")
-                .unwrap()
-                .unwrap()
-                .get_item(9)
-                .unwrap()
-                .extract::<Vec<f64>>()
-                .unwrap(),
-            vec![0.125]
-        );
-        source.set_item("count", true).unwrap();
-        assert!(source.extract::<ScalarRecord>().is_err(), "bool is not an integer field");
-        source.set_item("count", 7).unwrap();
-        source.get_item("values").unwrap().set_item("wrong", vec![0.5]).unwrap();
-        assert!(source.extract::<ScalarRecord>().is_err(), "map keys must validate as u32");
-    });
-}
-
-#[derive(Debug, Default, lk_agents_host_derive::Host)]
-#[binding(extract, emit, from_items)]
-struct NullableUpdate {
-    #[binding(default, skip_if_none)]
-    value: Option<String>,
 }
 
 #[test]

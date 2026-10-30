@@ -42,11 +42,6 @@ base64.workspace = true
 # Local storage: thread files, the registry and the response streams.
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 
-# `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
-# a feature this crate does not have (it is host-neutral): name the value so check-cfg does not
-# warn on every such enum.
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))'] }
 
 [features]
 # `testing`: the contract fixtures over both backends and a fault-injecting connection.

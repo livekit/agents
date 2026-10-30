@@ -34,40 +34,25 @@ fn an_export_is_a_guarded_registered_pyfunction_with_the_declared_signature() {
     assert!(out.contains("# [pyo3 (name = \"split_sentences\" , signature = (text , min_sentence_len = 20 , * , retain_format = false))]"), "{out}");
     assert!(out.contains("fn __host_py_split_sentences < 'py > (py : :: pyo3 :: Python < 'py > , text : & str , # [pyo3 (from_py_with = __host_read_split_sentences_min_sentence_len)] min_sentence_len : usize , retain_format : bool) -> :: pyo3 :: PyResult < Vec < Sentence > >"), "{out}");
     assert!(out.contains(":: lk_agents_abi :: python :: check_pid () ?"), "{out}");
-    assert!(
-        out.contains(
-            "let out = py . detach (|| split_sentences (text , min_sentence_len , retain_format)) ;"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("let out = py . detach (|| split_sentences (text , min_sentence_len , retain_format)) ;"), "{out}");
     assert!(out.contains("wrap_pyfunction ! (__host_py_split_sentences , m)"), "{out}");
     let out = export(quote!(export(pid = false)), quote! { pub fn f(x: u8) -> u8 { x } }).unwrap();
     assert!(!out.contains("check_pid"), "{out}");
-    assert!(
-        !out.contains("signature"),
-        "no defaults, no kw_only: pyo3 infers the same text: {out}"
-    );
+    assert!(!out.contains("signature"), "no defaults, no kw_only: pyo3 infers the same text: {out}");
 }
 
 // Catches: an explicit `err` kind not reaching the exception, or an undeclared error bypassing the
 // autoref dispatch (then a `#[host(error)]` type elsewhere could never pick its own class).
 #[test]
 fn a_failure_raises_the_named_kind_or_goes_through_the_error_dispatch() {
-    let out = export(
-        quote!(export),
-        quote! { pub fn f(x: &[u8]) -> Result<Vec<u8>, String> { todo!() } },
-    )
-    .unwrap();
+    let out = export(quote!(export), quote! { pub fn f(x: &[u8]) -> Result<Vec<u8>, String> { todo!() } }).unwrap();
     assert!(out.contains("(& :: lk_agents_abi :: python :: Fail (& e)) . py_err ()"), "{out}");
     let out = object(
         quote!(object(name = "AudioDecoder", cell = "mutex")),
         quote! { impl Decoder { #[host(method(name = "push", err = "RuntimeError"))] pub fn push_bytes(&mut self, data: &[u8]) -> Result<Vec<u8>> { todo!() } } },
     )
     .unwrap();
-    assert!(
-        out.contains(":: pyo3 :: exceptions :: PyRuntimeError :: new_err (e . to_string ())"),
-        "{out}"
-    );
+    assert!(out.contains(":: pyo3 :: exceptions :: PyRuntimeError :: new_err (e . to_string ())"), "{out}");
     assert!(!out.contains("Fail"), "{out}");
 }
 
@@ -86,12 +71,7 @@ fn a_function_doc_is_its_first_paragraph_unlinked() {
         },
     )
     .unwrap();
-    assert!(
-        out.contains(
-            "# [doc = \" Encode `RgbaFrame` bytes,\"] # [doc = \" as the reference does.\"]"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("# [doc = \" Encode `RgbaFrame` bytes,\"] # [doc = \" as the reference does.\"]"), "{out}");
     assert!(!out.contains("Not for Python"), "{out}");
 }
 
@@ -113,12 +93,7 @@ fn a_plain_object_is_pymethods_on_the_type_itself() {
     )
     .unwrap();
     assert!(out.contains("# [:: pyo3 :: pymethods] impl StreamBuffer"), "{out}");
-    assert!(
-        out.contains(
-            "same_name (< StreamBuffer as :: pyo3 :: PyClass > :: NAME , \"StreamBuffer\")"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("same_name (< StreamBuffer as :: pyo3 :: PyClass > :: NAME , \"StreamBuffer\")"), "{out}");
     assert!(out.contains("# [new] fn __host_py_new < 'py > (py : :: pyo3 :: Python < 'py > ,) -> :: pyo3 :: PyResult < Self >"), "{out}");
     assert!(out.contains("# [pyo3 (name = \"__len__\")] fn __host_py_len < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"), "{out}");
     assert!(out.contains("# [pyo3 (name = \"read\" , signature = (size = - 1))]"), "{out}");
@@ -168,21 +143,10 @@ fn a_mutex_object_is_a_frozen_class_over_the_core_type_beside_it() {
     .unwrap();
     assert!(out.contains("# [doc = \" `AudioStreamDecoder`'s engine.\"] # [:: pyo3 :: pyclass (frozen , name = \"AudioDecoder\" , module = \"livekit.agents._core\")] pub struct PyAudioDecoder { pub inner : :: std :: sync :: Mutex < Decoder > , }"), "{out}");
     assert!(out.contains("# [pyo3 (signature = (mime , * , sample_rate = 48000))] fn __host_py_new < 'py > (py : :: pyo3 :: Python < 'py > , mime : & str , # [pyo3 (from_py_with = __host_read_new_sample_rate)] sample_rate : u32) -> :: pyo3 :: PyResult < PyAudioDecoder >"), "{out}");
-    assert!(
-        out.contains("let out = py . detach (|| < Decoder > :: new (mime , sample_rate)) ;"),
-        "{out}"
-    );
-    assert!(
-        out.contains("Ok (PyAudioDecoder { inner : :: std :: sync :: Mutex :: new (out) })"),
-        "{out}"
-    );
+    assert!(out.contains("let out = py . detach (|| < Decoder > :: new (mime , sample_rate)) ;"), "{out}");
+    assert!(out.contains("Ok (PyAudioDecoder { inner : :: std :: sync :: Mutex :: new (out) })"), "{out}");
     assert!(out.contains("# [getter (output_format)] fn __host_py_output_format_pair < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"), "{out}");
-    assert!(
-        out.contains(
-            "fn __host_py_flush_bytes < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("fn __host_py_flush_bytes < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"), "{out}");
     assert!(out.contains("self . inner . lock () . map_err (| _ | :: pyo3 :: exceptions :: PyRuntimeError :: new_err (\"native object state is poisoned\")) ? . flush_bytes ()"), "{out}");
     assert!(out.contains("m . add_class :: < PyAudioDecoder > ()"), "{out}");
 }
@@ -191,12 +155,8 @@ fn a_mutex_object_is_a_frozen_class_over_the_core_type_beside_it() {
 // reference's pure-Python `ExpFilter`/`MovingAverage` never did), or it being on by default.
 #[test]
 fn subclass_is_an_opt_in_pyclass_option() {
-    let out =
-        class(quote!(name = "ExpFilter", mutable, subclass), quote! { pub struct F; }).unwrap();
-    assert!(
-        out.contains(":: pyo3 :: pyclass (subclass , skip_from_py_object , name = \"ExpFilter\" ,"),
-        "{out}"
-    );
+    let out = class(quote!(name = "ExpFilter", mutable, subclass), quote! { pub struct F; }).unwrap();
+    assert!(out.contains(":: pyo3 :: pyclass (subclass , skip_from_py_object , name = \"ExpFilter\" ,"), "{out}");
     let out = class(quote!(), quote! { pub struct F; }).unwrap();
     assert!(!out.contains("subclass"), "{out}");
 }
@@ -217,18 +177,13 @@ fn a_class_is_frozen_and_documented_by_its_first_paragraph() {
         },
     )
     .unwrap();
-    let summary = out
-        .find("# [cfg_attr (feature = \"python\" , doc = \" A thread-safe buffer.\")]")
-        .expect(&out);
+    let summary = out.find("# [cfg_attr (feature = \"python\" , doc = \" A thread-safe buffer.\")]").expect(&out);
     let pyclass = out
         .find("# [cfg_attr (feature = \"python\" , :: pyo3 :: pyclass (frozen , skip_from_py_object , name = \"StreamBuffer\" , module = \"livekit.agents._core\"))]")
         .expect(&out);
     assert!(summary < pyclass, "{out}");
     // `///` lines reach the macro as raw strings.
-    assert!(
-        out.contains("# [cfg_attr (not (feature = \"python\") , doc = r\" Rust readers only.\")]"),
-        "{out}"
-    );
+    assert!(out.contains("# [cfg_attr (not (feature = \"python\") , doc = r\" Rust readers only.\")]"), "{out}");
     assert!(!out.contains("feature = \"python\" , doc = \" Rust readers only.\""), "{out}");
     assert!(out.contains("m . add_class :: < StreamBuffer > ()"), "{out}");
     let out = class(quote!(name = "Buf", mutable), quote! { pub struct B; }).unwrap();
@@ -246,51 +201,15 @@ fn what_does_not_expand_in_place_yet_is_refused_by_name() {
         assert!(e.contains(want), "{e}");
     };
     refused(object(quote!(object(extend = "X")), quote! { impl T {} }), "object.extend");
-    refused(
-        object(
-            quote!(object),
-            quote! { impl T { #[host(method(clock = "c"))] pub fn c(&self) {} } },
-        ),
-        "clock",
-    );
-    refused(
-        object(
-            quote!(object),
-            quote! { impl T { #[host(method)] pub fn m(&self, #[host(convert = "f")] x: u8) {} } },
-        ),
-        "parameter marker",
-    );
+    refused(object(quote!(object), quote! { impl T { #[host(method(clock = "c"))] pub fn c(&self) {} } }), "clock");
+    refused(object(quote!(object), quote! { impl T { #[host(method)] pub fn m(&self, #[host(convert = "f")] x: u8) {} } }), "parameter marker");
     refused(object(quote!(object(rust_name = PyT)), quote! { impl T {} }), "rust_name");
-    refused(
-        object(quote!(object), quote! { impl T { #[host(getter)] pub fn m() -> u8 { 0 } } }),
-        "needs a receiver",
-    );
-    refused(
-        object(
-            quote!(object),
-            quote! { impl T { #[host(new)] pub fn m(&self) -> Self { todo!() } } },
-        ),
-        "takes no receiver",
-    );
-    refused(
-        object(quote!(object), quote! { impl T { #[host(method(name = n))] pub fn m(&self) {} } }),
-        "host text",
-    );
-    refused(
-        export(
-            quote!(export(defaults(x = None))),
-            quote! { pub fn f(#[host(required)] x: Option<u8>) {} },
-        ),
-        "`required` and has a default",
-    );
-    refused(
-        export(quote!(export(err = "RuntimeError")), quote! { pub fn f() -> u8 { 0 } }),
-        "does not return a Result",
-    );
-    refused(
-        export(quote!(export(defaults(y = 1))), quote! { pub fn f(x: u8) {} }),
-        "names no parameter",
-    );
+    refused(object(quote!(object), quote! { impl T { #[host(getter)] pub fn m() -> u8 { 0 } } }), "needs a receiver");
+    refused(object(quote!(object), quote! { impl T { #[host(new)] pub fn m(&self) -> Self { todo!() } } }), "takes no receiver");
+    refused(object(quote!(object), quote! { impl T { #[host(method(name = n))] pub fn m(&self) {} } }), "host text");
+    refused(export(quote!(export(defaults(x = None))), quote! { pub fn f(#[host(required)] x: Option<u8>) {} }), "`required` and has a default");
+    refused(export(quote!(export(err = "RuntimeError")), quote! { pub fn f() -> u8 { 0 } }), "does not return a Result");
+    refused(export(quote!(export(defaults(y = 1))), quote! { pub fn f(x: u8) {} }), "names no parameter");
     refused(class(quote!(frozen), quote! { pub struct S; }), "frozen");
 }
 
@@ -306,10 +225,7 @@ fn a_const_is_a_zero_argument_function_and_a_duration_is_float_seconds() {
     .unwrap();
     let out = text(crate::export_const(quote!(export(pid = false)), &c).unwrap());
     assert!(out.contains("# [pyo3 (name = \"heartbeat_interval\")] fn __host_py_heartbeat_interval () -> :: pyo3 :: PyResult < f64 >"), "{out}");
-    assert!(
-        out.contains("let out = HEARTBEAT_INTERVAL ; let out = out . as_secs_f64 () ;"),
-        "{out}"
-    );
+    assert!(out.contains("let out = HEARTBEAT_INTERVAL ; let out = out . as_secs_f64 () ;"), "{out}");
     assert!(!out.contains("check_pid"), "{out}");
     let imp: syn::ItemImpl = syn::parse2(quote! {
         impl DefaultLoadCalc {
@@ -323,9 +239,7 @@ fn a_const_is_a_zero_argument_function_and_a_duration_is_float_seconds() {
     assert!(out.contains(":: lk_agents_abi :: python :: check_pid () ?"), "{out}");
     assert!(!out.contains("OTHER"), "an unmarked const is not exported: {out}");
     // A parameter: seconds in, back to a `Duration` with the codegen's `ValueError` label.
-    let out =
-        export(quote!(export), quote! { pub fn f(wait: Option<Duration>) -> Duration { todo!() } })
-            .unwrap();
+    let out = export(quote!(export), quote! { pub fn f(wait: Option<Duration>) -> Duration { todo!() } }).unwrap();
     assert!(out.contains("wait : :: std :: option :: Option < f64 >"), "{out}");
     assert!(out.contains("let wait = { let v = wait ; v . map ("), "{out}");
     assert!(out.contains("-> :: pyo3 :: PyResult < f64 >"), "{out}");
@@ -348,9 +262,7 @@ fn a_wire_enum_crosses_as_its_string_both_ways() {
 fn a_file_is_in_place_by_its_crate_whatever_spelling_rustc_uses() {
     use std::path::Path;
     assert!(crate::in_place(Some(Path::new("crates/lk-agents-media/src/decoder.rs"))));
-    assert!(crate::in_place(Some(Path::new(
-        "/Users/x/repo/rust/crates/lk-agents-media/src/images/encode.rs"
-    ))));
+    assert!(crate::in_place(Some(Path::new("/Users/x/repo/rust/crates/lk-agents-media/src/images/encode.rs"))));
     assert!(!crate::in_place(Some(Path::new("crates/lk-agents-py/src/decoder.rs"))));
     assert!(!crate::in_place(Some(Path::new("crates/lk-agents-mediax/src/decoder.rs"))));
     assert!(!crate::in_place(None));
@@ -369,21 +281,11 @@ fn json_crosses_through_the_checked_readers_and_a_borrow_is_lent() {
     assert!(out.contains("fn __host_py_f < 'py > (py : :: pyo3 :: Python < 'py > , schema : & :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny >"), "{out}");
     assert!(out.contains("value_from_py (v , \"schema\")"), "{out}");
     assert!(out.contains("value_from_py (v , \"tool arguments\")"), "{out}");
-    assert!(
-        out.contains(
-            "root : :: std :: option :: Option < & :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny > >"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("root : :: std :: option :: Option < & :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny > >"), "{out}");
     assert!(out.contains("tags : :: std :: vec :: Vec < :: std :: string :: String >"), "{out}");
     assert!(out.contains("ids : :: std :: vec :: Vec < String >"), "{out}");
     assert!(out.contains("map_from_py (v , \"m\")"), "{out}");
-    assert!(
-        out.contains(
-            "let out = py . detach (|| f (& schema , root . as_ref () , v , & tags , & ids , m)) ;"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("let out = py . detach (|| f (& schema , root . as_ref () , v , & tags , & ids , m)) ;"), "{out}");
     assert!(out.contains("-> :: pyo3 :: PyResult < :: std :: vec :: Vec < (& 'static str , :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny > , :: pyo3 :: Bound < 'py , :: pyo3 :: types :: PyDict > ,) > >"), "{out}");
     assert!(out.contains("value_to_py (py , & v1) ?"), "{out}");
 }
@@ -404,17 +306,9 @@ fn an_error_is_a_host_exception_by_its_kind_table() {
     })
     .unwrap();
     let out = text(crate::error(quote!(error(kind = "RuntimeError")), &e).unwrap());
-    assert!(
-        out.contains("impl :: lk_agents_abi :: python :: HostException for SchemaError"),
-        "{out}"
-    );
+    assert!(out.contains("impl :: lk_agents_abi :: python :: HostException for SchemaError"), "{out}");
     assert!(out.contains("Self :: Strict (inner) => :: lk_agents_abi :: python :: HostException :: to_py_err (inner)"), "{out}");
-    assert!(
-        out.contains(
-            "Self :: NotAnObject { .. } => :: pyo3 :: exceptions :: PyTypeError :: new_err"
-        ),
-        "{out}"
-    );
+    assert!(out.contains("Self :: NotAnObject { .. } => :: pyo3 :: exceptions :: PyTypeError :: new_err"), "{out}");
     assert!(out.contains("Self :: Cancelled => :: lk_agents_abi :: python :: host_exception (\"asyncio\" , \"CancelledError\""), "{out}");
     assert!(out.contains("_ => :: pyo3 :: exceptions :: PyRuntimeError :: new_err"), "{out}");
     // The same table, as the class name a non-Python binding raises.
@@ -425,19 +319,9 @@ fn an_error_is_a_host_exception_by_its_kind_table() {
     let e: syn::Item = syn::parse2(quote! { pub struct E; }).unwrap();
     let out = text(crate::error(quote!(error(with = crate::x::to_py)), &e).unwrap());
     assert!(out.contains("impl :: lk_agents_abi :: python :: HostException for E"), "{out}");
-    assert!(
-        out.contains("crate :: x :: to_py (:: std :: clone :: Clone :: clone (self))"),
-        "{out}"
-    );
-    let out = export(
-        quote!(export(err = "livekit.agents.llm.ToolError")),
-        quote! { pub fn f() -> Result<(), E> { todo!() } },
-    )
-    .unwrap();
-    assert!(
-        out.contains("host_exception (\"livekit.agents.llm\" , \"ToolError\" , e . to_string ())"),
-        "{out}"
-    );
+    assert!(out.contains("crate :: x :: to_py (:: std :: clone :: Clone :: clone (self))"), "{out}");
+    let out = export(quote!(export(err = "livekit.agents.llm.ToolError")), quote! { pub fn f() -> Result<(), E> { todo!() } }).unwrap();
+    assert!(out.contains("host_exception (\"livekit.agents.llm\" , \"ToolError\" , e . to_string ())"), "{out}");
 }
 
 // Catches: a kind-selected struct raising one class for every kind, a listed field not passed as
@@ -449,24 +333,11 @@ fn a_struct_error_selects_its_class_by_a_field() {
         pub struct ApiError { pub kind: Kind, pub message: String, pub retryable: bool, pub code: Option<i64> }
     })
     .unwrap();
-    let attr = quote!(error(
-        by = kind,
-        kinds(A(class = "m.A", kwargs(retryable)), B(class = "m.sub.B", kwargs(retryable, code)))
-    ));
+    let attr = quote!(error(by = kind, kinds(A(class = "m.A", kwargs(retryable)), B(class = "m.sub.B", kwargs(retryable, code)))));
     let out = text(crate::error(attr, &e).unwrap());
     assert!(out.contains("match self . kind"), "{out}");
-    assert!(
-        out.contains(
-            "< Kind > :: A => :: lk_agents_abi :: python :: host_exception_with (\"m\" , \"A\""
-        ),
-        "{out}"
-    );
-    assert!(
-        out.contains(
-            "< Kind > :: B => :: lk_agents_abi :: python :: host_exception_with (\"m.sub\" , \"B\""
-        ),
-        "{out}"
-    );
+    assert!(out.contains("< Kind > :: A => :: lk_agents_abi :: python :: host_exception_with (\"m\" , \"A\""), "{out}");
+    assert!(out.contains("< Kind > :: B => :: lk_agents_abi :: python :: host_exception_with (\"m.sub\" , \"B\""), "{out}");
     assert_eq!(out.matches("\"code\"").count(), 1, "{out}");
     assert_eq!(out.matches("\"retryable\"").count(), 2, "{out}");
     assert!(out.contains("< Kind > :: B => \"m.sub.B\""), "{out}");
@@ -479,9 +350,7 @@ fn a_struct_error_selects_its_class_by_a_field() {
     let out = text(crate::error(quote!(error), &e).unwrap());
     assert!(out.contains("Self :: Host { error , .. } => :: lk_agents_abi :: python :: HostException :: to_py_err (error)"), "{out}");
     assert!(out.contains("Self :: Host { error , .. } => error . host_kind ()"), "{out}");
-    let bad: syn::Item =
-        syn::parse2(quote! { pub enum E { #[host(delegate = nope)] Host { error: HostError } } })
-            .unwrap();
+    let bad: syn::Item = syn::parse2(quote! { pub enum E { #[host(delegate = nope)] Host { error: HostError } } }).unwrap();
     assert!(crate::error(quote!(error), &bad).is_err());
 }
 
@@ -500,12 +369,7 @@ fn a_keyword_record_parameter_is_spread_through_the_records_macro() {
     .unwrap();
     let mac = text(crate::kwargs(quote!(kwargs), &st).unwrap());
     assert!(mac.contains("macro_rules ! __host_kwargs_Frame"), "{mac}");
-    assert!(
-        mac.contains(
-            "# [pyo3 (signature = ($ ($ sig_pre) * agent , tools = None , $ ($ sig_post) *))]"
-        ),
-        "{mac}"
-    );
+    assert!(mac.contains("# [pyo3 (signature = ($ ($ sig_pre) * agent , tools = None , $ ($ sig_post) *))]"), "{mac}");
     assert!(mac.contains("let $ var = Frame { agent , tools } ;"), "{mac}");
     let out = object(
         quote!(object),
@@ -515,10 +379,7 @@ fn a_keyword_record_parameter_is_spread_through_the_records_macro() {
     assert!(out.contains("__host_kwargs_Frame ! {"), "{out}");
     assert!(out.contains("{ id , * , } { }"), "{out}");
     assert!(out.contains("{ & self , py : :: pyo3 :: Python < 'py > , # [pyo3 (from_py_with = __host_read_update_id)] id : u64 , } { }"), "{out}");
-    assert!(
-        out.contains("let out = py . detach (|| Self :: update (self , id , frame)) ;"),
-        "{out}"
-    );
+    assert!(out.contains("let out = py . detach (|| Self :: update (self , id , frame)) ;"), "{out}");
 }
 
 // Catches: a method returning `Reply<T>` awaited on the calling thread (it would block the loop),
@@ -533,22 +394,11 @@ fn a_reply_method_raises_its_refusal_now_and_awaits_the_reply_on_the_loop() {
     .unwrap();
     let send = out.find("let out = py . detach (|| Self :: ask (self ,)) ;").expect(&out);
     let refusal = out.find("(& :: lk_agents_abi :: python :: Fail (& e)) . py_err ()").expect(&out);
-    let future =
-        out.find("future_into_py (py , async move { let out = reply . await ;").expect(&out);
+    let future = out.find("future_into_py (py , async move { let out = reply . await ;").expect(&out);
     assert!(send < refusal && refusal < future, "{out}");
-    assert!(
-        out.contains("-> :: pyo3 :: PyResult < :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny > >"),
-        "{out}"
-    );
-    let plain = object(
-        quote!(object),
-        quote! { impl T { #[host(method)] pub fn ask(&self) -> bool { todo!() } } },
-    )
-    .unwrap();
-    assert!(
-        !plain.contains("future_into_py") && plain.contains("-> :: pyo3 :: PyResult < bool >"),
-        "{plain}"
-    );
+    assert!(out.contains("-> :: pyo3 :: PyResult < :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny > >"), "{out}");
+    let plain = object(quote!(object), quote! { impl T { #[host(method)] pub fn ask(&self) -> bool { todo!() } } }).unwrap();
+    assert!(!plain.contains("future_into_py") && plain.contains("-> :: pyo3 :: PyResult < bool >"), "{plain}");
 }
 
 // Catches: a method's kind read from anything but its signature -- a receiver-less `method` not
@@ -564,10 +414,7 @@ fn a_methods_kind_is_its_signatures() {
     )
     .unwrap();
     assert!(out.contains("# [staticmethod] # [pyo3 (name = \"make\")]"), "{out}");
-    assert!(
-        out.contains("future_into_py (py , async move { let out = inner . wait () . await ;"),
-        "{out}"
-    );
+    assert!(out.contains("future_into_py (py , async move { let out = inner . wait () . await ;"), "{out}");
 }
 
 // Catches: a constant exported under a Python constant's name becoming a function (the host reads
@@ -587,20 +434,11 @@ fn an_upper_case_constant_is_a_module_attribute_and_any_other_a_function() {
 // syntax error at import), or defaulted despite `#[host(required)]`.
 #[test]
 fn an_option_defaults_to_none_unless_required_or_a_required_parameter_follows() {
-    let out = export(
-        quote!(export),
-        quote! { pub fn f(a: Option<u8>, b: u8, c: Option<u8>, d: Option<u8>) {} },
-    )
-    .unwrap();
+    let out = export(quote!(export), quote! { pub fn f(a: Option<u8>, b: u8, c: Option<u8>, d: Option<u8>) {} }).unwrap();
     assert!(out.contains("signature = (a , b , c = None , d = None)"), "{out}");
-    let out = export(
-        quote!(export),
-        quote! { pub fn f(c: Option<u8>, #[host(required)] d: Option<u8>) {} },
-    )
-    .unwrap();
+    let out = export(quote!(export), quote! { pub fn f(c: Option<u8>, #[host(required)] d: Option<u8>) {} }).unwrap();
     assert!(!out.contains("signature"), "nothing defaults, so pyo3 infers the signature: {out}");
-    let out = export(quote!(export(defaults(b = 2))), quote! { pub fn f(a: Option<u8>, b: u8) {} })
-        .unwrap();
+    let out = export(quote!(export(defaults(b = 2))), quote! { pub fn f(a: Option<u8>, b: u8) {} }).unwrap();
     assert!(out.contains("signature = (a = None , b = 2)"), "{out}");
 }
 
@@ -609,91 +447,19 @@ fn an_option_defaults_to_none_unless_required_or_a_required_parameter_follows() 
 // accepted where Rust is written unquoted, an unquoted host name accepted.
 #[test]
 fn rust_is_written_unquoted_and_host_text_as_a_string() {
-    let out = export(
-        quote!(export(defaults(n = -1, s = "auto"))),
-        quote! { pub fn f(n: i64, s: &str) {} },
-    )
-    .unwrap();
+    let out = export(quote!(export(defaults(n = -1, s = "auto"))), quote! { pub fn f(n: i64, s: &str) {} }).unwrap();
     assert!(out.contains("signature = (n = - 1 , s = \"auto\")"), "{out}");
-    let e = object(quote!(object(cell = "mutex", rust_name = "PyT")), quote! { impl T {} })
-        .expect_err("a quoted ident");
+    let e = object(quote!(object(cell = "mutex", rust_name = "PyT")), quote! { impl T {} }).expect_err("a quoted ident");
     assert!(e.to_string().contains("write it unquoted"), "{e}");
-    let e =
-        export(quote!(export(name = f2)), quote! { pub fn f() {} }).expect_err("an unquoted name");
+    let e = export(quote!(export(name = f2)), quote! { pub fn f() {} }).expect_err("an unquoted name");
     assert!(e.to_string().contains("host text"), "{e}");
-    let out = object(
-        quote!(object(cell = "mutex", rust_name = Cell)),
-        quote! { impl T { #[host(new)] pub fn new() -> Self { todo!() } } },
-    )
-    .unwrap();
+    let out = object(quote!(object(cell = "mutex", rust_name = Cell)), quote! { impl T { #[host(new)] pub fn new() -> Self { todo!() } } }).unwrap();
     assert!(out.contains("pub struct Cell {"), "{out}");
 }
 
 // Catches: a record's extract error naming anything but the record (the twin names the old
 // grammar required), or a key of the deleted twin grammar (`module`, `name`, `extract_name`, a
 // `from` naming the record itself) accepted and silently ignored.
-#[test]
-fn a_record_is_named_by_itself_and_the_twin_keys_are_refused() {
-    let rec = |attr: proc_macro2::TokenStream| -> syn::Result<String> {
-        let input: syn::DeriveInput = syn::parse2(quote! { #[derive(Host)] #attr pub struct Usage { pub tokens: u32, pub model: String } }).unwrap();
-        crate::record(&input).map(text)
-    };
-    let out = rec(quote!(#[binding(extract)])).unwrap();
-    assert!(out.contains("number_from_py :: < u32 > (v , \"tokens\")"), "{out}");
-    for bad in [
-        quote!(#[binding(emit, module = "m")]),
-        quote!(#[binding(extract, extract_name = "UsageFromPy")]),
-        quote!(#[binding(emit, name = "UsagePy")]),
-    ] {
-        let e = rec(bad).expect_err("a twin key");
-        assert!(e.to_string().contains("is not a key here"), "{e}");
-    }
-    let e = rec(quote!(#[binding(emit, from = crate::Usage)])).expect_err("from the record itself");
-    assert!(e.to_string().contains("leave it out"), "{e}");
-}
-
-// Catches: a record-level `default` / `skip_if_none` (or a `total = "False"` typed dict's implied
-// `default`) expanding differently from the same words written on each field, reaching a field
-// that says its own, or `skip_if_none` reaching a field that is not an `Option`.
-#[test]
-fn record_level_field_words_expand_as_the_same_words_on_each_field() {
-    let expand =
-        |t: proc_macro2::TokenStream| text(crate::record(&syn::parse2(t).unwrap()).unwrap());
-    let per_field = expand(quote! {
-        #[binding(emit, extract, from_items)]
-        pub struct R {
-            #[binding(skip_if_none, default)] pub a: Option<f64>,
-            #[binding(default)] pub b: u32,
-            #[binding(default = 7)] pub c: u32,
-        }
-    });
-    let hoisted = expand(quote! {
-        #[binding(emit, extract, from_items, default, skip_if_none)]
-        pub struct R {
-            pub a: Option<f64>,
-            pub b: u32,
-            #[binding(default = 7)] pub c: u32,
-        }
-    });
-    assert_eq!(hoisted, per_field);
-    let open = expand(quote! {
-        #[python(typed_dict, total = "False", module = "m")]
-        #[binding(emit, extract, from_items, skip_if_none)]
-        pub struct R {
-            pub a: Option<f64>,
-            pub b: u32,
-            #[binding(default = 7)] pub c: u32,
-        }
-    });
-    assert_eq!(open, per_field);
-    let closed = expand(quote! {
-        #[python(typed_dict, module = "m")]
-        #[binding(emit, extract, from_items, skip_if_none)]
-        pub struct R { pub a: Option<f64>, pub b: u32, #[binding(default = 7)] pub c: u32 }
-    });
-    assert_ne!(closed, per_field, "a total typed dict implies nothing");
-}
-
 fn filled(item: proc_macro2::TokenStream) -> syn::Result<syn::ItemImpl> {
     let mut imp: syn::ItemImpl = syn::parse2(item).unwrap();
     crate::fill_sends(&mut imp).map(|()| imp)
@@ -719,11 +485,7 @@ fn a_send_method_is_written_as_a_send_of_its_expression() {
     assert!(text.contains("pub fn release (& self , hold : u64) { let _ = self . send (Hold { id : HoldId (hold) }) ; }"), "{text}");
     assert!(text.contains("pub fn plain (& self) -> u8 { 0 }"), "{text}");
     let out = crate::object(quote!(object), &imp).unwrap().to_string();
-    assert!(
-        out.contains("let out = py . detach (|| Self :: clear (self ,)) ;")
-            && out.contains("let out = py . detach (|| Self :: release (self , hold)) ;"),
-        "{out}"
-    );
+    assert!(out.contains("let out = py . detach (|| Self :: clear (self ,)) ;") && out.contains("let out = py . detach (|| Self :: release (self , hold)) ;"), "{out}");
 }
 
 // Catches: a body-less method compiled with no body at all, `send` beside a body it would silently
@@ -731,67 +493,17 @@ fn a_send_method_is_written_as_a_send_of_its_expression() {
 #[test]
 fn a_body_is_written_by_send_or_by_hand_never_both_nor_neither() {
     let err = |item| filled(item).err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(
-        err(quote! { impl S { #[host(method)] pub fn f(&self); } })
-            .contains("needs #[host(method(send = <expr>))]")
-    );
+    assert!(err(quote! { impl S { #[host(method)] pub fn f(&self); } }).contains("needs #[host(method(send = <expr>))]"));
     assert!(err(quote! { impl S { #[host(method(send = C::X))] pub fn f(&self) -> Result<(), E> { todo!() } } }).contains("`send` writes the body"));
-    assert!(
-        err(quote! { impl S { #[host(method(send = C::X))] pub fn f(&self) -> bool; } })
-            .contains("returns nothing")
-    );
-    assert!(
-        err(quote! { impl S { #[host(method(send = C::X))] pub fn f() -> Result<(), E>; } })
-            .contains("takes `&self`")
-    );
+    assert!(err(quote! { impl S { #[host(method(send = C::X))] pub fn f(&self) -> bool; } }).contains("returns nothing"));
+    assert!(err(quote! { impl S { #[host(method(send = C::X))] pub fn f() -> Result<(), E>; } }).contains("takes `&self`"));
 }
 
-fn record(item: proc_macro2::TokenStream) -> syn::Result<String> {
-    crate::record(&syn::parse2(item).unwrap()).map(text)
-}
-
-// Catches: an untagged union trying its arms out of order, a `none` arm taking anything but None,
-// a class arm not testing the instance, the last member's error lost when nothing fits, and a
-// `rest` arm anywhere but last (it would shadow every arm after it).
-#[test]
-fn an_untagged_union_takes_the_first_arm_the_value_fits() {
-    let out = record(quote! {
-        #[binding(extract, emit, untagged)]
-        enum Reply { #[binding(none)] Declined, Text(String), #[binding(class = "m.End")] End, #[binding(rest)] Spoke }
-    })
-    .unwrap();
-    let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s}: {out}"));
-    let (none, text, end, rest) = (
-        at("is_none"),
-        at("extract :: < String >"),
-        at("getattr (\"End\")"),
-        at("Ok (Reply :: Spoke)"),
-    );
-    assert!(none < text && text < end && end < rest, "{out}");
-    assert!(out.contains("import (\"m\")"), "{out}");
-    assert!(out.contains("last . unwrap_or_else"), "{out}");
-    let err = record(
-        quote! { #[binding(extract, untagged)] enum R { #[binding(rest)] Any, Text(String) } },
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("last arm"), "{err}");
-}
-
-// Catches: a declared exception not created on `_core`, not registered, or not raised as itself;
-// a dotted class (a host's own) taken for one `_core` declares.
 #[test]
 fn a_declared_error_is_a_core_exception_class_of_its_base() {
     let item: syn::Item = syn::parse2(quote! { pub enum IdleRefused { Closing } }).unwrap();
-    let out = text(
-        crate::error(quote!(error(kind = "SessionClosing", declare = "RuntimeError")), &item)
-            .unwrap(),
-    );
-    assert!(
-        out.contains(
-            "create_exception ! (_core , SessionClosing , :: pyo3 :: exceptions :: PyRuntimeError"
-        ),
-        "{out}"
-    );
+    let out = text(crate::error(quote!(error(kind = "SessionClosing", declare = "RuntimeError")), &item).unwrap());
+    assert!(out.contains("create_exception ! (_core , SessionClosing , :: pyo3 :: exceptions :: PyRuntimeError"), "{out}");
     assert!(out.contains("SessionClosing :: new_err"), "{out}");
     assert!(out.contains("m . add (\"SessionClosing\""), "{out}");
     assert!(crate::error(quote!(error(kind = "a.B", declare = "RuntimeError")), &item).is_err());
@@ -801,8 +513,7 @@ fn a_declared_error_is_a_core_exception_class_of_its_base() {
 // refuses non-native objects), or a misspelled native key accepted.
 #[test]
 fn a_native_trait_is_declaration_metadata_only() {
-    let tr: syn::ItemTrait =
-        syn::parse2(quote! { pub trait Room: Send { fn rtc(&self); } }).unwrap();
+    let tr: syn::ItemTrait = syn::parse2(quote! { pub trait Room: Send { fn rtc(&self); } }).unwrap();
     assert!(crate::native(quote!(native(refused = "only native")), &tr).unwrap().is_empty());
     assert!(crate::native(quote!(native), &tr).unwrap().is_empty());
     let err = crate::native(quote!(native(refuse = "x")), &tr).unwrap_err();
