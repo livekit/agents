@@ -1154,3 +1154,154 @@ async def test_reply_instructions_turns_follow_the_model(
         assert len(sent) == 1
         assert sent[0].turn_complete
         assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
+
+
+def _manual_activity_config() -> types.RealtimeInputConfig:
+    return types.RealtimeInputConfig(
+        automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+    )
+
+
+async def test_manual_activity_model_turn_is_not_a_barge_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generation the model starts must not emit input_speech_started.
+
+    AgentSession treats that event as the user barging in and sends activity_start, which
+    Gemini reads as an interruption and cuts the line.
+    """
+    async with _make_configured_session(
+        monkeypatch, realtime_input_config=_manual_activity_config()
+    ) as session:
+        started: list[llm.InputSpeechStartedEvent] = []
+        created: list[llm.GenerationCreatedEvent] = []
+        session.on("input_speech_started", started.append)
+        session.on("generation_created", created.append)
+
+        consumed = session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    model_turn=types.Content(parts=[types.Part(text="Thank you for calling.")])
+                )
+            )
+        )
+
+        assert consumed is False
+        assert len(created) == 1
+        assert created[0].user_initiated is False
+        assert started == []
+
+
+async def test_automatic_activity_model_turn_still_interrupts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        started: list[llm.InputSpeechStartedEvent] = []
+        session.on("input_speech_started", started.append)
+        session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    model_turn=types.Content(parts=[types.Part(text="Hello")])
+                )
+            )
+        )
+        assert len(started) == 1
+
+
+async def test_manual_activity_interruption_still_counts_as_barge_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(
+        monkeypatch, realtime_input_config=_manual_activity_config()
+    ) as session:
+        started: list[llm.InputSpeechStartedEvent] = []
+        session.on("input_speech_started", started.append)
+        session._open_generation(
+            types.LiveServerMessage(server_content=types.LiveServerContent(interrupted=True))
+        )
+        assert len(started) == 1
+
+
+async def test_manual_transcript_only_turn_does_not_open_a_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Input transcription with no model turn must not leave a generation waiting for turn_complete."""
+    async with _make_configured_session(
+        monkeypatch, realtime_input_config=_manual_activity_config()
+    ) as session:
+        transcripts: list[llm.InputTranscriptionCompleted] = []
+        created: list[llm.GenerationCreatedEvent] = []
+        session.on("input_audio_transcription_completed", transcripts.append)
+        session.on("generation_created", created.append)
+
+        assert session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="Hello?")
+                )
+            )
+        )
+        assert session._current_generation is None
+        assert created == []
+        assert [event.transcript for event in transcripts] == ["Hello?"]
+        assert transcripts[0].is_final is False
+
+        assert session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="", finished=True)
+                )
+            )
+        )
+
+        assert session._current_generation is None
+        assert created == []
+        assert [event.is_final for event in transcripts] == [False, True]
+        assert transcripts[-1].transcript == "Hello?"
+        assert [message.text_content for message in session.chat_ctx.messages()] == ["Hello?"]
+
+        # the closed turn does not occupy the session, so the next reply can be requested
+        fut = session.generate_reply()
+        assert session._pending_generation_fut is fut
+        fut.cancel()
+
+
+async def test_dropped_socket_does_not_keep_a_partial_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial transcript finalized on disconnect must not prefix the next connection's turn."""
+    async with _make_configured_session(
+        monkeypatch, realtime_input_config=_manual_activity_config()
+    ) as session:
+        transcripts: list[llm.InputTranscriptionCompleted] = []
+        session.on("input_audio_transcription_completed", transcripts.append)
+
+        session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="Hello")
+                )
+            )
+        )
+        assert session._pending_input_transcript == "Hello"
+
+        # the receive task calls this when the socket drops, and again if already settled
+        session._mark_current_generation_done()
+        session._mark_current_generation_done()
+
+        session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="Goodbye", finished=True)
+                )
+            )
+        )
+
+        finals = [event.transcript for event in transcripts if event.is_final]
+        assert finals == ["Hello", "Goodbye"]
+        assert len({event.item_id for event in transcripts if event.is_final}) == 2
+        assert [message.text_content for message in session.chat_ctx.messages()] == [
+            "Hello",
+            "Goodbye",
+        ]
+        assert session._pending_input_id is None
