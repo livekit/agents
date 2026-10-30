@@ -27,7 +27,7 @@ pub struct InitialSession {
     pub hook_bound: Option<Duration>,
     pub expressive: ExpressiveLayers,
     pub sinks: BTreeMap<AudioChannel, ResourceId>,
-    pub video_instance: Option<lk_agents_abi::resources::ResourceId>,
+    pub video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
     pub video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
     pub eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     pub eot_provider: Option<lk_agents_abi::ProviderId>,

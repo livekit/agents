@@ -56,6 +56,14 @@ pub struct RealtimeRef {
     pub capabilities: RealtimeCapabilities,
 }
 
+/// A video input, registered under a new id each time it is handed over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoInputRef {
+    pub id: ResourceId,
+    /// The object registered: the input already read, handed back, is not reattached.
+    pub instance: usize,
+}
+
 /// The agent's audio output: what it said about itself when handed over.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioOutputRef {

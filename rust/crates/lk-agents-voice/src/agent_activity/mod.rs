@@ -375,13 +375,13 @@ impl Driver {
             }
             ActivityCommand::SetVideoInput(input) => {
                 let attached = input.is_some();
-                // The leg already read, handed back: nothing to swap.
-                if self.input.video_instance == input {
+                // The leg already read, handed back: nothing to swap, and its new id is released.
+                if self.input.video_instance.map(|v| v.instance) == input.map(|v| v.instance) {
                     return;
                 }
                 self.input.video_instance = input;
                 out.machine().push(crate::agent_session::effects::Effect::Audio(
-                    crate::agent_session::effects::AudioOp::SetVideoInput(input),
+                    crate::agent_session::effects::AudioOp::SetVideoInput(input.map(|i| i.id)),
                 ));
                 out.trace(InputStep::VideoInputSet { attached });
             }

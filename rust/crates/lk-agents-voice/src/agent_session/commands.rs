@@ -529,8 +529,7 @@ pub enum ActivityCommand {
     UpdateExpressive(crate::agent_activity::options::Expressive),
     /// The old pump is aborted first, so two sources never feed the legs at once.
     SetAudioInput(Option<HostAudio>),
-    /// The input by its id in the runtime's table: the same object keeps its id.
-    SetVideoInput(Option<lk_agents_abi::resources::ResourceId>),
+    SetVideoInput(Option<lk_agents_abi::resources::VideoInputRef>),
     /// The leg stays: a muted mic stops feeding STT; a disabled output plans speech without a
     /// voice.
     SetIoEnabled {
@@ -634,7 +633,7 @@ impl Command {
                 run.update.resources().collect()
             }
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
-            Command::Activity(ActivityCommand::SetVideoInput(Some(input))) => vec![*input],
+            Command::Activity(ActivityCommand::SetVideoInput(Some(input))) => vec![input.id],
             Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
                 handed(stt, |r| r.id),

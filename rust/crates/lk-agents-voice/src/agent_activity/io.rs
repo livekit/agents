@@ -29,7 +29,7 @@ pub(crate) struct AgentInput {
     /// When audio started flowing from the current source, as the data plane reported it.
     pub(crate) first_input_at: Option<Ts>,
     /// So the same leg handed back is a no-op. Runtime retains the object.
-    pub(crate) video_instance: Option<lk_agents_abi::resources::ResourceId>,
+    pub(crate) video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
     /// Shared: its rates are public attributes a caller may change mid-call.
     video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
     /// A pipeline session has nowhere to push a frame: said the first time only.
@@ -58,7 +58,7 @@ impl AgentInput {
     /// was attached), nothing pending.
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
-        video_instance: Option<lk_agents_abi::resources::ResourceId>,
+        video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
         video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
     ) -> Self {
         AgentInput {

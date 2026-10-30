@@ -3,6 +3,7 @@
 
 use lk_agents_abi::resources::{
     AudioOutputRef, LlmRef, RealtimeRef, ResourceId, SttRef, TextOutputRef, TtsRef, VadRef,
+    VideoInputRef,
 };
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput, VideoInput,
@@ -122,16 +123,9 @@ impl Resources {
         self.get(id, |r| if let Resource::AudioInput(i) = r { Some(Arc::clone(i)) } else { None })
     }
 
-    /// The same input object keeps its id, so the core tells a re-set of the input it reads from
-    /// a new one.
-    pub fn register_video_input(&self, input: Arc<dyn VideoInput>) -> ResourceId {
-        let held = self.0.lock().live.iter().find_map(|(id, r)| match r {
-            Resource::VideoInput(i) if std::ptr::addr_eq(Arc::as_ptr(i), Arc::as_ptr(&input)) => {
-                Some(*id)
-            }
-            _ => None,
-        });
-        held.unwrap_or_else(|| self.insert(Resource::VideoInput(input)))
+    pub fn register_video_input(&self, input: Arc<dyn VideoInput>) -> VideoInputRef {
+        let instance = Arc::as_ptr(&input).cast::<()>() as usize;
+        VideoInputRef { id: self.insert(Resource::VideoInput(input)), instance }
     }
 
     pub fn video_input(&self, id: ResourceId) -> Option<Arc<dyn VideoInput>> {

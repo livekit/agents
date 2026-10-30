@@ -941,3 +941,43 @@ async fn a_failed_build_leaves_the_held_override_for_the_retried_start() {
     let legs = SessionLegs { stt: true, vad: true, llm: true, tts: true, ..SessionLegs::none() };
     assert_eq!(options.resolved(legs).endpointing.min_delay, 0.5);
 }
+
+/// A camera that says whether the session reads it.
+struct Camera(AtomicBool);
+
+impl lk_agents_abi::voice::io::VideoInput for Camera {
+    fn label(&self) -> &str {
+        "camera"
+    }
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>,
+    > {
+        Box::pin(std::future::pending())
+    }
+    fn on_attached(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    fn on_detached(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+// Catches: the camera unset and set again before the core took the unset. The same object kept
+// its id, which the unset's step released, so the set named an id the table no longer had and
+// the camera was silently never read again.
+#[tokio::test(start_paused = true)]
+async fn a_camera_unset_and_set_again_at_once_is_read() {
+    let api = running(unobserved(no_room(), None)).await;
+    let camera = Arc::new(Camera(AtomicBool::new(false)));
+    api.set_video_input(Some(camera.clone())).unwrap();
+    settle().await;
+    assert!(camera.0.load(Ordering::SeqCst), "the camera is read");
+    api.set_video_input(None).unwrap();
+    api.set_video_input(Some(camera.clone())).unwrap();
+    settle().await;
+    assert!(camera.0.load(Ordering::SeqCst), "the camera set again is not read");
+    api.shutdown(false);
+}
