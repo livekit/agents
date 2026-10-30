@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from livekit import rtc
-from livekit.agents import VAD, APIError, VADCapabilities, VADStream
+from livekit.agents import VAD, APIError, VADCapabilities, VADEvent, VADEventType, VADStream
 from livekit.agents.inference import VAD as InferenceVAD
 
 pytestmark = pytest.mark.unit
@@ -105,3 +105,42 @@ async def test_inference_vad_refused_audio_fails_the_stream() -> None:
             async with asyncio.timeout(5):
                 async for _ in stream:
                     pass
+
+
+class EchoVAD(VAD):
+    def __init__(self) -> None:
+        super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+
+    def stream(self) -> VADStream:
+        return EchoStream(self)
+
+
+class EchoStream(VADStream):
+    """One event per frame, several frames' worth from one large frame."""
+
+    async def _main_task(self) -> None:
+        async for item in self.input:
+            if isinstance(item, rtc.AudioFrame):
+                for _ in range(item.samples_per_channel // 160):
+                    self.send(
+                        VADEvent(
+                            type=VADEventType.INFERENCE_DONE,
+                            samples_index=0,
+                            timestamp=0,
+                            speech_duration=0,
+                            silence_duration=0,
+                        )
+                    )
+
+
+@pytest.mark.asyncio
+async def test_a_reader_behind_on_events_stops_the_detector_reading_audio() -> None:
+    stream = EchoVAD().stream()
+    stream.push_frame(frame(160 * 100))
+    with pytest.raises(APIError, match="capacity"):
+        for _ in range(512):
+            stream.push_frame(frame())
+            await asyncio.sleep(0)
+    # nothing the detector produced was dropped
+    assert len([await anext(stream) for _ in range(100)]) == 100
+    await stream.aclose()

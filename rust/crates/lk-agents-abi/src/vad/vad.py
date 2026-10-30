@@ -28,6 +28,20 @@ _MAX_FRAME_BYTES = 192_000
 _OUTPUT_CAPACITY = 64
 
 
+class _Input(aio.Chan["rtc.AudioFrame | VADStream.Flush"]):
+    """A stream's audio, read only while its reader keeps up with the events, as the native
+    stream's worker waits for event space: pending events stop the detector, and the bounded
+    input then refuses more audio."""
+
+    def __init__(self, stream: VADStream) -> None:
+        super().__init__(maxsize=_INPUT_CAPACITY, _on_receive=stream._input_received)
+        self._events_drained = stream._events_drained
+
+    async def recv(self) -> rtc.AudioFrame | VADStream.Flush:
+        await self._events_drained.wait()
+        return await super().recv()
+
+
 class VAD(
     ABC,
     rtc.EventEmitter[Literal["metrics_collected"] | TEvent],
@@ -118,11 +132,11 @@ class VADStream(ABC):
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
         self._input_bytes = 0
-        self.input = aio.Chan[rtc.AudioFrame | VADStream.Flush](
-            maxsize=_INPUT_CAPACITY, _on_receive=self._input_received
-        )
+        self._events_drained = asyncio.Event()
+        self._events_drained.set()
+        self.input: aio.Chan[rtc.AudioFrame | VADStream.Flush] = _Input(self)
         """The audio ``_main_task`` reads, a ``Flush`` at the end of each segment."""
-        self._event_ch = aio.Chan[VADEvent](maxsize=_OUTPUT_CAPACITY)
+        self._event_ch = aio.Chan[VADEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -184,17 +198,18 @@ class VADStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc  # noqa: B904
             raise StopAsyncIteration from None
+        if self._event_ch.qsize() < _OUTPUT_CAPACITY:
+            self._events_drained.set()
         return val
 
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self
 
     def send(self, event: VADEvent) -> None:
-        """Hand ``event`` to the reader; a reader that fell too far behind fails the stream."""
-        try:
-            self._event_ch.send_nowait(event)
-        except aio.ChanFull:
-            raise APIError("VAD event capacity exhausted", retryable=False) from None
+        """Hand ``event`` to the reader. Once it falls behind, ``input`` waits for it."""
+        self._event_ch.send_nowait(event)
+        if self._event_ch.qsize() >= _OUTPUT_CAPACITY:
+            self._events_drained.clear()
 
     @property
     def closed(self) -> bool:
