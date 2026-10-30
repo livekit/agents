@@ -467,10 +467,12 @@ pub fn terminate_current_process() {
     unsafe {
         libc::_exit(1);
     }
+    // Not ExitProcess: it runs DLL detach, which can deadlock on a loader or heap lock a dead
+    // thread holds, exactly when an orphaned child must end.
     #[cfg(windows)]
-    // SAFETY: ExitProcess ends the current isolated child process.
+    // SAFETY: terminates this isolated child process.
     unsafe {
-        windows::ExitProcess(1);
+        windows::TerminateProcess(windows::GetCurrentProcess(), 1);
     }
 }
 
@@ -484,7 +486,7 @@ mod windows {
         pub fn TerminateProcess(handle: *mut c_void, code: u32) -> i32;
         pub fn GetExitCodeProcess(handle: *mut c_void, code: *mut u32) -> i32;
         pub fn WaitForSingleObject(handle: *mut c_void, timeout: u32) -> u32;
-        pub fn ExitProcess(code: u32) -> !;
+        pub fn GetCurrentProcess() -> *mut c_void;
     }
 }
 
