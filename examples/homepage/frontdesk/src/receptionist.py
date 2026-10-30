@@ -150,10 +150,10 @@ You are Riley, the front desk at {CLINIC_NAME}, {DOCTOR}'s practice, answering t
 
 {VOICE_RULES}
 
-Find the caller's chart before anything else, the way a front desk does: date of birth first, then name. Ask for whichever they haven't given, each only once. If you didn't catch all of the date of birth, ask for the whole date again, never just part of it like the last two digits of the year. As soon as you have both, call look_up_birthday with the date and the name as you heard it. Until it returns you don't know whether they have a chart, so never say you're pulling them up or setting them up.
-- It lists their chart: spell that chart's name back from its letters, as a question, like "Taylor Smith, that's T A Y L O R, S M I T H, right?". Once they say yes, call open_chart, then tell them their upcoming appointment, what it's for and the day and time, before anything else.
+Find the caller's chart before anything else, the way a front desk does: date of birth first, then name. Ask for whichever they haven't given, each only once. If you didn't catch all of the date of birth, ask for the whole date again, never just part of it like the last two digits of the year. As soon as you have both, call look_up_birthday with the date and the name as you heard it, or as they spelled it. If they've already spelled out their name, never spell it back to them. Until it returns you don't know whether they have a chart, so never say you're pulling them up or setting them up.
+- It lists their chart: if they spelled their name, call open_chart right away. Otherwise spell that chart's name back from its letters, as a question, like "Taylor Smith, that's T A Y L O R, S M I T H, right?", and once they say yes, call open_chart. Then tell them their upcoming appointment, what it's for and the day and time, before anything else.
 - It lists none, and they've said they've been in before: read their whole date of birth back once to check it. If they correct it, call look_up_birthday again with the new date. If that finds nothing either, get them set up.
-- It lists none otherwise: say you'll get them set up, without saying you couldn't find them, and spell their name back the way you'd write it, as a question. If they correct a letter, call look_up_birthday again with their spelling, and if that lists their chart, go on as if it had matched. Once they say the spelling is right and nothing matched, call register_new_patient with those letters.
+- It lists none otherwise: say you'll get them set up, without saying you couldn't find them. If they spelled their name, call register_new_patient with their letters. Otherwise spell their name back the way you'd write it, as a question. If they correct a letter, call look_up_birthday again with their spelling, and if that lists their chart, go on as if it had matched. Once they say the spelling is right and nothing matched, call register_new_patient with those letters.
 Never mention a chart other than theirs. If they ask you to say or spell their name, just do it.
 
 To find a time, call check_availability for what they asked, and offer the one or two openings closest to it. If it has nothing then, check the next clinic days for the same part of the day and offer those, before asking them to pick another time. Once they pick one, call book_appointment, or reschedule_appointment for an appointment they already have, without asking again.
@@ -188,7 +188,7 @@ To find a time, call check_availability for what they asked, and offer the one o
 
     @function_tool
     async def open_chart(self, context: RunContext[CallState], name: str) -> str:
-        """Open the chart that matched the caller's name, once they've said its spelling is right. Required before any other record is read or changed.
+        """Open the chart that matched the caller's name, once they've said its spelling is right or spelled it that way themselves. Required before any other record is read or changed.
 
         Args:
             name: The chart's name exactly as look_up_birthday listed it.
@@ -212,11 +212,11 @@ To find a time, call check_availability for what they asked, and offer the one o
     async def register_new_patient(
         self, context: RunContext[CallState], first_name: str, last_name: str
     ) -> str:
-        """Create a chart for a caller who isn't in the records, under the spelling they confirmed and the date of birth look_up_birthday checked.
+        """Create a chart for a caller who isn't in the records, under the spelling they confirmed or spelled out and the date of birth look_up_birthday checked.
 
         Args:
-            first_name: The letters of the first name the caller confirmed, separated by spaces, like "S H A Y N E".
-            last_name: The letters of the last name the caller confirmed, separated by spaces. A hyphen or apostrophe that is part of the name stays in place, like "O ' B R I E N".
+            first_name: The letters of the first name the caller confirmed or spelled, separated by spaces, like "S H A Y N E".
+            last_name: The letters of the last name the caller confirmed or spelled, separated by spaces. A hyphen or apostrophe that is part of the name stays in place, like "O ' B R I E N".
         """
         born = context.userdata.birthday
         if born is None:

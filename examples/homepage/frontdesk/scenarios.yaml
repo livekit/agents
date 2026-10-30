@@ -17,9 +17,9 @@ scenarios:
       Asks Taylor for their date of birth once, then spells Taylor's name back to confirm it
       instead of asking Taylor to spell it. Shares nothing from the chart until Taylor
       confirms the spelling, then mentions the upcoming knee pain follow-up. Checks the
-      calendar and offers morning times later in the week, then moves the appointment to
-      the time Taylor picked without asking for a second confirmation. Replies are one or two
-      short spoken sentences.
+      calendar and offers morning times later in the week; asking whether an offered time works
+      is fine. Once Taylor accepts one, moves the appointment to it without asking again whether
+      to go ahead. Replies are one or two short spoken sentences.
     tags:
       feature: reschedule
     userdata:
@@ -188,4 +188,52 @@ scenarios:
         born: "1988-03-14"
         new_patient: false
         booked: false
+        moved: false
+
+  - id: SCN_Ut2uXKv7FvhZ
+    label: Existing patient spells their name up front
+    instructions: |
+      PERSONA: Jordan Lee, a patient on file, born July 8, 1992, checking their appointment.
+      OPENING LINE: "Hi, this is Jordan Lee, that's J, O, R, D, A, N, L, E, E. When's my next appointment?"
+      If asked for your date of birth, say "July 8th, 1992."
+      If Riley spells your name back anyway, say "Yes, like I said."
+      DO, IN ORDER:
+      1. Once Riley has told you when your appointment is, say thanks and hang up. Don't say goodbye before that.
+    agent_expectations: >
+      Asks Jordan for their date of birth and finds Jordan Lee's chart without spelling the name
+      back, since Jordan already spelled it. Then tells Jordan about the upcoming annual physical.
+      Does not register a new patient.
+    tags:
+      feature: lookup
+    userdata:
+      expected:
+        patient: Jordan Lee
+        born: "1992-07-08"
+        new_patient: false
+        booked: false
+        moved: false
+
+  - id: SCN_nUPpekf7efW4
+    label: New patient spells their name up front
+    instructions: |
+      PERSONA: Dana Whitfield, a new patient with a cough, born February 9, 1991.
+      OPENING LINE: "Hi, I'm a new patient. My name's Dana Whitfield, that's D, A, N, A, W, H, I, T, F, I, E, L, D, and I'd like to book a visit for a cough."
+      If asked for your date of birth, say "February 9th, 1991."
+      If Riley spells your name back anyway, say "Yes, like I said."
+      DO, IN ORDER:
+      1. When asked about timing, ask for the earliest afternoon appointment.
+      2. Accept the first time offered.
+      3. Say that's all and hang up.
+    agent_expectations: >
+      Asks Dana for their date of birth, then registers Dana without spelling the name back, since
+      Dana already spelled it. Books the afternoon opening Dana picks and confirms it with the same
+      day and time it offered.
+    tags:
+      feature: new-patient
+    userdata:
+      expected:
+        patient: Dana Whitfield
+        born: "1991-02-09"
+        new_patient: true
+        booked: afternoon
         moved: false
