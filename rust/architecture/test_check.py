@@ -533,4 +533,3 @@ class WarningContracts(unittest.TestCase):
         for records in ([], self.transcript(success=False), self.transcript()):
             with self.subTest(records=len(records)), self.assertRaises(ValueError):
                 warning_violations(records, self.NAMES)
-
