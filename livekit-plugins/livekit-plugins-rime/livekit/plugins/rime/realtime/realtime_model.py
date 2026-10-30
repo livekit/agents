@@ -404,9 +404,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 submitted = await self._history.sync(chat_ctx)
                 for ref, output in submitted:
                     if output.reply_required:
-                        if self._latest and ref.response_id == self._latest.response_id:
+                        if (
+                            self._latest
+                            and ref.response_id == self._latest.response_id
+                            and not self._history.has_pending_calls(self._latest)
+                        ):
                             self._parent = self._latest
                         else:
+                            # SDK continuation waits for every result. A partial
+                            # update can still request a report for an accepted result.
                             self._report = ref
             except HistoryUpdateError as error:
                 if error.partial:
@@ -552,7 +558,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         self._require()
         assert self._history is not None
         await self._history.wait_for_updates()
-        self._history.check_reply()
         try:
             if not disable_tools:
                 return await self._request_reply(instruction, parent, report, metadata)
@@ -606,7 +611,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
     ) -> llm.GenerationCreatedEvent:
         sdk = self._require()
         assert self._history is not None
-        self._history.check_reply()
         ref: r.ResponseRef | None = None
         try:
             if instruction is not None:

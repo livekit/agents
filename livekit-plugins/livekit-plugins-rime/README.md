@@ -271,13 +271,15 @@ each result separately. Replacing or reordering history
 rebuilds completed items with new server IDs. A rebuild requires no active reply
 or pending tool call. Prism has no atomic history replacement: replies can see
 intermediate context between operations. An explicit event-scoped refusal during
-an append or result insertion preserves acknowledged items and reports the original
-provider error.
+an append or result insertion preserves acknowledged items, logs a warning, and
+returns normally. Later items in that update are not sent after the refusal.
+Refusal of the first deletion also logs a warning and preserves the original history.
 Keep the requested context to retry or correct the unaccepted items. Preserve
 newer conversation items and accepted item IDs when retrying. The plugin does not retry
-automatically or execute tools again. Replies requested through the plugin are
-blocked until rejected tool results have been submitted. Server-initiated speech
-replies are still controlled by Prism.
+automatically or execute tools again. The plugin permits new reply requests even
+when a tool result was refused. Prism decides whether to accept those requests,
+and a reply can use history that is missing the refused result. Server-initiated
+speech replies are still controlled by Prism.
 
 An unknown request outcome, session failure, or partially applied deletion or
 replacement still ends the session. Standard fallback replays the current agent

@@ -13,6 +13,8 @@ from rimelabs_sdk import realtime as r
 
 from livekit.agents import llm
 
+from ..log import logger
+
 
 class HistoryUpdateError(llm.RealtimeError):
     """A rejected history change, or a partially applied change that requires recovery."""
@@ -90,8 +92,6 @@ class PrismHistory:
         self._calls: OrderedDict[str, tuple[r.ToolCallRef, llm.FunctionCall]] = OrderedDict()
         self._lock = asyncio.Lock()
         self._failure: HistoryUpdateError | None = None
-        self._rejected_results: set[str] = set()
-        self._submitted: list[tuple[r.ToolCallRef, llm.FunctionCallOutput]] = []
         self._ids: dict[str, str] = {}
         self._active: dict[str, set[str]] = {}
         self._response_revision = 0
@@ -123,10 +123,14 @@ class PrismHistory:
             None,
         )
 
-    def check_reply(self) -> None:
-        """Prevent continuation until explicitly rejected tool results are supplied."""
-        if self._rejected_results:
-            raise HistoryUpdateError("Submit the rejected tool results before requesting a reply")
+    def has_pending_calls(self, response: r.ResponseRef) -> bool:
+        """Whether a response still has tool calls without acknowledged results."""
+        completed = {i.call_id for i in self._chat.items if isinstance(i, llm.FunctionCallOutput)}
+        return any(
+            call_id not in completed
+            for call_id, (ref, _) in self._calls.items()
+            if ref.response_id == response.response_id
+        )
 
     def record_tool_call(self, payload: r.ToolCall) -> llm.FunctionCall:
         """Record an allowed live call and return a separate item for execution."""
@@ -343,6 +347,7 @@ class PrismHistory:
                 if item.id not in self._ids:
                     raise HistoryUpdateError("Prism has not published the history item's server ID")
         committed = False
+        submitted: list[tuple[r.ToolCallRef, llm.FunctionCallOutput]] = []
         try:
             deleted_calls: set[str] = set()
             for item in deletions:
@@ -365,7 +370,7 @@ class PrismHistory:
                     ref = self._calls[item.call_id][0]
                     wire = cast(r.HistoryFunctionResult, _wire(item))
                     await self._sdk.submit_tool_result(ref, wire.output)
-                    self._submitted.append((ref, item.model_copy(deep=True)))
+                    submitted.append((ref, item.model_copy(deep=True)))
                 else:
                     if rebuild and self._response_revision != response_revision:
                         raise HistoryUpdateError("A new reply started during history replacement")
@@ -377,30 +382,21 @@ class PrismHistory:
                 if additions_only:
                     # Insert before observations that arrived during acknowledgment.
                     self._chat.items.insert(desired.index(item), item.model_copy(deep=True))
-                if isinstance(item, llm.FunctionCallOutput):
-                    self._rejected_results.discard(item.call_id)
                 if rebuild and self._response_revision != response_revision:
                     raise HistoryUpdateError("A new reply started during history replacement")
         except Exception as error:
             if (
-                additions_only
+                (additions_only or not committed)
                 and isinstance(error, r.RimeRealtimeError)
                 and error.fault.scope == "event"
             ):
-                accepted = {
-                    i.call_id for i in self._chat.items if isinstance(i, llm.FunctionCallOutput)
-                }
-                known_calls = {
-                    i.call_id for i in self._chat.items if isinstance(i, llm.FunctionCall)
-                }
-                self._rejected_results.update(
-                    i.call_id
-                    for i in to_create
-                    if isinstance(i, llm.FunctionCallOutput)
-                    and i.call_id in known_calls
-                    and i.call_id not in accepted
+                logger.warning(
+                    "Prism rejected part of a chat context update",
+                    extra={"error": str(error)},
                 )
-                raise
+                # Keep only acknowledged items, including newer speech. Let the
+                # caller continue with any tool results accepted before the refusal.
+                return submitted
             if committed:
                 raise HistoryUpdateError(
                     "Prism history update was partially applied; restart required", partial=True
@@ -418,7 +414,4 @@ class PrismHistory:
                 self._calls.pop(item.call_id, None)
         for item in removed:
             self._ids.pop(item.id, None)
-        if self._rejected_results:
-            return []
-        submitted, self._submitted = self._submitted, []
-        return [(ref, output) for ref, output in submitted if output.id in new_by_id]
+        return submitted
