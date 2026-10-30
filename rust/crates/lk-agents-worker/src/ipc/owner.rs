@@ -18,7 +18,7 @@ use tokio::sync::watch;
 use super::process::{ProcessControl, ProcessLaunch, ProcessResource, StartMethod};
 use super::supervisor::{CleanupObservation, SignalFailure};
 use super::{
-    Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, MemoryError, PROTOCOL_VERSION,
+    Channel, Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, MemoryError,
     ProcSupervisor, ProcessCallbacks, SupervisorOptions, extra_fields, secs,
 };
 use lk_agents_net::blocking_io::BlockingIo;
@@ -98,11 +98,11 @@ impl ProcessSupervisor for ProcessOwner {
         let (process, native) = watch::channel(None);
         let sup = {
             let _runtime = io.runtime_handle().enter();
-            let socket = super::process::socket(fd)
+            let channel = Channel::from_endpoint(fd)
                 .map_err(|error| WorkerError::Invalid(error.to_string()))?;
             let diagnostics =
                 ProcessDiagnostics { host: Mutex::new(Some(host.clone())), process: native };
-            ProcSupervisor::new(socket, diagnostics, opts, io.clone())
+            ProcSupervisor::new(channel, diagnostics, opts, io.clone())
         };
         Ok(Self {
             launch: watch::channel(ProcessLaunch::Pending).0,
@@ -125,7 +125,6 @@ impl ProcessSupervisor for ProcessOwner {
         http_proxy: Option<String>,
     ) -> Result<f64, WorkerError> {
         let hello = Hello {
-            version: PROTOCOL_VERSION,
             asyncio_debug,
             http_proxy: http_proxy.filter(|p| !p.is_empty()),
             health_timeout_ms: self.health_timeout_ms,

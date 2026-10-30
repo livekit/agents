@@ -1,19 +1,14 @@
 //! The job process protocol: what the worker says to a job process ([`ToChild`]) and what the job
-//! process answers ([`ToParent`]), each a typed message encoded with postcard, in frames of a
-//! 4-byte big-endian length then the message, at most [`MAX_FRAME`] bytes.
+//! process answers ([`ToParent`]). The [`channel`](super::channel) carries them and checks the
+//! version.
 //!
-//! The parent speaks first, [`Hello`] with its [`PROTOCOL_VERSION`]; the child answers
-//! [`ToParent::Ready`] with its own. Either side fails on a version it does not speak. Everything
-//! after is one-way: a ping's pong echoes its timestamp, and the shutdown is acked by messages of
-//! its own.
+//! The parent speaks first, [`Hello`]; the child answers [`ToParent::Ready`]. Everything after is
+//! one-way: a ping's pong echoes its timestamp, and the shutdown is acked by messages of its own.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-/// The version both ends must speak; a change to a message is a new version.
-pub const PROTOCOL_VERSION: u32 = 4;
-
-/// The largest message a side reads: a job's `Job` protobuf is a few kilobytes.
-pub const MAX_FRAME: usize = 4 << 20;
+/// The longest free text a message carries (an error, a reason); longer text is cut.
+pub const MAX_TEXT: usize = 64 << 10;
 
 /// The worker's messages to a job process.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,10 +30,7 @@ pub enum ToChild {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ToParent {
     /// The answer to `Hello`: initialized, or the error it failed with.
-    Ready {
-        version: u32,
-        error: Option<String>,
-    },
+    Ready { error: Option<String> },
     Pong {
         sent_ms: u64,
     },
@@ -58,7 +50,6 @@ pub enum ToParent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Hello {
-    pub version: u32,
     /// The worker's event loop runs in debug mode: so does the job's.
     pub asyncio_debug: bool,
     pub http_proxy: Option<String>,
@@ -68,102 +59,15 @@ pub struct Hello {
 
 pub use lk_agents_abi::worker::job::StartJobFields as StartJob;
 
-#[derive(Debug, thiserror::Error)]
-pub enum WireError {
-    #[error("the IPC peer closed before the next frame")]
-    Eof,
-    #[error("the socket closed: {message}")]
-    Io { kind: io::ErrorKind, os_error: Option<i32>, message: String },
-    #[error("a {0}-byte frame is over the {MAX_FRAME}-byte limit")]
-    TooLarge(usize),
-    #[error("malformed message: {0}")]
-    Malformed(#[from] postcard::Error),
-    #[error("unexpected message: {0}")]
-    Unexpected(String),
-    #[error("the other side speaks protocol version {theirs}, this one {PROTOCOL_VERSION}")]
-    Version { theirs: u32 },
-}
-
-impl From<&WireError> for lk_agents_abi::worker::ipc::IpcFailure {
-    fn from(error: &WireError) -> Self {
-        match error {
-            WireError::Eof => Self::Io {
-                kind: "UnexpectedEof".into(),
-                os_error: None,
-                message: error.to_string(),
-            },
-            WireError::Io { kind, os_error, message } => Self::Io {
-                kind: format!("{kind:?}"),
-                os_error: *os_error,
-                message: message.clone(),
-            },
-            WireError::Malformed(cause) => Self::Malformed { message: cause.to_string() },
-            WireError::TooLarge(size) => Self::TooLarge { size: *size as u64 },
-            WireError::Unexpected(message) => Self::Unexpected { message: message.clone() },
-            WireError::Version { theirs } => {
-                Self::Version { received: *theirs, expected: PROTOCOL_VERSION }
-            }
+/// `text`, cut to [`MAX_TEXT`] bytes with a marker, so a huge traceback cannot exceed a frame.
+pub fn bounded(mut text: String) -> String {
+    if text.len() > MAX_TEXT {
+        let mut end = MAX_TEXT;
+        while !text.is_char_boundary(end) {
+            end -= 1;
         }
+        text.truncate(end);
+        text.push_str("... [truncated]");
     }
-}
-
-/// A message's bytes.
-pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {
-    postcard::to_allocvec(msg).expect("the messages serialize")
-}
-
-/// A message from its bytes, all of them.
-pub fn decode<T: DeserializeOwned>(data: &[u8]) -> Result<T, WireError> {
-    let (msg, rest) = postcard::take_from_bytes(data)?;
-    if !rest.is_empty() {
-        return Err(postcard::Error::DeserializeBadEncoding.into());
-    }
-    Ok(msg)
-}
-
-use serde::{Serialize, de::DeserializeOwned};
-use std::io;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-
-/// Capture the transport cause before crossing into the decision core.
-pub(super) fn io_failure(error: io::Error) -> WireError {
-    WireError::Io { kind: error.kind(), os_error: error.raw_os_error(), message: error.to_string() }
-}
-
-/// The next message.
-pub async fn read<T: DeserializeOwned, R: AsyncRead + Unpin + ?Sized>(
-    r: &mut R,
-) -> Result<T, WireError> {
-    let mut len = [0u8; 4];
-    let first = r.read(&mut len[..1]).await.map_err(io_failure)?;
-    if first == 0 {
-        return Err(WireError::Eof);
-    }
-    r.read_exact(&mut len[1..]).await.map_err(io_failure)?;
-    let len = u32::from_be_bytes(len) as usize;
-    if len > MAX_FRAME {
-        return Err(WireError::TooLarge(len));
-    }
-    let mut buf = vec![0; len];
-    r.read_exact(&mut buf).await.map_err(io_failure)?;
-    decode(&buf)
-}
-
-/// Writes one message.
-pub async fn write<T: Serialize, W: AsyncWrite + Unpin + ?Sized>(
-    w: &mut W,
-    msg: &T,
-) -> io::Result<()> {
-    // Measure with postcard's non-allocating flavor before constructing the encoded payload.
-    let size = postcard::serialize_with_flavor(msg, postcard::ser_flavors::Size::default())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    if size > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, WireError::TooLarge(size)));
-    }
-    let data = encode(msg);
-    let mut frame = Vec::with_capacity(4 + data.len());
-    frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    frame.extend_from_slice(&data);
-    w.write_all(&frame).await?;
-    w.flush().await
+    text
 }

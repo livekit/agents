@@ -3,23 +3,20 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::{AsyncWriteExt, DuplexStream};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::time::Instant;
 
 use super::supervisor::{
     CleanupObservation, Extra, KILL_GRACE, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB,
     SignalFailure, WarnGate,
 };
-use super::wire::{MAX_FRAME, decode, encode, read, write};
+use super::channel::{MAGIC, VERSION, memory};
+use super::child::watch_parent;
 use super::*;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::unix_now_ms;
 
 mod supervision;
-mod writer;
-
-// ---------------------------------------------------------------------------------------- wire
 
 fn job() -> StartJob {
     StartJob {
@@ -41,47 +38,10 @@ fn job() -> StartJob {
 
 fn hello() -> Hello {
     Hello {
-        version: PROTOCOL_VERSION,
         asyncio_debug: false,
         http_proxy: None,
         health_timeout_ms: None,
     }
-}
-
-// Catches: a frame with trailing bytes, a truncated one or an unknown variant read as a message.
-#[test]
-fn malformed_messages_are_errors() {
-    let mut extra = encode(&ToParent::ShutdownAck);
-    extra.push(0);
-    assert!(matches!(decode::<ToParent>(&extra), Err(WireError::Malformed(_))));
-    let pong = encode(&ToParent::Pong { sent_ms: 1 << 40 });
-    assert!(matches!(decode::<ToParent>(&pong[..pong.len() - 1]), Err(WireError::Malformed(_))));
-    assert!(matches!(decode::<ToParent>(&[99]), Err(WireError::Malformed(_))));
-    assert!(matches!(decode::<ToChild>(&[]), Err(WireError::Malformed(_))));
-}
-
-// Catches: a length prefix trusted past the limit (an allocation the size of a bad header), or
-// the framing out of step with the reader.
-#[tokio::test]
-async fn frames_are_length_prefixed_and_bounded() {
-    let (mut a, mut b) = tokio::io::duplex(1 << 16);
-    write(&mut a, &ToChild::Ping { sent_ms: 5 }).await.unwrap();
-    write(&mut a, &ToChild::DumpStacks).await.unwrap();
-    assert_eq!(read::<ToChild, _>(&mut b).await.unwrap(), ToChild::Ping { sent_ms: 5 });
-    assert_eq!(read::<ToChild, _>(&mut b).await.unwrap(), ToChild::DumpStacks);
-
-    a.write_all(&((MAX_FRAME + 1) as u32).to_be_bytes()).await.unwrap();
-    assert!(
-        matches!(read::<ToChild, _>(&mut b).await, Err(WireError::TooLarge(n)) if n == MAX_FRAME + 1)
-    );
-
-    let big = StartJob { job: vec![0; MAX_FRAME], ..job() };
-    assert!(
-        write(&mut a, &ToChild::StartJob { request_id: 1, job: Box::new(big) }).await.is_err(),
-        "an oversized message is not sent"
-    );
-    drop(a);
-    assert!(matches!(read::<ToChild, _>(&mut b).await, Err(WireError::Eof)));
 }
 
 // ------------------------------------------------------------------------------- supervision
@@ -97,7 +57,7 @@ struct FakeHost {
     samples: Mutex<VecDeque<Sample>>,
 
     /// The child's end, dropped by a kill as the process's death would close it.
-    child: Mutex<Option<DuplexStream>>,
+    child: Mutex<Option<Child>>,
     released: AtomicBool,
     /// The stack dump request went out (a grace before the kill).
     dumps: AtomicBool,
@@ -178,23 +138,47 @@ fn opts() -> SupervisorOptions {
     }
 }
 
-fn setup(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, DuplexStream) {
-    let (parent, child) = tokio::io::duplex(1 << 16);
+/// The job process's end of the supervised channel.
+type Child = Channel<ToParent, ToChild>;
+
+fn supervise(parent: Channel<ToChild, ToParent>, opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>) {
     let host = Arc::new(FakeHost::default());
     host.alive.store(true, Ordering::SeqCst);
-    (
-        ProcSupervisor::new(parent, host.clone(), opts, crate::test_support::blocking_io()),
-        host,
-        child,
-    )
+    (ProcSupervisor::new(parent, host.clone(), opts, crate::test_support::blocking_io()), host)
 }
 
-async fn recv(child: &mut DuplexStream) -> ToChild {
-    read(child).await.unwrap()
+fn setup(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, Child) {
+    let (parent, child) = memory();
+    let (sup, host) = supervise(parent, opts);
+    (sup, host, child)
+}
+
+/// A child writing raw bytes: its preamble is written, the parent's is read.
+async fn setup_raw(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, DuplexStream) {
+    let (parent, mut child) = tokio::io::duplex(1 << 16);
+    let (sup, host) = supervise(Channel::new(parent), opts);
+    child.write_all(&MAGIC).await.unwrap();
+    child.write_all(&VERSION.to_be_bytes()).await.unwrap();
+    child.read_exact(&mut [0; 8]).await.unwrap();
+    (sup, host, child)
+}
+
+/// Reads the parent's `Hello` off a raw child.
+async fn raw_hello(child: &mut DuplexStream) {
+    let len = child.read_u32().await.unwrap() as usize;
+    child.read_exact(&mut vec![0; len]).await.unwrap();
+}
+
+async fn recv(child: &Child) -> ToChild {
+    child.recv().await.unwrap()
+}
+
+async fn write(child: &Child, msg: &ToParent) -> Result<(), SendError> {
+    child.send(msg.clone()).await
 }
 
 /// Reads until a message other than a ping.
-async fn recv_skipping_pings(child: &mut DuplexStream) -> ToChild {
+async fn recv_skipping_pings(child: &Child) -> ToChild {
     loop {
         let msg = recv(child).await;
         if !matches!(msg, ToChild::Ping { .. }) {
@@ -220,7 +204,7 @@ async fn initialize_sends_hello_and_logs_the_elapsed_time() {
     let init = waits(&sup).await;
     assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
     tokio::time::sleep(Duration::from_millis(1234)).await;
-    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
+    write(&mut child, &ToParent::Ready { error: None }).await.unwrap();
     let elapsed = init.await.unwrap().unwrap().unwrap();
     assert!(elapsed >= Duration::from_millis(1234));
     assert_eq!(host.messages(), ["initializing process", "process initialized"]);
@@ -234,23 +218,18 @@ async fn initialize_sends_hello_and_logs_the_elapsed_time() {
 async fn initialize_raises_the_child_error_and_a_version_mismatch() {
     let (sup, _host, mut child) = setup(opts());
     let init = waits(&sup).await;
-    write(
-        &mut child,
-        &ToParent::Ready { version: PROTOCOL_VERSION, error: Some("no model".into()) },
-    )
-    .await
-    .unwrap();
+    write(&mut child, &ToParent::Ready { error: Some("no model".into()) }).await.unwrap();
     assert_eq!(
         init.await.unwrap().unwrap_err().to_string(),
         "process initialization failed: no model"
     );
 
-    let (sup, _host, mut child) = setup(opts());
+    let (parent, mut child) = tokio::io::duplex(1 << 16);
+    let (sup, _host) = supervise(Channel::new(parent), opts());
     let init = waits(&sup).await;
-    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION + 1, error: None })
-        .await
-        .unwrap();
-    assert!(matches!(init.await.unwrap(), Err(InitError::Version(v)) if v == PROTOCOL_VERSION + 1));
+    child.write_all(&MAGIC).await.unwrap();
+    child.write_all(&(VERSION + 1).to_be_bytes()).await.unwrap();
+    assert!(matches!(init.await.unwrap(), Err(InitError::Version(v)) if v == VERSION + 1));
 
     let (sup, _host, mut child) = setup(opts());
     let init = waits(&sup).await;
@@ -263,12 +242,14 @@ async fn initialize_raises_the_child_error_and_a_version_mismatch() {
     assert!(matches!(initialized, Err(InitError::Closed)), "{initialized:?}");
 
     // a frame the parent cannot read closes the connection, with why
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, mut child) = setup_raw(opts()).await;
     let init = waits(&sup).await;
     child.write_all(&[0, 0, 0, 1, 99]).await.unwrap();
-    assert!(
-        matches!(init.await.unwrap(), Err(InitError::Protocol(failure)) if matches!(*failure, WireError::Malformed(_)))
-    );
+    assert!(matches!(
+        init.await.unwrap(),
+        Err(InitError::Protocol(failure))
+            if matches!(*failure, ProtocolError::Channel(ChannelError::Malformed(_)))
+    ));
     assert!(
         host.messages().iter().any(|m| m.starts_with("invalid IPC message: malformed message"))
     );
@@ -325,7 +306,7 @@ async fn missing_pongs_kill_the_process_after_ping_timeout() {
     // one pong at 60 s moves the deadline to 150 s
     tokio::time::sleep(Duration::from_secs(60)).await;
     write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
-    let drain = tokio::spawn(async move { while read::<ToChild, _>(&mut child).await.is_ok() {} });
+    let drain = tokio::spawn(async move { while child.recv().await.is_ok() {} });
     while host.kills.load(Ordering::SeqCst) == 0 {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -353,7 +334,7 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
     write(&mut child, &ToParent::ShutdownAck).await.unwrap();
     write(&mut child, &ToParent::Exiting { reason: "shutdown".into() }).await.unwrap();
     write(&mut child, &ToParent::ShuttingDown).await.unwrap();
-    drop(child);
+    child.close().await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(!close.is_finished(), "returns only once the process exited");
     sup.exited(Some(0)).await;
@@ -507,7 +488,7 @@ async fn kill_sends_sigusr1_then_kills() {
     let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
     let pid = child.id();
     let host = Arc::new(ChildHost(Mutex::new(child), AtomicUsize::new(0)));
-    let (parent, _peer) = UnixStream::pair().unwrap();
+    let (parent, _peer) = memory::<ToChild, ToParent>();
     let sup = ProcSupervisor::new(
         parent,
         host.clone(),
@@ -525,100 +506,79 @@ async fn kill_sends_sigusr1_then_kills() {
     assert_eq!(host.1.load(Ordering::SeqCst), 0);
 }
 
-// ------------------------------------------------------------------------------------- client
+// ------------------------------------------------------------------------------------- child
 
-async fn connected(health_timeout_ms: Option<u64>) -> (IpcClient, DuplexStream) {
-    let (mut parent, child) = tokio::io::duplex(1 << 16);
-    write(&mut parent, &ToChild::Hello(Hello { health_timeout_ms, ..hello() })).await.unwrap();
-    let (client, got) = IpcClient::connect(child).await.unwrap();
-    assert_eq!(got.health_timeout_ms, health_timeout_ms);
-    (client, parent)
-}
-
-// Catches: the client answering a parent of another version as if it spoke it, or reading
-// anything but `Hello` first.
-#[tokio::test]
-async fn client_fails_on_a_version_mismatch_and_says_why() {
-    let (mut parent, child) = tokio::io::duplex(1 << 16);
-    write(&mut parent, &ToChild::Hello(Hello { version: PROTOCOL_VERSION + 1, ..hello() }))
-        .await
-        .unwrap();
-    let err = IpcClient::connect(child).await.err().unwrap();
-    assert!(matches!(err, WireError::Version { theirs } if theirs == PROTOCOL_VERSION + 1));
-    let ToParent::Ready { version, error } = read(&mut parent).await.unwrap() else { panic!() };
-    assert_eq!(version, PROTOCOL_VERSION);
-    assert!(error.unwrap().contains("protocol version"));
-
-    let (mut parent, child) = tokio::io::duplex(1 << 16);
-    write(&mut parent, &ToChild::DumpStacks).await.unwrap();
-    assert!(matches!(IpcClient::connect(child).await, Err(WireError::Unexpected(_))));
-}
-
-// Catches: what the child sends reordered, or lost on close.
-
-#[tokio::test]
-async fn client_sends_in_order_and_flushes_on_close() {
-    let (client, mut parent) = connected(None).await;
-    write(&mut parent, &ToChild::Ping { sent_ms: 1 }).await.unwrap();
-    let reading = tokio::spawn(async move {
-        let mut got = Vec::new();
-        while let Ok(msg) = read::<ToParent, _>(&mut parent).await {
-            got.push(msg);
-        }
-        got
+/// The child's watch over a channel whose parent end the test drives.
+fn watched(
+    health_timeout: Option<Duration>,
+) -> (
+    tokio::sync::mpsc::Receiver<ToChild>,
+    lk_agents_abi::OwnedTask<Result<(), ChannelError>>,
+    Channel<ToChild, ToParent>,
+    Arc<AtomicUsize>,
+) {
+    let (parent, child) = memory();
+    let orphaned = Arc::new(AtomicUsize::new(0));
+    let count = orphaned.clone();
+    let (inbox, watching) = watch_parent(Arc::new(child), health_timeout, move || {
+        count.fetch_add(1, Ordering::SeqCst);
     });
-    for i in 0..100 {
-        client.send(ToParent::Pong { sent_ms: i }).await.unwrap();
-    }
-    assert_eq!(client.recv().await, Some(ToChild::Ping { sent_ms: 1 }));
-    client.close().await;
-    let got = reading.await.unwrap();
-    assert_eq!(got, (0..100).map(|i| ToParent::Pong { sent_ms: i }).collect::<Vec<_>>());
-    assert!(client.send(ToParent::ShutdownAck).await.is_err());
+    (inbox, watching, parent, orphaned)
 }
 
 // Catches: an orphaned child (the parent stopped talking) never noticing.
-
 #[tokio::test(start_paused = true)]
-async fn client_health_check_closes_when_the_parent_goes_quiet() {
-    let (client, mut parent) = connected(Some(100_000)).await;
+async fn the_child_calls_itself_orphaned_when_the_parent_goes_quiet() {
+    let (mut inbox, watching, parent, orphaned) = watched(Some(Duration::from_secs(100)));
     let start = Instant::now();
     tokio::time::sleep(Duration::from_secs(60)).await;
-    write(&mut parent, &ToChild::Ping { sent_ms: 1 }).await.unwrap();
-    assert_eq!(client.recv().await, Some(ToChild::Ping { sent_ms: 1 }));
-    assert_eq!(client.recv().await, None);
+    parent.send(ToChild::Ping { sent_ms: 1 }).await.unwrap();
+    assert_eq!(inbox.recv().await, Some(ToChild::Ping { sent_ms: 1 }));
+    assert_eq!(inbox.recv().await, None);
     let quiet = start.elapsed();
     assert!(quiet >= Duration::from_secs(160) && quiet < Duration::from_secs(161), "{quiet:?}");
+    assert_eq!(orphaned.load(Ordering::SeqCst), 1);
+    assert!(matches!(watching.await.unwrap(), Err(ChannelError::Io { .. })));
 
-    let (client, _parent) = connected(None).await;
-    let pending = tokio::time::timeout(Duration::from_secs(10_000), client.recv()).await;
+    let (mut inbox, _watching, _parent, _) = watched(None);
+    let pending = tokio::time::timeout(Duration::from_secs(10_000), inbox.recv()).await;
     assert!(pending.is_err(), "no health check without a ping deadline");
 }
 
 // Catches: a malformed frame from the parent read past, instead of ending the connection.
 #[tokio::test]
-async fn client_stops_at_a_malformed_frame() {
-    let (client, mut parent) = connected(None).await;
+async fn the_child_stops_at_a_malformed_frame() {
+    let (parent, child) = tokio::io::duplex(1 << 16);
+    let child = Arc::new(Channel::<ToParent, ToChild>::new(child));
+    let (mut inbox, watching) = watch_parent(child, None, || {});
+    let mut parent = parent;
+    parent.write_all(&MAGIC).await.unwrap();
+    parent.write_all(&VERSION.to_be_bytes()).await.unwrap();
     parent.write_all(&[0, 0, 0, 1, 99]).await.unwrap();
-    write(&mut parent, &ToChild::DumpStacks).await.unwrap();
-    assert_eq!(client.recv().await, None);
-    assert!(matches!(client.wait_reader().await, Err(WireError::Malformed(_))));
+    assert_eq!(inbox.recv().await, None);
+    assert!(matches!(watching.await.unwrap(), Err(ChannelError::Malformed(_))));
+}
+
+// Catches: a busy child loop (an undrained inbox) suspending the health check.
+#[tokio::test(start_paused = true)]
+async fn a_full_child_inbox_does_not_suspend_the_health_check() {
+    let (_inbox, watching, parent, orphaned) = watched(Some(Duration::from_millis(100)));
+    for _ in 0..65 {
+        parent.send(ToChild::Ping { sent_ms: 0 }).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(watching.is_finished());
+    assert_eq!(orphaned.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(start_paused = true)]
 async fn supervisor_blocked_writer() {
-    let (parent, mut child) = UnixStream::pair().unwrap();
-    let host = Arc::new(FakeHost::default());
-    host.alive.store(true, Ordering::SeqCst);
-    let sup = ProcSupervisor::new(
-        parent,
-        host.clone(),
-        SupervisorOptions { ping_timeout: 1.0, ..opts() },
-        crate::test_support::blocking_io(),
-    );
+    let (sup, host, mut child) = setup_raw(SupervisorOptions { ping_timeout: 1.0, ..opts() }).await;
     let initialize = waits(&sup).await;
-    assert!(matches!(read::<ToChild, _>(&mut child).await.unwrap(), ToChild::Hello(_)));
-    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
+    raw_hello(&mut child).await;
+    let ready = postcard::to_allocvec(&ToParent::Ready { error: None }).unwrap();
+    child.write_u32(ready.len() as u32).await.unwrap();
+    child.write_all(&ready).await.unwrap();
     initialize.await.unwrap().unwrap();
     let mut large = job();
     large.metadata = "x".repeat(3 << 20);
@@ -656,26 +616,12 @@ async fn shutdown_ack_phase_deadline() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn child_inbox_saturation_health() {
-    let (client, mut parent) = connected(Some(100)).await;
-    for _ in 0..65 {
-        write(&mut parent, &ToChild::DumpStacks).await.unwrap();
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert!(
-        client.reader.lock().as_ref().unwrap().is_finished(),
-        "an undrained application inbox must not suspend the health loop"
-    );
-    client.close().await;
-}
-
-#[tokio::test(start_paused = true)]
 async fn repeated_initialize_callers_are_refused_without_replacing_the_first_waiter() {
     let (sup, _host, mut child) = setup(opts());
     let first = waits(&sup).await;
     assert!(matches!(recv(&mut child).await, ToChild::Hello(_)));
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
-    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
+    write(&mut child, &ToParent::Ready { error: None }).await.unwrap();
     assert!(first.await.unwrap().unwrap().is_some());
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
     sup.exited(Some(0)).await;

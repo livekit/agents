@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::wire::{PROTOCOL_VERSION, StartJob, WireError};
+use super::super::channel::{ChannelError, VERSION};
+use super::super::wire::StartJob;
 
 /// How often the memory monitor samples the process.
 pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
@@ -81,10 +82,44 @@ pub enum InitError {
     Unexpected,
     #[error("process initialization failed: {0}")]
     Failed(String),
-    #[error("the job process speaks protocol version {0}, the worker {PROTOCOL_VERSION}")]
+    #[error("the job process speaks protocol version {0}, the worker {VERSION}")]
     Version(u32),
     #[error("IPC protocol failed: {0}")]
-    Protocol(Arc<WireError>),
+    Protocol(Arc<ProtocolError>),
+}
+
+/// Why the supervisor gave up on the connection: the channel failed, or the child said what the
+/// protocol does not allow then.
+#[derive(Debug, thiserror::Error)]
+pub enum ProtocolError {
+    #[error(transparent)]
+    Channel(#[from] ChannelError),
+    #[error("unexpected message: {0}")]
+    Unexpected(String),
+}
+
+impl From<&ProtocolError> for lk_agents_abi::worker::ipc::IpcFailure {
+    fn from(error: &ProtocolError) -> Self {
+        let message = error.to_string();
+        match error {
+            ProtocolError::Channel(ChannelError::Closed | ChannelError::Truncated) => {
+                Self::Io { kind: "UnexpectedEof".into(), os_error: None, message }
+            }
+            ProtocolError::Channel(ChannelError::Io { kind, os_error, .. }) => {
+                Self::Io { kind: format!("{kind:?}"), os_error: *os_error, message }
+            }
+            ProtocolError::Channel(ChannelError::Malformed(cause)) => {
+                Self::Malformed { message: cause.clone() }
+            }
+            ProtocolError::Channel(ChannelError::TooLarge(size)) => {
+                Self::TooLarge { size: *size as u64 }
+            }
+            ProtocolError::Channel(ChannelError::Version(received)) => {
+                Self::Version { received: *received, expected: VERSION }
+            }
+            ProtocolError::Unexpected(message) => Self::Unexpected { message: message.clone() },
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -98,7 +133,7 @@ pub enum StartJobError {
     #[error("the IPC connection is closed")]
     Closed,
     #[error("IPC protocol failed: {0}")]
-    Protocol(Arc<WireError>),
+    Protocol(Arc<ProtocolError>),
     #[error("the child refused the job: {0}")]
     Rejected(String),
     #[error("the child did not acknowledge the job before its deadline")]
@@ -144,12 +179,6 @@ pub struct CleanupObservation {
     pub pid: u32,
     pub exited: bool,
     pub reaped: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WritePurpose {
-    Ping,
-    Protocol,
 }
 
 /// Where a graceful close is.

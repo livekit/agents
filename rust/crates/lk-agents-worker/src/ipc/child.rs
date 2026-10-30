@@ -1,26 +1,83 @@
-//! The job process's side of the parent's socket (`_core.IpcClient`): the initialize handshake,
+//! The job process's side of the parent's channel (`_core.IpcClient`): the initialize handshake,
 //! then it serves the parent's messages, answers pings once the child's loop ran a callback,
 //! starts the one job and acks the parent's shutdown.
 
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
-use tokio::sync::watch;
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
+use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
+use super::channel::{Channel, ChannelError};
 use super::job_run::JobRun;
-use super::{IpcClient, PROTOCOL_VERSION, ToChild, ToParent};
+use super::wire::{ToChild, ToParent, bounded};
 use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
 
+/// The parent's messages the child holds while its loop is busy.
+const INBOX: usize = 64;
+
 pub struct ChildChannel {
-    client: Arc<IpcClient>,
+    channel: Arc<Channel<ToParent, ToChild>>,
+    /// The parent's messages, as [`watch_parent`] reads them.
+    inbox: tokio::sync::Mutex<mpsc::Receiver<ToChild>>,
+    watching: Mutex<Option<OwnedTask<Result<(), ChannelError>>>>,
     io: BlockingIo,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
     /// The job the parent started, once it did.
     run: OnceLock<Arc<JobRun>>,
     asyncio_debug: bool,
+}
+
+/// Reads the parent's messages into a bounded inbox until the parent goes or sends what cannot be
+/// read, or goes quiet past `health_timeout`, whatever the state of the child's loop; then calls
+/// `on_orphan` and ends with why.
+pub fn watch_parent<F: FnOnce() + Send + 'static>(
+    channel: Arc<Channel<ToParent, ToChild>>,
+    health_timeout: Option<Duration>,
+    on_orphan: F,
+) -> (mpsc::Receiver<ToChild>, OwnedTask<Result<(), ChannelError>>) {
+    let (inbox, received) = mpsc::channel(INBOX);
+    let watching = TokioSpawner::current().spawn(async move {
+        let far = Duration::from_secs(1 << 30);
+        let timeout = health_timeout.map(|t| t.min(far));
+        let mut deadline = Instant::now() + timeout.unwrap_or(far);
+        let mut pending = None;
+        loop {
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(deadline), if timeout.is_some() => {
+                    on_orphan();
+                    return Err(ChannelError::Io {
+                        kind: std::io::ErrorKind::TimedOut,
+                        os_error: None,
+                        message: "the IPC parent exceeded its health timeout".into(),
+                    });
+                }
+                permit = inbox.reserve(), if pending.is_some() => {
+                    let Ok(permit) = permit else { return Ok(()) };
+                    permit.send(pending.take().unwrap());
+                }
+                msg = channel.recv(), if pending.is_none() => match msg {
+                    Ok(msg) => {
+                        if let Some(timeout) = timeout { deadline = Instant::now() + timeout; }
+                        pending = Some(msg);
+                    }
+                    Err(error) => {
+                        on_orphan();
+                        return Err(error);
+                    }
+                },
+            }
+        }
+    });
+    (received, watching)
 }
 
 impl ChildChannel {
@@ -31,23 +88,23 @@ impl ChildChannel {
                 if host.ping().await.is_err() {
                     return Ok(false);
                 }
-                Ok(self.client.send(ToParent::Pong { sent_ms }).await.is_ok())
+                Ok(self.channel.send(ToParent::Pong { sent_ms }).await.is_ok())
             }
             // The job starts once: its run ends with the parent's shutdown.
             ToChild::StartJob { request_id, job } => {
                 let accepted = self.start(host, *job).await;
-                let error = accepted.as_ref().err().map(ToString::to_string);
-                let sent = self.client.send(ToParent::JobAccepted { request_id, error }).await;
+                let error = accepted.as_ref().err().map(|error| bounded(error.to_string()));
+                let sent = self.channel.send(ToParent::JobAccepted { request_id, error }).await;
                 accepted?;
                 Ok(sent.is_ok())
             }
             // Acked, then the process ends with its job (at once without one).
             ToChild::Shutdown { reason } => {
-                if self.client.send(ToParent::ShutdownAck).await.is_err() {
+                if self.channel.send(ToParent::ShutdownAck).await.is_err() {
                     return Ok(false);
                 }
                 let Some(run) = self.run.get() else {
-                    let _ = self.client.send(ToParent::ShuttingDown).await;
+                    let _ = self.channel.send(ToParent::ShuttingDown).await;
                     return Ok(false);
                 };
                 let reason =
@@ -76,7 +133,7 @@ impl ChildChannel {
         let run = run
             .downcast::<JobRun>()
             .map_err(|_| WorkerError::Failed("the runner started a foreign JobRun".into()))?;
-        run.report_to(self.client.clone());
+        run.report_to(self.channel.clone());
         self.run.set(run).map_err(|_| running())
     }
 }
@@ -94,33 +151,42 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
     ) -> Result<Self, WorkerError> {
         let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
         let runtime = io.runtime_handle();
-        let socket = {
-            let _runtime = runtime.enter();
-            super::process::socket(fd).map_err(|error| WorkerError::Invalid(error.to_string()))?
+        let _runtime = runtime.enter();
+        let channel = Arc::new(
+            Channel::<ToParent, ToChild>::from_endpoint(fd)
+                .map_err(|error| WorkerError::Invalid(error.to_string()))?,
+        );
+        let hello = match runtime.block_on(channel.recv()) {
+            Ok(ToChild::Hello(hello)) => hello,
+            Ok(other) => {
+                return Err(WorkerError::Failed(format!("expected Hello first, got {other:?}")));
+            }
+            Err(error) => return Err(WorkerError::Failed(format!("failed to initialize: {error}"))),
         };
-        let (client, hello) = runtime
-            .block_on(IpcClient::connect_with_health_action(socket, move || {
-                if process {
-                    super::process::terminate_current_process();
-                }
-            }))
-            .map_err(|error| WorkerError::Failed(format!("failed to initialize: {error}")))?;
+        let health_timeout = hello.health_timeout_ms.map(Duration::from_millis);
+        let (inbox, watching) = watch_parent(channel.clone(), health_timeout, move || {
+            if process {
+                super::process::terminate_current_process();
+            }
+        });
         // The host's preloads are ready before readiness.
         let initialized =
             initialize.initialize(hello.http_proxy.clone()).map_err(WorkerError::Host);
         let error = initialized.as_ref().err().map(|error| match error {
-            WorkerError::Host(error) => error.message.clone(),
-            error => error.to_string(),
+            WorkerError::Host(error) => bounded(error.message.clone()),
+            error => bounded(error.to_string()),
         });
-        let sent =
-            runtime.block_on(client.send(ToParent::Ready { version: PROTOCOL_VERSION, error }));
+        let sent = runtime.block_on(channel.send(ToParent::Ready { error }));
         if let Err(error) = initialized {
-            runtime.block_on(client.close());
+            drop(watching);
+            runtime.block_on(channel.close());
             return Err(error);
         }
         sent.map_err(|_| WorkerError::Closed)?;
         Ok(Self {
-            client: Arc::new(client),
+            channel,
+            inbox: tokio::sync::Mutex::new(inbox),
+            watching: Mutex::new(Some(watching)),
             io,
             stop: watch::channel(false).0,
             run: OnceLock::new(),
@@ -137,12 +203,16 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         let mut stop = self.stop.subscribe();
         let served = async {
             loop {
-                let Some(msg) = self.client.recv().await else {
-                    return self
-                        .client
-                        .wait_reader()
-                        .await
-                        .map_err(|error| WorkerError::Failed(error.to_string()));
+                let Some(msg) = self.inbox.lock().await.recv().await else {
+                    let watching = self.watching.lock().take();
+                    return match watching {
+                        Some(watching) => match watching.await {
+                            Ok(Ok(())) | Ok(Err(ChannelError::Closed)) => Ok(()),
+                            Ok(Err(error)) => Err(WorkerError::Failed(error.to_string())),
+                            Err(error) => Err(WorkerError::Failed(error.to_string())),
+                        },
+                        None => Ok(()),
+                    };
                 };
                 if !self.on_message(host.as_ref(), msg).await? {
                     return Ok(());
@@ -159,8 +229,19 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         self.stop.send_replace(true);
     }
 
+    /// Stops watching the parent, then closes the channel: what is queued is flushed and the
+    /// parent's last messages are drained, so the parent never sees a reset.
     async fn aclose(&self) {
-        let client = self.client.clone();
-        self.io.run(async move { client.close().await }).await;
+        let watching = self.watching.lock().take();
+        let channel = self.channel.clone();
+        self.io
+            .run(async move {
+                if let Some(watching) = watching {
+                    watching.cancel();
+                    let _ = watching.await;
+                }
+                channel.close().await;
+            })
+            .await;
     }
 }

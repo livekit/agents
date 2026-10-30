@@ -226,7 +226,8 @@ class JobExecutor:
         if self._closing:
             raise RuntimeError("process is closed")
         pch, cch = _core.ipc_pair()
-        child_end = socket.socket(fileno=cch)
+        # the job's end: a socket on Unix, a named pipe on Windows
+        child_end = child.PipeEnd(cch) if os.name == "nt" else socket.socket(fileno=cch)
         self._child_end = child_end
         self._pch = _core.ProcSupervisor(pch, self, pid=0, killable=self._killable, **self._opts)
         # The Rust owner exists before the host invokes multiprocessing and survives caller loss.
@@ -283,12 +284,12 @@ class JobExecutor:
             JobStatus.SUCCESS if exitcode == 0 and completion.failure is None else JobStatus.FAILED
         )
 
-    def _create_process(self, cch: socket.socket) -> Any:
+    def _create_process(self, cch: socket.socket | child.PipeEnd) -> Any:
         from ..cli import _log_config
 
         self._args.user_arguments = self.user_arguments
         if self._thread:
-            # the thread shares this process's logging, and keeps its own copy of the socket the
+            # the thread shares this process's logging, and keeps its own copy of the end the
             # parent closes once started
             return _JobThread(child.JobArgs(**{**vars(self._args), "mp_cch": cch.dup()}))
         levels = {"root": logging.getLogger().level}

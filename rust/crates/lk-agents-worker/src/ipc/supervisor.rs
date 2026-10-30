@@ -1,25 +1,24 @@
 //! One job process's supervisor: an actor owning the IPC connection, the initialization, pings,
 //! memory samples, shutdown and kill deadlines and the cleanup ownership of the process.
 
-use lk_agents_abi::{OwnedTask, SpawnerExt, unix_now_ms};
+use lk_agents_abi::unix_now_ms;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use lk_agents_abi::errors::HostError;
 
-use super::wire::{self, Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
+use super::channel::{Channel, ChannelError, SendError};
+use super::wire::{Hello, StartJob, ToChild, ToParent};
 
 mod timeline;
 mod types;
 pub use timeline::JobTimeline;
 pub use types::*;
-use types::{Close, WritePurpose, round};
+use types::{Close, round};
 
 /// What the supervisor needs from the host language: logging and the process handle.
 pub trait ProcessCallbacks: Send + Sync + 'static {
@@ -92,37 +91,15 @@ pub struct ProcSupervisor {
 }
 
 impl ProcSupervisor {
-    pub fn new<S: AsyncRead + AsyncWrite + Send + 'static, H: ProcessCallbacks>(
-        stream: S,
+    /// Supervises the process at the other end of `channel`. Needs a runtime context.
+    pub fn new<H: ProcessCallbacks>(
+        channel: Channel<ToChild, ToParent>,
         host: H,
         opts: SupervisorOptions,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> Self {
-        let (mut reader, mut writer) = tokio::io::split(stream);
-        let (messages_tx, messages) = mpsc::channel(QUEUE);
+        let channel = Arc::new(channel);
         let spawner = TokioSpawner::current();
-        let reading = spawner.spawn(async move {
-            loop {
-                let read = wire::read::<ToParent, _>(&mut reader).await;
-                let failed = read.is_err();
-                if messages_tx.send(read.map_err(Arc::new)).await.is_err() || failed {
-                    break;
-                }
-            }
-        });
-        let (writes, mut queued) = mpsc::channel::<(u64, ToChild)>(QUEUE);
-        let (written_tx, written) = mpsc::channel(QUEUE);
-        let writing = spawner.spawn(async move {
-            while let Some((id, message)) = queued.recv().await {
-                let result = wire::write(&mut writer, &message)
-                    .await
-                    .map_err(|error| Arc::new(wire::io_failure(error)));
-                let failed = result.is_err();
-                if written_tx.send((id, result)).await.is_err() || failed {
-                    break;
-                }
-            }
-        });
         let (commands, commands_rx) = mpsc::channel(QUEUE);
         let (control, control_rx) = watch::channel(Control::default());
         let (status_tx, status) = watch::channel(Status::default());
@@ -131,7 +108,7 @@ impl ProcSupervisor {
             origin: Instant::now(),
             host: Arc::new(host),
             blocking_io,
-            writes,
+            channel: channel.clone(),
             init_reply: None,
             job_reply: None,
             next_job_id: 0,
@@ -164,13 +141,11 @@ impl ProcSupervisor {
             launch_rejected: false,
             exitcode: None,
             cleanup_at: None,
-            next_write: 0,
-            pending_writes: BTreeMap::new(),
             protocol_failure: None,
         };
         // Self-owned: it ends once the supervisor's channels close, after shutting the child down.
         let driving = Arc::new(TaskSet::default());
-        let run = driver.run(commands_rx, control_rx, messages, written, reading, writing);
+        let run = driver.run(commands_rx, control_rx, channel);
         driving.spawn(&spawner, "process supervisor", run);
         Self { commands, control, status, _driver: driving }
     }
@@ -288,7 +263,7 @@ struct Driver {
     origin: Instant,
     host: Arc<dyn ProcessCallbacks>,
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
-    writes: mpsc::Sender<(u64, ToChild)>,
+    channel: Arc<Channel<ToChild, ToParent>>,
     init_reply: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
     job_reply: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
     next_job_id: u64,
@@ -322,29 +297,19 @@ struct Driver {
     launch_rejected: bool,
     exitcode: Option<i64>,
     cleanup_at: Option<Duration>,
-    next_write: u64,
-    pending_writes: BTreeMap<u64, WritePurpose>,
-    protocol_failure: Option<Arc<WireError>>,
+    protocol_failure: Option<Arc<ProtocolError>>,
 }
 
 impl Driver {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the actor takes each of its channels and I/O tasks as it is spawned"
-    )]
     async fn run(
         mut self,
         mut commands: mpsc::Receiver<Command>,
         mut control: watch::Receiver<Control>,
-        mut messages: mpsc::Receiver<Result<ToParent, Arc<WireError>>>,
-        mut written: mpsc::Receiver<(u64, Result<(), Arc<WireError>>)>,
-        reading: OwnedTask,
-        writing: OwnedTask,
+        channel: Arc<Channel<ToChild, ToParent>>,
     ) {
         let mut reader_open = true;
         let mut commands_open = true;
         let mut control_open = true;
-        let mut writer_open = true;
         let mut seen = Control::default();
         while !self.cleaned() {
             if self.wake_at().is_some_and(|at| at <= self.now()) {
@@ -386,27 +351,11 @@ impl Driver {
                         seen = next;
                     }
                 },
-                msg = messages.recv(), if reader_open => match msg {
-                    Some(Ok(msg)) => self.input(true, |d| d.on_message(msg)),
-                    Some(Err(reason)) => {
+                msg = channel.recv(), if reader_open => match msg {
+                    Ok(msg) => self.input(true, |d| d.on_message(msg)),
+                    Err(reason) => {
                         reader_open = false;
-                        self.input(true, |d| d.on_reader_closed(Some(reason)));
-                    }
-                    None => {
-                        reader_open = false;
-                        self.input(true, |d| d.on_reader_closed(None));
-                    }
-                },
-                result = written.recv(), if writer_open => match result {
-                    Some((id, result)) => {
-                        // A failed write is the writer's final correlated outcome.
-                        writer_open = result.is_ok();
-                        self.input(false, |d| d.on_written(id, result));
-                    },
-                    None => {
-                        writer_open = false;
-                        let closed = Arc::new(WireError::Unexpected("IPC writer closed".into()));
-                        self.input(true, |d| d.on_reader_closed(Some(closed)));
+                        self.input(true, |d| d.on_reader_closed(reason));
                     }
                 },
                 command = commands.recv(), if commands_open => match command {
@@ -452,10 +401,6 @@ impl Driver {
             }
             self.publish();
         }
-        reading.cancel();
-        writing.cancel();
-        let _ = reading.await;
-        let _ = writing.await;
         // Started blocking samples cannot be aborted: retain the host until they settle.
         if let Some(mut sample) = self.sampling.take() {
             if tokio::time::timeout(secs(self.opts.close_timeout), &mut sample).await.is_err() {
@@ -614,19 +559,6 @@ impl Driver {
         }
     }
 
-    fn on_written(&mut self, id: u64, result: Result<(), Arc<WireError>>) {
-        if let (Some(purpose), Err(reason)) = (self.pending_writes.remove(&id), result) {
-            let expected_ping_close = purpose == WritePurpose::Ping
-                && self.shutting_down
-                && matches!(reason.as_ref(), WireError::Io { kind, .. } if matches!(kind,
-                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::NotConnected));
-            if !expected_ping_close {
-                self.input(true, |d| d.on_reader_closed(Some(reason)));
-            }
-        }
-    }
-
     fn initialize(&mut self, hello: Hello) {
         if self.initialized_requested || self.closing || self.exited {
             self.reply_init(Err(InitError::AlreadyInitializing));
@@ -675,23 +607,33 @@ impl Driver {
         match failure {
             Some(error) => self.reply_job(request_id, Err(error)),
             None => {
-                self.pending_job =
-                    Some((request_id, self.now() + secs(self.opts.initialize_timeout)));
-                self.send(ToChild::StartJob { request_id, job: Box::new(job) });
+                let message = ToChild::StartJob { request_id, job: Box::new(job) };
+                match self.channel.try_send(message) {
+                    Err(SendError::TooLarge(size)) => self.reply_job(
+                        request_id,
+                        Err(StartJobError::InvalidFields(format!("a {size}-byte job is too large"))),
+                    ),
+                    sent => {
+                        self.pending_job =
+                            Some((request_id, self.now() + secs(self.opts.initialize_timeout)));
+                        self.sent(sent);
+                    }
+                }
             }
         }
     }
 
-    fn on_reader_closed(&mut self, reason: Option<Arc<WireError>>) {
-        let reason = reason.unwrap_or_else(|| Arc::new(WireError::Eof));
-        if self.shutting_down && matches!(*reason, WireError::Eof) {
+    /// The peer finishing after it said it was shutting down is the clean end; anything else is
+    /// a protocol failure.
+    fn on_reader_closed(&mut self, reason: ChannelError) {
+        if self.shutting_down && matches!(reason, ChannelError::Closed) {
             self.reader_closed = true;
             self.reader_deadline = None;
             self.next_ping = None;
             self.acked = true;
             self.advance_close();
         } else {
-            self.fail_protocol(reason);
+            self.fail_protocol(Arc::new(reason.into()));
         }
     }
 
@@ -743,11 +685,11 @@ impl Driver {
         }
         if self.reader_deadline.is_some_and(|at| at <= now) {
             self.reader_deadline = None;
-            self.fail_protocol(Arc::new(WireError::Io {
+            self.fail_protocol(Arc::new(ProtocolError::Channel(ChannelError::Io {
                 kind: std::io::ErrorKind::TimedOut,
                 os_error: None,
                 message: "IPC reader did not settle after process exit".into(),
-            }));
+            })));
         }
         if self.exited {
             return;
@@ -840,8 +782,7 @@ impl Driver {
     fn on_message(&mut self, msg: ToParent) {
         if self.exited {
             match &msg {
-                ToParent::Ready { version, error }
-                    if *version != PROTOCOL_VERSION || error.is_some() => {}
+                ToParent::Ready { error: Some(_) } => {}
                 ToParent::JobAccepted { error: Some(_), .. }
                 | ToParent::ShuttingDown
                 | ToParent::Exiting { .. } => {}
@@ -851,11 +792,8 @@ impl Driver {
         let now = self.now();
         if let Some((started, _)) = self.init.take() {
             let result = match msg {
-                ToParent::Ready { version, .. } if version != PROTOCOL_VERSION => {
-                    Err(InitError::Version(version))
-                }
-                ToParent::Ready { error: Some(error), .. } => Err(InitError::Failed(error)),
-                ToParent::Ready { error: None, .. } => {
+                ToParent::Ready { error: Some(error) } => Err(InitError::Failed(error)),
+                ToParent::Ready { error: None } => {
                     self.initialized = true;
                     let elapsed = now.saturating_sub(started);
                     let extra =
@@ -870,8 +808,7 @@ impl Driver {
                 _ => Err(InitError::Unexpected),
             };
             let refusal = match &result {
-                Err(InitError::Version(theirs)) => Some(WireError::Version { theirs: *theirs }),
-                Err(error) => Some(WireError::Unexpected(error.to_string())),
+                Err(error) => Some(ProtocolError::Unexpected(error.to_string())),
                 Ok(_) => None,
             };
             self.reply_init(result);
@@ -936,19 +873,19 @@ impl Driver {
                         self.cleanup_at.get_or_insert(now + self.termination_timeout());
                     }
                 } else {
-                    self.fail_protocol(Arc::new(WireError::Unexpected(format!(
+                    self.fail_protocol(Arc::new(ProtocolError::Unexpected(format!(
                         "job acknowledgment {request_id} has no pending submission"
                     ))));
                 }
             }
             ToParent::Ready { .. } => {
-                self.fail_protocol(Arc::new(WireError::Unexpected("unsolicited Ready".into())))
+                self.fail_protocol(Arc::new(ProtocolError::Unexpected("unsolicited Ready".into())))
             }
         }
     }
 
     /// The first protocol failure remains authoritative even when OS exit reports zero.
-    fn fail_protocol(&mut self, failure: Arc<WireError>) {
+    fn fail_protocol(&mut self, failure: Arc<ProtocolError>) {
         if self.protocol_failure.is_some() {
             return;
         }
@@ -961,7 +898,12 @@ impl Driver {
         self.closing = true;
         self.log(Level::Error, &format!("invalid IPC message: {failure}"));
         if self.init.take().is_some() {
-            self.reply_init(Err(InitError::Protocol(failure.clone())));
+            let error = match *failure {
+                ProtocolError::Channel(ChannelError::Version(theirs)) => InitError::Version(theirs),
+                ProtocolError::Channel(ChannelError::Closed) => InitError::Closed,
+                _ => InitError::Protocol(failure.clone()),
+            };
+            self.reply_init(Err(error));
         }
         if let Some((request_id, _)) = self.pending_job.take() {
             self.reply_job(request_id, Err(StartJobError::Protocol(failure)));
@@ -1067,18 +1009,14 @@ impl Driver {
         if self.reader_closed || self.exited {
             return;
         }
-        self.next_write += 1;
-        let id = self.next_write;
-        let purpose = if matches!(message, ToChild::Ping { .. }) {
-            WritePurpose::Ping
-        } else {
-            WritePurpose::Protocol
-        };
-        self.pending_writes.insert(id, purpose);
-        if let Err(error) = self.writes.try_send((id, message)) {
-            let failure =
-                Arc::new(WireError::Unexpected(format!("IPC write submission failed: {error}")));
-            self.on_written(id, Err(failure));
+        let sent = self.channel.try_send(message);
+        self.sent(sent);
+    }
+
+    /// A closed channel is reported by its reader; a full one means the child stopped reading.
+    fn sent(&mut self, sent: Result<(), SendError>) {
+        if let Err(error @ (SendError::Full | SendError::TooLarge(_))) = sent {
+            self.fail_protocol(Arc::new(ProtocolError::Unexpected(error.to_string())));
         }
     }
 

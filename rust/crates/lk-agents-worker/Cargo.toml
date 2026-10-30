@@ -12,7 +12,7 @@ prost.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 lk-agents-net = { path = "../lk-agents-net" }
 serde_json = { workspace = true, features = ["preserve_order"] }
-# The job process protocol (`ipc/wire.rs`): typed messages, postcard-encoded.
+# The job process channel (`ipc/channel.rs`): typed messages, postcard-encoded.
 serde.workspace = true
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 tokio = { workspace = true, features = ["net", "rt", "sync", "time", "io-util", "macros"] }
@@ -27,8 +27,11 @@ httparse = "1"
 # The log lines' timestamps (`cli.rs`).
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 [target.'cfg(unix)'.dependencies]
-# SIGUSR1 before the kill of a supervised process (`ipc`).
+# Process signals and waits (`ipc/process.rs`), socket options (`ipc/channel.rs`).
 libc = "0.2"
+[target.'cfg(windows)'.dependencies]
+# The job channel's named pipe (`ipc/channel.rs`).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Pipes"] }
 
 [dev-dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }

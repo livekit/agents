@@ -70,7 +70,7 @@ class JobArgs:
     preload_modules: tuple[str, ...] = ()
     setup_fnc: Callable[[JobProcess], None] | None = None
     user_arguments: Any | None = None
-    mp_cch: socket.socket | None = None
+    mp_cch: socket.socket | PipeEnd | None = None
     log_config: tuple[str, str] | None = None
     logger_levels: dict[str, int] = field(default_factory=dict)
     # the server's settings as environment variables, which the job's code reads
@@ -93,7 +93,7 @@ def job_main(args: JobArgs) -> None:
         server_env=args.env,
     )
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
-    serve_parent(cast(socket.socket, args.mp_cch), job_proc)
+    serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)
 
     import sys
     import threading
@@ -430,7 +430,7 @@ def thread_main(args: JobArgs) -> None:
         setup_fnc=args.setup_fnc,
         server_env=args.env,
     )
-    serve_parent(cast(socket.socket, args.mp_cch), job_proc)
+    serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)
 
 
 def log_to_stdout(
@@ -464,7 +464,42 @@ class _Stamp(logging.Filter):
         return True
 
 
-def serve_parent(mp_cch: socket.socket, host: Any) -> None:
+class PipeEnd:
+    """The job's end of the parent's named pipe (Windows), duplicated straight into the job
+    process when multiprocessing pickles its arguments."""
+
+    def __init__(self, handle: int) -> None:
+        self._handle: int | None = handle
+
+    def __reduce__(self) -> tuple[type[PipeEnd], tuple[int]]:
+        from multiprocessing.context import get_spawning_popen
+
+        popen: Any = get_spawning_popen()
+        return (PipeEnd, (popen.duplicate_for_child(self._handle),))
+
+    def dup(self) -> PipeEnd:
+        import _winapi  # type: ignore[import-not-found,unused-ignore]
+
+        process = _winapi.GetCurrentProcess()
+        return PipeEnd(
+            _winapi.DuplicateHandle(
+                process, self._handle, process, 0, False, _winapi.DUPLICATE_SAME_ACCESS
+            )
+        )
+
+    def detach(self) -> int:
+        handle, self._handle = self._handle, None
+        assert handle is not None, "the pipe end was already detached"
+        return handle
+
+    def close(self) -> None:
+        if self._handle is not None:
+            import _winapi  # type: ignore[import-not-found,unused-ignore]
+
+            _winapi.CloseHandle(self.detach())
+
+
+def serve_parent(mp_cch: socket.socket | PipeEnd, host: Any) -> None:
     """A child process's (or job thread's) side of the parent's socket: the handshake
     (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
     hands the parent's messages to ``host`` until the parent goes or the child is done. A failed

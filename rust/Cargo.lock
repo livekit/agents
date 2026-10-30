@@ -1657,6 +1657,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "url",
  "web-transport-quinn",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

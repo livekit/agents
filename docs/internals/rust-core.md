@@ -1611,13 +1611,31 @@ is separate from the public [semantic run stream](../agents.md#semantic-events).
 
 `lk-agents-worker` owns socket/pipe creation, ownership, framing, protocol
 messages, reads, writes, shutdown, exit monitoring, termination, supervision and
-pool policy.
-`_core.ipc_pair()` creates the control socket pair.
+pool policy, in three layers:
 
-Each child has one Rust-owned control connection. Validate protocol
-compatibility before accepting work and bound frame lengths before allocation.
-Malformed/truncated input and unexpected EOF settle pending operations as
-failures and enter supervision cleanup; they cannot appear as successful exit.
+- `ipc/channel`: the only code touching the connection's bytes. A typed
+  `Channel` (`send`/`try_send`/`recv`/`close`) over the platform's best
+  transport: an AF_UNIX socketpair on Linux and macOS (close-on-exec, the job's
+  end too once adopted; `SO_NOSIGPIPE` on macOS), a single-instance named pipe on
+  Windows that the worker connects itself, and a bounded in-memory duplex in
+  tests. Each side writes a magic and its protocol version, then length-prefixed
+  postcard frames; lengths are checked before allocating, in both directions.
+  `recv` ends with `Closed` (EOF, reset, aborted, broken pipe, not connected),
+  `Truncated` (EOF inside a frame), `TooLarge`, `Malformed` or `Version`. A
+  refused oversized send is a typed error and the channel stays usable; senders
+  bound free text. `close()` stops sending, flushes and finishes the stream, then
+  drains the peer to its end, so closing with unread data never resets the peer;
+  a side whose peer finished finishes too.
+- `ipc/process`: the only code touching the OS process: exit observation,
+  termination, reaping receipts, memory samples.
+- Supervisor, pool and dispatch: policy over a channel and a process, never
+  sockets or framing.
+
+`_core.ipc_pair()` creates the two endpoints; the host transfers the job's.
+Each child has one Rust-owned control connection. Malformed/truncated input
+and unexpected EOF settle pending operations as failures and enter supervision
+cleanup; they cannot appear as successful exit. The peer closing after it said
+it was shutting down is the clean end.
 
 The host-language process adapter launches and bootstraps the child with the
 Rust-created IPC endpoint. Python uses `multiprocessing`; Node supplies its own

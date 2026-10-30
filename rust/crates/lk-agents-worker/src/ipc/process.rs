@@ -655,46 +655,5 @@ pub enum ProcessLaunch {
     Failed(String),
 }
 
-/// Create the control endpoints transferred to the supervisor and child bootstrap.
-/// The caller owns both returned descriptors; they are not inherited across exec.
-pub fn ipc_pair() -> io::Result<(i64, i64)> {
-    #[cfg(unix)]
-    {
-        use std::os::fd::IntoRawFd;
-        let (parent, child) = std::os::unix::net::UnixStream::pair()?;
-        Ok((parent.into_raw_fd().into(), child.into_raw_fd().into()))
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::IntoRawSocket;
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-        let child = std::net::TcpStream::connect(listener.local_addr()?)?;
-        let (parent, _) = listener.accept()?;
-        Ok((parent.into_raw_socket() as i64, child.into_raw_socket() as i64))
-    }
-}
-
-#[cfg(unix)]
-pub type Socket = tokio::net::UnixStream;
-#[cfg(windows)]
-pub type Socket = tokio::net::TcpStream;
-
-/// Takes ownership of a connected socket (an end of [`ipc_pair`], or a host socket's detached
-/// descriptor). Needs a runtime context.
-pub fn socket(fd: i64) -> io::Result<Socket> {
-    #[cfg(unix)]
-    let std = {
-        let fd = i32::try_from(fd)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad socket fd"))?;
-        // SAFETY: the caller hands the descriptor's ownership over.
-        unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) }
-    };
-    #[cfg(windows)]
-    let std = {
-        use std::os::windows::io::FromRawSocket;
-        // SAFETY: the caller hands the socket's ownership over.
-        unsafe { std::net::TcpStream::from_raw_socket(fd as u64) }
-    };
-    std.set_nonblocking(true)?;
-    Socket::from_std(std)
-}
+/// `cli.rs` still reaches the pair here; it is owner-owned (`channel::pair` is the home).
+pub use super::channel::pair as ipc_pair;

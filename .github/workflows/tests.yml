@@ -43,6 +43,41 @@ jobs:
         working-directory: livekit-plugins/livekit-blockguard
         run: python -m pytest test_blockguard.py -v
 
+  # The job channel's transport differs per OS (a socketpair on Linux and macOS, a named pipe on
+  # Windows): its tests and stress run on each.
+  ipc-channel:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-sdk: 'false'
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+
+      - name: Install Rust
+        shell: bash
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ipc-channel-${{ matrix.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: ipc-channel-${{ matrix.os }}-
+
+      - name: Test the channel, stress included
+        working-directory: rust
+        run: cargo test --locked -p lk-agents-worker --test ipc_channel -- --include-ignored
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:

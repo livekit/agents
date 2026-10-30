@@ -14,10 +14,10 @@ fn short(close_timeout: f64) -> SupervisorOptions {
 }
 
 /// Initialized and ready to take a job.
-async fn ready(sup: &ProcSupervisor, child: &mut DuplexStream) {
+async fn ready(sup: &ProcSupervisor, child: &Child) {
     let init = waits(sup).await;
     assert_eq!(recv(child).await, ToChild::Hello(hello()));
-    write(child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
+    write(child, &ToParent::Ready { error: None }).await.unwrap();
     init.await.unwrap().unwrap();
 }
 
@@ -168,9 +168,9 @@ async fn unknown_os_exit_status_waits_for_the_start_methods_receipt_before_loggi
 // Catches: a protocol failure read after the native exit lost, or its cause replaced.
 #[tokio::test(start_paused = true)]
 async fn ipc_protocol_failure_after_native_exit_keeps_the_original_cause() {
-    let (sup, _host, mut child) = setup(short(60.0));
+    let (sup, _host, mut child) = setup_raw(short(60.0)).await;
     let init = waits(&sup).await;
-    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
+    raw_hello(&mut child).await;
     sup.exited(Some(0)).await;
     let reaping = sup.clone();
     tokio::spawn(async move { reaping.reaped(0).await });
@@ -204,11 +204,15 @@ async fn start_job_admission_ack_correlates_acceptance_and_rejects_duplicate_wor
 // Catches: a job that failed on a protocol error reported clean because the process exited 0.
 #[tokio::test(start_paused = true)]
 async fn pending_job_failure_is_not_replaced_by_a_zero_exit() {
-    let (sup, host, mut child) = setup(short(60.0));
-    ready(&sup, &mut child).await;
+    let (sup, host, mut child) = setup_raw(short(60.0)).await;
+    let init = waits(&sup).await;
+    raw_hello(&mut child).await;
+    let ready = postcard::to_allocvec(&ToParent::Ready { error: None }).unwrap();
+    child.write_u32(ready.len() as u32).await.unwrap();
+    child.write_all(&ready).await.unwrap();
+    init.await.unwrap().unwrap();
     let first = sup.clone();
     let started = tokio::spawn(async move { first.start_job(job()).await });
-    recv_skipping_pings(&mut child).await;
     // a frame whose message tag no version knows
     child.write_all(&1u32.to_be_bytes()).await.unwrap();
     child.write_all(&[0xff]).await.unwrap();
@@ -222,15 +226,16 @@ async fn pending_job_failure_is_not_replaced_by_a_zero_exit() {
 // Catches: a version refusal read after the exit losing its typed cause.
 #[tokio::test(start_paused = true)]
 async fn a_version_refusal_queued_before_exit_keeps_its_typed_cause() {
-    let (sup, _host, mut child) = setup(short(60.0));
+    let (parent, mut child) = tokio::io::duplex(1 << 16);
+    let (sup, _host) = supervise(Channel::new(parent), short(60.0));
     let init = waits(&sup).await;
-    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
     sup.exited(Some(0)).await;
     let reaping = sup.clone();
     tokio::spawn(async move { reaping.reaped(0).await });
     settle().await;
-    let theirs = PROTOCOL_VERSION + 1;
-    write(&mut child, &ToParent::Ready { version: theirs, error: None }).await.unwrap();
+    let theirs = VERSION + 1;
+    child.write_all(&MAGIC).await.unwrap();
+    child.write_all(&theirs.to_be_bytes()).await.unwrap();
     assert!(matches!(init.await.unwrap(), Err(InitError::Version(v)) if v == theirs));
     assert!(sup.wait_cleaned().await);
     assert!(sup.completion(Some(0)).failure.is_some());
@@ -285,7 +290,7 @@ async fn memory_warnings_include_the_job_baseline() {
 }
 
 /// What the child reads within `within`, pings skipped; `None` when it reads nothing else.
-async fn next_within(child: &mut DuplexStream, within: Duration) -> Option<ToChild> {
+async fn next_within(child: &Child, within: Duration) -> Option<ToChild> {
     tokio::time::timeout(within, recv_skipping_pings(child)).await.ok()
 }
 
@@ -340,20 +345,15 @@ async fn work_is_refused_until_a_compatible_ready_reply() {
 // Catches: a child that refused the protocol version still given a job.
 #[tokio::test(start_paused = true)]
 async fn no_job_is_accepted_after_a_version_refusal() {
-    let (sup, host, mut child) = setup(short(60.0));
+    let (parent, mut child) = tokio::io::duplex(1 << 16);
+    let (sup, host) = supervise(Channel::new(parent), short(60.0));
     let init = waits(&sup).await;
-    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
-    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION + 1, error: None })
-        .await
-        .unwrap();
+    child.write_all(&MAGIC).await.unwrap();
+    child.write_all(&(VERSION + 1).to_be_bytes()).await.unwrap();
     assert!(matches!(init.await.unwrap(), Err(InitError::Version(_))));
     assert!(sup.start_job(job()).await.is_err());
     settle().await;
     assert_eq!(host.kills.load(Ordering::SeqCst), 1, "the refusal starts the cleanup");
-    assert!(!matches!(
-        next_within(&mut child, Duration::from_millis(500)).await,
-        Some(ToChild::StartJob { .. })
-    ));
 }
 
 // Catches: a memory sample that failed because the process is gone (or was interrupted) being
@@ -369,8 +369,7 @@ async fn unavailable_or_interrupted_memory_sampling_stops_without_retrying() {
         host.samples.lock().unwrap().extend([Err(failed), Ok((600.0, "uss".into()))]);
         ready(&sup, &mut child).await;
         sup.supervise().await;
-        let drain =
-            tokio::spawn(async move { while read::<ToChild, _>(&mut child).await.is_ok() {} });
+        let drain = tokio::spawn(async move { while child.recv().await.is_ok() {} });
         tokio::time::sleep(Duration::from_secs(30)).await;
         settle().await;
         let messages = host.messages();

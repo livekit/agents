@@ -370,7 +370,7 @@ async fn websocket_drain_does_not_wait_for_a_stalled_data_write() {
     };
     io.writing.notified().await;
     let outcome = tokio::time::timeout(
-        crate::ipc::FLUSH_TIMEOUT + Duration::from_secs(1),
+        crate::ipc::channel::CLOSE_TIMEOUT + Duration::from_secs(1),
         registry.close_all(1001, "worker draining"),
     )
     .await;

@@ -67,14 +67,20 @@ def _ipc_child(endpoint: socket.socket, behavior: str) -> None:
     if hasattr(signal, "SIGUSR1"):
         signal.signal(signal.SIGUSR1, lambda *_: None)
     if behavior.startswith("wire_"):
-        endpoint.recv(4)  # wait until the parent admitted Initialize
+        # The parent's channel preamble, which a child of the same version echoes, then the
+        # length of its Hello: the parent admitted Initialize.
+        preamble = b""
+        while len(preamble) < 8:
+            preamble += endpoint.recv(8 - len(preamble))
+        endpoint.recv(4)
         frames = {
             "wire_malformed": bytes([0, 0, 0, 1, 99]),
             "wire_truncated": bytes([0, 0, 0, 5, 1]),
             "wire_oversized_prefix": (2**32 - 1).to_bytes(4, "big"),
             "wire_eof": b"",
         }
-        endpoint.sendall(frames[behavior])
+        if behavior != "wire_eof":
+            endpoint.sendall(preamble + frames[behavior])
         if behavior == "wire_oversized_prefix":
             time.sleep(60)  # no payload: refusal must follow the prefix alone
         endpoint.close()

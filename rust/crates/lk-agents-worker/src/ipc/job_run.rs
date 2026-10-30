@@ -19,7 +19,9 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
-use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
+use super::channel::Channel;
+use super::wire::{ToChild, bounded};
+use super::{Extra, ExtraValue, Level, ToParent, extra_fields, secs};
 use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
 
@@ -71,7 +73,7 @@ struct Inner {
     /// The runner and the context its steps run in, from `run()`.
     host: OnceLock<(Arc<dyn JobProcess>, CallContext)>,
     /// The parent the job process reports its end to (none for a job run outside one).
-    parent: OnceLock<Arc<IpcClient>>,
+    parent: OnceLock<Arc<Channel<ToParent, ToChild>>>,
     io: BlockingIo,
     fake: bool,
     session_end_timeout: f64,
@@ -102,7 +104,7 @@ impl JobRun {
         self.inner.end(reason, user_initiated);
     }
 
-    pub(crate) fn report_to(&self, parent: Arc<IpcClient>) {
+    pub(crate) fn report_to(&self, parent: Arc<Channel<ToParent, ToChild>>) {
         let _ = self.inner.parent.set(parent);
     }
 }
@@ -287,7 +289,7 @@ impl Inner {
         ];
         self.log(Level::Debug, "shutting down job task", None, extra);
         if let Some(parent) = self.parent.get() {
-            let _ = parent.send(ToParent::Exiting { reason: reason.clone() }).await;
+            let _ = parent.send(ToParent::Exiting { reason: bounded(reason.clone()) }).await;
         }
         let disconnect = host.span("room_disconnect".into(), None)?;
         let disconnected = host.disconnect(cx, disconnect.clone()).await;

@@ -28,7 +28,7 @@ use websocket::{WsExchange, serve_ws};
 
 const READ_SIZE: usize = 64 * 1024;
 // Graceful close shares the bounded IPC flush budget; frame scheduling is a separate contract.
-const CLOSE_FLUSH_TIMEOUT: Duration = crate::ipc::FLUSH_TIMEOUT;
+const CLOSE_FLUSH_TIMEOUT: Duration = crate::ipc::channel::CLOSE_TIMEOUT;
 
 pub use lk_agents_abi::worker::endpoint_host::Headers;
 
