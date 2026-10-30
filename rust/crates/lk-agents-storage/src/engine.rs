@@ -583,13 +583,14 @@ impl EventLog {
     }
 }
 
-/// How long a commit whose acknowledgment was lost is resolved before the caller is answered.
+/// How long a commit whose acknowledgment was lost is resolved before the caller is answered
+/// [`StorageError::Uncertain`]; the run then still holds the commit for [`Run::resolve_later`].
 pub const RESOLVE_WAIT: Duration = Duration::from_secs(10);
 /// How long a resolver keeps checking a commit nobody could resolve in the caller's wait.
 pub const RESOLVE_LATER: Duration = Duration::from_secs(3600);
 
 /// What [`Run::commit`] does besides writing the run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CommitOptions {
     /// Extend the lease instead of releasing it: the runner continues with pending inbox rows.
     pub keep_lease: bool,
@@ -597,15 +598,6 @@ pub struct CommitOptions {
     pub drained_id: Option<i64>,
     /// The task the turn answers, read back with the commit.
     pub answer_task: Option<String>,
-    /// How long a lost acknowledgment is resolved before [`StorageError::Uncertain`] is
-    /// returned; the run then still holds the commit for [`Run::resolve_later`].
-    pub resolve_wait: Duration,
-}
-
-impl Default for CommitOptions {
-    fn default() -> Self {
-        Self { keep_lease: false, drained_id: None, answer_task: None, resolve_wait: RESOLVE_WAIT }
-    }
 }
 
 /// Everything a run reads and writes, committed together.
@@ -705,12 +697,11 @@ impl Run {
                     self.lane.thread.ensure_schema().await?;
                 }
                 let keep = opts.keep_lease;
-                let wait = opts.resolve_wait;
                 let commit = self.writes(opts)?;
                 match self.send(&commit, keep).await {
                     Err(StorageError::Uncertain(why)) => {
                         log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
-                        let resolved = self.resolve(&commit, keep, wait).await;
+                        let resolved = self.resolve(&commit, keep, RESOLVE_WAIT).await;
                         if matches!(resolved, Err(StorageError::Uncertain(_))) {
                             self.unresolved = Some((commit, keep));
                         }

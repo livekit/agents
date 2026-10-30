@@ -46,11 +46,6 @@ impl Lease {
         &self.inner.fence
     }
 
-    /// The version the lease loaded: the commit's fence.
-    pub fn version(&self) -> i64 {
-        self.inner.fence.version
-    }
-
     pub fn holder(&self) -> &str {
         &self.inner.fence.holder
     }
