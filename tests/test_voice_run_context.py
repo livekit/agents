@@ -4,10 +4,19 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, RunContext, VoiceSession
-from livekit.agents.llm import FunctionToolCall, Toolset, function_tool
+from livekit.agents import Agent, RunContext, VoiceSession, utils
+from livekit.agents.llm import (
+    FunctionCall,
+    FunctionToolCall,
+    GenerationCreatedEvent,
+    MessageGeneration,
+    Toolset,
+    function_tool,
+)
 
+from .fake_io import FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_realtime import FakeRealtimeModel
 
 pytestmark = pytest.mark.unit
 
@@ -191,3 +200,31 @@ async def test_an_interrupted_model_request_counts_as_unmeasured() -> None:
     usage = session.usage
     assert (usage.requests, usage.unmeasured_requests) == (1, 1), usage
     assert not usage.complete
+
+
+# Catches: a realtime response counted only by a metrics record it may never send (gpt_live sends
+# connection rows and its backend's records), so the call reported no request for the model.
+async def test_a_realtime_response_counts_as_a_request_when_created() -> None:
+    model = FakeRealtimeModel()
+    async with VoiceSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="Answer.", name="desk"))
+        session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+        messages, functions = utils.aio.Chan[MessageGeneration](), utils.aio.Chan[FunctionCall]()
+        messages.close()
+        functions.close()
+        model.active_session._reply_futs[0].set_result(
+            GenerationCreatedEvent(
+                message_stream=messages,
+                function_stream=functions,
+                user_initiated=True,
+                response_id="response-id",
+            )
+        )
+        async with asyncio.timeout(5):
+            while not [m for m in session.usage.models if m.type == "llm"]:
+                await asyncio.sleep(0.01)
+        (llm,) = [m for m in session.usage.models if m.type == "llm"]
+        assert (llm.requests, llm.unmeasured_requests) == (1, 1), session.usage
