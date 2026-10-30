@@ -1,6 +1,5 @@
 use crate::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -16,20 +15,17 @@ pub trait Hyphenator: Send + Sync {
 
 #[derive(Default)]
 struct Node {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    children: HashMap<char, Node>,
+    children: BTreeMap<char, Node>,
     /// The pattern's points when a pattern ends at this node (`t[None]`).
     points: Option<Vec<u8>>,
 }
 
 struct Table {
     tree: Node,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    exceptions: HashMap<String, Vec<u8>>,
+    exceptions: BTreeMap<String, Vec<u8>>,
 }
 
 impl Table {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn build() -> Table {
         let mut tree = Node::default();
         for pattern in PATTERNS.split_whitespace() {
@@ -49,7 +45,7 @@ impl Table {
             points.push(digits.parse::<u8>().unwrap_or(0));
             node.points = Some(points);
         }
-        let mut exceptions = HashMap::new();
+        let mut exceptions = BTreeMap::new();
         for ex in EXCEPTIONS.split_whitespace() {
             // `[0] + [int(h == "-") for h in re.split(r"[a-z]", ex)]`.
             let mut points = vec![0u8];

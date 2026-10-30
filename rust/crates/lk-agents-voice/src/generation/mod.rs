@@ -294,7 +294,6 @@ pub struct Request {
     pub expressive: Option<String>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Assemble one request: pending and new items by `created_at`, the expressive guide and the
 /// running placeholders, then the core's plan (prompt first, per-turn instructions last).
 pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
@@ -315,7 +314,7 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
 
     let mut ctx = record.copy(&CopyOptions::default());
 
-    let known: std::collections::HashSet<String> =
+    let known: std::collections::BTreeSet<String> =
         ctx.items.iter().map(|it| it.id().to_owned()).collect();
     ctx.insert_all(pending.iter().filter(|it| !known.contains(it.id())).cloned());
     if let Some(msg) = new_message
@@ -438,11 +437,10 @@ pub fn stable_hash(text: &str) -> u64 {
     h.finish()
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Inject a flagged in-progress pair for each tool still running, so the model doesn't re-issue it.
 fn inject_running_tool_calls(ctx: &mut ChatContext, running: &[RunningToolCall]) {
     // Owned, since the loop inserts into `ctx`.
-    let mut existing: std::collections::HashSet<String> = ctx
+    let mut existing: std::collections::BTreeSet<String> = ctx
         .items
         .iter()
         .filter_map(|it| match it {
@@ -564,7 +562,6 @@ pub enum ReplySource {
     Realtime,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub struct ReplyContext {
     /// Resolved from the active agent at creation.
     pub preemptive_tts: bool,
