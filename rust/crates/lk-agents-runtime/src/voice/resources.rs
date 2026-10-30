@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[derive(Clone)]
 enum Resource {
     Stt(Arc<dyn Stt>),
     Vad(Arc<dyn Vad>),
@@ -145,9 +146,11 @@ impl Resources {
         self.get(id, |r| if let Resource::Tts(t) = r { Some(Arc::clone(t)) } else { None })
     }
 
+    /// The provider is called after the table lock is released: a host provider's `prewarm` is
+    /// a host call.
     pub fn prewarm(&self, id: ResourceId) {
-        let table = self.0.lock();
-        match table.live.get(&id) {
+        let resource = self.0.lock().live.get(&id).cloned();
+        match resource {
             Some(Resource::Stt(s)) => s.prewarm(),
             Some(Resource::Vad(v)) => v.prewarm(),
             Some(Resource::Llm(l)) => l.prewarm(),
