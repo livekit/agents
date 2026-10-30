@@ -61,7 +61,6 @@ fn policy() -> RequestPolicy {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "a live test stamps its message with wall time")]
 fn chat_ctx(text: &str) -> ChatContext {
     ChatContext::new(vec![
         lk_agents_abi::ChatMessage::text("m1", Role::User, text, std::time::SystemTime::now())

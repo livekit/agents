@@ -1,5 +1,4 @@
 [
-  "allow:rust/crates/lk-agents-inference/tests/inference/llm_live.rs:fn chat_ctx:clippy::disallowed_methods:allow:always:1",
   "allow:rust/crates/lk-agents-net/src/lock.rs::clippy::disallowed_types:allow:always:1",
   "site:rust/crates/lk-agents-net/src/lock.rs:impl  Mutex < T >/fn new:clippy::disallowed_types:use of a disallowed type `parking_lot::Mutex`:Self(parking_lot::Mutex::new(value)):1",
   "site:rust/crates/lk-agents-net/src/lock.rs:impl  RwLock < T >/fn new:clippy::disallowed_types:use of a disallowed type `parking_lot::RwLock`:Self(parking_lot::RwLock::new(value)):1",
