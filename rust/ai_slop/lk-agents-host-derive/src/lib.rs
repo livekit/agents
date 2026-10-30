@@ -375,7 +375,10 @@ fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStrea
         let value = match m.0.iter().rev().find(|x| x.key == "default").map(|x| &x.value) {
             Some(lk_agents_bindgen::Value::Text(s)) => quote::quote!(#s.into()),
             Some(lk_agents_bindgen::Value::Rust(r)) => r.parse::<proc_macro2::TokenStream>()?,
-            _ if is_maybe(&f.ty) => quote::quote!(::core::default::Default::default()),
+            // Required of the host; Rust callers still start from the type's own default.
+            _ if is_maybe(&f.ty) || m.0.iter().any(|x| x.key == "required") => {
+                quote::quote!(::core::default::Default::default())
+            }
             _ => {
                 return Err(syn::Error::new_spanned(
                     f,

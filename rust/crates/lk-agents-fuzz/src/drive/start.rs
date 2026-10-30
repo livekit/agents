@@ -162,15 +162,13 @@ impl Run {
             }),
             tts: tts,
             on_event: Some(Arc::new(WireSink)),
-            input_sample_rate: SAMPLE_RATE,
-            output_sample_rate: SAMPLE_RATE,
             agent_use_tts_aligned_transcript: setup.agent_aligned_transcript,
             turn_detector: setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
             interruption_detector: adaptive.then(|| {
                 Arc::new(fakes::FakeInterruptionSource(registry.clone()))
                     as Arc<dyn InterruptionSource>
             }),
-            room_io_config: Some(room_io),
+            room_io_config: room_io,
             tools: Some(fakes::tools::tool_infos(&setup.tools)),
             voice_agent: Some(fakes::frame(&registry, OPENING_AGENT, &setup.tools)),
             transcription_node: nodes.transcription,

@@ -204,14 +204,6 @@ pub struct VoiceSessionArgs {
     pub on_event: Option<Arc<dyn crate::voice::session_effects::SessionEvents>>,
     #[host(default = None)]
     pub hooks: Option<Arc<dyn crate::voice::session_effects::SessionHooks>>,
-    #[host(default = None)]
-    pub participant_identity: Option<String>,
-    #[host(default = true)]
-    pub auto_gain_control: bool,
-    #[host(default = 24000)]
-    pub input_sample_rate: u32,
-    #[host(default = 24000)]
-    pub output_sample_rate: u32,
     /// The first agent's own `turn_handling`, `min_consecutive_speech_delay` in seconds and
     /// `use_tts_aligned_transcript`: the agent layer of the stack.
     #[host(default = None)]
@@ -226,11 +218,9 @@ pub struct VoiceSessionArgs {
     /// The adaptive-interruption detector: an object means the host's gate said yes.
     #[host(default = None)]
     pub interruption_detector: Option<Arc<dyn crate::turn::interruption::InterruptionSource>>,
-    #[host(default = true)]
-    pub text_output: bool,
-    /// `RoomOptions._to_core()`, resolved per leg; without it the scalars above.
-    #[host(default = None)]
-    pub room_io_config: Option<crate::voice::room_io::RoomIoConfig>,
+    /// `RoomOptions._to_core()`, resolved per leg.
+    #[host(required)]
+    pub room_io_config: crate::voice::room_io::RoomIoConfig,
     /// Every tool of the first agent and the session, as `_core_setup_tools` reported them.
     #[host(default = None)]
     pub tools: Option<Vec<crate::agent::FunctionToolInfo>>,

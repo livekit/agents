@@ -49,14 +49,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         };
         let clock = time.clock();
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
-        let mut config = lk_agents_voice::room_io::options::resolve_config(
-            args.room_io_config,
-            args.participant_identity,
-            args.input_sample_rate,
-            args.output_sample_rate,
-            args.auto_gain_control,
-            args.text_output,
-        );
+        let mut config = args.room_io_config;
         let host_audio_input = args
             .host_audio_input
             .or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_input()));

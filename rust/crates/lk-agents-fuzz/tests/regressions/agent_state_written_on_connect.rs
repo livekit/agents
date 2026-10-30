@@ -51,7 +51,7 @@ async fn the_session_writes_the_agent_state_to_the_room_as_it_changes() {
         FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
     let args = VoiceSessionArgs {
         agent: "agent".into(),
-        room_io_config: Some(Default::default()),
+        room_io_config: Default::default(),
         ..Default::default()
     };
     let env = lk_agents_runtime::net::env::ProcessEnv::current_runtime();

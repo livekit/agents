@@ -130,7 +130,7 @@ fn assembled(
     let room = Arc::new(room) as Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>;
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),
-        room_io_config: Some(Default::default()),
+        room_io_config: Default::default(),
         hook_bound,
         ..Default::default()
     };

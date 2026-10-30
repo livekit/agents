@@ -104,10 +104,6 @@ class VoiceSessionArgs:
     on_event: VoiceSession | None = None
     """Receives each session event, on the calling loop."""
     hooks: _AgentHooks | None = None
-    participant_identity: str | None = None
-    auto_gain_control: bool = True
-    input_sample_rate: int = 24000
-    output_sample_rate: int = 24000
     agent_turn_handling: TurnHandlingOptions | None = None
     """The first agent's own `turn_handling`, `min_consecutive_speech_delay` in seconds and
     `use_tts_aligned_transcript`: the agent layer of the stack.
@@ -118,9 +114,8 @@ class VoiceSessionArgs:
     """The turn detector over the user's audio (`turn_detection`)."""
     interruption_detector: InterruptionDetector | None = None
     """The adaptive-interruption detector: an object means the host's gate said yes."""
-    text_output: bool = True
-    room_io_config: dict[str, object] | None = None
-    """`RoomOptions._to_core()`, resolved per leg; without it the scalars above."""
+    room_io_config: dict[str, object]
+    """`RoomOptions._to_core()`, resolved per leg."""
     tools: list[FunctionToolInfo] | None = None
     """Every tool of the first agent and the session, as `_core_setup_tools` reported them."""
     tools_host: object | None = None

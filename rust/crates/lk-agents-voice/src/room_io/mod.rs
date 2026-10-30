@@ -2,7 +2,6 @@ pub mod coordinator;
 pub mod detached;
 pub mod ingress;
 pub mod input_state;
-pub mod options;
 pub mod output;
 pub mod playout;
 pub mod pre_connect_state;

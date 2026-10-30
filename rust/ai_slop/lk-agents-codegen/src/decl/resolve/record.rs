@@ -404,6 +404,8 @@ impl Resolver<'_> {
                     "rename",
                     // Rust's own: `record(.., model_dump)` dumps the field through this function.
                     "dump_with",
+                    // Rust's own: no host default; `record(.., default)` starts from the type's.
+                    "required",
                 ],
             )?;
             let host_type = voc::text(&at, &entries, "host_type")?
