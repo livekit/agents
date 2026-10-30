@@ -11,11 +11,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/python/host_tests.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/mod.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/values.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/utils/audio.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/utils/dates.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/utils/host_ref.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/utils/maybe.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/utils/video.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/io.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/rtc/error.rs"
 ]
