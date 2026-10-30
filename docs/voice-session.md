@@ -31,7 +31,8 @@ again when left empty.
 | `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`), `preemptive_generation` (`PreemptiveGenerationOptions`) and `user_turn_limit` (`UserTurnLimitOptions`) in one dict |
 | `conn_options` | a `SessionConnectOptions`: each leg's [connection policy](models.md#connection-options) (`stt_conn_options`, `llm_conn_options`, `tts_conn_options`) and `max_unrecoverable_errors` |
 | `video_sampler` | a `VoiceActivityVideoSampler(speaking_fps=, silent_fps=)`: how often camera frames reach the model; `None` sends every frame |
-| `stt_context_options` | an `STTContextOptions`; its `keyterm_detection` (`KeytermDetectionOptions`) biases recognition toward the conversation's key terms |
+| `stt_context_options` | an `STTContextOptions`: static `keyterms` the STT is biased toward, `keyterm_detection` (`KeytermDetectionOptions`) to add terms heard in the conversation, `forward_chat_context`. `session.keyterms` reads the current terms; `update_options(keyterms=)` replaces the static ones |
+| `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
 | `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template) |
 | `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own |
@@ -51,6 +52,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `text_output` (`TextOutputOptions`), each `True`/`False` or its options |
 | `say(text)`, `generate_reply(instructions=, user_input=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle` |
 | `interrupt()` | stop the current speech |
+| `set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a `ChatContext`; empty on a new thread |
 | `current_agent` | the agent speaking now |

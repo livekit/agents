@@ -835,6 +835,11 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         return asyncio.ensure_future(self._running.interrupt(force=force))
 
+    async def set_participant(self, identity: str | None) -> None:
+        """Listen to the room participant ``identity``: their audio and transcript, and their
+        keypad. ``None`` stops listening to anyone until another participant is set."""
+        await self._running.set_participant(identity)
+
     @contextlib.asynccontextmanager
     async def _claim_user_turn(self) -> AsyncIterator[None]:
         """A programmatic user turn: the user state is pinned to ``speaking`` and
