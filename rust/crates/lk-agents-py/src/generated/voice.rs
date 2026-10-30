@@ -1909,7 +1909,8 @@ pub fn validate_card_number(py: Python<'_>, card_number: ::std::string::String) 
 /// Whether a two-digit expiry year and its month precede `today`'s month.
 #[pyfunction]
 #[pyo3(signature = (month, year, today))]
-pub fn card_expired(py: Python<'_>, #[pyo3(from_py_with = _extract_workflow_checks_card_expired_month)] month: i64, #[pyo3(from_py_with = _extract_workflow_checks_card_expired_year)] year: i64, today: ::lk_agents_abi::utils::dates::Date) -> PyResult<bool> {
+pub fn card_expired(py: Python<'_>, #[pyo3(from_py_with = _extract_workflow_checks_card_expired_month)] month: i64, #[pyo3(from_py_with = _extract_workflow_checks_card_expired_year)] year: i64, today: Bound<'_, PyAny>) -> PyResult<bool> {
+    let today = crate::conversions::date_from_py(&today)?;
     let out = py.detach(|| <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::card_expired(month, year, today));
     Ok(out)
 }
@@ -1918,9 +1919,10 @@ pub fn card_expired(py: Python<'_>, #[pyo3(from_py_with = _extract_workflow_chec
 /// last century's; an invalid or future date is refused.
 #[pyfunction]
 #[pyo3(signature = (year, month, day, today))]
-pub fn normalize_date_of_birth(py: Python<'_>, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_year)] year: i64, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_month)] month: i64, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_day)] day: i64, today: ::lk_agents_abi::utils::dates::Date) -> PyResult<::lk_agents_abi::utils::dates::Date> {
+pub fn normalize_date_of_birth<'py>(py: Python<'py>, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_year)] year: i64, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_month)] month: i64, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_day)] day: i64, today: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let today = crate::conversions::date_from_py(&today)?;
     let out = py.detach(|| <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::normalize_date_of_birth(year, month, day, today)).map_err(|e: ::lk_agents_abi::voice::workflows::DateOfBirthRefused| <::lk_agents_abi::voice::workflows::DateOfBirthRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
+    Ok(crate::conversions::date_to_py(py, out)?)
 }
 
 /// Stripped, and refused unless it reads `local@label.….tld`.

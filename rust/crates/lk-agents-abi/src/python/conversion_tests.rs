@@ -474,11 +474,6 @@ fn unicode_float_and_newtype_boundaries_keep_their_declared_semantics() {
             lone_surrogate.extract::<String>().is_err(),
             "Rust Unicode strings reject lone surrogates"
         );
-        let native = crate::utils::dates::Date::new(2024, 2, 29).unwrap();
-        let host = native.into_pyobject(py).unwrap();
-        assert_eq!(host.extract::<crate::utils::dates::Date>().unwrap(), native);
-        let invalid = module(py, "from types import SimpleNamespace\nvalue = SimpleNamespace(year=2024, month=2, day=30)\n").getattr("value").unwrap();
-        assert!(extract_at::<crate::utils::dates::Date>(&invalid, "birthday").is_err());
     });
 }
 

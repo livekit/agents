@@ -1,14 +1,10 @@
-//! `datetime.date` and `datetime.time`, valid by construction.
+//! `datetime.date`, valid by construction.
 
-use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
+use chrono::{Datelike, NaiveDate};
 
-#[crate::host(handwritten(extract, emit, host = "datetime.date"))]
+#[crate::host(handwritten(extract, emit, host = "datetime.date", py))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Date(NaiveDate);
-
-/// Hour and minute only: the two fields `update_time` collects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Time(NaiveTime);
 
 /// CPython's `datetime` wording, interpolated into the tool's reply. CPython 3.13 rewords the day
 /// message; the pinned interpreter's older text is kept.
@@ -20,10 +16,6 @@ pub enum DateError {
     MonthOutOfRange,
     #[error("day is out of range for month")]
     DayOutOfRange,
-    #[error("hour must be in 0..23")]
-    HourOutOfRange,
-    #[error("minute must be in 0..59")]
-    MinuteOutOfRange,
 }
 
 impl Date {
@@ -56,80 +48,5 @@ impl Date {
     /// year is not (chrono's `%Y` would pad year 5 to `0005`).
     pub fn format_long(self) -> String {
         format!("{} {:02}, {}", self.0.format("%B"), self.day(), self.year())
-    }
-}
-
-impl Time {
-    pub fn new(hour: i64, minute: i64) -> Result<Time, DateError> {
-        if !(0..=23).contains(&hour) {
-            return Err(DateError::HourOutOfRange);
-        }
-        if !(0..=59).contains(&minute) {
-            return Err(DateError::MinuteOutOfRange);
-        }
-        Ok(Time(NaiveTime::from_hms_opt(hour as u32, minute as u32, 0).expect("checked above")))
-    }
-
-    pub fn hour(self) -> u32 {
-        self.0.hour()
-    }
-    pub fn minute(self) -> u32 {
-        self.0.minute()
-    }
-
-    /// `strftime("%I:%M %p")` -- `03:05 PM`. Midnight is `12:00 AM`, noon is `12:00 PM`.
-    pub fn format_12h(self) -> String {
-        self.0.format("%I:%M %p").to_string()
-    }
-}
-
-#[cfg(feature = "python")]
-mod host {
-    use pyo3::exceptions::PyValueError;
-    use pyo3::prelude::*;
-    use pyo3::types::{PyDate, PyTime};
-
-    use super::{Date, Time};
-
-    impl<'py> IntoPyObject<'py> for Date {
-        type Target = PyDate;
-        type Output = Bound<'py, PyDate>;
-        type Error = PyErr;
-
-        fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyDate>> {
-            PyDate::new(py, self.year(), self.month() as u8, self.day() as u8)
-        }
-    }
-
-    impl<'py> IntoPyObject<'py> for Time {
-        type Target = PyTime;
-        type Output = Bound<'py, PyTime>;
-        type Error = PyErr;
-
-        fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyTime>> {
-            PyTime::new(py, self.hour() as u8, self.minute() as u8, 0, 0, None)
-        }
-    }
-
-    /// Validated rather than saturated.
-    impl<'a, 'py> FromPyObject<'a, 'py> for Date {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let part = |name: &str| -> PyResult<i64> { obj.getattr(name)?.extract() };
-            Date::new(part("year")?, part("month")?, part("day")?)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
-        }
-    }
-
-    /// To the minute.
-    impl<'a, 'py> FromPyObject<'a, 'py> for Time {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let part = |name: &str| -> PyResult<i64> { obj.getattr(name)?.extract() };
-            Time::new(part("hour")?, part("minute")?)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
-        }
     }
 }

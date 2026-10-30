@@ -9,6 +9,7 @@ use lk_agents_abi::voice::session_options::{
 };
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
+use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::session_effects::FillerReply;
 use lk_agents_abi::voice::room_io::{
@@ -25,7 +26,7 @@ use lk_agents_abi::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyBool, PyBytes, PyDict, PyFloat, PyInt, PyMapping, PySequence, PyString, PyType,
+    PyBool, PyBytes, PyDate, PyDict, PyFloat, PyInt, PyMapping, PySequence, PyString, PyType,
 };
 
 /// A scalar applies to both edges.
@@ -683,6 +684,17 @@ pub fn tool_flag_to_py<'py>(py: Python<'py>, value: ToolFlag) -> PyResult<Bound<
     Ok(value.bits().into_pyobject(py)?.into_any())
 }
 
+/// Validated rather than saturated.
+pub fn date_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Date> {
+    let part = |name: &str| -> PyResult<i64> { obj.getattr(name)?.extract() };
+    Date::new(part("year")?, part("month")?, part("day")?)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+pub fn date_to_py<'py>(py: Python<'py>, value: Date) -> PyResult<Bound<'py, PyAny>> {
+    Ok(PyDate::new(py, value.year(), value.month() as u8, value.day() as u8)?.into_any())
+}
+
 #[cfg(test)]
 mod tests {
     use pyo3::prelude::*;
@@ -761,6 +773,20 @@ class VADEvent:
             assert!(read("VADEvent('inference_done', [AudioFrame(4)])").frames.is_empty());
             let ev = read("VADEvent('end_of_speech', [AudioFrame(4), AudioFrame(4)])");
             assert_eq!(ev.frames.len(), 2);
+        });
+    }
+
+    // Catches: a date saturated or wrapped into range instead of refused.
+    #[test]
+    fn a_date_crosses_both_ways_and_an_impossible_one_is_refused() {
+        Python::initialize();
+        Python::attach(|py| {
+            let leap = lk_agents_abi::utils::dates::Date::new(2024, 2, 29).unwrap();
+            assert_eq!(super::date_from_py(&super::date_to_py(py, leap).unwrap()).unwrap(), leap);
+            let globals = PyDict::new(py);
+            let program = c"from types import SimpleNamespace\nout = SimpleNamespace(year=2024, month=2, day=30)\n";
+            py.run(program, Some(&globals), None).unwrap();
+            assert!(super::date_from_py(&globals.get_item("out").unwrap().unwrap()).is_err());
         });
     }
 }
