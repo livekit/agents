@@ -202,3 +202,94 @@ def test_gpt_5_responses_shape_strips_temperature_even_at_effort_none() -> None:
         {"temperature": 0.2, "reasoning": Reasoning(effort="none")},
     )
     assert params == {"reasoning": Reasoning(effort="none")}
+
+
+# gpt-6 rejects every sampling param while it reasons and accepts them all
+# again at effort "none" — probed against the API 2026-10-20 on gpt-6.1-sol
+# (chat and responses transports), gpt-6-sol and gpt-6-luna.
+def test_gpt_6_1_sol_strips_every_sampling_param() -> None:
+    params = drop_unsupported_params(
+        "openai/gpt-6.1-sol",
+        {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "presence_penalty": 0.5,
+            "frequency_penalty": 0.5,
+            "logit_bias": {"5": 1},
+            "logprobs": True,
+            "top_logprobs": 3,
+            "stop": ["x"],
+            "reasoning_effort": "low",
+        },
+    )
+    assert params == {"reasoning_effort": "low"}
+
+
+def test_gpt_6_1_sol_strips_temperature_when_reasoning_effort_is_omitted() -> None:
+    params = drop_unsupported_params("openai/gpt-6.1-sol", {"temperature": 0.2, "top_p": 0.9})
+    assert params == {}
+
+
+def test_gpt_6_1_sol_keeps_n_and_seed() -> None:
+    # both are accepted while reasoning, so neither belongs in the strip set
+    params = drop_unsupported_params(
+        "openai/gpt-6.1-sol",
+        {"n": 2, "seed": 1, "reasoning_effort": "low"},
+    )
+    assert params == {"n": 2, "seed": 1, "reasoning_effort": "low"}
+
+
+def test_gpt_6_sol_keeps_every_sampling_param_at_effort_none() -> None:
+    params = drop_unsupported_params(
+        "openai/gpt-6-sol",
+        {
+            "temperature": 0.2,
+            "presence_penalty": 0.5,
+            "logprobs": True,
+            "reasoning_effort": "none",
+        },
+    )
+    assert params == {
+        "temperature": 0.2,
+        "presence_penalty": 0.5,
+        "logprobs": True,
+        "reasoning_effort": "none",
+    }
+
+
+def test_gpt_6_luna_strips_temperature_while_reasoning() -> None:
+    params = drop_unsupported_params(
+        "openai/gpt-6-luna",
+        {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "low"},
+    )
+    assert params == {"reasoning_effort": "low"}
+
+
+def test_gpt_6_1_sol_strips_even_when_the_client_asks_for_effort_none() -> None:
+    # gpt-6.1-sol has no "none" rung, so the gateway coerces the value to the
+    # model's floor ("low", its reasoning_effort_fallback) and the request
+    # reasons: the strip must not trust the client's spelling of the effort.
+    # The coercion is what the gateway's "unexpected reasoning_effort value for
+    # model, defaulting to supported value" warn records.
+    params = drop_unsupported_params(
+        "openai/gpt-6.1-sol",
+        {"temperature": 0.2, "reasoning_effort": "none"},
+    )
+    assert params == {"reasoning_effort": "none"}
+
+
+def test_gpt_6_1_sol_responses_shape_strips_temperature() -> None:
+    params = drop_unsupported_params(
+        "openai/gpt-6.1-sol",
+        {"temperature": 0.2, "reasoning": Reasoning(effort="low")},
+    )
+    assert params == {"reasoning": Reasoning(effort="low")}
+
+
+def test_gpt_6_sol_responses_shape_keeps_temperature_at_effort_none() -> None:
+    params = drop_unsupported_params(
+        "openai/gpt-6-sol",
+        {"temperature": 0.2, "reasoning": Reasoning(effort="none")},
+    )
+    assert params["temperature"] == 0.2
+    assert _responses_effort(params) == "none"
