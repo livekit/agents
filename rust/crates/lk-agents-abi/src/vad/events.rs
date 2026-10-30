@@ -3,12 +3,10 @@
 
 use crate::AudioFrame;
 
-use lk_agents_host_derive::Host;
-
 // `vad.py:19`, a `(str, Enum)`: the wire strings are public API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
-#[python(enum, module = "vad", path = "livekit.agents", name = "VADEventType")]
-#[host(wire(
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_host_derive::Vocabulary)]
+#[crate::host(record(module = "vad", path = "livekit.agents", name = "VADEventType", enum, extract, emit))]
+#[crate::host(wire_strs(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "VADEventType", value: s.to_owned() },
 ))]
@@ -25,11 +23,16 @@ pub enum VadEventType {
 /// Represents an event detected by the Voice Activity Detector (VAD).
 //
 // The `///` above is the reference's docstring, blank first line included.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(dataclass, module = "vad", path = "livekit.agents", name = "VADEvent")]
-// Read by hand (`FromPyObject` below): `frames` is interned only when it holds audio.
-#[crate::host(handwritten(extract))]
-#[binding(emit)]
+// Read by hand (`conversions::vad_event_from_py`): `frames` is read only for an end of speech.
+#[crate::host(record(
+    module = "vad",
+    path = "livekit.agents",
+    name = "VADEvent",
+    dataclass,
+    extract(py),
+    emit,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VadEvent {
     /// Type of the VAD event (e.g., start of speech, end of speech, inference done).
     // A string both ways, as `SpeechEvent::kind`.
@@ -52,57 +55,25 @@ pub struct VadEvent {
     //
     // Read from a host VAD only for an end of speech, the one event whose audio is recognized
     // (`inference_done` fires ~30/s).
-    #[python(ty = "list[rtc.AudioFrame]", import = "livekit:rtc", default_factory = "list")]
+    #[host(default_factory = "list")]
     pub frames: Vec<AudioFrame>,
     /// Probability that speech is present (only for `INFERENCE_DONE` events).
-    #[python(default = "0.0")]
+    #[host(default = 0.0)]
     pub probability: f64,
     /// Time taken to perform the inference, in seconds (only for `INFERENCE_DONE` events).
-    #[python(default = "0.0")]
+    #[host(default = 0.0)]
     pub inference_duration: f64,
     /// Indicates whether speech was detected in the frames.
-    #[python(default = "False")]
+    #[host(default = false)]
     pub speaking: bool,
     /// Threshold used to detect silence.
     // (The reference's words; it holds the accumulated silence in seconds.)
-    #[python(default = "0.0")]
+    #[host(default = 0.0)]
     pub raw_accumulated_silence: f64,
     /// Threshold used to detect speech.
     // (Likewise: the accumulated speech in seconds.)
-    #[python(default = "0.0")]
+    #[host(default = 0.0)]
     pub raw_accumulated_speech: f64,
-}
-
-/// `frames` is read only for an end of speech.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for VadEvent {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr, attr_with};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "VadEventFromPy";
-        let obj = &*obj;
-        let kind: VadEventType = attr(obj, OWNER, "type")?;
-        Ok(VadEvent {
-            kind,
-            samples_index: attr(obj, OWNER, "samples_index")?,
-            timestamp: attr(obj, OWNER, "timestamp")?,
-            speech_duration: attr(obj, OWNER, "speech_duration")?,
-            silence_duration: attr(obj, OWNER, "silence_duration")?,
-            frames: attr_with(obj, OWNER, "frames", |v| {
-                if kind != VadEventType::EndOfSpeech || v.is_none() {
-                    return Ok(Vec::new());
-                }
-                v.extract()
-            })?,
-            probability: attr(obj, OWNER, "probability")?,
-            inference_duration: attr(obj, OWNER, "inference_duration")?,
-            speaking: attr(obj, OWNER, "speaking")?,
-            raw_accumulated_silence: attr(obj, OWNER, "raw_accumulated_silence")?,
-            raw_accumulated_speech: attr(obj, OWNER, "raw_accumulated_speech")?,
-        })
-    }
 }
 
 impl VadEvent {

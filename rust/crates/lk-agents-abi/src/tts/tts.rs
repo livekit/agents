@@ -11,7 +11,6 @@
 
 use crate::TimedString;
 use crate::errors::{ApiError, ProviderError};
-use lk_agents_host_derive::Host;
 
 use crate::utils::stream::{StreamSink, StreamSource};
 use crate::{ApiConnectOptions, AudioFrame};
@@ -48,92 +47,37 @@ pub struct MarkupInfo {
 // `tts.SynthesizedAudio` (`tts/tts.py:39-51`) plus the two fields a Python plugin carries in
 // `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`). Not what
 // `Agent.tts_node` yields (a bare frame). The reference has no class docstring.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "SynthesizedAudio")]
-// Read by hand (below): the two fields are the frame's `userdata`.
-#[host(handwritten(extract))]
-#[binding(emit)]
+// Crosses by hand (`conversions::synthesized_audio_{from,to}_py`): two fields are the frame's
+// `userdata`.
+#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, extract(py), emit(py)))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SynthesizedAudio {
     /// Synthesized audio frame
-    // A real `rtc.AudioFrame` both ways: [`AudioFrame`]'s twin is `construct`.
-    #[python(ty = "rtc.AudioFrame", import = "livekit:rtc")]
     pub frame: AudioFrame,
     /// Request ID (one segment could be made up of multiple requests)
     pub request_id: String,
     /// Whether this is latest frame of the segment
-    #[python(default = "False")]
+    #[host(default = false)]
     pub is_final: bool,
     /// Segment ID, each segment is separated by a flush (streaming only)
-    #[python(default = "\"\"")]
+    #[host(default = "")]
     pub segment_id: String,
     /// Current segment of the synthesized audio (streaming only)
-    #[python(default = "\"\"")]
+    #[host(default = "")]
     pub delta_text: String,
     // `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
     // seconds (a host's `perf_counter()` stamp is converted where it is read). `None` when absent
     // (`generation.py:426` branches on it); `0.0` is legitimate.
-    #[python(skip)]
+    #[host(skip)]
     pub started_time: Option<f64>,
     // `USERDATA_TIMED_TRANSCRIPT`: the words this frame covers. Empty is the common case. Host
-    // `TimedString`s both ways; a plain `str` in the host's list is skipped, as
+    // `TimedString`s both ways; a plain `str` in the host's list is skipped on the way in, as
     // `generation.py:432-434` does.
-    #[python(skip)]
+    #[host(skip)]
     pub timed_transcript: Vec<TimedString>,
     // What `frame.data` holds. Host plugins always deliver PCM, so it does not cross.
-    #[binding(skip, extract_skip)]
-    #[python(skip)]
+    #[host(skip)]
     pub encoding: AudioEncoding,
-}
-
-/// `started_time` and `timed_transcript` come off the frame's `userdata`.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for SynthesizedAudio {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::attr;
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "SynthesizedAudioFromPy";
-        let obj = &*obj;
-        let py = obj.py();
-        let frame = obj.getattr("frame")?;
-        let types = py.import("livekit.agents.types")?;
-        let userdata = frame.getattr("userdata")?;
-        let get = |key: &str| -> pyo3::PyResult<Option<pyo3::Bound<'py, pyo3::PyAny>>> {
-            let v = userdata.call_method1("get", (types.getattr(key)?,))?;
-            Ok((!v.is_none()).then_some(v))
-        };
-        // a `perf_counter()` stamp, as wall-clock seconds
-        let started_time = match get("USERDATA_TTS_STARTED_TIME")? {
-            Some(v) => {
-                let started: f64 = v.extract()?;
-                let time = py.import("time")?;
-                let wall: f64 = time.call_method0("time")?.extract()?;
-                let perf: f64 = time.call_method0("perf_counter")?.extract()?;
-                Some(wall - (perf - started))
-            }
-            None => None,
-        };
-        let timed_transcript = match get("USERDATA_TIMED_TRANSCRIPT")? {
-            Some(words) => {
-                let word = types.getattr("TimedString")?;
-                let words =
-                    words.try_iter()?.flatten().filter(|w| w.is_instance(&word).unwrap_or(false));
-                words.map(|w| w.extract()).collect::<pyo3::PyResult<_>>()?
-            }
-            None => Vec::new(),
-        };
-        Ok(SynthesizedAudio {
-            frame: frame.extract()?,
-            request_id: attr(obj, OWNER, "request_id")?,
-            is_final: attr(obj, OWNER, "is_final")?,
-            segment_id: attr(obj, OWNER, "segment_id")?,
-            delta_text: attr(obj, OWNER, "delta_text")?,
-            started_time,
-            timed_transcript,
-            encoding: AudioEncoding::default(),
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

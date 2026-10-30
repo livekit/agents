@@ -517,7 +517,7 @@ pub mod agent_nodes {
             let ::lk_agents_abi::voice::nodes::NodeFrame { frame, timed_transcript, started_time } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("frame", ::pyo3::IntoPyObjectExt::into_bound_py_any(frame, py)?)?;
-            kwargs.set_item("timed_transcript", ::pyo3::types::PyList::new(py, timed_transcript.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("timed_transcript", ::pyo3::types::PyList::new(py, timed_transcript.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("started_time", match started_time { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(NODE_FRAME.import(py, "livekit.agents._generated.agent_nodes", "NodeFrame")?.as_any(), (), Some(&kwargs))
     }
@@ -4633,7 +4633,7 @@ pub mod stt {
                 end_time: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "end_time", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechData.end_time"))?,
                 confidence: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "confidence", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechData.confidence"))?,
                 speaker_id: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "speaker_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                words: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "words", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::TimedString>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("SpeechData.words: expected a list or tuple")) }).map(Some) })?,
+                words: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "words", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; crate::conversions::timed_string_from_py(item) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("SpeechData.words: expected a list or tuple")) }).map(Some) })?,
                 source_languages: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "source_languages", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::LanguageCode>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("SpeechData.source_languages: expected a list or tuple")) }).map(Some) })?,
                 source_texts: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "source_texts", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("SpeechData.source_texts: expected a list or tuple")) }).map(Some) })?,
                 target_languages: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "target_languages", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::LanguageCode>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("SpeechData.target_languages: expected a list or tuple")) }).map(Some) })?,
@@ -4651,7 +4651,7 @@ pub mod stt {
             kwargs.set_item("end_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_time, py)?)?;
             kwargs.set_item("confidence", ::pyo3::IntoPyObjectExt::into_bound_py_any(confidence, py)?)?;
             kwargs.set_item("speaker_id", match speaker_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("words", match words { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            kwargs.set_item("words", match words { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
             kwargs.set_item("source_languages", match source_languages { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
             kwargs.set_item("source_texts", match source_texts { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
             kwargs.set_item("target_languages", match target_languages { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
@@ -5702,6 +5702,12 @@ pub mod tts {
             kwargs.set_item("nonverbals", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in nonverbals { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k.as_str(), py)?, ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?; } d.into_any() })?;
             crate::host::construct(MARKUP_INFO.import(py, "livekit.agents._generated.tts", "MarkupInfo")?.as_any(), (), Some(&kwargs))
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
+
+    pub use crate::conversions::synthesized_audio_from_py;
+
+    pub use crate::conversions::synthesized_audio_to_py;
 }
 
 pub mod turn {
@@ -6139,6 +6145,52 @@ pub mod usage {
 
 pub mod vad {
     use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/vad/events.rs.
+    static VAD_EVENT_TYPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn vad_event_type_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::VadEventType> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "start_of_speech" => Ok(::lk_agents_abi::VadEventType::StartOfSpeech),
+                "inference_done" => Ok(::lk_agents_abi::VadEventType::InferenceDone),
+                "end_of_speech" => Ok(::lk_agents_abi::VadEventType::EndOfSpeech),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("VADEventType: {other:?} is not one of 'start_of_speech', 'inference_done', 'end_of_speech'"))),
+            }
+    }
+
+    pub fn vad_event_type_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::VadEventType) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::VadEventType::StartOfSpeech => "start_of_speech",
+                ::lk_agents_abi::VadEventType::InferenceDone => "inference_done",
+                ::lk_agents_abi::VadEventType::EndOfSpeech => "end_of_speech",
+            };
+            Ok(crate::host::construct(VAD_EVENT_TYPE.import(py, "livekit.agents._generated.vad", "VADEventType")?.as_any(), (value,), None)?)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/vad/events.rs.
+    static VAD_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub use crate::conversions::vad_event_from_py;
+
+    pub fn vad_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::VadEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::VadEvent { kind, samples_index, timestamp, speech_duration, silence_duration, frames, probability, inference_duration, speaking, raw_accumulated_silence, raw_accumulated_speech } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("type", crate::generated::records::vad::vad_event_type_to_py(py, kind)?)?;
+            kwargs.set_item("samples_index", ::pyo3::IntoPyObjectExt::into_bound_py_any(samples_index, py)?)?;
+            kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
+            kwargs.set_item("speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration, py)?)?;
+            kwargs.set_item("silence_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(silence_duration, py)?)?;
+            kwargs.set_item("frames", ::pyo3::types::PyList::new(py, frames.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
+            kwargs.set_item("inference_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(inference_duration, py)?)?;
+            kwargs.set_item("speaking", ::pyo3::IntoPyObjectExt::into_bound_py_any(speaking, py)?)?;
+            kwargs.set_item("raw_accumulated_silence", ::pyo3::IntoPyObjectExt::into_bound_py_any(raw_accumulated_silence, py)?)?;
+            kwargs.set_item("raw_accumulated_speech", ::pyo3::IntoPyObjectExt::into_bound_py_any(raw_accumulated_speech, py)?)?;
+            crate::host::construct(VAD_EVENT.import(py, "livekit.agents._generated.vad", "VADEvent")?.as_any(), (), Some(&kwargs))
+    }
 
     // Declared in rust/crates/lk-agents-abi/src/vad/vad.rs.
     static VAD_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =

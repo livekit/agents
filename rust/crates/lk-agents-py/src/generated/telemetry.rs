@@ -275,7 +275,8 @@ impl TtsMetricState {
 
     /// Whether `audio` ends its segment.
     #[pyo3(signature = (now, start, audio))]
-    fn observe(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: ::lk_agents_abi::SynthesizedAudio) -> PyResult<bool> {
+    fn observe(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: Bound<'_, PyAny>) -> PyResult<bool> {
+        let audio = crate::generated::records::tts::synthesized_audio_from_py(&audio)?;
         let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio);
         Ok(out)
     }

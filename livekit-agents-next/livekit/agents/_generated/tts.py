@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self, TypeVar
 
 from livekit import rtc
+from livekit.rtc import AudioFrame
 
 from .. import _bindings, _core
 from .._exceptions import APIError
@@ -53,13 +54,9 @@ class MarkupInfo:
     """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
 
 
-TTSCapabilities.__module__ = "livekit.agents.tts"
-MarkupInfo.__module__ = "livekit.agents.tts"
-
-
 @dataclass
 class SynthesizedAudio:
-    frame: rtc.AudioFrame
+    frame: AudioFrame
     """Synthesized audio frame"""
     request_id: str
     """Request ID (one segment could be made up of multiple requests)"""
@@ -69,6 +66,11 @@ class SynthesizedAudio:
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
     """Current segment of the synthesized audio (streaming only)"""
+
+
+TTSCapabilities.__module__ = "livekit.agents.tts"
+MarkupInfo.__module__ = "livekit.agents.tts"
+SynthesizedAudio.__module__ = "livekit.agents.tts"
 
 
 class TTSError(BaseModel):
@@ -583,7 +585,6 @@ class _ChunkedStreamFromStream(ChunkedStream):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-SynthesizedAudio.__module__ = "livekit.agents.tts"
 TTSError.__module__ = "livekit.agents.tts"
 TTS.__module__ = "livekit.agents.tts"
 ChunkedStream.__module__ = "livekit.agents.tts"

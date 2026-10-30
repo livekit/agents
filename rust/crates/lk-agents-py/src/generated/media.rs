@@ -155,7 +155,7 @@ impl AudioEmitter {
     #[pyo3(signature = (delta_text))]
     fn push_timed_transcript(&self, delta_text: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let delta_text = (if delta_text.is_instance_of::<::pyo3::types::PyList>() { delta_text.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::TimedString>() }).collect::<PyResult<Vec<_>>>()) } else { (delta_text.extract::<::lk_agents_abi::TimedString>()).map(|item| vec![item]) })?;
+        let delta_text = (if delta_text.is_instance_of::<::pyo3::types::PyList>() { delta_text.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::timed_string_from_py(&item) }).collect::<PyResult<Vec<_>>>()) } else { (crate::conversions::timed_string_from_py(&delta_text)).map(|item| vec![item]) })?;
         <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push_timed_transcript(&self.0, delta_text).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -476,7 +476,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         let is_final_arg = is_final;
         let timed_transcript_arg = timed_transcript;
         ::lk_agents_runtime::host::notify(&self.notifier, "EmitterOutput.send", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 5] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_transcript_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 5] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::types::PyList::new(py, timed_transcript_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
                 Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

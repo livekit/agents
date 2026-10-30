@@ -7,7 +7,11 @@ use lk_agents_abi::voice::session_options::{
     BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions, SessionConnOptions,
     TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
 };
-use lk_agents_abi::{AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef};
+use lk_agents_abi::tts::tts::AudioEncoding;
+use lk_agents_abi::{
+    AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef, SynthesizedAudio, TimedString,
+    VadEvent, VadEventType,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{
@@ -267,4 +271,185 @@ pub fn aligned_transcript_to_py<'py>(
         AlignedTranscript::None => pyo3::types::PyBool::new(py, false).to_owned().into_any(),
         other => PyString::new(py, other.as_str()).into_any(),
     })
+}
+
+/// Built as the host's own `TimedString` (a `str` subclass), an absent timing an absent keyword.
+pub fn timed_string_to_py<'py>(py: Python<'py>, value: TimedString) -> PyResult<Bound<'py, PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("text", value.text)?;
+    for (key, v) in [
+        ("start_time", value.start_time),
+        ("end_time", value.end_time),
+        ("confidence", value.confidence),
+        ("start_time_offset", value.start_time_offset),
+    ] {
+        if let Some(v) = v {
+            kwargs.set_item(key, v)?;
+        }
+    }
+    if let Some(v) = value.speaker_id {
+        kwargs.set_item("speaker_id", v)?;
+    }
+    CLASS.import(py, "livekit.agents.types", "TimedString")?.call((), Some(&kwargs))
+}
+
+/// The `str` itself and its timings; `NOT_GIVEN`, `None`, anything unreadable and a missing
+/// attribute (an older subclass's `speaker_id`) read as absent.
+pub fn timed_string_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TimedString> {
+    let lenient = |key: &str| obj.getattr(key).ok().and_then(|v| v.extract::<f64>().ok());
+    Ok(TimedString {
+        text: obj.str()?.extract()?,
+        start_time: lenient("start_time"),
+        end_time: lenient("end_time"),
+        confidence: lenient("confidence"),
+        start_time_offset: lenient("start_time_offset"),
+        speaker_id: obj.getattr("speaker_id").ok().and_then(|v| v.extract().ok()),
+    })
+}
+
+/// `started_time` and `timed_transcript` come off the frame's `userdata`; a plain `str` among the
+/// words is skipped.
+pub fn synthesized_audio_from_py(obj: &Bound<'_, PyAny>) -> PyResult<SynthesizedAudio> {
+    let py = obj.py();
+    let frame = obj.getattr("frame")?;
+    let types = py.import("livekit.agents.types")?;
+    let userdata = frame.getattr("userdata")?;
+    let get = |key: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
+        let v = userdata.call_method1("get", (types.getattr(key)?,))?;
+        Ok((!v.is_none()).then_some(v))
+    };
+    // a `perf_counter()` stamp, as wall-clock seconds
+    let started_time = match get("USERDATA_TTS_STARTED_TIME")? {
+        Some(v) => {
+            let started: f64 = v.extract()?;
+            let time = py.import("time")?;
+            let wall: f64 = time.call_method0("time")?.extract()?;
+            let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+            Some(wall - (perf - started))
+        }
+        None => None,
+    };
+    let timed_transcript = match get("USERDATA_TIMED_TRANSCRIPT")? {
+        Some(words) => {
+            let class = types.getattr("TimedString")?;
+            let mut out = Vec::new();
+            for word in words.try_iter()? {
+                let word = word?;
+                if word.is_instance(&class)? {
+                    out.push(timed_string_from_py(&word)?);
+                }
+            }
+            out
+        }
+        None => Vec::new(),
+    };
+    Ok(SynthesizedAudio {
+        frame: frame.extract()?,
+        request_id: obj.getattr("request_id")?.extract()?,
+        is_final: obj.getattr("is_final")?.extract()?,
+        segment_id: obj.getattr("segment_id")?.extract()?,
+        delta_text: obj.getattr("delta_text")?.extract()?,
+        started_time,
+        timed_transcript,
+        encoding: AudioEncoding::default(),
+    })
+}
+
+/// The two userdata fields go back onto the frame, the started time as a `perf_counter()` stamp.
+pub fn synthesized_audio_to_py<'py>(
+    py: Python<'py>,
+    value: SynthesizedAudio,
+) -> PyResult<Bound<'py, PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
+    let types = py.import("livekit.agents.types")?;
+    let frame = pyo3::IntoPyObjectExt::into_bound_py_any(value.frame, py)?;
+    let userdata = frame.getattr("userdata")?;
+    if !value.timed_transcript.is_empty() {
+        let words = value
+            .timed_transcript
+            .into_iter()
+            .map(|w| timed_string_to_py(py, w))
+            .collect::<PyResult<Vec<_>>>()?;
+        userdata.set_item(types.getattr("USERDATA_TIMED_TRANSCRIPT")?, words)?;
+    }
+    if let Some(wall) = value.started_time {
+        let time = py.import("time")?;
+        let now: f64 = time.call_method0("time")?.extract()?;
+        let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+        userdata.set_item(types.getattr("USERDATA_TTS_STARTED_TIME")?, perf - (now - wall))?;
+    }
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("frame", frame)?;
+    kwargs.set_item("request_id", value.request_id)?;
+    kwargs.set_item("is_final", value.is_final)?;
+    kwargs.set_item("segment_id", value.segment_id)?;
+    kwargs.set_item("delta_text", value.delta_text)?;
+    CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?.call((), Some(&kwargs))
+}
+
+/// `frames` is read only for an end of speech, the one event whose audio is recognized
+/// (`inference_done` fires ~30/s).
+pub fn vad_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<VadEvent> {
+    let kind = crate::generated::records::vad::vad_event_type_from_py(&obj.getattr("type")?)?;
+    let number = |key: &str| obj.getattr(key)?.extract::<f64>();
+    let frames = obj.getattr("frames")?;
+    Ok(VadEvent {
+        kind,
+        samples_index: obj.getattr("samples_index")?.extract()?,
+        timestamp: number("timestamp")?,
+        speech_duration: number("speech_duration")?,
+        silence_duration: number("silence_duration")?,
+        frames: match kind == VadEventType::EndOfSpeech && !frames.is_none() {
+            true => frames.extract()?,
+            false => Vec::new(),
+        },
+        probability: number("probability")?,
+        inference_duration: number("inference_duration")?,
+        speaking: obj.getattr("speaking")?.extract()?,
+        raw_accumulated_silence: number("raw_accumulated_silence")?,
+        raw_accumulated_speech: number("raw_accumulated_speech")?,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+
+    // The package is not importable here: a stub frame and event stand in for it.
+    const STUBS: &str = r#"
+class AudioFrame:
+    def __init__(self, n):
+        self._d = bytes(n * 2); self.sample_rate = 24000
+        self.num_channels = 1; self.samples_per_channel = n
+    @property
+    def data(self):
+        return memoryview(self._d)
+
+class VADEvent:
+    def __init__(self, type, frames):
+        self.type = type; self.frames = frames; self.samples_index = 0; self.timestamp = 0.0
+        self.speech_duration = 0.0; self.silence_duration = 0.0; self.probability = 0.9
+        self.inference_duration = 0.0; self.speaking = False
+        self.raw_accumulated_silence = 0.0; self.raw_accumulated_speech = 0.0
+"#;
+
+    // Catches: copying the audio of every VAD event off the host (`inference_done` fires ~30 a
+    // second per stream) when only an end of speech's is recognized.
+    #[test]
+    fn only_an_end_of_speech_carries_its_audio_off_the_host() {
+        Python::initialize();
+        Python::attach(|py| {
+            let read = |code: &str| {
+                let globals = PyDict::new(py);
+                let program = std::ffi::CString::new(format!("{STUBS}\nout = {code}\n")).unwrap();
+                py.run(&program, Some(&globals), None).unwrap();
+                super::vad_event_from_py(&globals.get_item("out").unwrap().unwrap()).unwrap()
+            };
+            assert!(read("VADEvent('inference_done', [AudioFrame(4)])").frames.is_empty());
+            let ev = read("VADEvent('end_of_speech', [AudioFrame(4), AudioFrame(4)])");
+            assert_eq!(ev.frames.len(), 2);
+        });
+    }
 }

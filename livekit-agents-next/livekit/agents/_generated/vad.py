@@ -2,8 +2,8 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
 # `#[host(record)]` declarations in:
-#     rust/crates/lk-agents-abi/src/vad/events.rs
 #     rust/crates/lk-agents-abi/src/vad/vad.rs
+#     rust/crates/lk-agents-abi/src/vad/events.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -21,19 +21,12 @@ from typing import Generic, Literal, Never
 from typing_extensions import Self, TypeVar
 
 from livekit import rtc
+from livekit.rtc import AudioFrame
 
 from ..utils import aio
 from .chat_items import MetricsMetadata
 
 # The declared records.
-
-
-@dataclass
-class VADCapabilities:
-    update_interval: float
-
-
-VADCapabilities.__module__ = "livekit.agents"
 
 
 @unique
@@ -59,7 +52,7 @@ class VADEvent:
     """Duration of the speech segment in seconds."""
     silence_duration: float
     """Duration of the silence segment in seconds."""
-    frames: list[rtc.AudioFrame] = field(default_factory=list)
+    frames: list[AudioFrame] = field(default_factory=list)
     """
     List of audio frames associated with the speech.
 
@@ -77,6 +70,16 @@ class VADEvent:
     """Threshold used to detect silence."""
     raw_accumulated_speech: float = 0.0
     """Threshold used to detect speech."""
+
+
+@dataclass
+class VADCapabilities:
+    update_interval: float
+
+
+VADEventType.__module__ = "livekit.agents"
+VADEvent.__module__ = "livekit.agents"
+VADCapabilities.__module__ = "livekit.agents"
 
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -270,7 +273,5 @@ class VADStream(ABC):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-VADEventType.__module__ = "livekit.agents"
-VADEvent.__module__ = "livekit.agents"
 VAD.__module__ = "livekit.agents"
 VADStream.__module__ = "livekit.agents"

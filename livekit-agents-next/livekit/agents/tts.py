@@ -127,14 +127,14 @@ def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:
     """What forwards a core synthesis's audio into ``output_emitter``, one segment if streamed."""
     started = not stream
 
-    def out(audio: Any) -> None:
+    def out(audio: SynthesizedAudio) -> None:
         nonlocal started
         if not started:
             started = True
-            output_emitter.start_segment(segment_id=audio["segment_id"] or utils.shortuuid())
-        if words := audio["timed_transcript"]:
+            output_emitter.start_segment(segment_id=audio.segment_id or utils.shortuuid())
+        if words := audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
             output_emitter.push_timed_transcript(words)
-        output_emitter.push_frame(audio["frame"])
+        output_emitter.push_frame(audio.frame)
 
     return out
 

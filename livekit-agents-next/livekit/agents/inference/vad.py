@@ -129,8 +129,7 @@ class _VADStream(vad.VADStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                ev["type"] = vad.VADEventType(ev["type"])
-                self.send(vad.VADEvent(**ev))
+                self.send(ev)
         finally:
             await aio.cancel_and_wait(push)
             await native.aclose()
