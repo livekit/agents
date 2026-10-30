@@ -8,6 +8,7 @@ import gc
 import json
 import multiprocessing as mp
 import os
+import pickle
 import signal
 import socket
 import sys
@@ -270,7 +271,8 @@ async def test_launch_failure_keeps_its_cause_and_settles_close(
         "_create_process",
         lambda endpoint: executor._mp_ctx.Process(target=lambda: None),
     )
-    with pytest.raises(Exception, match="pickle|local object"):
+    # Python 3.14 raises PicklingError where earlier versions raise AttributeError.
+    with pytest.raises((AttributeError, pickle.PicklingError), match="local object"):
         await asyncio.wait_for(executor.start(), timeout=5)
     await asyncio.wait_for(executor.aclose(), timeout=3)
     await asyncio.wait_for(executor.join(), timeout=3)
