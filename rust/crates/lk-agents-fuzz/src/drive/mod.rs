@@ -699,6 +699,8 @@ pub struct Run {
     /// The way to reach a live fake, owned outright and shared with no one. A delivery is a
     /// lookup in this map and a call, so there is no lock on that path to re-enter.
     controls: BTreeMap<Slot, Control>,
+    /// The `override_options` layers the host holds, oldest first, by the id the session minted.
+    overrides: Vec<u64>,
     /// Which output each flushed segment sits on, kept after the segment is gone.
     segments: BTreeMap<u32, u32>,
     /// Journal steps the probe stamped, waiting to be absorbed. The probe runs under the

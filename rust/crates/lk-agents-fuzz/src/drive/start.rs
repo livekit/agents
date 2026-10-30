@@ -339,6 +339,7 @@ impl Run {
             registry,
             records,
             controls: BTreeMap::new(),
+            overrides: Vec::new(),
             segments: BTreeMap::new(),
             steps,
             livelock,

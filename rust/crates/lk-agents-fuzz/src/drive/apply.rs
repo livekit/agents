@@ -11,15 +11,13 @@ use std::task::{Context, Poll, Waker};
 use lk_agents_abi::voice::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_abi::voice::session::{VoiceSession as _, VoiceTaskEnded};
 use lk_agents_abi::voice::session_options::UpdateKwargs;
-use lk_agents_voice::agent_session::{
-    Command, CommitSuperseded, DrainRefused, IvrCommand,
-};
+use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused, IvrCommand};
 
 use lk_agents_voice::agent_activity::scheduling::SpeechKind;
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
-    Llm, Tts, frame, history, patch, session_stt, tool_specs, turn_detection, avatar_metrics,
+    Llm, Tts, avatar_metrics, frame, history, patch, session_stt, tool_specs, turn_detection,
 };
 use super::*;
 mod wait;
@@ -146,6 +144,33 @@ fn io_leg(leg: IoKind) -> &'static str {
         IoKind::AudioInput => "audio_input",
         IoKind::AudioOutput => "audio_output",
         IoKind::Transcription => "transcription",
+    }
+}
+
+/// What `update_options` / `override_options` say for `knob`; `None` for the options they do not
+/// take (endpointing and detection only).
+fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
+    let endpointing = |patch: fn(&mut EndpointingKwargs, f64)| {
+        let mut kwargs = EndpointingKwargs::default();
+        patch(&mut kwargs, secs(ms));
+        Some(kwargs)
+    };
+    match knob {
+        Knob::Detection => Some(UpdateKwargs {
+            turn_detection: Maybe::Given(
+                turn_detection(mode).map_or(TurnDetectionKwarg::Null, TurnDetectionKwarg::Mode),
+            ),
+            ..UpdateKwargs::default()
+        }),
+        Knob::MinEndpointing => Some(UpdateKwargs {
+            endpointing_opts: endpointing(|k, s| k.min_delay = Some(s)),
+            ..UpdateKwargs::default()
+        }),
+        Knob::MaxEndpointing => Some(UpdateKwargs {
+            endpointing_opts: endpointing(|k, s| k.max_delay = Some(s)),
+            ..UpdateKwargs::default()
+        }),
+        _ => None,
     }
 }
 
@@ -453,36 +478,27 @@ impl Run {
             }
             Input::ClearTurn {} => api.clear_user_turn().is_ok(),
             Input::Configure { knob, mode, ms, on, words } => {
-                let endpointing = |patch: fn(&mut EndpointingKwargs, f64)| {
-                    let mut kwargs = EndpointingKwargs::default();
-                    patch(&mut kwargs, secs(*ms));
-                    Some(kwargs)
-                };
-                let update = match knob {
-                    Knob::Detection => Some(UpdateKwargs {
-                        turn_detection: Maybe::Given(
-                            turn_detection(*mode)
-                                .map_or(TurnDetectionKwarg::Null, TurnDetectionKwarg::Mode),
-                        ),
-                        ..UpdateKwargs::default()
-                    }),
-                    Knob::MinEndpointing => Some(UpdateKwargs {
-                        endpointing_opts: endpointing(|k, s| k.min_delay = Some(s)),
-                        ..UpdateKwargs::default()
-                    }),
-                    Knob::MaxEndpointing => Some(UpdateKwargs {
-                        endpointing_opts: endpointing(|k, s| k.max_delay = Some(s)),
-                        ..UpdateKwargs::default()
-                    }),
-                    _ => None,
-                };
-                match update {
+                match turn_update(*knob, *mode, *ms) {
                     Some(update) => api.update_turn_options(update).is_ok(),
                     // No host call: `update_options` takes endpointing and detection only.
                     None => api
                         .send(TurnCommand::Configure(patch(*knob, *mode, *ms, *on, *words)))
                         .is_ok(),
                 }
+            }
+            Input::Override { knob, mode, ms } => {
+                let Some(update) = turn_update(*knob, *mode, *ms) else { return false };
+                let Ok(layer) = api.override_options(update) else { return false };
+                self.overrides.push(layer);
+                true
+            }
+            Input::ReleaseOverride { nth } => {
+                if self.overrides.is_empty() {
+                    return false;
+                }
+                let layer = self.overrides.remove(nth.0 as usize % self.overrides.len());
+                api.release_override(layer);
+                self.loop_runs()
             }
             Input::Handoff { agent, instructions, tools } => api
                 .update_agent(frame(
@@ -649,7 +665,9 @@ impl Run {
                 DtmfInput::Start => {
                     collecting = true;
                     api.collect_dtmf(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
-                        .map(|reply| wait(Pending::reply(reply, |answer| Answer::Dtmf(dtmf_outcome(answer)))))
+                        .map(|reply| {
+                            wait(Pending::reply(reply, |answer| Answer::Dtmf(dtmf_outcome(answer))))
+                        })
                         .is_ok()
                 }
                 // The person, or a guest, presses it on their keypad; only a room carries it.

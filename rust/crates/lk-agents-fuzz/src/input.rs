@@ -638,6 +638,10 @@ inputs! {
     ClearTurn { } leaf turn::Clear;
     /// One live option changed, alone, so a finding names the option that mattered.
     Configure { knob: Knob, mode: TurnMode, ms: Millis, on: bool, words: Count } leaf turn::Configure;
+    /// `override_options()` entered with one option the host can layer.
+    Override { knob: Knob, mode: TurnMode, ms: Millis } leaf turn::Override;
+    /// An `override_options()` block ends: the `nth` held layer, oldest first, in any order.
+    ReleaseOverride { nth: Count } leaf turn::ReleaseOverride;
     /// A handoff to another agent, with the same fakes behind it.
     Handoff { agent: String, instructions: AgentText, tools: Vec<String> }
         opens [Answer] leaf activity::Update;
