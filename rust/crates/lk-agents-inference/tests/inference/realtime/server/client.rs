@@ -256,9 +256,10 @@ impl Server {
                     self.breaches.push(Breach::CancelledUnprompted { response, generation });
                 }
                 // What it had generated still streams out first: a reply asked in the same breath
-                // is created before this one's `response.done` (probe-cancel_then_create).
-                let lag = self.answer_after(now, 120..=150);
-                self.cancel(later(now, lag), r);
+                // is created before this one's `response.done` (probe-cancel_then_create). The
+                // cancel is taken in order, but its wind-down holds back no later answer.
+                let lag = self.rng.u64(120..=150);
+                self.cancel(later(now, lag).max(self.answered), r);
             }
             None => {
                 // Knowing when the client had been told the end of the response it names (of

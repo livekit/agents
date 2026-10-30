@@ -56,48 +56,58 @@ fn answered(sim: &Sim, req_id: &str) -> String {
 // breath. The real server frees the conversation at a cancel and creates the new reply before the
 // cancelled one's last audio delta and `response.done` (`probe-cancel_then_create`). Its late
 // deltas were told as the new reply's, and its late `response.done` ended the new reply's
-// generation, whose audio was then dropped: the agent fell silent.
+// generation, whose audio was then dropped: the agent fell silent. Over several draws, so the
+// server creates the new reply both before and after the cancelled one ends.
 #[test]
 fn a_cancelled_response_tail_leaves_the_next_reply_alone() {
-    let mut sim = Sim::new(Setup::default());
-    sim.send(reply("first"));
-    sim.advance(1_000);
-    let first = answered(&sim, "first");
-    sim.send(Command::Interrupt(Interrupt { response_id: Some(first.clone()) }));
-    sim.send(reply("second"));
-    let asked = sim.now();
-    sim.advance(20_000);
-    let second = answered(&sim, "second");
-    let messages: Vec<&str> = sim
-        .events()
-        .iter()
-        .filter_map(|(_, e)| match e {
-            Event::MessageStarted(m) if m.response_id.as_deref() == Some(&second) => {
-                Some(m.message_id.as_str())
-            }
-            _ => None,
-        })
-        .collect();
-    let audio: Vec<&str> = sim
-        .events()
-        .iter()
-        .filter(|(at, _)| *at > asked)
-        .filter_map(|(_, e)| match e {
-            Event::AudioDelta(a) => Some(a.message_id.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(!audio.is_empty(), "the new reply's audio is told");
-    assert!(audio.iter().all(|m| messages.contains(m)), "only the new reply's audio is: {audio:?}");
-    let ends: Vec<_> = sim
-        .events()
-        .iter()
-        .filter_map(|(_, e)| match e {
-            Event::GenerationDone(d) if d.response_id == second => Some(d.status),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(ends.len(), 1, "the new reply ends once: {ends:?}");
+    let mut overlapped = false;
+    for seed in 0..8 {
+        let mut sim = Sim::new(Setup { seed, ..Setup::default() });
+        sim.send(reply("first"));
+        sim.advance(1_000);
+        let first = answered(&sim, "first");
+        sim.send(Command::Interrupt(Interrupt { response_id: Some(first.clone()) }));
+        sim.send(reply("second"));
+        sim.advance(20_000);
+        overlapped |= sim.overlapped();
+        let second = answered(&sim, "second");
+        let messages: Vec<&str> = sim
+            .events()
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::MessageStarted(m) if m.response_id.as_deref() == Some(&second) => {
+                    Some(m.message_id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        let audio: Vec<(&str, Option<&str>)> = sim
+            .events()
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::AudioDelta(a) => Some((a.message_id.as_str(), a.response_id.as_deref())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            audio.iter().any(|(m, _)| messages.contains(m)),
+            "seed {seed}: the new reply's audio is told"
+        );
+        assert!(
+            audio.iter().all(|(m, r)| messages.contains(m) == (*r == Some(&second))),
+            "seed {seed}: each delta is told as its own reply's: {audio:?}"
+        );
+        let ends: Vec<_> = sim
+            .events()
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::GenerationDone(d) if d.response_id == second => Some(d.status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ends.len(), 1, "seed {seed}: the new reply ends once: {ends:?}");
+    }
+    assert!(overlapped, "no draw created the new reply before the cancelled one ended");
 }
 
 /// The server drops the socket; it takes connections again 100 ms later.

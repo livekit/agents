@@ -8,7 +8,10 @@
 //! its choosing and reads what the driver would have been told ([`Sim::events`]) and what the
 //! server refused or answered from the wrong state ([`Sim::breaches`]). What the machine gets
 //! wrong about the server shows here; what the driver does with its events is the DST's.
-use std::{collections::VecDeque, time::Duration, time::SystemTime};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    time::{Duration, SystemTime},
+};
 
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, PushAudio, Ts,
@@ -96,14 +99,22 @@ pub struct Sim {
 struct Record {
     breaches: Vec<Breach>,
     responses: u32,
+    /// The responses created and not done yet.
+    live: BTreeSet<u32>,
+    /// A response was created before the previous one was done.
+    overlapped: bool,
 }
 
 impl Hooks for Record {
     fn created(&mut self, _: &str) -> u32 {
         self.responses += 1;
+        self.overlapped |= !self.live.is_empty();
+        self.live.insert(self.responses);
         self.responses
     }
-    fn done(&mut self, _: u32) {}
+    fn done(&mut self, source: u32) {
+        self.live.remove(&source);
+    }
     fn produced(&mut self, _: u32, _: u16) {}
     fn heard(&mut self, _: &[u8]) {}
     fn breach(&mut self, breach: Breach) {
@@ -194,6 +205,8 @@ impl Sim {
         {
             *server = None;
             self.up = false;
+            // Its responses end with it.
+            self.record.live.clear();
         }
         self.step();
     }
@@ -227,6 +240,11 @@ impl Sim {
     /// What the server refused of the client, or answered from the wrong state.
     pub fn breaches(&self) -> &[Breach] {
         &self.record.breaches
+    }
+
+    /// The server created a response before the previous one's `response.done`.
+    pub fn overlapped(&self) -> bool {
+        self.record.overlapped
     }
 
     /// The refusals among them.
