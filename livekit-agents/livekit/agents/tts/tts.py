@@ -386,8 +386,13 @@ class ChunkedStream(ABC):
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""
         frames = []
-        async for ev in self:
-            frames.append(ev.frame)
+        try:
+            async for ev in self:
+                frames.append(ev.frame)
+        finally:
+            # collecting is the whole request: close it so the request span ends
+            # and the tee is released
+            await self.aclose()
 
         return rtc.combine_audio_frames(frames)
 
