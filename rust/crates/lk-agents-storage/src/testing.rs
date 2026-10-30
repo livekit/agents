@@ -207,7 +207,18 @@ impl SqliteConnection for Faulty {
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.reachable()?;
         let is_commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
-        let fault = if is_commit { self.commit.lock().take() } else { None };
+        // only a commit carrying staged writes can outgrow the database's frame: a run closed
+        // with nothing of its own writes the lane and its journal, and leaves the fault armed
+        let staged = statements.iter().any(|s| {
+            !["version = version + 1", "INTO events", "INTO lanes"]
+                .iter()
+                .any(|w| s.sql.contains(w))
+        });
+        let fault = match *self.commit.lock() {
+            Some(CommitFault::RefuseTooLarge) if !staged => None,
+            ref mut armed if is_commit => armed.take(),
+            _ => None,
+        };
         if fault.is_some()
             && let Some(d) = self.unreachable_for.lock().take()
         {
