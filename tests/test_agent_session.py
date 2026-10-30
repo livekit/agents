@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 
 import pytest
 
@@ -86,6 +86,66 @@ async def test_live_session_changes_interruption_and_delivery_settings() -> None
         await interruption(enabled=True, min_words=0, min_duration=1.5)
         assert session.options["min_consecutive_speech_delay"] == 0.4
         assert session.options["tts_text_transforms"] is None
+
+
+async def _eventually(check: Callable[[], bool]) -> None:
+    # the running core applies a change on its own loop
+    for _ in range(100):
+        if check():
+            return
+        await asyncio.sleep(0.01)
+    assert check()
+
+
+def _endpointing(session: VoiceSession) -> tuple[float, float]:
+    endpointing = session.options["endpointing"]
+    return endpointing["min_delay"], endpointing["max_delay"]
+
+
+async def test_an_override_opened_before_start_is_released_after_it() -> None:
+    async with VoiceSession(
+        vad=None, turn_detection="manual", endpointing_opts={"min_delay": 0.3, "max_delay": 2.0}
+    ) as session:
+        async with session.override_options(endpointing_opts={"min_delay": 1.2}):
+            await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+            await _eventually(lambda: _endpointing(session) == (1.2, 2.0))
+        await _eventually(lambda: _endpointing(session) == (0.3, 2.0))
+
+
+async def test_a_base_change_shows_through_the_settings_an_override_leaves_unset() -> None:
+    async with VoiceSession(
+        vad=None, turn_detection="manual", endpointing_opts={"min_delay": 0.3, "max_delay": 2.0}
+    ) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        async with session.override_options(endpointing_opts={"min_delay": 1.2}):
+            session.update_options(endpointing_opts={"max_delay": 4.0})
+            await _eventually(lambda: _endpointing(session) == (1.2, 4.0))
+        await _eventually(lambda: _endpointing(session) == (0.3, 4.0))
+
+
+async def test_overrides_released_out_of_order_leave_the_one_still_held() -> None:
+    async with VoiceSession(
+        vad=None, turn_detection="manual", endpointing_opts={"min_delay": 0.3, "max_delay": 2.0}
+    ) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        outer = session.override_options(endpointing_opts={"min_delay": 0.9})
+        inner = session.override_options(endpointing_opts={"max_delay": 3.0})
+        await outer.__aenter__()
+        await inner.__aenter__()
+        await outer.__aexit__(None, None, None)
+        await _eventually(lambda: _endpointing(session) == (0.3, 3.0))
+        await inner.__aexit__(None, None, None)
+        await _eventually(lambda: _endpointing(session) == (0.3, 2.0))
+
+
+async def test_an_override_on_a_session_closed_inside_it_raises_the_block_error() -> None:
+    base, specialist = FakeTTS(fake_audio_duration=0.1), FakeTTS(fake_audio_duration=0.1)
+    async with _voiced_session(base) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        with pytest.raises(RuntimeError, match="interaction failed"):
+            async with session.override_options(tts=specialist, turn_detection="vad"):
+                await session.aclose()
+                raise RuntimeError("interaction failed")
 
 
 def _voiced_session(tts: FakeTTS) -> VoiceSession:

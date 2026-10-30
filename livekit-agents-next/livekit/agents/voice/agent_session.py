@@ -965,22 +965,33 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         )
         # the core layers the settings; the providers are host objects, layered here
         layer = None
-        if turn:
-            layer = (self._options if self._core is None else self._core).override_options(turn)
-        for leg in models:
-            if not self._layered(leg):
-                self._base_models[leg] = getattr(self, f"_{leg}")
-        self._model_layers.append(models)
-        self._install_models(models)
+        failure: BaseException | None = None
         try:
+            if turn:
+                layer = (self._options if self._core is None else self._core).override_options(turn)
+            for leg in models:
+                if not self._layered(leg):
+                    self._base_models[leg] = getattr(self, f"_{leg}")
+            self._model_layers.append(models)
+            self._install_models(models)
             yield
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            del self._model_layers[
-                next(i for i, held in enumerate(self._model_layers) if held is models)
-            ]
-            self._install_models({leg: self._effective_model(leg) for leg in models})
+            # a release never raises: a closed session has nothing left to restore
             if layer is not None:
                 (self._options if self._core is None else self._core).release_override(layer)
+            held = next((i for i, held in enumerate(self._model_layers) if held is models), None)
+            if held is not None:
+                del self._model_layers[held]
+                try:
+                    self._install_models({leg: self._effective_model(leg) for leg in models})
+                except RuntimeError:
+                    # a session closed inside the block refuses the restore; the block's own
+                    # error is the one to raise
+                    if failure is None:
+                        raise
 
     @staticmethod
     def _split(options: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
