@@ -2,7 +2,7 @@
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
 use lk_agents_abi::python::{
-    BufferFormat, MaybeNull, attr_with, number_from_py, snapshot_buffer,
+    BufferFormat, MaybeNull, attr_with, number_from_py, retained_bytes, snapshot_buffer,
 };
 use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
 use lk_agents_abi::voice::session_options::{
@@ -12,6 +12,7 @@ use lk_agents_abi::voice::session_options::{
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
 use lk_agents_abi::utils::dates::Date;
+use lk_agents_abi::utils::video::VideoFrame;
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::session_effects::FillerReply;
 use lk_agents_abi::voice::room_io::{
@@ -725,6 +726,25 @@ pub fn audio_frame_to_py<'py>(py: Python<'py>, value: AudioFrame) -> PyResult<Bo
     crate::host::construct(CLASS.import(py, "livekit.rtc", "AudioFrame")?, (), Some(&kwargs))
 }
 
+/// `data` held as the host's own `bytes` when the frame's buffer is one, else copied once
+/// through the buffer protocol. Read-only views of mutable exporters still copy.
+pub fn video_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<VideoFrame> {
+    const OWNER: &str = "VideoFrameFromPy";
+    let width = attr_with(obj, OWNER, "width", |v| number_from_py(v, "VideoFrame.width"))?;
+    let height = attr_with(obj, OWNER, "height", |v| number_from_py(v, "VideoFrame.height"))?;
+    let buffer_type = attr_with(obj, OWNER, "type", |v| number_from_py(v, "VideoFrame.type"))?;
+    let data = attr_with(obj, OWNER, "data", |v| retained_bytes(v, "VideoFrame.data", None))?;
+    Ok(VideoFrame { width, height, buffer_type, data })
+}
+
+/// `rtc.VideoFrame(width, height, type, data)`.
+pub fn video_frame_to_py<'py>(py: Python<'py>, value: VideoFrame) -> PyResult<Bound<'py, PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
+    let data = PyBytes::new(py, &value.data);
+    let args = (value.width, value.height, value.buffer_type, data);
+    crate::host::construct(CLASS.import(py, "livekit.rtc", "VideoFrame")?, args, None)
+}
+
 #[cfg(test)]
 mod tests {
     use pyo3::prelude::*;
@@ -849,6 +869,28 @@ frame = SimpleNamespace(data=samples, sample_rate=16000, num_channels=1, samples
             assert_eq!(&*frame.data, &[1, 0, 2, 0], "host output must not alias native storage");
             get("frame").setattr("sample_rate", true).unwrap();
             assert!(super::audio_frame_from_py(&get("frame")).is_err(), "metadata rejects bool");
+        });
+    }
+
+    // Catches: a frame keeping a view of a host buffer the host goes on mutating, or a bool taken
+    // as frame metadata.
+    #[test]
+    fn a_video_frame_snapshots_a_sliced_mutable_buffer() {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            let program = c"
+from types import SimpleNamespace
+owner = bytearray(b'01234567')
+frame = SimpleNamespace(data=memoryview(owner)[2:6], width=1, height=1, type=0)
+";
+            py.run(program, Some(&globals), None).unwrap();
+            let get = |name: &str| globals.get_item(name).unwrap().unwrap();
+            let frame = super::video_frame_from_py(&get("frame")).unwrap();
+            get("owner").set_item(2, 99).unwrap();
+            assert_eq!(&*frame.data, b"2345");
+            get("frame").setattr("width", true).unwrap();
+            assert!(super::video_frame_from_py(&get("frame")).is_err(), "metadata rejects bool");
         });
     }
 }

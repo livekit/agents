@@ -208,31 +208,25 @@ started.wait()
 }
 
 #[test]
-fn bounded_video_frames_refuse_oversized_host_buffers_before_copying() {
+fn bounded_buffers_refuse_oversized_host_buffers_before_copying() {
     attach(|py| {
         let m = module(
             py,
             r#"
-class Frame:
-    width = height = 1
-    type = 0
-    def __init__(self, data): self.data = data
 immutable = b'x' * (1920 * 1080 * 4)
 mutable = memoryview(bytearray(immutable)).toreadonly()
 "#,
         );
         let clock = py.import("time").unwrap().getattr("thread_time").unwrap();
         for field in ["immutable", "mutable"] {
-            let frame = m.getattr("Frame").unwrap().call1((m.getattr(field).unwrap(),)).unwrap();
             let started = clock.call0().unwrap().extract::<f64>().unwrap();
-            let result = crate::utils::video::VideoFrame::from_host(&frame, Some(4));
+            let result = retained_bytes(&m.getattr(field).unwrap(), "VideoFrame.data", Some(4));
             let elapsed = clock.call0().unwrap().extract::<f64>().unwrap() - started;
             let Err(error) = result else {
                 panic!("oversized host buffer was accepted");
             };
-            let cause = error.cause(py).expect("field extraction preserves the size error");
-            assert!(cause.is_instance_of::<PyValueError>(py));
-            assert!(cause.to_string().contains("limit is 4"));
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("limit is 4"));
             assert!(elapsed <= 0.002, "byte admission used {elapsed:.6}s CPU");
         }
     });
@@ -323,29 +317,6 @@ broken = Broken()
         )
         .unwrap_err();
         assert!(err.value(py).is(&obj.getattr("failure").unwrap()));
-    });
-}
-
-#[test]
-fn video_frame_snapshots_a_sliced_mutable_buffer() {
-    attach(|py| {
-        let m = module(
-            py,
-            r#"
-from types import SimpleNamespace
-owner = bytearray(b'01234567')
-frame = SimpleNamespace(data=memoryview(owner)[2:6], width=1, height=1, type=0)
-"#,
-        );
-        let frame =
-            m.getattr("frame").unwrap().extract::<crate::utils::video::VideoFrame>().unwrap();
-        m.getattr("owner").unwrap().set_item(2, 99).unwrap();
-        assert_eq!(&*frame.data, b"2345");
-        m.getattr("frame").unwrap().setattr("width", true).unwrap();
-        assert!(
-            m.getattr("frame").unwrap().extract::<crate::utils::video::VideoFrame>().is_err(),
-            "frame integer metadata rejects bool"
-        );
     });
 }
 

@@ -1162,7 +1162,7 @@ pub mod avatar {
             return Ok(::lk_agents_abi::utils::video::MediaFrame::Audio(crate::conversions::audio_frame_from_py(obj)?));
         }
         if obj.is_instance(MEDIA_FRAME__VIDEO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("VideoFrame")?.unbind()))?.bind(obj.py()))? {
-            return Ok(::lk_agents_abi::utils::video::MediaFrame::Video(obj.extract::<::lk_agents_abi::utils::video::VideoFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::utils::video::MediaFrame::Video(crate::conversions::video_frame_from_py(obj)?));
         }
         Err(super::not_a(obj, "MediaFrame"))
     }
@@ -1170,7 +1170,7 @@ pub mod avatar {
     pub fn media_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::MediaFrame) -> PyResult<Bound<'py, PyAny>> {
         Ok(match value {
             ::lk_agents_abi::utils::video::MediaFrame::Audio(x) => crate::conversions::audio_frame_to_py(py, x)?,
-            ::lk_agents_abi::utils::video::MediaFrame::Video(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::MediaFrame::Video(x) => crate::conversions::video_frame_to_py(py, x)?,
         })
     }
 
@@ -1184,7 +1184,7 @@ pub mod avatar {
             return Ok(::lk_agents_abi::utils::video::AvatarFrame::Audio(crate::conversions::audio_frame_from_py(obj)?));
         }
         if obj.is_instance(AVATAR_FRAME__VIDEO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("VideoFrame")?.unbind()))?.bind(obj.py()))? {
-            return Ok(::lk_agents_abi::utils::video::AvatarFrame::Video(obj.extract::<::lk_agents_abi::utils::video::VideoFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::utils::video::AvatarFrame::Video(crate::conversions::video_frame_from_py(obj)?));
         }
         if obj.is_instance(AVATAR_FRAME__AUDIO_SEGMENT_END.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::utils::video::AvatarFrame::SegmentEnd);
@@ -1195,7 +1195,7 @@ pub mod avatar {
     pub fn avatar_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::AvatarFrame) -> PyResult<Bound<'py, PyAny>> {
         Ok(match value {
             ::lk_agents_abi::utils::video::AvatarFrame::Audio(x) => crate::conversions::audio_frame_to_py(py, x)?,
-            ::lk_agents_abi::utils::video::AvatarFrame::Video(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::AvatarFrame::Video(x) => crate::conversions::video_frame_to_py(py, x)?,
             ::lk_agents_abi::utils::video::AvatarFrame::SegmentEnd => crate::host::construct(py.import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.as_any(), (), None)?,
         })
     }

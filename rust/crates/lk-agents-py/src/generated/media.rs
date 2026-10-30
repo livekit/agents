@@ -417,7 +417,7 @@ impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::utils::video::VideoFrame>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::conversions::video_frame_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

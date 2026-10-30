@@ -32,13 +32,15 @@ fn receiver_frames_keep_the_sdk_audio_and_public_segment_end_types() {
             AudioReceiverFrame::Audio(AudioFrame::new(vec![0; 640], 16000, 1, 320))
         );
         assert!(audio_receiver_frame_from_py(py.None().bind(py)).is_err());
-        let video = lk_agents_abi::utils::video::VideoFrame {
-            width: 1,
-            height: 1,
-            buffer_type: 0,
-            data: vec![0u8; 4].into(),
-        }
-        .into_pyobject(py)
+        let video = _core::conversions::video_frame_to_py(
+            py,
+            lk_agents_abi::utils::video::VideoFrame {
+                width: 1,
+                height: 1,
+                buffer_type: 0,
+                data: vec![0u8; 4].into(),
+            },
+        )
         .unwrap();
         assert!(audio_receiver_frame_from_py(&video).is_err());
 
