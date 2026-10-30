@@ -143,7 +143,7 @@ pub trait ChatRequestView: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn parallel_tool_calls(&self) -> Option<bool>;
     #[host(getter)]
-    fn tool_choice(&self) -> Option<serde_json::Value>;
+    fn tool_choice(&self) -> Option<ToolChoice>;
     #[host(getter)]
     fn extra(&self) -> Option<Extra>;
     #[host(getter)]
@@ -191,8 +191,8 @@ impl ChatRequestView for ChatRequest {
         self.parallel_tool_calls
     }
 
-    fn tool_choice(&self) -> Option<serde_json::Value> {
-        self.tool_choice.as_ref().map(ToolChoice::to_host_json)
+    fn tool_choice(&self) -> Option<ToolChoice> {
+        self.tool_choice.clone()
     }
 
     fn extra(&self) -> Option<Extra> {

@@ -24,7 +24,10 @@ from pydantic import Field, JsonValue
 from typing_extensions import ParamSpec, Required, Self, TypedDict, TypeVar
 
 from .. import _core
-from .._generated.tool_context import CONFIRM_DUPLICATE_DESCRIPTION, RawFunctionDescription
+from .._generated.tool_context import (
+    CONFIRM_DUPLICATE_DESCRIPTION,
+    RawFunctionDescription as RawFunctionDescription,
+)
 from . import _provider_format
 
 if TYPE_CHECKING:

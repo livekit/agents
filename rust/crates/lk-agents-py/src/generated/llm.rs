@@ -769,7 +769,7 @@ impl ChatRequest {
     fn tool_choice<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tool_choice(&self.0));
-        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::value_to_py(py, &value)?)).transpose()?)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::tool_choice_to_py(py, value)?)).transpose()?)
     }
 
     #[getter]
