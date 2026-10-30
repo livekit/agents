@@ -1,7 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/voice/amd.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -11,11 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypeAlias
 
 from typing_extensions import TypedDict
-
-# The declared records.
 
 
 @unique
@@ -68,12 +66,9 @@ class AmdConstants(TypedDict):
     max_extension_secs: float
 
 
-AMDCategory.__module__ = "livekit.agents.voice.amd"
-
-
-# --- the user's tuning, as the host takes it --------------------------------------------------
-
 class DetectionOptions(TypedDict, total=False):
+    """Per-`AMD` overrides of the classifier's timings and prompt (`voice/amd/detector.py`)."""
+
     human_speech_threshold: float
     human_silence_threshold: float
     machine_silence_threshold: float
@@ -83,11 +78,23 @@ class DetectionOptions(TypedDict, total=False):
     prompt: str
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+TranscriptSource: TypeAlias = Literal["stt", "amd_stt"]
+"""With AMD's own STT, session transcripts are dropped, or the greeting is seen twice."""
+
+
+class AMDConfig(TypedDict):
+    """What `AMD` attaches to the session: the user's overrides and the settings the host resolved."""
+
+    detection: DetectionOptions
+    """The user's overrides; every one left out is the classifier's own."""
+    max_endpointing_delay: NotRequired[float]
+    """Already resolved by the host (`amd_resolve_max_endpointing_delay`)."""
+    source: NotRequired[TranscriptSource]
+    """``"stt"`` for the session's finals, ``"amd_stt"`` for a recogniser of AMD's own."""
+    wait_until_finished: bool
+    interrupt_on_machine: bool
+    ivr_detection: bool
+
+
+AMDCategory.__module__ = "livekit.agents.voice.amd"
 DetectionOptions.__module__ = "livekit.agents.voice.amd"

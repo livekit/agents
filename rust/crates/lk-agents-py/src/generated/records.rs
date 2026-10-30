@@ -1108,6 +1108,46 @@ pub mod amd {
             dict.set_item("max_extension_secs", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_extension_secs, py)?)?;
             Ok(dict.into_any())
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+
+    pub fn detection_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::amd::AmdDetectionOptions> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::voice::amd::AmdDetectionOptions {
+                human_speech_threshold: match obj.get_item("human_speech_threshold")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "DetectionOptions.human_speech_threshold"))?) }, _ => None },
+                human_silence_threshold: match obj.get_item("human_silence_threshold")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "DetectionOptions.human_silence_threshold"))?) }, _ => None },
+                machine_silence_threshold: match obj.get_item("machine_silence_threshold")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "DetectionOptions.machine_silence_threshold"))?) }, _ => None },
+                no_speech_threshold: match obj.get_item("no_speech_threshold")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "DetectionOptions.no_speech_threshold"))?) }, _ => None },
+                timeout: match obj.get_item("timeout")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "DetectionOptions.timeout"))?) }, _ => None },
+                max_endpointing_delay: match obj.get_item("max_endpointing_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "DetectionOptions.max_endpointing_delay"))?) }, _ => None },
+                prompt: match obj.get_item("prompt")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+
+    pub fn transcript_source_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::amd::TranscriptSource> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "stt" => Ok(::lk_agents_abi::voice::amd::TranscriptSource::SessionStt),
+                "amd_stt" => Ok(::lk_agents_abi::voice::amd::TranscriptSource::AmdStt),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("TranscriptSource: {other:?} is not one of 'stt', 'amd_stt'"))),
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+
+    pub fn amd_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::amd::AmdConfigKwargs> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::voice::amd::AmdConfigKwargs {
+                detection: { let v = &obj.get_item("detection")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.detection"))?; (crate::generated::records::amd::detection_options_from_py(v))? },
+                max_endpointing_delay: match obj.get_item("max_endpointing_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "AMDConfig.max_endpointing_delay"))?) }, _ => None },
+                source: match obj.get_item("source")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::amd::transcript_source_from_py(v))?) }, _ => None },
+                wait_until_finished: { let v = &obj.get_item("wait_until_finished")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.wait_until_finished"))?; (v.extract::<bool>())? },
+                interrupt_on_machine: { let v = &obj.get_item("interrupt_on_machine")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.interrupt_on_machine"))?; (v.extract::<bool>())? },
+                ivr_detection: { let v = &obj.get_item("ivr_detection")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.ivr_detection"))?; (v.extract::<bool>())? },
+            })
+    }
 }
 
 pub mod avatar {

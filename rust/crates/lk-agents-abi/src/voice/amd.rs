@@ -3,8 +3,6 @@
 
 use std::time::Duration;
 
-use lk_agents_host_derive::Host;
-
 // `classifier.py:28`. The wire strings are public API (enum values, an OTel attribute, the job
 // tagger key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -201,30 +199,39 @@ pub trait AmdFunctions {
 
 // --- the user's tuning, as the host takes it ---------------------------------------------------
 
-// `voice/amd/detector.py`: per-`AMD` overrides. A `typing` `TypedDict` (not `typing_extensions`).
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    typed_dict_from = "typing",
+/// Per-`AMD` overrides of the classifier's timings and prompt (`voice/amd/detector.py`).
+#[crate::host(record(
     module = "amd",
     path = "livekit.agents.voice.amd",
-    name = "DetectionOptions"
-)]
+    name = "DetectionOptions",
+    typed_dict,
+    extract
+))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AmdDetectionOptions {
+    #[host(default = None)]
     pub human_speech_threshold: Option<f64>,
+    #[host(default = None)]
     pub human_silence_threshold: Option<f64>,
+    #[host(default = None)]
     pub machine_silence_threshold: Option<f64>,
+    #[host(default = None)]
     pub no_speech_threshold: Option<f64>,
+    #[host(default = None)]
     pub timeout: Option<f64>,
+    // Resolved against the session's endpointing by the host (`amd_resolve_max_endpointing_delay`)
+    // into `AmdConfigKwargs::max_endpointing_delay`.
+    #[host(default = None)]
     pub max_endpointing_delay: Option<f64>,
+    // `None` is `AMD_PROMPT`.
+    #[host(default = None)]
     pub prompt: Option<String>,
 }
 
 // --- the machine's config, as the host hands it over ------------------------------------------
 
 /// With AMD's own STT, session transcripts are dropped, or the greeting is seen twice.
-#[crate::host(wire_strs(msg = format!("unknown AMD transcript source {s:?}: expected stt or amd_stt")))]
+#[crate::host(record(module = "amd", extract))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TranscriptSource {
     /// AMD's default when it was not given an `stt=`.
@@ -233,28 +240,22 @@ pub enum TranscriptSource {
     AmdStt,
 }
 
-#[cfg(feature = "python")]
-crate::python::from_host_str!(TranscriptSource);
-
-/// `AMD._run`'s config dict (`voice/amd/__init__.py`). Every key defaults to the classifier's own,
-/// resolved and validated by `AmdConfig::resolve`.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[binding(extract, from_items, default)]
+/// What `AMD` attaches to the session: the user's overrides and the settings the host resolved.
+// Resolved and validated by the voice core's `AmdConfig::resolve`.
+#[crate::host(record(module = "amd", name = "AMDConfig", typed_dict, extract))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AmdConfigKwargs {
-    pub human_speech_threshold: Option<f64>,
-    pub human_silence_threshold: Option<f64>,
-    pub machine_silence_threshold: Option<f64>,
-    pub no_speech_threshold: Option<f64>,
-    pub detection_timeout: Option<f64>,
+    /// The user's overrides; every one left out is the classifier's own.
+    pub detection: AmdDetectionOptions,
     /// Already resolved by the host (`amd_resolve_max_endpointing_delay`).
+    #[host(default = None)]
     pub max_endpointing_delay: Option<f64>,
-    /// `"stt"` for the session's finals, `"amd_stt"` for a recogniser of AMD's own.
+    /// ``"stt"`` for the session's finals, ``"amd_stt"`` for a recogniser of AMD's own.
+    #[host(default = None)]
     pub source: Option<TranscriptSource>,
     pub wait_until_finished: bool,
     pub interrupt_on_machine: bool,
     pub ivr_detection: bool,
-    /// `DetectionOptions.prompt`; `None` is [`AMD_PROMPT`].
-    pub prompt: Option<String>,
 }
 
 /// Runtime-owned answering-machine detector attached to a live session.

@@ -27,7 +27,7 @@ from livekit.rtc import AudioFrame
 from .._core import SessionRecorder, VoiceAgent
 from ..types import NotGivenOr, TimedString
 from .agent_nodes import NodeFrame
-from .amd import AMDPredictionEvent, AmdConstants
+from .amd import AMDConfig, AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
@@ -574,7 +574,7 @@ class VoiceSession:
         """
     def attach_amd(
         self,
-        cfg: dict[str, object],
+        cfg: AMDConfig,
         llm: LLM[Any],
         tools: object | None,
         stt: STT[Any] | None,

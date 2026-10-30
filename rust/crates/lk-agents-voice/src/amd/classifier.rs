@@ -90,9 +90,10 @@ impl AmdConfig {
             Some(s) if s.is_finite() && s >= 0.0 => Ok(Duration::from_secs_f64(s)),
             Some(s) => Err(InvalidDuration { key, value: s }),
         };
+        let given = &kw.detection;
         macro_rules! secs {
             ($f:ident) => {
-                secs(stringify!($f), kw.$f, defaults.$f)?
+                secs(stringify!($f), given.$f, defaults.$f)?
             };
         }
         Ok(AmdConfig {
@@ -100,8 +101,12 @@ impl AmdConfig {
             human_silence_threshold: secs!(human_silence_threshold),
             machine_silence_threshold: secs!(machine_silence_threshold),
             no_speech_threshold: secs!(no_speech_threshold),
-            detection_timeout: secs!(detection_timeout),
-            max_endpointing_delay: secs!(max_endpointing_delay),
+            detection_timeout: secs("timeout", given.timeout, defaults.detection_timeout)?,
+            max_endpointing_delay: secs(
+                "max_endpointing_delay",
+                kw.max_endpointing_delay,
+                defaults.max_endpointing_delay,
+            )?,
             source: kw.source.unwrap_or(defaults.source),
             wait_until_finished: kw.wait_until_finished,
             interrupt_on_machine: kw.interrupt_on_machine,

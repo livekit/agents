@@ -14,7 +14,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _bindings, _core, inference
-from .._generated.amd import AMDCategory, AMDPredictionEvent, DetectionOptions
+from .._generated.amd import AMDCategory, AMDConfig, AMDPredictionEvent, DetectionOptions
 from ..inference._utils import default_api_key, default_api_secret
 from ..job import _server_credentials
 from ..llm import LLM as _LLM
@@ -64,17 +64,6 @@ EVALUATED_LLM_MODELS: set[str] = set(_CONSTANTS["evaluated_llm_models"])
 
 
 EVALUATED_STT_MODELS: set[str] = set(_CONSTANTS["evaluated_stt_models"])
-
-
-# `DetectionOptions`' keys as the core's config names them
-_CONFIG_KEYS = {
-    "human_speech_threshold": "human_speech_threshold",
-    "human_silence_threshold": "human_silence_threshold",
-    "machine_silence_threshold": "machine_silence_threshold",
-    "no_speech_threshold": "no_speech_threshold",
-    "timeout": "detection_timeout",
-    "prompt": "prompt",
-}
 
 
 class AMD(EventEmitter[Literal["amd_prediction"]]):
@@ -216,18 +205,16 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             logger.warning("session level ivr_detection will be disabled when AMD is used")
 
         provided = self._detection_options
-        config: dict[str, Any] = {
-            key: provided[name]  # type: ignore[literal-required]
-            for name, key in _CONFIG_KEYS.items()
-            if name in provided
+        config: AMDConfig = {
+            "detection": provided,
+            "max_endpointing_delay": _core.amd_resolve_max_endpointing_delay(
+                provided.get("max_endpointing_delay"), session.options["endpointing"]["max_delay"]
+            ),
+            "source": "amd_stt" if self._stt is not None else "stt",
+            "wait_until_finished": self._wait_until_finished,
+            "interrupt_on_machine": self._interrupt_on_machine,
+            "ivr_detection": self._ivr_detection,
         }
-        config["max_endpointing_delay"] = _core.amd_resolve_max_endpointing_delay(
-            provided.get("max_endpointing_delay"), session.options["endpointing"]["max_delay"]
-        )
-        config["source"] = "amd_stt" if self._stt is not None else "stt"
-        config["wait_until_finished"] = self._wait_until_finished
-        config["interrupt_on_machine"] = self._interrupt_on_machine
-        config["ivr_detection"] = self._ivr_detection
         session._running.attach_amd(
             config,
             _bindings.core_leg(llm),

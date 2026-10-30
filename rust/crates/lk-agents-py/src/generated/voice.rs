@@ -1561,8 +1561,9 @@ impl VoiceSession {
     /// optional STT. It listens once the callee answers in the session's room; the verdict comes
     /// back as `amd_result`. A second attach is refused.
     #[pyo3(signature = (cfg, llm, tools, stt, participant_identity))]
-    fn attach_amd(&self, py: Python<'_>, cfg: ::lk_agents_abi::voice::amd::AmdConfigKwargs, llm: Bound<'_, PyAny>, tools: ::std::option::Option<::lk_agents_abi::HostRef>, stt: Option<Bound<'_, PyAny>>, participant_identity: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn attach_amd(&self, py: Python<'_>, cfg: Bound<'_, PyAny>, llm: Bound<'_, PyAny>, tools: ::std::option::Option<::lk_agents_abi::HostRef>, stt: Option<Bound<'_, PyAny>>, participant_identity: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let cfg = crate::generated::records::amd::amd_config_from_py(&cfg)?;
         let llm = crate::generated::llm::LlmProxy::from_host(&llm)?;
         let stt = stt.map(|v| crate::generated::stt::SttProxy::from_host(&v)).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::attach_amd(&self.0, cfg, llm, tools, stt, participant_identity)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;

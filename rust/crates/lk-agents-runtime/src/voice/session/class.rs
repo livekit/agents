@@ -535,7 +535,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let setup = lk_agents_voice::amd::AmdSetup {
             config,
-            prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
+            prompt: cfg
+                .detection
+                .prompt
+                .unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
             llm: llm_leg(llm, self.conn.llm),
             tools_host: tools,
             stt: stt.map(|s| {
