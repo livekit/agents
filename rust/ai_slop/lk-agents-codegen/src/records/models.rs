@@ -561,6 +561,10 @@ fn model(
             // pydantic model's do; a frozen record's are for the type checker only.
             let imports = if r.dataclass.is_some() { &mut *runtime } else { &mut *typing };
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested, imports);
+            for h in r.dataclass.iter().flat_map(|d| &d.host_fields) {
+                s.push_str(&format!("    {}: {} = {}\n", h.name, h.annotation, h.default));
+                s.push_str(&docstring(&h.doc.iter().cloned().collect::<Vec<_>>(), "    "));
+            }
             if !r.constants.is_empty() {
                 runtime.add("typing", "Literal");
                 s = s.replace("    pass\n", "");

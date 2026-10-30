@@ -100,6 +100,17 @@ pub struct Pydantic {
 #[derive(Debug, Clone, Default)]
 pub struct Dataclass {
     pub post_init: Option<String>,
+    /// `host_fields(name(ty = "bool", default = "False", doc = ".."), ..)`: fields only the host
+    /// holds, trailing the declared ones; never read nor emitted.
+    pub host_fields: Vec<HostField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostField {
+    pub name: String,
+    pub annotation: String,
+    pub default: String,
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone)]

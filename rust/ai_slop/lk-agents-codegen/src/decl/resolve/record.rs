@@ -70,8 +70,34 @@ impl Resolver<'_> {
             {
                 return Err(format!("{at}: a mutable dataclass record is a plain model struct"));
             }
-            Some(_) => Some(Dataclass { post_init: voc::text(at, &record.nested, "post_init")? }),
+            Some(_) => Some(Dataclass {
+                post_init: voc::text(at, &record.nested, "post_init")?,
+                host_fields: match voc::find(&record.nested, "host_fields") {
+                    None => Vec::new(),
+                    Some(h) => h
+                        .nested
+                        .iter()
+                        .map(|e| {
+                            voc::only(at, &e.nested, &["ty", "default", "doc"])?;
+                            let need = |key: &str| {
+                                voc::text(at, &e.nested, key)?.ok_or_else(|| {
+                                    format!("{at}: host field `{}` needs `{key}`", e.key)
+                                })
+                            };
+                            Ok(HostField {
+                                name: e.key.clone(),
+                                annotation: need("ty")?,
+                                default: need("default")?,
+                                doc: voc::text(at, &e.nested, "doc")?,
+                            })
+                        })
+                        .collect::<Result<_, String>>()?,
+                },
+            }),
         };
+        if dataclass.is_none() && voc::find(&record.nested, "host_fields").is_some() {
+            return Err(format!("{at}: `host_fields` shape a mutable dataclass model"));
+        }
         if pydantic.is_none()
             && ["constants_after", "private"].iter().any(|w| voc::find(&record.nested, w).is_some())
         {
@@ -512,6 +538,7 @@ pub(super) fn record_target(
             "pydantic",
             "dataclass",
             "post_init",
+            "host_fields",
             "base",
             "repr",
             "validator",
