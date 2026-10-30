@@ -20,9 +20,9 @@ agent = Agent(instructions="...", llm="google/gemma-4-31b-it")
 session = VoiceSession(stt="deepgram/nova-3:en", tts="cartesia/sonic-3:<voice>")
 ```
 
-The classes take `extra_kwargs=`, the provider's own options, and `fallback=`, models the
-gateway falls back to (a `FallbackModel` or a model string, `FallbackModelType`). Their
-typed forms:
+The classes take `extra_kwargs=`, the provider's own options; `inference.STT` and
+`inference.TTS` also take `fallback=`, models the gateway falls back to (a `FallbackModel` or a
+model string, `FallbackModelType`). Their typed forms:
 
 | Module | Model strings | Provider options |
 | --- | --- | --- |
