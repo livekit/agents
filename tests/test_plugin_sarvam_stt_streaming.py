@@ -1670,15 +1670,34 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
 
 
 @pytest.mark.asyncio
-async def test_manual_eos_precedes_final_received_during_send() -> None:
+@pytest.mark.parametrize("switch_to_vad", [False, True], ids=["manual", "manual_to_vad"])
+async def test_manual_eos_precedes_final_received_during_send(switch_to_vad: bool) -> None:
     stream = _make_stream(endpointing="manual")
     stream._input_ch = stt_streaming.stt.RecognizeStream._InputChan()
     stream._input_ch.send_nowait(stt_streaming.rtc.AudioFrame.create(16000, 1, 8000))
     stream._input_ch.send_nowait(stream._FlushSentinel())
     stream._input_ch.close()
+    switch_requested = False
+
+    async def send_bytes(payload: bytes) -> None:
+        nonlocal switch_requested
+        if not switch_to_vad or switch_requested:
+            return
+        switch_requested = True
+        stream.update_options(endpointing="vad")
+        await stream._send_pending_config_update(ws)
+        await stream._handle_message(
+            {
+                "event": "config.updated",
+                "applied": ["endpointing=vad (pending: applies next boundary)"],
+            }
+        )
+        assert stream._active_endpointing == "manual"
 
     async def send_str(payload: str) -> None:
         if json.loads(payload)["event"] == "speech_end":
+            assert stream._active_endpointing == ("vad" if switch_to_vad else "manual")
+            assert stream._utterance_speech_end_audio_pos == pytest.approx(0.5)
             # A socket send can yield to the receive task before it returns.
             await stream._handle_message(
                 {
@@ -1689,11 +1708,12 @@ async def test_manual_eos_precedes_final_received_during_send() -> None:
                     "end_s": 0.4,
                 }
             )
+            assert stream._pending_final_data is None
 
     ws = SimpleNamespace(
         closed=False,
         send_str=send_str,
-        send_bytes=lambda payload: asyncio.sleep(0),
+        send_bytes=send_bytes,
     )
     await stream._process_audio(ws)
 
