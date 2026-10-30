@@ -1,0 +1,26 @@
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_bcd3e70328118e::t_f1b04875ea5c51 973,975
+tests/test_transcription_delay_anchor.py
+  s_bcd3e70328118e::t_095b958f028035 312-316,318-324,326-327
+  s_bcd3e70328118e::t_b88f4044b64c5a 317,325
+  s_bcd3e70328118e::t_2d54fe8c82236e 311
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_1ca7208dd77f9d 1673-1714
+  s_bcd3e70328118e::t_033c9845817652 1672
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f0619e4b8357aecec7e00633e88d4bc877d2958",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

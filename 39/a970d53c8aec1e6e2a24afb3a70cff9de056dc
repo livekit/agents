@@ -1,0 +1,19 @@
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_e767e92f5ddb55 1673-1674,1680-1695,1699-1700,1711,1716
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39a970d53c8aec1e6e2a24afb3a70cff9de056dc",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

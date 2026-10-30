@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/inference/stt.py
+  s_bcd3e70328118e::t_1cd2502039d94d 1455-1456
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "386a353fb6320d4fb34d6b51ee1baa4ab6b2d421",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
