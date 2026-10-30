@@ -21,17 +21,18 @@ use std::{
     time::Duration,
 };
 
+use crate::fakes::room::{FakeRoom, Sent};
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::voice::avatar::AvatarRunner as _;
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
+use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
 use lk_agents_abi::{
     AudioFrame, Clock, Ts,
     errors::{ApiError, ProviderError},
 };
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
 use lk_agents_runtime::avatar::runner::{AvatarIo, AvatarRunner, Event};
-use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
     avatar_runner::{
@@ -559,7 +560,7 @@ impl FakeAvatarWorker {
         fps: u64,
         latency_ms: u64,
     ) -> Arc<FakeAvatarWorker> {
-        let room = lk_agents_test_support::rtc::FakeRtc::new(
+        let room = crate::fakes::room::FakeRtc::new(
             clock.clone(),
             lk_agents_runtime::rtc::events::RoomEventBus::port,
         )

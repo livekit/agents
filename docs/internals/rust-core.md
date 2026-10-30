@@ -54,7 +54,6 @@ tools and host RTC objects.
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
 | `lk-agents-codegen` | Python models, stubs, provider bases, forwarders and architecture checks |
 | `lk-agents-fuzz` | Deterministic simulation of the sans-I/O crates and behavioral contracts, running the runtime's real executors over faked SDK and provider ports |
-| `lk-agents-test-support` | Simulated RTC peers (the SDK-port fakes) on a supplied clock, shared by the DST and the crates' own tests |
 | `lk-agents-bench-steps` | Direct step measurements of the voice data plane; compiled in the launch gate, measured explicitly on qualified hardware |
 
 ```text
@@ -67,9 +66,8 @@ lk-agents-inference -> lk-agents-core
 lk-agents-net -> lk-agents-core
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
-fuzz, test-support, bench-steps -> sans-I/O crates + lk-agents-abi
-lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-storage (real storage under the A2A DST), lk-agents-test-support
-every crate's tests -> lk-agents-test-support
+fuzz, bench-steps -> sans-I/O crates + lk-agents-abi
+lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-storage (real storage under the A2A DST)
 ```
 
 The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
@@ -1043,9 +1041,8 @@ tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
 `net -> core`, `py -> abi`, async I/O crates `-> net`,
-`fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`,
-`fuzz -> storage` (the A2A DST runs real storage), and
-`-> test-support` from fuzz and every crate's tests described above;
+`fuzz` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`, and
+`fuzz -> storage` (the A2A DST runs real storage) described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
 support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
@@ -1848,7 +1845,7 @@ Python tests reach an offline room through the documented session, as
 [programmatic tests](../testing.md#programmatic-tests) do: `session.start(agent)`
 without a job, or `room=None` where a job would supply one. `_core` ships no
 test-only room export. Room-level behavior is tested in Rust over the SDK-port
-fakes in `lk-agents-test-support`.
+fakes in `lk-agents-fuzz` (`fakes::room`).
 
 ## Deterministic simulation testing
 

@@ -8,9 +8,9 @@
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::task::{Context, Poll, Waker};
 
+use lk_agents_abi::voice::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_abi::voice::session_options::UpdateKwargs;
-use lk_agents_test_support::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_voice::agent_session::{
     Command, CommitSuperseded, DrainRefused, DtmfCommand, IvrCommand,
 };

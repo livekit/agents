@@ -35,7 +35,7 @@ done
 # What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
 # with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-net lk-agents-voice lk-agents-worker lk-agents-runtime lk-agents-test-support)
+executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-net lk-agents-voice lk-agents-worker lk-agents-runtime)
 compiled=(
     "lk-agents-bench-steps: measurement CLI; run explicitly on qualified hardware"
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"

@@ -1,10 +1,11 @@
 //! The remote session's room transport (`RoomTransport`), which no DST seed carries: the console
 //! seeds run the protocol over a socket.
+use lk_agents_abi::voice::rtc::{ConnectionState, StreamInfo};
+use lk_agents_fuzz::fakes::room::FakeRtc;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::rtc::events::{RoomEventBus, byte_streams};
 use lk_agents_runtime::voice::remote_session::room::RoomTransport;
 use lk_agents_runtime::voice::remote_session::{SessionTransport, TOPIC_SESSION_MESSAGES, proto};
-use lk_agents_test_support::rtc::{ConnectionState, FakeRtc, StreamInfo};
 use prost::Message as _;
 use proto::agent_session_message::Message;
 use std::sync::Arc;

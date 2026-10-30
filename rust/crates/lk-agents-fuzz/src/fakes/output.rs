@@ -75,11 +75,11 @@ impl VideoInput for FakeVideoInput {
         &self,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        lk_agents_abi::voice::io::Result<Option<lk_agents_test_support::rtc::VideoFrameRef>>,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>,
     > {
         Box::pin(async move {
             let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
-            Ok(Some(lk_agents_test_support::rtc::VideoFrameRef {
+            Ok(Some(lk_agents_abi::voice::rtc::VideoFrameRef {
                 media: MediaRef::new(ordinal, &self.refs),
                 width: 1280,
                 height: 720,
@@ -92,7 +92,7 @@ impl VideoInput for FakeVideoInput {
 /// The person's camera track as a resource the case feeds by `VideoFrames`.
 pub fn room_camera(
     registry: &Registry,
-    camera: Arc<lk_agents_test_support::rtc::FakeTrackPublication>,
+    camera: Arc<crate::fakes::room::FakeTrackPublication>,
     refs: Arc<dyn RefRegistry>,
 ) {
     registry.register(Kind::Video, Detail::RoomCamera, Control::RoomVideo(camera, refs));
@@ -101,7 +101,7 @@ pub fn room_camera(
 /// So many frames onto the person's camera track, minted as the host camera's are. Accepted
 /// when a reader took them.
 pub(super) fn feed_room_video(
-    camera: &lk_agents_test_support::rtc::FakeTrackPublication,
+    camera: &crate::fakes::room::FakeTrackPublication,
     refs: &Arc<dyn RefRegistry>,
     video: u32,
     what: &Input,
@@ -113,7 +113,7 @@ pub(super) fn feed_room_video(
     drop(sender);
     let mut read = false;
     while let Ok(ordinal) = frames.try_recv() {
-        let frame = lk_agents_test_support::rtc::VideoFrameRef {
+        let frame = lk_agents_abi::voice::rtc::VideoFrameRef {
             media: MediaRef::new(ordinal, refs),
             width: 1280,
             height: 720,

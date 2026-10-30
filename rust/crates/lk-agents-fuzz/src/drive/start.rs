@@ -28,7 +28,7 @@ impl Run {
         registry.set_refuse_cancel(setup.tools_refuse_cancel);
         // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
         // and the survey runs seeds side by side in one process.
-        let room = lk_agents_test_support::rtc::FakeRtc::new(
+        let room = crate::fakes::room::FakeRtc::new(
             time.clock(),
             lk_agents_runtime::rtc::events::RoomEventBus::port,
         )
@@ -80,7 +80,7 @@ impl Run {
                 ..AudioInputConfig::default()
             }),
             audio_output: legs.map(|_| AudioOutputConfig {
-                publish: lk_agents_test_support::rtc::TrackPublishOptions {
+                publish: lk_agents_abi::voice::rtc::TrackPublishOptions {
                     sample_rate: SAMPLE_RATE,
                     ..Default::default()
                 },
@@ -444,14 +444,14 @@ impl Run {
         let mic = caller.publish_microphone(track.as_str());
         if let Some(pre_connect) = legs.pre_connect {
             mic.set_audio_features(vec![
-                lk_agents_test_support::rtc::AudioTrackFeature::PreconnectBuffer,
+                lk_agents_abi::voice::rtc::AudioTrackFeature::PreconnectBuffer,
             ]);
             let mut attributes = std::collections::BTreeMap::from([("trackId".into(), track)]);
             if pre_connect != PreConnect::Malformed {
                 attributes.insert("sampleRate".into(), SAMPLE_RATE.to_string());
                 attributes.insert("channels".into(), "1".into());
             }
-            let info = lk_agents_test_support::rtc::StreamInfo {
+            let info = lk_agents_abi::voice::rtc::StreamInfo {
                 name: None,
                 id: format!("pre_connect_{}", self.joins),
                 topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
@@ -474,7 +474,7 @@ impl Run {
         if self.setup.room_camera {
             let camera = caller.publish_track(
                 format!("TR_cam_{}", self.joins).as_str(),
-                lk_agents_test_support::rtc::TrackSource::Camera,
+                lk_agents_abi::voice::rtc::TrackSource::Camera,
             );
             fakes::room_camera(&self.registry, camera, self.refs.clone());
         }

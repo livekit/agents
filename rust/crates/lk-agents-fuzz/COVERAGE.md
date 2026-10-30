@@ -496,7 +496,7 @@ Ranked by what a person on the call or a developer would hit:
 
 The fuzzer drives the core as its host does. `Run::start` (`src/drive/start.rs`) assembles the
 session with the runtime's `VoiceSession::new`, the `VoiceSession(...)` `lk-agents-py` binds, over a
-`FakeRoom` from `lk-agents-test-support` and the fakes, with the setup as `SessionOptions` kwargs, and
+`FakeRoom` (`fakes::room`) and the fakes, with the setup as `SessionOptions` kwargs, and
 awaits `start()`. Every input that is a host call (`src/drive/apply.rs`) is that method with its
 argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_reply`,
 `interrupt`, `SpeechHandle.interrupt` and `.allow_interruptions`, `commit_user_turn`,

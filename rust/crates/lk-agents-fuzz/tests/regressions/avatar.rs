@@ -5,15 +5,16 @@ use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, AvatarPlaybackSegment, PlaybackEvent, PlaybackObserver,
     PlaybackSegment,
 };
+use lk_agents_abi::voice::rtc::{
+    ConnectionState, ParticipantIdentity, ParticipantKind, StreamInfo, TRACK_KIND_VIDEO,
+    TrackSource,
+};
 use lk_agents_abi::{AudioFrame, Clock as _, Closed, SpawnerExt, VirtualClock};
+use lk_agents_fuzz::fakes::room::{FakeRoom, FakeRtc};
 use lk_agents_runtime::avatar::output::DataStreamAudioOutput;
 use lk_agents_runtime::avatar::receiver::{DataStreamAudioReceiver, wait_avatar_join_room};
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::rtc::events::RoomEventBus;
-use lk_agents_test_support::rtc::{
-    ConnectionState, FakeRoom, FakeRtc, ParticipantIdentity, ParticipantKind, StreamInfo,
-    TRACK_KIND_VIDEO, TrackSource,
-};
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received,
     ReceiverEnd, playback_method, stream_name, stream_segment,

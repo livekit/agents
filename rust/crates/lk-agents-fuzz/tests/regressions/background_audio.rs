@@ -3,6 +3,8 @@
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::background_audio::BackgroundAudioPlayer as _;
+use lk_agents_abi::voice::rtc::LocalParticipant as _;
+use lk_agents_fuzz::fakes::room::{FakeRoom, FakeRtc};
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::FixedRoom;
 use lk_agents_runtime::rtc::events::RoomEventBus;
@@ -11,7 +13,6 @@ use lk_agents_runtime::voice::background_audio::{
     SoundSource,
 };
 use lk_agents_runtime::voice::session::Timebase;
-use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, LocalParticipant as _};
 use std::future::Future as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,7 +44,8 @@ async fn started(name: &str, ambient: Vec<Sound>) -> (BackgroundAudio, Arc<FakeR
     let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
     let room = rtc.room(name);
     std::mem::forget(rtc);
-    let fixed = FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
+    let fixed =
+        FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
     let player = player(&fixed.time);
     player.start(Arc::new(fixed), 0.5, ambient, true, None).await.unwrap();
     (player, room)

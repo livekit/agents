@@ -40,6 +40,7 @@ mod llm;
 mod nodes;
 mod output;
 pub mod realtime;
+pub mod room;
 mod storage;
 mod stt;
 pub(crate) mod tools;
@@ -142,7 +143,7 @@ pub enum Control {
     Video(mpsc::UnboundedSender<u64>),
     /// The person's camera track in the room: frames pushed onto it, minted the same way.
     RoomVideo(
-        Arc<lk_agents_test_support::rtc::FakeTrackPublication>,
+        Arc<crate::fakes::room::FakeTrackPublication>,
         Arc<dyn lk_agents_abi::errors::RefRegistry>,
     ),
     /// The realtime socket: the server-side events the case injects.

@@ -1,8 +1,9 @@
 //! `rtc.AudioSource` with playout modelled on the injected clock, and a synthesiser of speech frames.
 
-use super::super::traits::AudioSource;
-use super::super::{PlaybackInfo, TrackPublishOptions, frame_duration};
-use super::super::{Result, RtcError};
+use lk_agents_abi::voice::rtc::RtcError;
+use lk_agents_abi::voice::rtc::capabilities::AudioSource;
+use lk_agents_abi::voice::rtc::{PlaybackInfo, TrackPublishOptions, frame_duration};
+type Result<T> = std::result::Result<T, RtcError>;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_voice::room_io::playout::PlayoutLedger;
@@ -248,7 +249,7 @@ impl FrameSynth {
 
     pub fn frame(&self, silent: bool) -> AudioFrame {
         if silent {
-            return super::super::silence_frame(self.samples, self.sample_rate, 1);
+            return lk_agents_abi::voice::rtc::silence_frame(self.samples, self.sample_rate, 1);
         }
         let base = self.next.fetch_add(1, Ordering::SeqCst) as i16;
         let data: Vec<u8> = (0..self.samples)

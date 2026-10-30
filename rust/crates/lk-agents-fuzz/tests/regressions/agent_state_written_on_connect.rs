@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use lk_agents_abi::ATTRIBUTE_AGENT_STATE;
 use lk_agents_abi::voice::room_owner::RoomIo as _;
+use lk_agents_abi::voice::rtc::{ConnectionState, RtcRoom};
+use lk_agents_fuzz::fakes::room::FakeRtc;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
-use lk_agents_test_support::rtc::{ConnectionState, FakeRtc, RtcRoom};
 use lk_agents_voice::room_io::RoomIoConfig;
 
 // Catches: `lk.agent.state` written only while the room is connected, and the session started
@@ -46,7 +47,8 @@ async fn the_session_writes_the_agent_state_to_the_room_as_it_changes() {
     let (rtc, clock) =
         FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room("agent-state");
-    let fixed = FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
+    let fixed =
+        FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
     let args = VoiceSessionArgs {
         agent: "agent".into(),
         room_io_config: Some(Default::default()),

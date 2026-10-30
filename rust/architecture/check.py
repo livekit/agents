@@ -23,9 +23,8 @@ UNRESTRICTED = (
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.
 ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net", "lk-agents-storage"}
-TEST_SUPPORT = "lk-agents-test-support"
 # The documented crate graph (rust-core.md "Crates and dependencies"): each checked crate's allowed
-# workspace dependencies. Every crate's tests may also use test support. Build tools are unchecked.
+# workspace dependencies. Build tools are unchecked.
 GRAPH = {
     "lk-agents-abi": set(),
     "lk-agents-core": {"lk-agents-abi"},
@@ -40,8 +39,7 @@ GRAPH = {
     # The DST runs the runtime's real executors over faked ports (decision 92); providers and the
     # network are fakes at their ABI boundary, never inference's or net's code. The A2A DST runs
     # real storage over an in-memory database (decision 113 keeps storage DST-covered).
-    "lk-agents-fuzz": PURE | {TEST_SUPPORT} | {"lk-agents-runtime", "lk-agents-storage"},
-    TEST_SUPPORT: PURE,
+    "lk-agents-fuzz": PURE | {"lk-agents-runtime", "lk-agents-storage"},
     "lk-agents-bench-steps": PURE,
     "lk-agents-runtime": PURE | ASYNC,
     "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
@@ -74,7 +72,6 @@ WARNING_CLEAN = {
         "codegen",
         "bindgen",
         "host-derive",
-        "test-support",
         "bench-steps",
     )
 }
@@ -136,9 +133,6 @@ def dependency_violations(metadata: dict) -> set[str]:
         for edge in resolved[root]:
             dep = edge["pkg"]
             target = packages[dep]
-            dev = edge.get("dep_kinds") and all(k.get("kind") == "dev" for k in edge["dep_kinds"])
-            if target == TEST_SUPPORT and dev:
-                continue
             if target.startswith("lk-agents-") and target != name and target not in allowed:
                 # Proc macros/build tooling do not define a product dependency direction.
                 if target not in {"lk-agents-host-derive", "lk-agents-bindgen"}:

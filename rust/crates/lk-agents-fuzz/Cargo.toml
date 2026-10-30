@@ -20,7 +20,6 @@ lk-agents-core = { path = "../lk-agents-core" }
 # The recorder trait the recorder fake implements, and the video frame type the video input
 # fake's signature names. Both already come in through lk-agents-voice.
 lk-agents-media = { path = "../lk-agents-media" }
-lk-agents-test-support = { path = "../lk-agents-test-support" }
 lk-agents-runtime = { path = "../lk-agents-runtime", default-features = false, features = ["dst"] }
 # The A2A simulation runs storage on its in-memory connection behind its fault-injecting one.
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }

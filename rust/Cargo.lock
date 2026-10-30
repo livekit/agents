@@ -1446,7 +1446,6 @@ dependencies = [
  "lk-agents-media",
  "lk-agents-runtime",
  "lk-agents-storage",
- "lk-agents-test-support",
  "lk-agents-voice",
  "prost",
  "serde_json",
@@ -1610,16 +1609,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "url",
-]
-
-[[package]]
-name = "lk-agents-test-support"
-version = "0.1.0"
-dependencies = [
- "lk-agents-abi",
- "lk-agents-media",
- "lk-agents-voice",
- "tokio",
 ]
 
 [[package]]

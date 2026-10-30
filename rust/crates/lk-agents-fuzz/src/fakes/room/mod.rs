@@ -1,17 +1,16 @@
-//! In-memory RTC for deterministic tests: records operations and models playout on an injected clock.
+//! The room the DST runs the runtime's room executors in: the ABI room capabilities in memory,
+//! recording what was done and playing out on the run's clock, as the LiveKit SDK behaves.
 use lk_agents_abi::voice::rtc::{RoomEventBus, RoomEventSink};
 
-use super::traits::{
-    AudioSource, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
-    TrackPublication,
-};
-use super::{ByteStreamIngress, Receiver, RoomEvent, RpcCallback, TextStreamIngress};
-use super::{
-    ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind, StreamInfo,
-    StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
-};
-use super::{Result, RtcError};
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::rtc::capabilities::{
+    AudioSource, LocalParticipant, RemoteParticipant, RtcRoom, TextStreamWriter, TrackPublication,
+};
+use lk_agents_abi::voice::rtc::{
+    ByteStreamIngress, ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind,
+    Receiver, RoomEvent, RpcCallback, RtcError, StreamInfo, StreamTextOptions, TextStreamIngress,
+    TrackPublishOptions, TrackSid, TrackSource, Transcription,
+};
 use lk_agents_abi::{AudioFrame, BoundedLossy, Closed, StreamSource, Ts};
 use lk_agents_abi::{Clock, VirtualClock};
 use std::collections::{BTreeMap, VecDeque};
@@ -19,6 +18,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+type Result<T> = std::result::Result<T, RtcError>;
 
 mod audio_source;
 mod track;
@@ -32,21 +33,13 @@ pub struct FakeRtc {
     bus: fn() -> RoomEventBus,
     /// `Some` only from [`with_virtual_clock`](FakeRtc::with_virtual_clock); `advance` needs it.
     virtual_clock: Option<Arc<VirtualClock>>,
-    state: Mutex<HostState>,
-}
-
-#[derive(Default)]
-struct HostState {
-    rooms: Vec<Arc<FakeRoom>>,
-    connects: Vec<ConnectCall>,
-    next_connect_error: Option<RtcError>,
+    rooms: Mutex<Vec<Arc<FakeRoom>>>,
 }
 
 impl FakeRtc {
     /// Share the session's clock, so playout and the core's timers run on one timeline.
     pub fn new(clock: Arc<dyn Clock>, bus: fn() -> RoomEventBus) -> Arc<Self> {
-        let state = Mutex::new(HostState::default());
-        Arc::new(FakeRtc { clock, bus, virtual_clock: None, state })
+        Arc::new(FakeRtc { clock, bus, virtual_clock: None, rooms: Mutex::default() })
     }
 
     pub fn with_virtual_clock(bus: fn() -> RoomEventBus) -> (Arc<Self>, Arc<VirtualClock>) {
@@ -55,45 +48,24 @@ impl FakeRtc {
             clock: clock.clone(),
             bus,
             virtual_clock: Some(clock.clone()),
-            state: Mutex::new(HostState::default()),
+            rooms: Mutex::default(),
         });
         (rtc, clock)
     }
 
-    /// A room with no RTC at all, for console/daemon sessions where the CLI owns the audio. The
-    /// clock must be the wall clock the session's timers run on.
-    pub fn offline(
-        name: &str,
-        clock: Arc<dyn Clock>,
-        bus: fn() -> RoomEventBus,
-    ) -> (Arc<Self>, Arc<FakeRoom>) {
-        let rtc = Self::new(clock, bus);
-        let room = rtc.room(name);
-        (rtc, room)
-    }
-
     /// Get or create a connected room; idempotent by name.
     pub fn room(&self, name: &str) -> Arc<FakeRoom> {
-        let mut state = self.state.lock().unwrap();
-        if let Some(existing) = state.rooms.iter().find(|r| r.name == name) {
+        let mut rooms = self.rooms.lock().unwrap();
+        if let Some(existing) = rooms.iter().find(|r| r.name == name) {
             return existing.clone();
         }
         let room = FakeRoom::new(name, self.clock.clone(), (self.bus)());
-        state.rooms.push(room.clone());
+        rooms.push(room.clone());
         room
     }
 
     pub fn rooms(&self) -> Vec<Arc<FakeRoom>> {
-        self.state.lock().unwrap().rooms.clone()
-    }
-
-    pub fn connect_calls(&self) -> Vec<ConnectCall> {
-        self.state.lock().unwrap().connects.clone()
-    }
-
-    /// Fail the next `connect` only.
-    pub fn fail_next_connect(&self, err: RtcError) {
-        self.state.lock().unwrap().next_connect_error = Some(err);
+        self.rooms.lock().unwrap().clone()
     }
 
     /// Panics unless built by [`with_virtual_clock`](FakeRtc::with_virtual_clock); a shared clock
@@ -114,37 +86,6 @@ impl FakeRtc {
             room.settle();
         }
     }
-}
-
-impl RtcHost for FakeRtc {
-    fn connect<'a>(
-        &'a self,
-        url: &'a str,
-        token: &'a str,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<Arc<dyn RtcRoom>>> {
-        Box::pin(async move {
-            let mut state = self.state.lock().unwrap();
-            if let Some(err) = state.next_connect_error.take() {
-                return Err(err);
-            }
-            let name = format!("fake-room-{}", state.rooms.len() + 1);
-            let room = FakeRoom::new(&name, self.clock.clone(), (self.bus)());
-            state.rooms.push(room.clone());
-            state.connects.push(ConnectCall {
-                url: url.to_owned(),
-                token: token.to_owned(),
-                room: name,
-            });
-            Ok(room as Arc<dyn RtcRoom>)
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectCall {
-    pub url: String,
-    pub token: String,
-    pub room: String,
 }
 
 /// Connected from the moment it exists, as `ctx.connect()` leaves it.
@@ -779,8 +720,9 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn stream_bytes<'a>(
         &'a self,
-        opts: super::StreamBytesOptions,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<Box<dyn super::ByteStreamWriter>>> {
+        opts: lk_agents_abi::voice::rtc::StreamBytesOptions,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Box<dyn lk_agents_abi::voice::rtc::ByteStreamWriter>>>
+    {
         Box::pin(async move {
             self.check()?;
             let (recorded, index, id) = {
@@ -804,7 +746,7 @@ impl LocalParticipant for FakeLocalParticipant {
                 closing: self.byte_closes.subscribe(),
                 index,
                 sent: self.sent.clone(),
-            }) as Box<dyn super::ByteStreamWriter>)
+            }) as Box<dyn lk_agents_abi::voice::rtc::ByteStreamWriter>)
         })
     }
 
@@ -846,7 +788,7 @@ struct FakeByteStreamWriter {
     sent: Arc<SentLog>,
 }
 
-impl super::ByteStreamWriter for FakeByteStreamWriter {
+impl lk_agents_abi::voice::rtc::ByteStreamWriter for FakeByteStreamWriter {
     fn id(&self) -> &str {
         &self.id
     }
@@ -873,7 +815,7 @@ impl super::ByteStreamWriter for FakeByteStreamWriter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedByteStream {
     pub id: String,
-    pub opts: super::StreamBytesOptions,
+    pub opts: lk_agents_abi::voice::rtc::StreamBytesOptions,
     pub chunks: Vec<Vec<u8>>,
     pub closed: bool,
 }
@@ -1054,11 +996,6 @@ impl RemoteParticipant for FakeRemoteParticipant {
     }
 }
 
-#[doc(hidden)]
-pub fn tokio_test_block<F: std::future::Future>(f: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime").block_on(f)
-}
-
 /// Supplied finite data; no independently running producer or queued task.
 struct FiniteSource<T>(VecDeque<T>);
 
@@ -1107,3 +1044,6 @@ impl<T: Send + 'static> StreamSource<T> for LossySource<T> {
         Box::pin(async move { Closed::Clean })
     }
 }
+
+#[cfg(test)]
+mod tests;

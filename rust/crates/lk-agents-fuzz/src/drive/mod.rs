@@ -31,8 +31,10 @@ use std::{
     time::Duration,
 };
 
+use crate::fakes::room::FakeRoom;
 use lk_agents_abi::voice::background_audio::BackgroundAudioPlayer as _;
 use lk_agents_abi::voice::nodes::NodeFactory;
+use lk_agents_abi::voice::rtc::ParticipantKind;
 use lk_agents_abi::voice::session::UpdateAgentArgs;
 use lk_agents_abi::voice::session_effects::SessionEvents;
 use lk_agents_abi::{
@@ -51,7 +53,6 @@ use lk_agents_abi::{
 use lk_agents_abi::{Launch, OwnedTask};
 use lk_agents_runtime::voice::background_audio::{BackgroundAudio, BackgroundAudioPlayer};
 use lk_agents_runtime::voice::session::{Probe, Pusher, SessionOptions, VoiceSession};
-use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind};
 use lk_agents_voice::remote_session::{
     proto,
     proto::agent_session_message::{Message, console_io},
@@ -650,7 +651,7 @@ enum Mic {
     /// it, since when it is subscribed: past that instant the room io had its turn to read it
     /// again, so words spoken into it are owed to the session even when nothing reads them.
     Room {
-        track: Arc<lk_agents_test_support::rtc::FakeTrackPublication>,
+        track: Arc<crate::fakes::room::FakeTrackPublication>,
         burst: (u64, u32),
         read: Option<u64>,
     },

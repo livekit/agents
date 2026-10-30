@@ -1,9 +1,12 @@
 //! Track publications, local and remote, and the frame conversion a real `rtc.AudioStream` does.
 
-use super::super::RoomEvent;
-use super::super::traits::TrackPublication;
-use super::super::{AudioStreamOptions, AudioTrackFeature, TrackSid, TrackSource, VideoFrameRef};
-use super::super::{Result, RtcError};
+use lk_agents_abi::voice::rtc::RoomEvent;
+use lk_agents_abi::voice::rtc::RtcError;
+use lk_agents_abi::voice::rtc::capabilities::TrackPublication;
+use lk_agents_abi::voice::rtc::{
+    AudioStreamOptions, AudioTrackFeature, TrackSid, TrackSource, VideoFrameRef,
+};
+type Result<T> = std::result::Result<T, RtcError>;
 use super::FakeRemoteParticipant;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::rtc::AudioInputStream;
@@ -154,9 +157,11 @@ impl TrackPublication for FakeTrackPublication {
 
     fn kind(&self) -> i32 {
         match self.source {
-            TrackSource::Camera | TrackSource::Screenshare => super::super::TRACK_KIND_VIDEO,
+            TrackSource::Camera | TrackSource::Screenshare => {
+                lk_agents_abi::voice::rtc::TRACK_KIND_VIDEO
+            }
             TrackSource::Microphone | TrackSource::ScreenshareAudio => {
-                super::super::TRACK_KIND_AUDIO
+                lk_agents_abi::voice::rtc::TRACK_KIND_AUDIO
             }
             TrackSource::Unknown => 0,
         }
@@ -231,7 +236,7 @@ impl FakeTrackPublication {
     }
 
     pub fn video_stream(&self) -> BoundedLossy<VideoFrameRef> {
-        let (tx, rx) = BoundedLossy::channel(super::super::VIDEO_QUEUE_FRAMES);
+        let (tx, rx) = BoundedLossy::channel(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES);
         self.state.lock().unwrap().video_streams.push(tx);
         rx
     }

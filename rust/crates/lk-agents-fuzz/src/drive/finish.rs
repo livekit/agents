@@ -265,7 +265,7 @@ impl Run {
     /// The agent's voice still queued in the room's speaker or the console's: either plays on the
     /// clock and owes the driver its playout, so a round that leaves audio there is not quiet.
     fn room_audio_queued(&self) -> Duration {
-        use lk_agents_test_support::rtc::AudioSource as _;
+        use lk_agents_abi::voice::rtc::AudioSource as _;
         let sources = self.room.local_participant().sources();
         let room = sources
             .iter()

@@ -45,7 +45,7 @@ pub const VOICE: Boundary = Boundary {
          measured timings, its happenings as the port's events, a fallback setup's swap as one; no \
          session or fallback logic); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
-        "lk_agents_test_support::rtc::FakeRoom",
+        "fakes::room (the LiveKit SDK room in memory, on the run's clock)",
     ],
     transitional: &[
         "voice policy tasks the core spawns (generation, playout, tools, hooks): scheduled as the \

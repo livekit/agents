@@ -1,7 +1,10 @@
 //! The runtime's room performers over FakeRoom, in what the DST's room legs do not reach: SDK
 //! failures and stalls, cancelled and racing waiters, reattachment races, overload bounds and the
 //! pre-connect buffer's edges.
-use lk_agents_abi::voice::io::{AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TextOutput};
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::io::{
+    AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TextOutput,
+};
 use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextInput, TextOutputConfig,
 };
@@ -13,11 +16,11 @@ use lk_agents_abi::voice::rtc::{
     TextStreamIngress, TextStreamWriter, TrackPublication, TrackPublishOptions, TrackSid,
     TrackSource, Transcription, VideoFrameRef, silence_frame,
 };
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, BoundedLossy,
     Closed, HOST_TEARDOWN_TIMEOUT, LossyTx, Pushed, StreamSource, TOPIC_CHAT, Ts, VirtualClock,
 };
+use lk_agents_fuzz::fakes::room::{FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication};
 use lk_agents_runtime::net::clock::RealClock;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
@@ -28,7 +31,6 @@ use lk_agents_runtime::room_io::output::transcription::{
 };
 use lk_agents_runtime::room_io::pre_connect_audio::PreConnectAudioHandler;
 use lk_agents_runtime::rtc::events::byte_streams;
-use lk_agents_test_support::rtc::{FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication};
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use std::collections::BTreeMap;
 use std::future::{Future, poll_fn};
@@ -59,7 +61,8 @@ async fn yields(n: usize) {
 }
 
 fn fake_room(name: &str) -> (Arc<FakeRoom>, Arc<VirtualClock>) {
-    let (rtc, clock) = FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
+    let (rtc, clock) =
+        FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
     let room = rtc.room(name);
     std::mem::forget(rtc);
     (room, clock)
@@ -305,7 +308,8 @@ async fn selecting_the_same_participant_retires_buffered_input_from_the_old_atta
     let (room, clock) = fake_room("reselected-input");
     let person = room.add_participant("person", ParticipantKind::Standard);
     let microphone = person.publish_microphone("TR_mic");
-    let config = RoomIoConfig { audio_output: Some(AudioOutputConfig::default()), ..microphone_only() };
+    let config =
+        RoomIoConfig { audio_output: Some(AudioOutputConfig::default()), ..microphone_only() };
     let io = room_io(room, clock, config);
     io.clone().start();
     io.wait_for_ready().await.unwrap();
@@ -546,8 +550,11 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
         let input = input(&room, clock, Some(handler.clone()));
         let user = room.add_participant("user", ParticipantKind::Standard);
         input.set_participant(Some("user".into())).unwrap();
-        let (rate, channels, pcm) =
-            if fail { ("24000", "1", [100, 0].repeat(480)) } else { ("48000", "2", [100, 0, 200, 0].repeat(960)) };
+        let (rate, channels, pcm) = if fail {
+            ("24000", "1", [100, 0].repeat(480))
+        } else {
+            ("48000", "2", [100, 0, 200, 0].repeat(960))
+        };
         let info = pcm_info("TR_buffer", rate, channels);
         room.send_byte_stream("user", info, [pcm]).unwrap();
         let (processor, _live) = Processor::new(fail);
@@ -725,7 +732,10 @@ async fn paused_room_output_backpressures_capture() {
         output.capture(&silence_frame(24000, 24000, 1)),
     )
     .await;
-    assert!(result.is_err(), "a paused sink must bound accepted audio instead of buffering a second");
+    assert!(
+        result.is_err(),
+        "a paused sink must bound accepted audio instead of buffering a second"
+    );
     output.aclose().await;
 }
 

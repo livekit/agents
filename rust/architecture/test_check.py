@@ -97,30 +97,6 @@ class DependencyContracts(unittest.TestCase):
         actual = dependency_violations(metadata({"lk-agents-core": ["lk-agents-runtime"]}))
         self.assertIn("direction:lk-agents-core:lk-agents-runtime", actual)
 
-    def test_test_support_is_confined_to_test_dependencies(self):
-        for consumer in ("lk-agents-voice", "lk-agents-runtime", "lk-agents-py"):
-            with self.subTest(consumer=consumer):
-                graph = metadata(
-                    {
-                        consumer: ["lk-agents-test-support"],
-                        "lk-agents-test-support": ["lk-agents-abi"],
-                    }
-                )
-                violation = f"direction:{consumer}:lk-agents-test-support"
-                self.assertIn(violation, dependency_violations(graph))
-                node = next(node for node in graph["resolve"]["nodes"] if node["id"] == consumer)
-                node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
-                self.assertNotIn(violation, dependency_violations(graph))
-        graph = metadata(
-            {
-                "lk-agents-fuzz": ["lk-agents-test-support"],
-                "lk-agents-test-support": ["lk-agents-abi"],
-            }
-        )
-        self.assertNotIn(
-            "direction:lk-agents-fuzz:lk-agents-test-support", dependency_violations(graph)
-        )
-
     def test_the_dst_may_run_the_runtime_executors(self):
         graph = metadata({"lk-agents-fuzz": ["lk-agents-runtime"], "lk-agents-abi": []})
         self.assertNotIn("direction:lk-agents-fuzz:lk-agents-runtime", dependency_violations(graph))
@@ -134,7 +110,6 @@ class DependencyContracts(unittest.TestCase):
     def test_direction_allows_only_the_documented_graph(self):
         for crate, target in (
             ("lk-agents-net", "lk-agents-media"),
-            ("lk-agents-test-support", "lk-agents-runtime"),
             ("lk-agents-bench-steps", "lk-agents-inference"),
             ("lk-agents-media", "lk-agents-core"),
         ):
