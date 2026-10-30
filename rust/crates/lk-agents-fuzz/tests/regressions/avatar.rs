@@ -485,6 +485,18 @@ async fn take(rx: &DataStreamAudioReceiver, n: usize) -> Vec<String> {
     out
 }
 
+// Catches: byte-stream chunks handed on as they arrived instead of frames of the receiver's frame
+// size, or a segment's short tail dropped before its end.
+#[tokio::test]
+async fn a_segment_comes_out_in_frame_size_frames_then_its_end() {
+    let f = receiver("rx1").await;
+    // 250 ms at 10 kHz mono: two 100 ms frames and a 50 ms tail
+    f.room
+        .send_byte_stream("agent-1", audio_info("S1"), [vec![0u8; 3000], vec![0u8; 2000]])
+        .unwrap();
+    assert_eq!(take(&f.rx, 4).await, ["frame 1000", "frame 1000", "frame 500", "end"]);
+}
+
 // Catches: a lost trailer wedging the avatar (it stops receiving audio): a new stream must end
 // the open one.
 #[tokio::test]

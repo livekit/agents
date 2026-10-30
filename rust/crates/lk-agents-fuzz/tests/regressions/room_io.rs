@@ -303,6 +303,38 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     );
 }
 
+// Catches: a second `start()` subscribing to the room's events again, so every event is handled
+// twice.
+#[tokio::test]
+async fn repeated_room_start_keeps_one_event_subscription() {
+    let (room, clock) = fake_room("one-start");
+    let io = room_io(room.clone(), clock, config());
+    io.clone().start();
+    io.clone().start();
+    assert_eq!(room.event_subscriber_count(), 1);
+    io.clone().aclose().await;
+}
+
+// Catches: the input staying on a departed participant's track when another person replaces
+// them, with no explicit selection (the DST's caller always rejoins under the same identity).
+#[tokio::test]
+async fn room_relinks_input_after_the_linked_participant_is_replaced() {
+    let (room, clock) = fake_room("relinked-input");
+    room.add_participant("first", ParticipantKind::Standard).publish_microphone("TR_first");
+    let io = room_io(room.clone(), clock, microphone_only());
+    io.clone().start();
+    io.wait_for_ready().await.unwrap();
+    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("TR_first".into()));
+    room.remove_participant(&"first".into(), DisconnectReason::ClientInitiated);
+    room.add_participant("second", ParticipantKind::Standard).publish_microphone("TR_second");
+    yields(8).await;
+    let linked = io.linked_participant();
+    let reading = io.audio_input_leg().unwrap().reading();
+    io.clone().aclose().await;
+    assert_eq!(linked, Some("second".into()), "the replacement participant must become linked");
+    assert_eq!(reading, Some("TR_second".into()), "the microphone must follow the new link");
+}
+
 #[tokio::test]
 async fn selecting_the_same_participant_retires_buffered_input_from_the_old_attachment() {
     let (room, clock) = fake_room("reselected-input");
@@ -690,6 +722,23 @@ async fn preconnect_duration_is_bounded_before_transfer() {
 fn audio_output(room: Arc<FakeRoom>, clock: Arc<VirtualClock>) -> Arc<ParticipantAudioOutput> {
     let spawner = Arc::new(TokioSpawner::current());
     ParticipantAudioOutput::new(room, clock, spawner, AudioOutputConfig::default())
+}
+
+// Catches: closing an output that holds a captured segment it never played (paused) leaving that
+// segment's playout waiting for ever.
+#[tokio::test]
+async fn close_finishes_a_captured_segment_as_interrupted() {
+    let (room, clock) = fake_room("close-segment");
+    let output = audio_output(room, clock);
+    output.start().await.unwrap();
+    output.pause();
+    output.capture_frame(&silence_frame(480, 24000, 1)).await.unwrap();
+    output.aclose().await;
+    let finished = within_a_second(output.tracker().wait_for_playout())
+        .await
+        .expect("close must settle the captured segment");
+    assert!(finished.interrupted);
+    assert_eq!(finished.playback_position, Duration::ZERO);
 }
 
 #[tokio::test]
