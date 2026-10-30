@@ -726,6 +726,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
+        self._closing_event = asyncio.Event()
         self._job_context_cb_registered: bool = False
 
         # count of active `claim_user_turn` scopes. while > 0, `wait_for_idle`
@@ -1011,6 +1012,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._session_host = None
 
             self._closing = False
+            self._closing_event.clear()
             self._root_span_context = otel_context.get_current()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
@@ -1270,6 +1272,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if self._closing_task:
             return
+        self._closing_event.set()
         self._closing_task = asyncio.create_task(
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
@@ -1296,6 +1299,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             | None
         ) = None,
     ) -> None:
+        self._closing_event.set()
         # drain and on_exit run under the root span; the caller's context is restored after,
         # since aclose() may run in the caller's own task
         root_token: Token[otel_context.Context] | None = None
@@ -1474,6 +1478,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
     async def aclose(self) -> None:
+        self._closing_event.set()
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
     def update_options(
@@ -2065,6 +2070,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
+        self._closing_event.set()
         self._closing_task = asyncio.create_task(
             self._aclose_impl(error=error, reason=CloseReason.ERROR)
         )
