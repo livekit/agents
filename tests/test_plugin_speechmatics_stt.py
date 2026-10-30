@@ -9,6 +9,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -338,12 +339,13 @@ def test_additional_vocab_accepts_both_classes() -> None:
 
     That is where the wrong one actually failed: the config carries an unrecognised object
     into `additional_vocab` untouched, so an old pydantic entry survived construction and
-    then killed the session at `StartRecognition`.
+    then killed the session at `StartRecognition`. The plugin duck-types entries on their
+    fields, so a stand-in with `speechmatics.voice`'s two fields represents that SDK, which
+    the plugin does not depend on.
     """
     from speechmatics.agent_stt import AdditionalVocabEntry as AgentEntry
-    from speechmatics.voice import AdditionalVocabEntry as VoiceEntry
 
-    for entry_type in (AgentEntry, VoiceEntry):
+    for entry_type in (AgentEntry, SimpleNamespace):
         entry = entry_type(content="Speechmatics", sounds_like=["speech matics"])
         sent = _stt(additional_vocab=[entry])._prepare_config().to_dict()
 
