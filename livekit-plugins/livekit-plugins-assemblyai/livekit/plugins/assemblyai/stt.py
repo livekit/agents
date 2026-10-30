@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -712,6 +713,8 @@ class SpeechStream(stt.SpeechStream):
                 closing_ws = True
                 logger.debug("AssemblyAI sending close message session=%s", self._session_id)
                 await ws.send_str(SpeechStream._CLOSE_MSG)
+            except (APIStatusError, APIError):
+                raise
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
@@ -768,10 +771,16 @@ class SpeechStream(stt.SpeechStream):
                         msg.data,
                         msg.extra,
                     )
+                    close_code = ws.close_code or -1
+                    is_client_error = (
+                        400 <= close_code < 500 or 4000 <= close_code < 5000
+                    ) and close_code not in (408, 429, 499)
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
+                        status_code=close_code,
+                        request_id=self._session_id,
                         body=f"{msg.data=} {msg.extra=}",
+                        retryable=False if is_client_error else None,
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -787,6 +796,8 @@ class SpeechStream(stt.SpeechStream):
                     self._process_stream_event(data)
                     if data.get("type") in ("SpeechStarted", "Turn"):
                         self._mark_provider_progress()
+                except (APIStatusError, APIError):
+                    raise
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -811,6 +822,8 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(config_task, *tasks)
+        except (APIStatusError, APIError):
+            raise
         finally:
             if ws is not None:
                 await ws.close()
@@ -909,15 +922,54 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers, autoping=False)
-        logger.debug(
-            "AssemblyAI WebSocket connected status=%s",
-            ws._response.status if ws._response is not None else None,
-        )
-        return ws
+        try:
+            ws = await self._session.ws_connect(url, headers=headers, autoping=False)
+            logger.debug(
+                "AssemblyAI WebSocket connected status=%s",
+                ws._response.status if ws._response is not None else None,
+            )
+            return ws
+        except aiohttp.ClientResponseError as e:
+            is_client_error = 400 <= e.status < 500 and e.status not in (408, 429, 499)
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+                retryable=False if is_client_error else None,
+            ) from None
+        except (APIStatusError, APIError):
+            raise
+        except (aiohttp.ClientError, ConnectionError) as e:
+            raise APIConnectionError("Failed to connect to AssemblyAI") from e
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
+
+        if message_type in ("Error", "error") or "error" in data:
+            error_msg = data.get("error") or data.get("message") or f"AssemblyAI error: {data}"
+            error_code = data.get("error_code") or data.get("code") or 400
+            status_code = (
+                int(error_code)
+                if isinstance(error_code, (int, str)) and str(error_code).isdigit()
+                else 400
+            )
+            is_client_error = (
+                400 <= status_code < 500 or 4000 <= status_code < 5000
+            ) and status_code not in (408, 429, 499)
+            logger.error(
+                "AssemblyAI STT error message received session=%s code=%s message=%s",
+                self._session_id,
+                status_code,
+                error_msg,
+            )
+            raise APIStatusError(
+                message=str(error_msg),
+                status_code=status_code,
+                request_id=self._session_id,
+                body=data,
+                retryable=False if is_client_error else None,
+            )
 
         if message_type == "Begin":
             self._session_id = data.get("id")

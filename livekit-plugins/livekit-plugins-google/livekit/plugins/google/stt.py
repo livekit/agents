@@ -42,6 +42,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -483,6 +484,8 @@ class STT(stt.STT):
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
             raise APIStatusError(f"{e.message} {e.details}", status_code=e.code or -1) from e
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -916,6 +919,8 @@ class SpeechStream(stt.SpeechStream):
                         if not audio_pushed:
                             audio_pushed = True
 
+            except (APIStatusError, APIError):
+                raise
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
             finally:
@@ -1069,6 +1074,8 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1
                     ) from e
+            except (APIStatusError, APIError):
+                raise
             except Exception as e:
                 raise APIConnectionError() from e
 
