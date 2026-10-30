@@ -21,6 +21,7 @@ Stages, per agent reply:
     first_audio_out   user stopped speaking -> agent audio out (``e2e_latency``)
     caller_heard      caller's audio played out -> first audible agent frame, at the caller
     llm_tps           LLM output tokens per second over the streaming window (``llm_node_tps``)
+    worker_idle       the Rust core's async workers' idle share since the call started (next only)
 
 With two agents, each stage also shows B - A at p50 and p90 with a 95% bootstrap interval. The
 gateway's time to first token is heavy-tailed: at ~40 replies a p90 gap of 0.2 s is still noise.
@@ -64,7 +65,17 @@ STAGES = {
     "first_audio_out": ("assistant", "e2e_latency"),
     "caller_heard": ("caller", "heard"),
     "llm_tps": ("assistant", "llm_node_tps"),
+    "worker_idle": ("assistant", "worker_idle"),
 }
+
+
+def busy_seconds() -> list[float]:
+    """The Rust core's async workers' busy seconds so far; empty on the reference stack."""
+    try:
+        from livekit.agents import _core
+    except ImportError:
+        return []
+    return _core.runtime_busy_seconds()
 
 
 # ------------------------------------------------------------------------------------- agent
@@ -73,10 +84,16 @@ STAGES = {
 async def entry(ctx: JobContext) -> None:
     session = VoiceSession(stt=STT, llm=LLM, tts=TTS)
     sends: set[asyncio.Task[Any]] = set()
+    started, busy_at_start = time.monotonic(), busy_seconds()
 
     def on_item(ev: Any) -> None:
         metrics = dict(getattr(ev.item, "metrics", None) or {})
         role = getattr(ev.item, "role", None)
+        busy = busy_seconds()
+        if role == "assistant" and busy:
+            # Workers that started after the call contribute their whole busy time.
+            spent = sum(busy) - sum(busy_at_start[: len(busy)])
+            metrics["worker_idle"] = 1 - spent / (len(busy) * (time.monotonic() - started))
         if role in ("user", "assistant") and metrics:
             payload = json.dumps({"role": role, "metrics": metrics})
             task = asyncio.ensure_future(ctx.room.local_participant.send_text(payload, topic=TOPIC))

@@ -42,6 +42,13 @@ pub fn handle() -> Result<tokio::runtime::Handle, ProcessError> {
     with_started(|started| started.runtime.handle().clone())
 }
 
+/// The runtime's handle if it started in this process; starts nothing.
+pub fn started_handle() -> Option<tokio::runtime::Handle> {
+    let state = state();
+    let owned = state.owner == Some(std::process::id());
+    state.started.as_ref().filter(|_| owned).map(|started| started.runtime.handle().clone())
+}
+
 /// The runtime the caller is on, else the process runtime: where a native worker's async side runs.
 pub fn caller_handle() -> Result<tokio::runtime::Handle, ProcessError> {
     tokio::runtime::Handle::try_current().or_else(|_| handle())
@@ -116,6 +123,20 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         spawner: host_spawner,
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
+    }
+}
+
+/// The process runtime's async workers.
+pub struct RuntimeWorkers;
+
+impl lk_agents_abi::metrics::RuntimeWorkers for RuntimeWorkers {
+    /// Starts nothing: a runtime not started in this process reports no workers.
+    fn runtime_busy_seconds() -> Vec<f64> {
+        let Some(handle) = started_handle() else { return Vec::new() };
+        let metrics = handle.metrics();
+        (0..metrics.num_workers())
+            .map(|worker| metrics.worker_total_busy_duration(worker).as_secs_f64())
+            .collect()
     }
 }
 

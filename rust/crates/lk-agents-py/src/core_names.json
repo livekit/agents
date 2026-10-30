@@ -261,6 +261,7 @@
     "room_join_token",
     "rt_server_turn_detection",
     "rtc_wire_names",
+    "runtime_busy_seconds",
     "send_dtmf_events",
     "serialize_image_frame",
     "serialize_image_url",

@@ -9,6 +9,9 @@ from .chat_items import MetricsReport
 from .metrics import AgentMetrics
 from .telemetry import OtelValue
 
+def runtime_busy_seconds() -> list[float]:
+    """Each async worker's total busy seconds so far; empty before the runtime started."""
+
 def metrics_log_fields(metrics: AgentMetrics) -> tuple[str, dict[str, object]] | None:
     """`log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
     (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).

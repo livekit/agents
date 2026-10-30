@@ -64,6 +64,7 @@ impl generated::Implementations for Selected {
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type TelemetryAdmission = lk_agents_runtime::cores::Admission;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
+    type RuntimeWorkers = lk_agents_runtime::process::RuntimeWorkers;
     type Tagger = lk_agents_runtime::net::session_report::records::Tagger;
     type UploadGate = lk_agents_runtime::net::session_report::records::UploadGate;
     type ReportRecords = lk_agents_runtime::net::session_report::records::ReportRecords;

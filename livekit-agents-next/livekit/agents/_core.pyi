@@ -160,6 +160,7 @@ from ._generated._core_metrics import (
     metrics_log_fields as metrics_log_fields,
     otel_turn_records as otel_turn_records,
     otel_usage_records as otel_usage_records,
+    runtime_busy_seconds as runtime_busy_seconds,
 )
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,

@@ -11,6 +11,16 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
+type RuntimeWorkersImpl = <crate::Selected as super::Implementations>::RuntimeWorkers;
+
+/// Each async worker's total busy seconds so far; empty before the runtime started.
+#[pyfunction]
+pub fn runtime_busy_seconds() -> PyResult<::std::vec::Vec<f64>> {
+    let out = <RuntimeWorkersImpl as ::lk_agents_abi::metrics::RuntimeWorkers>::runtime_busy_seconds();
+    Ok(out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
 type MetricsRecordsImpl = <crate::Selected as super::Implementations>::MetricsRecords;
 
 /// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log

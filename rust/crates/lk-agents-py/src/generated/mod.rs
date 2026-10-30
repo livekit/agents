@@ -78,6 +78,7 @@ pub trait Implementations: 'static {
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
     type StreamBuffer: ::lk_agents_abi::media::codecs::StreamBuffer;
     type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
+    type RuntimeWorkers: ::lk_agents_abi::metrics::RuntimeWorkers;
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;
@@ -268,6 +269,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<media::AudioDecoder>()?;
     m.add_class::<media::StreamBuffer>()?;
     m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::otel_turn_records, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::otel_usage_records, m)?)?;
