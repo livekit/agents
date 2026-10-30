@@ -291,7 +291,7 @@ pub fn timed_string_to_py<'py>(py: Python<'py>, value: TimedString) -> PyResult<
     if let Some(v) = value.speaker_id {
         kwargs.set_item("speaker_id", v)?;
     }
-    CLASS.import(py, "livekit.agents.types", "TimedString")?.call((), Some(&kwargs))
+    crate::host::construct(CLASS.import(py, "livekit.agents.types", "TimedString")?, (), Some(&kwargs))
 }
 
 /// The `str` itself and its timings; `NOT_GIVEN`, `None`, anything unreadable and a missing
@@ -314,18 +314,17 @@ pub fn synthesized_audio_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Synthesized
     let py = obj.py();
     let frame = obj.getattr("frame")?;
     let types = py.import("livekit.agents.types")?;
-    let userdata = frame.getattr("userdata")?;
+    let userdata = frame.getattr("userdata")?.cast_into::<PyDict>()?;
     let get = |key: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-        let v = userdata.call_method1("get", (types.getattr(key)?,))?;
-        Ok((!v.is_none()).then_some(v))
+        Ok(userdata.get_item(types.getattr(key)?)?.filter(|v| !v.is_none()))
     };
     // a `perf_counter()` stamp, as wall-clock seconds
     let started_time = match get("USERDATA_TTS_STARTED_TIME")? {
         Some(v) => {
             let started: f64 = v.extract()?;
             let time = py.import("time")?;
-            let wall: f64 = time.call_method0("time")?.extract()?;
-            let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+            let wall: f64 = crate::host::read(&time, "time")?.extract()?;
+            let perf: f64 = crate::host::read(&time, "perf_counter")?.extract()?;
             Some(wall - (perf - started))
         }
         None => None,
@@ -375,8 +374,8 @@ pub fn synthesized_audio_to_py<'py>(
     }
     if let Some(wall) = value.started_time {
         let time = py.import("time")?;
-        let now: f64 = time.call_method0("time")?.extract()?;
-        let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+        let now: f64 = crate::host::read(&time, "time")?.extract()?;
+        let perf: f64 = crate::host::read(&time, "perf_counter")?.extract()?;
         userdata.set_item(types.getattr("USERDATA_TTS_STARTED_TIME")?, perf - (now - wall))?;
     }
     let kwargs = PyDict::new(py);
@@ -385,7 +384,7 @@ pub fn synthesized_audio_to_py<'py>(
     kwargs.set_item("is_final", value.is_final)?;
     kwargs.set_item("segment_id", value.segment_id)?;
     kwargs.set_item("delta_text", value.delta_text)?;
-    CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?.call((), Some(&kwargs))
+    crate::host::construct(CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?, (), Some(&kwargs))
 }
 
 /// `frames` is read only for an end of speech, the one event whose audio is recognized
