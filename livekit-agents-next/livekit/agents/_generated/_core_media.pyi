@@ -8,10 +8,11 @@ from __future__ import annotations
 from typing import Self
 
 from livekit.agents.tts import SynthesizedAudio
-from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import Chan
 from livekit.agents.utils.images import _FrameReader
 from livekit.rtc import AudioFrame
+
+from ..types import TimedString
 
 def _core_install_frame_reader(reader: _FrameReader) -> None:
     """Hands the runtime the host's frame reader; images of host frames need it."""

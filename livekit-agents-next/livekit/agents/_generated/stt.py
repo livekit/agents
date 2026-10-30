@@ -17,25 +17,24 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, Never
+from typing import Generic, Literal, Never
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import Self, TypeVar
 
 from livekit import rtc
 
 from .. import _bindings, _core
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
-
-if TYPE_CHECKING:
-    from pydantic import JsonValue
-
-    from livekit.agents.types import TimedString
-
-    from .language import LanguageCode
-
+from .language import LanguageCode
 
 # The declared records.
 

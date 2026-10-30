@@ -551,7 +551,10 @@ fn model(
         }
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
-            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested, typing);
+            // A mutable dataclass's annotations resolve at runtime (`typing.get_type_hints`), as a
+            // pydantic model's do; a frozen record's are for the type checker only.
+            let imports = if r.dataclass.is_some() { &mut *runtime } else { &mut *typing };
+            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested, imports);
             if !r.constants.is_empty() {
                 runtime.add("typing", "Literal");
                 s = s.replace("    pass\n", "");

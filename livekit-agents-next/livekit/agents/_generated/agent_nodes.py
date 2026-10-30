@@ -17,8 +17,9 @@ from livekit.agents.types import FlushSentinel
 from .llm import ChatChunk
 
 if TYPE_CHECKING:
-    from livekit.agents.types import TimedString
     from livekit.rtc import AudioFrame
+
+    from ..types import TimedString
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

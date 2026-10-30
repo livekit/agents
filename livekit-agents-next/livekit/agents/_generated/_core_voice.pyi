@@ -16,7 +16,7 @@ from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
-from livekit.agents.types import APIConnectOptions, TimedString
+from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
@@ -24,7 +24,7 @@ from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublicati
 from livekit.rtc import AudioFrame
 
 from .._core import PlaybackInfo, RoomEventBus, SessionRecorder, VoiceAgent
-from ..types import NotGivenOr
+from ..types import NotGivenOr, TimedString
 from .agent_nodes import NodeFrame
 from .amd import AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
