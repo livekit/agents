@@ -53,19 +53,6 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
-def _speech_event_from_core(ev: dict[str, Any]) -> SpeechEvent:
-    """An event the core emits as a dict; one the core minted is stamped as it is read."""
-    alternatives = [SpeechData(**alt) for alt in ev.pop("alternatives")]
-    usage = ev.pop("recognition_usage")
-    if ev.get("created_at") is None:
-        ev.pop("created_at", None)
-    return SpeechEvent(
-        **ev,
-        alternatives=alternatives,
-        recognition_usage=RecognitionUsage(**usage) if usage else None,
-    )
-
-
 @dataclass
 class AvailabilityChangedEvent:
     stt: STT
@@ -116,8 +103,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         self._max_retry_per_stt = max_retry_per_stt
         self._retry_interval = retry_interval
         # the chain's own merge, read before any chain is built
-        merged = _core.stt_fallback_capabilities([t.capabilities for t in stt])
-        super().__init__(capabilities=STTCapabilities(**merged))
+        super().__init__(
+            capabilities=_core.stt_fallback_capabilities([t.capabilities for t in stt])
+        )
 
     @property
     def _native(self) -> _core.FallbackStt:
@@ -180,10 +168,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         conn_options: APIConnectOptions,
     ) -> SpeechEvent:
         frames = buffer if isinstance(buffer, list) else [buffer]
-        event = await self._native.recognize(
+        return await self._native.recognize(
             frames, language if language else None, conn_options=conn_options
         )
-        return _speech_event_from_core(event)
 
     def stream(
         self,
@@ -229,7 +216,7 @@ class StreamAdapterWrapper(RecognizeStream):
             native,
             self.input,
             lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
-            lambda ev: self.send(_speech_event_from_core(ev)),
+            self.send,
         )
 
 

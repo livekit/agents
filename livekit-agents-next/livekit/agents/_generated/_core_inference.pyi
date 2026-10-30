@@ -106,13 +106,13 @@ def stt_capabilities(
     *,
     fallback: Sequence[str] | None = None,
     extra_kwargs: dict[str, object] | None = None,
-) -> dict[str, object]:
+) -> STTCapabilities:
     """`inference.STT`'s capabilities. Word alignment holds only when the model and every
     `fallback` model align: any turn may be served by a fallback, and a false claim disables
     the fast VAD interruption path.
     """
 
-def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> dict[str, object]:
+def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> STTCapabilities:
     """`stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
 
 def tts_fallback_capabilities(entries: Sequence[TTSCapabilities]) -> dict[str, object]:

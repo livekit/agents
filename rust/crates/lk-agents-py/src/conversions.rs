@@ -1,7 +1,7 @@
 //! The host conversions no declaration expresses: a type declared `handwritten(.., py)` in ABI
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
-use lk_agents_abi::{ApiConnectOptions, ImageSource, MediaRef};
+use lk_agents_abi::{AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef};
 use lk_agents_abi::python::MaybeNull;
 use lk_agents_abi::voice::session_options::{
     BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions,
@@ -223,5 +223,21 @@ pub fn telemetry_value_to_py<'py>(py: Python<'py>, value: TelemetryValue) -> PyR
             }
             d.into_any()
         }
+    })
+}
+
+/// A known word, else none: `False` (and anything that is not one of the words) reads as none.
+pub fn aligned_transcript_from_py(obj: &Bound<'_, PyAny>) -> PyResult<AlignedTranscript> {
+    Ok(obj.extract::<String>().ok().and_then(|s| s.parse().ok()).unwrap_or_default())
+}
+
+/// None is the host's `False`, never a string.
+pub fn aligned_transcript_to_py<'py>(
+    py: Python<'py>,
+    value: AlignedTranscript,
+) -> PyResult<Bound<'py, PyAny>> {
+    Ok(match value {
+        AlignedTranscript::None => pyo3::types::PyBool::new(py, false).to_owned().into_any(),
+        other => PyString::new(py, other.as_str()).into_any(),
     })
 }

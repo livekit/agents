@@ -15,6 +15,7 @@ from livekit.agents.types import APIConnectOptions
 from livekit.rtc import AudioFrame
 
 from .inference_stt import FallbackModel
+from .stt import STTCapabilities, SpeechEvent
 
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
@@ -34,7 +35,7 @@ class FallbackStt:
     def active_index(self) -> int:
         """Which entry most recently served, as a position in the host's list."""
     @property
-    def capabilities(self) -> dict[str, object]:
+    def capabilities(self) -> STTCapabilities:
         """The merged capabilities, not the primary's: a caller must not wait for interim results a
         secondary never sends.
         """
@@ -45,7 +46,7 @@ class FallbackStt:
         frames: Sequence[AudioFrame],
         language: str | None = None,
         conn_options: APIConnectOptions | None = None,
-    ) -> dict[str, object]:
+    ) -> SpeechEvent:
         """`_recognize_impl`: the batch path, over whichever entry answers."""
     async def stream(
         self,
@@ -59,7 +60,7 @@ class FallbackRecognizeStream:
     def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
-    async def recv(self) -> dict[str, object] | None: ...
+    async def recv(self) -> SpeechEvent | None: ...
     async def aclose(self) -> None: ...
 
 class InferenceStt:
@@ -137,7 +138,7 @@ class InferenceSttStream:
         extra: dict[str, object] | None = None,
     ) -> None:
         """A mid-stream `session.update`, for the providers that take one (AssemblyAI, Deepgram Flux)."""
-    async def recv(self) -> dict[str, object] | None: ...
+    async def recv(self) -> SpeechEvent | None: ...
     async def aclose(self) -> None: ...
 
 class SttStreamAdapter:
@@ -149,7 +150,7 @@ class SttStreamAdapter:
         frames: Sequence[AudioFrame],
         language: str | None = None,
         conn_options: APIConnectOptions | None = None,
-    ) -> dict[str, object]:
+    ) -> SpeechEvent:
         """`_recognize_impl`: the wrapped STT's batch path."""
     async def stream(
         self,
@@ -163,5 +164,5 @@ class SttAdapterStream:
     def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
-    async def recv(self) -> dict[str, object] | None: ...
+    async def recv(self) -> SpeechEvent | None: ...
     async def aclose(self) -> None: ...

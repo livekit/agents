@@ -1644,10 +1644,9 @@ class DefaultPipeline:
         session = self._session
         if session.stt is None:
             raise RuntimeError("stt_node called but no STT is available")
-        events = _core.stt_node(
+        return _core.stt_node(
             session.stt, audio, conn_options=session.conn_options.stt_conn_options, vad=session.vad
         )
-        return (stt._speech_event_from_core(ev) async for ev in events)
 
     def tts_node(
         self, ctx: RunContext[Any], text: AsyncIterable[str], model_settings: ModelSettings

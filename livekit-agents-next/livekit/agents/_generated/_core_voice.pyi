@@ -40,6 +40,7 @@ from .session_options import (
     UpdateKwargs,
 )
 from .session_wire import StartPlan
+from .stt import SpeechEvent
 from .tool_report import ToolReport
 from .turn import InterruptionMode
 from .usage import Usage
@@ -231,7 +232,7 @@ class TtsNodeFrames:
 class SttNodeEvents:
     """The default `stt_node`'s speech events."""
     def __aiter__(self) -> Self: ...
-    async def __anext__(self) -> dict[str, object]: ...
+    async def __anext__(self) -> SpeechEvent: ...
 
 def tts_node(
     tts: TTS[Any],

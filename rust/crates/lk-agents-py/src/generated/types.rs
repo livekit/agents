@@ -171,8 +171,9 @@ impl _core_ProviderAttempts {
     }
 
     #[pyo3(signature = (event, now_ns))]
-    fn observe(&mut self, event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_attempts_observe_now_ns)] now_ns: u64) -> PyResult<()> {
+    fn observe(&mut self, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_provider_attempts_observe_now_ns)] now_ns: u64) -> PyResult<()> {
         crate::host::check_pid()?;
+        let event = crate::generated::records::stt::speech_event_from_py(&event)?;
         <_core_ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::observe(&mut self.0, event, now_ns);
         Ok(())
     }

@@ -5,13 +5,12 @@ use crate::tokenize::language::LanguageCode;
 
 use crate::llm::chat_context::Extra;
 use crate::tts::timed::TimedString;
-use lk_agents_host_derive::Host;
 
 // `stt/stt.py`, a `(str, Enum)`: users write `ev.type == "final_transcript"`, so the wire strings
 // are public API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
-#[python(enum, module = "stt", path = "livekit.agents.stt", name = "SpeechEventType")]
-#[host(wire(
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_host_derive::Vocabulary)]
+#[crate::host(record(module = "stt", path = "livekit.agents.stt", enum, extract, emit))]
+#[crate::host(wire_strs(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "SpeechEventType", value: s.to_owned() },
 ))]
@@ -43,60 +42,57 @@ pub enum SpeechEventType {
 
 // `stt/stt.py:57`. `None` and `[]` are kept apart on the `source_*`/`target_*` lists. The
 // `LanguageCode` coercion in `__post_init__` stays host code.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    dataclass,
-    zero_defaults,
+#[crate::host(record(
     module = "stt",
     path = "livekit.agents.stt",
-    name = "SpeechData",
-    post_init = "speech_data_post_init"
-)]
-#[binding(emit, extract)]
+    dataclass,
+    post_init = "speech_data_post_init",
+    extract,
+    emit,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpeechData {
     // The target when translating; normalised through `LanguageCode::new` in both directions.
-    #[python(ty = "LanguageCode", import = ".language:LanguageCode")]
+    #[host(annotation = ".language.LanguageCode")]
     pub language: LanguageCode,
     pub text: String,
+    #[host(default = 0.0)]
     pub start_time: f64,
+    #[host(default = 0.0)]
     pub end_time: f64,
+    #[host(default = 0.0)]
     pub confidence: f64,
+    #[host(default = None)]
     pub speaker_id: Option<String>,
     // `None` vs `[]` matters to `TranscriptSynchronizer`.
-    #[python(ty = "list[TimedString] | None", import = "..types:TimedString", default = "None")]
+    #[host(default = None)]
     pub words: Option<Vec<TimedString>>,
     /// the source languages spoken by the user. populated by STT services that support translation,
     /// where `language` holds the target language and `source_languages` holds the original spoken language(s),
     /// or by multi-language detection services where `language` holds the dominant language and
     /// `source_languages` holds all detected languages sorted by prevalence.
     /// may contain multiple entries when a single utterance spans multiple source languages.
-    #[python(
-        ty = "list[LanguageCode] | None",
-        import = ".language:LanguageCode",
-        default = "None"
-    )]
+    #[host(annotation = "list[.language.LanguageCode] | None", default = None)]
     pub source_languages: Option<Vec<LanguageCode>>,
     /// the original transcription segments in the source language(s), when translation is active.
     /// each entry corresponds to the same-indexed entry in `source_languages`.
+    #[host(default = None)]
     pub source_texts: Option<Vec<String>>,
     /// the target language(s) produced by a translation-capable STT service, one entry per
     /// consecutive same-language run, parallel to `target_texts`. mirrors `source_languages` /
     /// `source_texts` on the source side: `language` holds the dominant (first) target language
     /// and `target_languages` carries the fine-grained per-run breakdown.
     /// populated when translation is active; None otherwise.
-    #[python(
-        ty = "list[LanguageCode] | None",
-        import = ".language:LanguageCode",
-        default = "None"
-    )]
+    #[host(annotation = "list[.language.LanguageCode] | None", default = None)]
     pub target_languages: Option<Vec<LanguageCode>>,
     /// the translated transcription segments in the target language(s).
     /// each entry corresponds to the same-indexed entry in `target_languages`.
+    #[host(default = None)]
     pub target_texts: Option<Vec<String>>,
     /// optional plugin-specific metadata (e.g. voice profile, provider diagnostics).
     /// plugins may populate this with provider-specific data that doesn't map to standard fields.
     // JSON, so the telemetry path can read it.
-    #[python(ty = "dict[str, Any] | None", import = "typing:Any", default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Extra>,
 }
 
@@ -120,44 +116,39 @@ impl SpeechData {
 }
 
 // `stt/stt.py:106`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-#[python(dataclass, module = "stt", path = "livekit.agents.stt", name = "RecognitionUsage")]
-#[binding(emit, extract)]
+#[crate::host(record(module = "stt", path = "livekit.agents.stt", dataclass, extract, emit))]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RecognitionUsage {
     /// Incremental audio duration/usage in seconds
     pub audio_duration: f64,
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub input_tokens: u32,
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub output_tokens: u32,
 }
 
 // `stt/stt.py:114`: one struct for all six kinds, as in the reference.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    dataclass,
-    zero_defaults,
-    module = "stt",
-    path = "livekit.agents.stt",
-    name = "SpeechEvent"
-)]
-#[binding(emit, extract)]
+#[crate::host(record(module = "stt", path = "livekit.agents.stt", dataclass, extract, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpeechEvent {
     #[host(rename = "type")]
     pub kind: SpeechEventType,
-    #[python(default = "\"\"")]
+    #[host(default = "")]
     pub request_id: String,
-    #[python(default_factory = "list")]
+    #[host(default_factory = "list")]
     pub alternatives: Vec<SpeechData>,
+    #[host(default = None)]
     pub recognition_usage: Option<RecognitionUsage>,
     /// server-reported wall-clock time of speech onset, when the provider sends
     /// a separate speech-start signal carrying onset timing.
+    #[host(default = None)]
     pub speech_start_time: Option<f64>,
     /// Wall-clock time when this event was created.
     // `None` for an event the core minted: the host stamps it as it reads it.
-    #[python(ty = "float", default_factory = "time.time")]
+    #[host(annotation = "float", default_factory = "time.time")]
     pub created_at: Option<f64>,
     /// Wall-clock time when the recognized speech ended, when known.
+    #[host(default = None)]
     pub speech_end_time: Option<f64>,
 }
 

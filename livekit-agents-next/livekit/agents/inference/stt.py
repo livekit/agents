@@ -299,12 +299,11 @@ class STT(stt.STT):
         return "livekit"
 
     def _fold_capabilities(self) -> stt.STTCapabilities:
-        caps = _core.stt_capabilities(
+        return _core.stt_capabilities(
             self._model,
             fallback=[f["model"] for f in self._fallback],
             extra_kwargs=self._extra,
         )
-        return stt.STTCapabilities(**caps)
 
     def _resolve_vad(self, vad: vad_mod.VAD | None) -> vad_mod.VAD | None:
         match _core.stt_resolve_vad_for_model(self._model, has_vad=vad is not None):
@@ -439,7 +438,7 @@ class SpeechStream(stt.SpeechStream):
                 native,
                 self.input,
                 lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
-                lambda ev: self.send(stt._speech_event_from_core(ev)),
+                self.send,
             )
         finally:
             self._native = None

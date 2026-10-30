@@ -7,7 +7,7 @@ mod provider_bridge {
     //! package must not be imported here, so `livekit.agents.types` and `livekit.rtc` are stubs;
     //! nextest's process per test keeps each type's cached class on these.
     use crate::python::extract_generated;
-    use crate::{SpeechEvent, VadEvent};
+    use crate::VadEvent;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
 
@@ -47,23 +47,6 @@ rtc.AudioFrame = AudioFrame
 def frame(n=4):
     return AudioFrame(b'\x00' * (n * 2), 24000, 1, n)
 
-class SpeechData:
-    def __init__(self, **kw):
-        self.language = kw.get('language', 'en-US'); self.text = kw.get('text', '')
-        self.start_time = kw.get('start_time', 0.0); self.end_time = kw.get('end_time', 0.0)
-        self.confidence = kw.get('confidence', 0.0)
-        self.speaker_id = kw.get('speaker_id')
-        self.words = kw.get('words'); self.source_languages = kw.get('source_languages')
-        self.source_texts = kw.get('source_texts'); self.target_languages = kw.get('target_languages')
-        self.target_texts = kw.get('target_texts'); self.metadata = kw.get('metadata')
-
-class SpeechEvent:
-    def __init__(self, type, request_id='r', alternatives=(), recognition_usage=None,
-                 speech_start_time=None, created_at=None, speech_end_time=None):
-        self.type = type; self.request_id = request_id; self.alternatives = list(alternatives)
-        self.recognition_usage = recognition_usage; self.speech_start_time = speech_start_time
-        self.created_at = created_at; self.speech_end_time = speech_end_time
-
 class VADEvent:
     def __init__(self, type='inference_done', frames=None, **kw):
         self.type = type; self.frames = [] if frames is None else frames
@@ -90,61 +73,6 @@ class VADEvent:
         Python::attach(f)
     }
 
-    fn speech_event(py: Python<'_>, code: &str) -> SpeechEvent {
-        let obj = eval_with_stubs(py, code);
-        extract_generated::<SpeechEvent>(obj.bind(py)).unwrap()
-    }
-
-    // Catches: a panic on an unknown `SpeechEventType` from a plugin, instead of an error that
-    // names the value (§1.6 #6).
-    #[test]
-    fn an_unknown_speech_event_type_is_an_error_not_a_panic() {
-        attach(|py| {
-            let obj = eval_with_stubs(py, "out = SpeechEvent('teleport_transcript')");
-            let err = extract_generated::<SpeechEvent>(obj.bind(py)).err().unwrap();
-            assert!(err.to_string().contains("teleport_transcript"), "{err}");
-        });
-    }
-
-    // Catches: collapsing `None` and `[]` on the translation lists, losing `language`
-    // normalisation (`stt/stt.py:87-102`), or the `is_none()` guards on optional sub-objects
-    // (`recognition_usage`, `words`, `metadata`) inverting: real data dropped, or `AttributeError`.
-    #[test]
-    fn speech_data_reads_optional_fields_without_collapsing_or_inventing_them() {
-        attach(|py| {
-            let ev = speech_event(
-                py,
-                r#"
-class Usage:
-    audio_duration = 1.5; input_tokens = 7; output_tokens = 9
-out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
-    SpeechData(language='en_us', source_languages=[], target_texts=None,
-               words=[TimedString('w', start_time=0.25)], metadata={'voice': 'a'})])
-"#,
-            );
-            let usage = ev.recognition_usage.as_ref().expect("a usage event must carry its usage");
-            assert_eq!((usage.audio_duration, usage.input_tokens), (1.5, 7));
-            let alt = &ev.alternatives[0];
-            assert_eq!(alt.language.as_str(), "en-US", "the underscore form must normalise");
-            assert_eq!(alt.source_languages.as_deref(), Some(&[][..]), "[] is not None");
-            assert_eq!(alt.target_texts, None, "None is not []");
-            let words = alt.words.as_ref().expect("word alignment must survive");
-            assert_eq!(
-                (words[0].text.as_str(), words[0].start_time, words[0].end_time),
-                ("w", Some(0.25), None)
-            );
-            assert_eq!(alt.metadata.as_ref().expect("plugin metadata must survive")["voice"], "a");
-
-            let bare = speech_event(
-                py,
-                "out = SpeechEvent('final_transcript', alternatives=[SpeechData()])",
-            );
-            assert!(bare.recognition_usage.is_none());
-            assert!(bare.alternatives[0].words.is_none());
-            assert!(bare.alternatives[0].metadata.is_none());
-        });
-    }
-
     // Catches: copying the audio of every VAD event off the host (`inference_done` fires ~30 a
     // second per stream) when only an end of speech's is recognized.
     #[test]
@@ -161,57 +89,6 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
                 eval_with_stubs(py, "out = VADEvent('end_of_speech', frames=[frame(), frame()])");
             let ev: VadEvent = extract_generated::<VadEvent>(obj.bind(py)).unwrap();
             assert_eq!(ev.frames.len(), 2);
-        });
-    }
-
-    // Catches: the emitted dict keyed differently from the dataclass it feeds -- the Rust `kind`
-    // instead of the host's `type`, the variant name instead of the literal, a translating STT's
-    // `target_*`/`source_*` lists lost crossing back behind an adapter, or words handed back as
-    // anything but the host's `TimedString`s.
-    #[test]
-    fn the_emitted_speech_event_has_the_dataclass_shape() {
-        attach(|py| {
-            let ev = speech_event(
-                py,
-                "out = SpeechEvent('interim_transcript', alternatives=[SpeechData(\
-                 language='fr', text='bonjour', source_languages=['en'], source_texts=['hello'], \
-                 target_languages=['fr'], target_texts=['bonjour'], words=[TimedString('bonjour', start_time=0.5)])])",
-            );
-            let dict = (&ev).into_pyobject(py).unwrap();
-            assert!(dict.get_item("kind").unwrap().is_none(), "`kind` is the Rust spelling");
-            let tag = dict.get_item("type").unwrap().expect("the host reads d[\"type\"]");
-            assert_eq!(tag.extract::<String>().unwrap(), "interim_transcript");
-
-            let alts = dict.get_item("alternatives").unwrap().unwrap();
-            let alt = alts.get_item(0).unwrap().cast_into::<PyDict>().unwrap();
-            let mut keys: Vec<String> = alt.keys().extract().unwrap();
-            keys.sort();
-            assert_eq!(
-                keys,
-                [
-                    "confidence",
-                    "end_time",
-                    "language",
-                    "metadata",
-                    "source_languages",
-                    "source_texts",
-                    "speaker_id",
-                    "start_time",
-                    "target_languages",
-                    "target_texts",
-                    "text",
-                    "words",
-                ]
-            );
-            let got = |k: &str| alt.get_item(k).unwrap().unwrap().extract::<Vec<String>>().unwrap();
-            assert_eq!(got("target_texts"), ["bonjour"]);
-            assert_eq!(got("target_languages"), ["fr"]);
-            assert_eq!(got("source_texts"), ["hello"]);
-            assert_eq!(got("source_languages"), ["en"]);
-            let words = alt.get_item("words").unwrap().unwrap();
-            let word = words.get_item(0).unwrap();
-            assert_eq!(word.get_type().name().unwrap().to_string(), "TimedString");
-            assert_eq!(word.getattr("start_time").unwrap().extract::<f64>().unwrap(), 0.5);
         });
     }
 }

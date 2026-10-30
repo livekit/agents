@@ -26,7 +26,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -1014,7 +1014,7 @@ class SpeechStream(stt.SpeechStream):
         # the `language_code` on the same message. The confidence score for the detected
         # language, between 0 (low confidence) and 1 (high confidence). Only populated when
         # language detection is enabled and an utterance is complete or turn is final.
-        turn_metadata: dict[str, float] = {}
+        turn_metadata: dict[str, JsonValue] = {}
         if end_of_turn_confidence is not None:
             turn_metadata["end_of_turn_confidence"] = end_of_turn_confidence
         if language_confidence is not None:

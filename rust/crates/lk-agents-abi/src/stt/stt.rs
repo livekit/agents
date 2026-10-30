@@ -4,12 +4,13 @@
 use crate::SpeechEvent;
 use crate::errors::ProviderError;
 use crate::tokenize::language::LanguageCode;
-use lk_agents_host_derive::Host;
 
 use crate::utils::stream::{StreamSink, StreamSource};
 use crate::{ApiConnectOptions, AudioFrame};
 
-/// `Literal["word", "chunk", False]`. `None` is the boolean `False` on the host, never a string.
+/// `Literal["word", "chunk", False]`. `None` is the boolean `False` on the host, never a string;
+/// anything but a known word (`False` included) reads as none, like `isinstance(x, str)` host-side.
+#[crate::host(handwritten(extract, emit, host = "typing.Literal[\"word\", \"chunk\", False]", py))]
 #[crate::host(wire_strs(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "aligned_transcript", value: s.to_owned() },
@@ -23,56 +24,31 @@ pub enum AlignedTranscript {
     Chunk,
 }
 
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for AlignedTranscript {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = std::convert::Infallible;
-
-    fn into_pyobject(
-        self,
-        py: pyo3::Python<'py>,
-    ) -> Result<pyo3::Bound<'py, pyo3::PyAny>, std::convert::Infallible> {
-        Ok(match self {
-            AlignedTranscript::None => pyo3::types::PyBool::new(py, false).to_owned().into_any(),
-            other => pyo3::types::PyString::new(py, other.as_str()).into_any(),
-        })
-    }
-}
-
-/// Anything but a known word (`False` included) is none, like `isinstance(x, str)` host-side.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AlignedTranscript {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Ok(obj.extract::<String>().ok().and_then(|s| s.parse().ok()).unwrap_or_default())
-    }
-}
-
-// Field `///`s are the reference's. The dict is generated because a forgotten key would silently
-// default `offline_recognize` to `True`. `impl Default` and `#[python(default)]` agree on purpose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-// The extract direction reads a plugin's `stt.STTCapabilities` attribute by attribute.
-#[binding(emit, extract)]
-#[python(dataclass, module = "stt", path = "livekit.agents.stt", name = "STTCapabilities")]
+// Field `///`s are the reference's. `impl Default` and the model's defaults agree on purpose.
+#[crate::host(record(
+    module = "stt",
+    path = "livekit.agents.stt",
+    name = "STTCapabilities",
+    dataclass,
+    extract,
+    emit,
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SttCapabilities {
     pub streaming: bool,
     pub interim_results: bool,
-    #[python(default = "False")]
+    #[host(default = false)]
     pub diarization: bool,
-    // `#[python(ty)]` because `False` is neither `"none"` nor `None`; the gate compares annotation
-    // text.
-    #[python(ty = "Literal[\"word\", \"chunk\", False]", default = "False")]
+    #[host(default = false)]
     pub aligned_transcript: AlignedTranscript,
     /// Whether the STT supports batch recognition via recognize() method
-    #[python(default = "True")]
+    #[host(default = true)]
     pub offline_recognize: bool,
     /// Whether the STT supports keyterm prompting
-    #[python(default = "False")]
+    #[host(default = false)]
     pub keyterms: bool,
     /// Whether the STT can natively consume conversation context (see STT._push_conversation_item)
-    #[python(default = "False")]
+    #[host(default = false)]
     pub chat_context: bool,
 }
 

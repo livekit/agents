@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -63,7 +63,7 @@ class _Transcription(BaseModel):
 
     transcript: str = ""
     is_final: bool = Field(default=False, alias="isFinal")
-    voice_profile: object = Field(default=None, alias="voiceProfile")
+    voice_profile: JsonValue = Field(default=None, alias="voiceProfile")
 
 
 class _TranscriptionResult(BaseModel):
@@ -467,7 +467,7 @@ class SpeechStream(stt.SpeechStream):
                 SpeechEventType.FINAL_TRANSCRIPT if is_final else SpeechEventType.INTERIM_TRANSCRIPT
             )
 
-            metadata = None
+            metadata: dict[str, JsonValue] | None = None
             if voice_profile:
                 metadata = {"voice_profile": voice_profile}
                 if is_final:

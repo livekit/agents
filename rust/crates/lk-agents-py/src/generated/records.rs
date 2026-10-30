@@ -4678,6 +4678,176 @@ pub mod storage_turn {
     }
 }
 
+pub mod stt {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
+    static SPEECH_EVENT_TYPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn speech_event_type_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::SpeechEventType> {
+        let py = obj.py();
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "start_of_speech" => Ok(::lk_agents_abi::SpeechEventType::StartOfSpeech),
+                "interim_transcript" => Ok(::lk_agents_abi::SpeechEventType::InterimTranscript),
+                "preflight_transcript" => Ok(::lk_agents_abi::SpeechEventType::PreflightTranscript),
+                "final_transcript" => Ok(::lk_agents_abi::SpeechEventType::FinalTranscript),
+                "recognition_usage" => Ok(::lk_agents_abi::SpeechEventType::RecognitionUsage),
+                "end_of_speech" => Ok(::lk_agents_abi::SpeechEventType::EndOfSpeech),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("SpeechEventType: {other:?} is not one of 'start_of_speech', 'interim_transcript', 'preflight_transcript', 'final_transcript', 'recognition_usage', 'end_of_speech'"))),
+            }
+    }
+
+    pub fn speech_event_type_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::SpeechEventType) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::SpeechEventType::StartOfSpeech => "start_of_speech",
+                ::lk_agents_abi::SpeechEventType::InterimTranscript => "interim_transcript",
+                ::lk_agents_abi::SpeechEventType::PreflightTranscript => "preflight_transcript",
+                ::lk_agents_abi::SpeechEventType::FinalTranscript => "final_transcript",
+                ::lk_agents_abi::SpeechEventType::RecognitionUsage => "recognition_usage",
+                ::lk_agents_abi::SpeechEventType::EndOfSpeech => "end_of_speech",
+            };
+            Ok(crate::host::construct(SPEECH_EVENT_TYPE.import(py, "livekit.agents._generated.stt", "SpeechEventType")?.as_any(), (value,), None)?)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
+    static SPEECH_DATA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn speech_data_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::SpeechData> {
+        let py = obj.py();
+            if !obj.is_instance(SPEECH_DATA.import(py, "livekit.agents._generated.stt", "SpeechData")?)? {
+                return Err(super::not_a(obj, "SpeechData"));
+            }
+            Ok(::lk_agents_abi::SpeechData {
+                language: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "language", |v| v.extract::<::lk_agents_abi::LanguageCode>().map_err(::std::convert::Into::<PyErr>::into))?,
+                text: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "text", |v| v.extract::<::std::string::String>())?,
+                start_time: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "start_time", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechData.start_time"))?,
+                end_time: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "end_time", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechData.end_time"))?,
+                confidence: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "confidence", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechData.confidence"))?,
+                speaker_id: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "speaker_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                words: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "words", |v| if v.is_none() { Ok(None) } else { (v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::TimedString>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                source_languages: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "source_languages", |v| if v.is_none() { Ok(None) } else { (v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::LanguageCode>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                source_texts: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "source_texts", |v| if v.is_none() { Ok(None) } else { (v.try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                target_languages: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "target_languages", |v| if v.is_none() { Ok(None) } else { (v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::LanguageCode>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                target_texts: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "target_texts", |v| if v.is_none() { Ok(None) } else { (v.try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                metadata: ::lk_agents_abi::python::attr_with(obj, "SpeechData", "metadata", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "SpeechData.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("SpeechData.metadata: expected a dict")) }).map(Some) })?,
+            })
+    }
+
+    pub fn speech_data_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::SpeechData) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::SpeechData { language, text, start_time, end_time, confidence, speaker_id, words, source_languages, source_texts, target_languages, target_texts, metadata } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("language", ::pyo3::IntoPyObjectExt::into_bound_py_any(language, py)?)?;
+            kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+            kwargs.set_item("start_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time, py)?)?;
+            kwargs.set_item("end_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_time, py)?)?;
+            kwargs.set_item("confidence", ::pyo3::IntoPyObjectExt::into_bound_py_any(confidence, py)?)?;
+            kwargs.set_item("speaker_id", match speaker_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("words", match words { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            kwargs.set_item("source_languages", match source_languages { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            kwargs.set_item("source_texts", match source_texts { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            kwargs.set_item("target_languages", match target_languages { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            kwargs.set_item("target_texts", match target_texts { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+            crate::host::construct(SPEECH_DATA.import(py, "livekit.agents._generated.stt", "SpeechData")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
+    static RECOGNITION_USAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn recognition_usage_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::RecognitionUsage> {
+        let py = obj.py();
+            if !obj.is_instance(RECOGNITION_USAGE.import(py, "livekit.agents._generated.stt", "RecognitionUsage")?)? {
+                return Err(super::not_a(obj, "RecognitionUsage"));
+            }
+            Ok(::lk_agents_abi::RecognitionUsage {
+                audio_duration: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "audio_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RecognitionUsage.audio_duration"))?,
+                input_tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "input_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RecognitionUsage.input_tokens"))?,
+                output_tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "output_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RecognitionUsage.output_tokens"))?,
+            })
+    }
+
+    pub fn recognition_usage_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::RecognitionUsage) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::RecognitionUsage { audio_duration, input_tokens, output_tokens } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("audio_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_duration, py)?)?;
+            kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
+            kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
+            crate::host::construct(RECOGNITION_USAGE.import(py, "livekit.agents._generated.stt", "RecognitionUsage")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
+    static SPEECH_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn speech_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::SpeechEvent> {
+        let py = obj.py();
+            if !obj.is_instance(SPEECH_EVENT.import(py, "livekit.agents._generated.stt", "SpeechEvent")?)? {
+                return Err(super::not_a(obj, "SpeechEvent"));
+            }
+            Ok(::lk_agents_abi::SpeechEvent {
+                kind: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "type", |v| crate::generated::records::stt::speech_event_type_from_py(v))?,
+                request_id: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "request_id", |v| v.extract::<::std::string::String>())?,
+                alternatives: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "alternatives", |v| v.try_iter()?.map(|item| { let item = &item?; crate::generated::records::stt::speech_data_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
+                recognition_usage: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "recognition_usage", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::stt::recognition_usage_from_py(v)).map(Some) })?,
+                speech_start_time: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "speech_start_time", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechEvent.speech_start_time")).map(Some) })?,
+                created_at: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "created_at", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechEvent.created_at")).map(Some) })?,
+                speech_end_time: ::lk_agents_abi::python::attr_with(obj, "SpeechEvent", "speech_end_time", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SpeechEvent.speech_end_time")).map(Some) })?,
+            })
+    }
+
+    pub fn speech_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::SpeechEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::SpeechEvent { kind, request_id, alternatives, recognition_usage, speech_start_time, created_at, speech_end_time } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("type", crate::generated::records::stt::speech_event_type_to_py(py, kind)?)?;
+            kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
+            kwargs.set_item("alternatives", ::pyo3::types::PyList::new(py, alternatives.into_iter().map(|x| PyResult::Ok(crate::generated::records::stt::speech_data_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("recognition_usage", match recognition_usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::stt::recognition_usage_to_py(py, x)? })?;
+            kwargs.set_item("speech_start_time", match speech_start_time { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            if let Some(x) = created_at {
+                kwargs.set_item("created_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            kwargs.set_item("speech_end_time", match speech_end_time { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(SPEECH_EVENT.import(py, "livekit.agents._generated.stt", "SpeechEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/stt/stt.rs.
+    static STT_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn stt_capabilities_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::SttCapabilities> {
+        let py = obj.py();
+            if !obj.is_instance(STT_CAPABILITIES.import(py, "livekit.agents._generated.stt", "STTCapabilities")?)? {
+                return Err(super::not_a(obj, "STTCapabilities"));
+            }
+            Ok(::lk_agents_abi::SttCapabilities {
+                streaming: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "streaming", |v| v.extract::<bool>())?,
+                interim_results: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "interim_results", |v| v.extract::<bool>())?,
+                diarization: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "diarization", |v| v.extract::<bool>())?,
+                aligned_transcript: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "aligned_transcript", |v| crate::conversions::aligned_transcript_from_py(v))?,
+                offline_recognize: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "offline_recognize", |v| v.extract::<bool>())?,
+                keyterms: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "keyterms", |v| v.extract::<bool>())?,
+                chat_context: ::lk_agents_abi::python::attr_with(obj, "STTCapabilities", "chat_context", |v| v.extract::<bool>())?,
+            })
+    }
+
+    pub fn stt_capabilities_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::SttCapabilities) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::SttCapabilities { streaming, interim_results, diarization, aligned_transcript, offline_recognize, keyterms, chat_context } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("streaming", ::pyo3::IntoPyObjectExt::into_bound_py_any(streaming, py)?)?;
+            kwargs.set_item("interim_results", ::pyo3::IntoPyObjectExt::into_bound_py_any(interim_results, py)?)?;
+            kwargs.set_item("diarization", ::pyo3::IntoPyObjectExt::into_bound_py_any(diarization, py)?)?;
+            kwargs.set_item("aligned_transcript", crate::conversions::aligned_transcript_to_py(py, aligned_transcript)?)?;
+            kwargs.set_item("offline_recognize", ::pyo3::IntoPyObjectExt::into_bound_py_any(offline_recognize, py)?)?;
+            kwargs.set_item("keyterms", ::pyo3::IntoPyObjectExt::into_bound_py_any(keyterms, py)?)?;
+            kwargs.set_item("chat_context", ::pyo3::IntoPyObjectExt::into_bound_py_any(chat_context, py)?)?;
+            crate::host::construct(STT_CAPABILITIES.import(py, "livekit.agents._generated.stt", "STTCapabilities")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod telemetry {
     use pyo3::prelude::*;
 

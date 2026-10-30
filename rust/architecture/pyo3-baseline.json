@@ -13,7 +13,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/python/host_tests.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/mod.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/values.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/stt/stt.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/timed.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/tts.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/turn/keyterms.rs",

@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
+# `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/stt/stt.rs
 #     rust/crates/lk-agents-abi/src/stt/events.rs
 #
@@ -16,7 +17,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, Never
+from typing import TYPE_CHECKING, Generic, Literal, Never
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self, TypeVar
@@ -24,30 +25,19 @@ from typing_extensions import Self, TypeVar
 from livekit import rtc
 
 from .. import _bindings, _core
-from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    APIConnectOptions,
-    NotGivenOr,
-    TimedString,
-)
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
-from .language import LanguageCode
+
+if TYPE_CHECKING:
+    from pydantic import JsonValue
+
+    from livekit.agents.types import TimedString
+
+    from .language import LanguageCode
 
 
-@dataclass
-class STTCapabilities:
-    streaming: bool
-    interim_results: bool
-    diarization: bool = False
-    aligned_transcript: Literal["word", "chunk", False] = False
-    offline_recognize: bool = True
-    """Whether the STT supports batch recognition via recognize() method"""
-    keyterms: bool = False
-    """Whether the STT supports keyterm prompting"""
-    chat_context: bool = False
-    """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+# The declared records.
 
 
 @unique
@@ -105,7 +95,7 @@ class SpeechData:
     """the translated transcription segments in the target language(s).
     each entry corresponds to the same-indexed entry in `target_languages`.
     """
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, JsonValue] | None = None
     """optional plugin-specific metadata (e.g. voice profile, provider diagnostics).
     plugins may populate this with provider-specific data that doesn't map to standard fields.
     """
@@ -136,6 +126,27 @@ class SpeechEvent:
     """Wall-clock time when this event was created."""
     speech_end_time: float | None = None
     """Wall-clock time when the recognized speech ended, when known."""
+
+
+@dataclass
+class STTCapabilities:
+    streaming: bool
+    interim_results: bool
+    diarization: bool = False
+    aligned_transcript: Literal["word", "chunk", False] = False
+    offline_recognize: bool = True
+    """Whether the STT supports batch recognition via recognize() method"""
+    keyterms: bool = False
+    """Whether the STT supports keyterm prompting"""
+    chat_context: bool = False
+    """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+
+
+SpeechEventType.__module__ = "livekit.agents.stt"
+SpeechData.__module__ = "livekit.agents.stt"
+RecognitionUsage.__module__ = "livekit.agents.stt"
+SpeechEvent.__module__ = "livekit.agents.stt"
+STTCapabilities.__module__ = "livekit.agents.stt"
 
 
 class STTError(BaseModel):
@@ -544,11 +555,6 @@ SpeechStream = RecognizeStream
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-STTCapabilities.__module__ = "livekit.agents.stt"
-SpeechEventType.__module__ = "livekit.agents.stt"
-SpeechData.__module__ = "livekit.agents.stt"
-RecognitionUsage.__module__ = "livekit.agents.stt"
-SpeechEvent.__module__ = "livekit.agents.stt"
 STTError.__module__ = "livekit.agents.stt"
 STT.__module__ = "livekit.agents.stt"
 RecognizeStream.__module__ = "livekit.agents.stt"

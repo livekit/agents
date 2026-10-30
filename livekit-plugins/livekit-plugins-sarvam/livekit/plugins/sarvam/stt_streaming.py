@@ -1257,7 +1257,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if confidence is None:
             confidence = 1.0
 
-        metadata: dict[str, object] = data.model_dump(
+        metadata: dict[str, JsonValue] = data.model_dump(
             include={"utterance_idx", "language_confidence"}, exclude_none=True, exclude_unset=True
         )
         if (

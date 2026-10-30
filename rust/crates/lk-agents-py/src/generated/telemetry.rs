@@ -167,7 +167,8 @@ fn _extract_provider_metrics_stt_stream_metrics_host(obj: &Bound<'_, PyAny>) -> 
 /// `STT.recognize`'s metrics for one batch recognition.
 #[pyfunction]
 #[pyo3(signature = (event, start, now, audio_durations, host))]
-pub fn stt_batch_metrics<'py>(py: Python<'py>, event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_start)] start: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_now)] now: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)] audio_durations: ::std::vec::Vec<f64>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
+pub fn stt_batch_metrics<'py>(py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_start)] start: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_now)] now: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)] audio_durations: ::std::vec::Vec<f64>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
+    let event = crate::generated::records::stt::speech_event_from_py(&event)?;
     let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host);
     Ok(crate::generated::records::metrics::stt_metrics_to_py(py, out)?)
 }
@@ -175,7 +176,8 @@ pub fn stt_batch_metrics<'py>(py: Python<'py>, event: ::lk_agents_abi::SpeechEve
 /// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
 #[pyfunction]
 #[pyo3(signature = (event, host))]
-pub fn stt_stream_metrics<'py>(py: Python<'py>, event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
+pub fn stt_stream_metrics<'py>(py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
+    let event = crate::generated::records::stt::speech_event_from_py(&event)?;
     let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [match x0 { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::stt_metrics_to_py(py, x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?])?.into_any() })
 }

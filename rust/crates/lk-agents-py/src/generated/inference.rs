@@ -166,18 +166,19 @@ pub fn tts_normalize_fallback_str<'py>(py: Python<'py>, model: ::std::string::St
 /// the fast VAD interruption path.
 #[pyfunction]
 #[pyo3(signature = (model = None, *, fallback = None, extra_kwargs = None))]
-pub fn stt_capabilities(model: ::std::option::Option<::std::string::String>, fallback: ::std::option::Option<::std::vec::Vec<::std::string::String>>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<::lk_agents_abi::SttCapabilities> {
+pub fn stt_capabilities<'py>(py: Python<'py>, model: ::std::option::Option<::std::string::String>, fallback: ::std::option::Option<::std::vec::Vec<::std::string::String>>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
     let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_capabilities(model, fallback, extra_kwargs);
-    Ok(out)
+    Ok(crate::generated::records::stt::stt_capabilities_to_py(py, out)?)
 }
 
 /// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
 #[pyfunction]
 #[pyo3(signature = (entries))]
-pub fn stt_fallback_capabilities(entries: ::std::vec::Vec<::lk_agents_abi::SttCapabilities>) -> PyResult<::lk_agents_abi::SttCapabilities> {
+pub fn stt_fallback_capabilities<'py>(py: Python<'py>, entries: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let entries = entries.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::stt::stt_capabilities_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_fallback_capabilities(entries);
-    Ok(out)
+    Ok(crate::generated::records::stt::stt_capabilities_to_py(py, out)?)
 }
 
 /// `tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
