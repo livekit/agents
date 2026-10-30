@@ -233,10 +233,6 @@ impl Sim {
         &self.events
     }
 
-    pub fn now(&self) -> Ts {
-        self.now
-    }
-
     /// What the server refused of the client, or answered from the wrong state.
     pub fn breaches(&self) -> &[Breach] {
         &self.record.breaches
