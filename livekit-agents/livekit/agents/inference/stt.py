@@ -1452,6 +1452,8 @@ class SpeechStream(stt.SpeechStream):
                 self._speaking = False
                 words = data.get("words") or []
                 end_alternatives = []
+                # speech_data.end_time uses start + duration. Some providers report
+                # billed audio duration (e.g. Ink-2), so use word timing for EOS.
                 if words and words[-1].get("end", 0) > 0:
                     end_alternatives = [
                         replace(speech_data, end_time=self.start_time_offset + words[-1]["end"])
