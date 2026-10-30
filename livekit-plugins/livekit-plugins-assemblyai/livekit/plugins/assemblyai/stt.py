@@ -46,6 +46,8 @@ from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
+PIIRedactionSubstitution = Literal["entity_name", "hash"]
+
 
 @dataclass
 class STTOptions:
@@ -80,6 +82,11 @@ class STTOptions:
     voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
     voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
     mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
+    redact_pii: NotGivenOr[bool] = NOT_GIVEN
+    redact_pii_policies: NotGivenOr[list[str]] = NOT_GIVEN
+    redact_pii_sub: NotGivenOr[PIIRedactionSubstitution] = NOT_GIVEN
+    include_partial_turns: NotGivenOr[bool] = NOT_GIVEN
+    filter_profanity: NotGivenOr[bool] = NOT_GIVEN
 
 
 # Speech models in the Universal-3 Pro family, which share the same parameter support
@@ -137,6 +144,30 @@ def _validate_agent_context(agent_context: str) -> None:
         )
 
 
+def _validate_redaction_options(
+    *,
+    redact_pii: NotGivenOr[bool],
+    redact_pii_policies: NotGivenOr[list[str]],
+    redact_pii_sub: NotGivenOr[PIIRedactionSubstitution],
+) -> None:
+    if is_given(redact_pii) and redact_pii:
+        return
+    for param, value in (
+        ("redact_pii_policies", redact_pii_policies),
+        ("redact_pii_sub", redact_pii_sub),
+    ):
+        if is_given(value):
+            raise ValueError(f"The {param!r} parameter requires 'redact_pii' to be enabled.")
+
+
+def _emits_partial_turns(
+    *, redact_pii: NotGivenOr[bool], include_partial_turns: NotGivenOr[bool]
+) -> bool:
+    if is_given(include_partial_turns):
+        return include_partial_turns
+    return not (is_given(redact_pii) and redact_pii)
+
+
 class STT(stt.STT):
     def __init__(
         self,
@@ -173,6 +204,11 @@ class STT(stt.STT):
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
         mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
+        redact_pii: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pii_policies: NotGivenOr[list[str]] = NOT_GIVEN,
+        redact_pii_sub: NotGivenOr[PIIRedactionSubstitution] = NOT_GIVEN,
+        include_partial_turns: NotGivenOr[bool] = NOT_GIVEN,
+        filter_profanity: NotGivenOr[bool] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -259,6 +295,20 @@ class STT(stt.STT):
                 `max_turn_silence` still take precedence over the mode's defaults.
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
+            redact_pii: Redact PII from final turns. AssemblyAI disables partial turns when
+                this is enabled unless ``include_partial_turns`` is set; partials are never
+                redacted. Set at construction (connect) time only.
+            redact_pii_policies: PII policies to redact, such as ``person_name`` or
+                ``phone_number``. Redacts all detected PII when unset. Requires
+                ``redact_pii``. Set at construction (connect) time only.
+            redact_pii_sub: Replacement for redacted PII: ``hash`` (AssemblyAI default) or
+                ``entity_name``, which writes ``[PERSON_NAME]``-style placeholders. Requires
+                ``redact_pii``. Set at construction (connect) time only.
+            include_partial_turns: Emit partial (non-final) turns. AssemblyAI defaults this to
+                true, or false when ``redact_pii`` is enabled. Set at construction (connect)
+                time only.
+            filter_profanity: Filter profanity from transcripts. Set at construction (connect)
+                time only.
         """
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
@@ -274,6 +324,11 @@ class STT(stt.STT):
             language_codes = NOT_GIVEN
         if is_given(agent_context):
             _validate_agent_context(agent_context)
+        _validate_redaction_options(
+            redact_pii=redact_pii,
+            redact_pii_policies=redact_pii_policies,
+            redact_pii_sub=redact_pii_sub,
+        )
 
         # agent_context carryover is only available on the u3-rt-pro family ("u3-pro" is
         # normalized to "u3-rt-pro" below), where it is on by default; the session's
@@ -296,7 +351,9 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,
+                interim_results=_emits_partial_turns(
+                    redact_pii=redact_pii, include_partial_turns=include_partial_turns
+                ),
                 aligned_transcript="word",
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
@@ -388,6 +445,11 @@ class STT(stt.STT):
             voice_focus=voice_focus,
             voice_focus_threshold=voice_focus_threshold,
             mode=mode,
+            redact_pii=redact_pii,
+            redact_pii_policies=redact_pii_policies,
+            redact_pii_sub=redact_pii_sub,
+            include_partial_turns=include_partial_turns,
+            filter_profanity=filter_profanity,
         )
         self._session = http_session
         # user keyterms; _opts.keyterms_prompt holds the effective set (user + session)
@@ -450,6 +512,11 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
+        redact_pii: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pii_policies: NotGivenOr[list[str]] = NOT_GIVEN,
+        redact_pii_sub: NotGivenOr[PIIRedactionSubstitution] = NOT_GIVEN,
+        include_partial_turns: NotGivenOr[bool] = NOT_GIVEN,
+        filter_profanity: NotGivenOr[bool] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -472,6 +539,18 @@ class STT(stt.STT):
             language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
+        next_redact_pii = redact_pii if is_given(redact_pii) else self._opts.redact_pii
+        next_redact_pii_policies = (
+            redact_pii_policies if is_given(redact_pii_policies) else self._opts.redact_pii_policies
+        )
+        next_redact_pii_sub = (
+            redact_pii_sub if is_given(redact_pii_sub) else self._opts.redact_pii_sub
+        )
+        _validate_redaction_options(
+            redact_pii=next_redact_pii,
+            redact_pii_policies=next_redact_pii_policies,
+            redact_pii_sub=next_redact_pii_sub,
+        )
 
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -498,6 +577,20 @@ class STT(stt.STT):
             self._opts.continuous_partials = continuous_partials
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
+        if is_given(redact_pii):
+            self._opts.redact_pii = redact_pii
+        if is_given(redact_pii_policies):
+            self._opts.redact_pii_policies = redact_pii_policies
+        if is_given(redact_pii_sub):
+            self._opts.redact_pii_sub = redact_pii_sub
+        if is_given(include_partial_turns):
+            self._opts.include_partial_turns = include_partial_turns
+        if is_given(filter_profanity):
+            self._opts.filter_profanity = filter_profanity
+        self._capabilities.interim_results = _emits_partial_turns(
+            redact_pii=self._opts.redact_pii,
+            include_partial_turns=self._opts.include_partial_turns,
+        )
 
         for stream in self._streams:
             stream.update_options(
@@ -512,6 +605,11 @@ class STT(stt.STT):
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
+                redact_pii=redact_pii,
+                redact_pii_policies=redact_pii_policies,
+                redact_pii_sub=redact_pii_sub,
+                include_partial_turns=include_partial_turns,
+                filter_profanity=filter_profanity,
             )
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
@@ -596,6 +694,11 @@ class SpeechStream(stt.SpeechStream):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
+        redact_pii: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pii_policies: NotGivenOr[list[str]] = NOT_GIVEN,
+        redact_pii_sub: NotGivenOr[PIIRedactionSubstitution] = NOT_GIVEN,
+        include_partial_turns: NotGivenOr[bool] = NOT_GIVEN,
+        filter_profanity: NotGivenOr[bool] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -618,6 +721,17 @@ class SpeechStream(stt.SpeechStream):
             language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
+        _validate_redaction_options(
+            redact_pii=redact_pii if is_given(redact_pii) else self._opts.redact_pii,
+            redact_pii_policies=(
+                redact_pii_policies
+                if is_given(redact_pii_policies)
+                else self._opts.redact_pii_policies
+            ),
+            redact_pii_sub=(
+                redact_pii_sub if is_given(redact_pii_sub) else self._opts.redact_pii_sub
+            ),
+        )
 
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -641,6 +755,16 @@ class SpeechStream(stt.SpeechStream):
             self._opts.continuous_partials = continuous_partials
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
+        if is_given(redact_pii):
+            self._opts.redact_pii = redact_pii
+        if is_given(redact_pii_policies):
+            self._opts.redact_pii_policies = redact_pii_policies
+        if is_given(redact_pii_sub):
+            self._opts.redact_pii_sub = redact_pii_sub
+        if is_given(include_partial_turns):
+            self._opts.include_partial_turns = include_partial_turns
+        if is_given(filter_profanity):
+            self._opts.filter_profanity = filter_profanity
 
         # Send UpdateConfiguration message over the active websocket
         config_msg: dict = {"type": "UpdateConfiguration"}
@@ -890,6 +1014,19 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.voice_focus_threshold)
             else None,
             "mode": self._opts.mode if is_given(self._opts.mode) else None,
+            "redact_pii": self._opts.redact_pii if is_given(self._opts.redact_pii) else None,
+            "redact_pii_policies": json.dumps(self._opts.redact_pii_policies)
+            if is_given(self._opts.redact_pii_policies) and self._opts.redact_pii_policies
+            else None,
+            "redact_pii_sub": self._opts.redact_pii_sub
+            if is_given(self._opts.redact_pii_sub)
+            else None,
+            "include_partial_turns": self._opts.include_partial_turns
+            if is_given(self._opts.include_partial_turns)
+            else None,
+            "filter_profanity": self._opts.filter_profanity
+            if is_given(self._opts.filter_profanity)
+            else None,
         }
 
         headers = {
@@ -1021,9 +1158,14 @@ class SpeechStream(stt.SpeechStream):
             for word in words
         ]
 
+        # AssemblyAI only guarantees redaction of `transcript`, so redacted final turns emit no
+        # per-word or utterance text; turn timing and confidence still come from `words`.
+        redact_final = is_given(self._opts.redact_pii) and self._opts.redact_pii and end_of_turn
+        emitted_words = [] if redact_final else timed_words
+
         # words are cumulative
         if timed_words:
-            interim_text = " ".join(word for word in timed_words)
+            interim_text = transcript if redact_final else " ".join(word for word in timed_words)
             start_time = timed_words[0].start_time or start_time
             end_time = timed_words[-1].end_time or end_time
             confidence = sum(word.confidence or 0.0 for word in timed_words) / len(timed_words)
@@ -1036,7 +1178,7 @@ class SpeechStream(stt.SpeechStream):
                         text=interim_text,
                         start_time=start_time,
                         end_time=end_time,
-                        words=timed_words,
+                        words=emitted_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
                         metadata=speech_metadata,
@@ -1054,12 +1196,14 @@ class SpeechStream(stt.SpeechStream):
             if self._last_preflight_start_time == 0.0:
                 self._last_preflight_start_time = start_time
 
+            # A redacted final preflight carries the cumulative transcript, so it spans the turn.
+            preflight_start_time = start_time if redact_final else self._last_preflight_start_time
             # utterance is chunk based so we need to filter the words to
             # only include the ones that are part of the current utterance
             utterance_words = [
                 word
                 for word in timed_words
-                if is_given(word.start_time) and word.start_time >= self._last_preflight_start_time
+                if is_given(word.start_time) and word.start_time >= preflight_start_time
             ]
             utterance_confidence = sum(word.confidence or 0.0 for word in utterance_words) / max(
                 len(utterance_words), 1
@@ -1070,10 +1214,10 @@ class SpeechStream(stt.SpeechStream):
                 alternatives=[
                     stt.SpeechData(
                         language=language,
-                        text=utterance,
-                        start_time=self._last_preflight_start_time,
+                        text=transcript if redact_final else utterance,
+                        start_time=preflight_start_time,
                         end_time=end_time,
-                        words=utterance_words,
+                        words=[] if redact_final else utterance_words,
                         confidence=utterance_confidence,
                         speaker_id=speaker_id,
                         metadata=speech_metadata,
@@ -1099,7 +1243,7 @@ class SpeechStream(stt.SpeechStream):
                         text=transcript,
                         start_time=start_time,
                         end_time=end_time,
-                        words=timed_words,
+                        words=emitted_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
                         metadata=speech_metadata,
