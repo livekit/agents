@@ -1,5 +1,5 @@
-//! Direct audio data-plane step measurements, without production observation hooks.
-//! Run beside scripts/bench/sessions.py; these are core instances, not full sessions.
+//! Direct audio data-plane step measurements, without production observation hooks: core
+//! instances, not full sessions.
 
 use lk_agents_abi::{AudioFrame, Ts, resources::ResourceId};
 use lk_agents_voice::audio::AudioChannel;
