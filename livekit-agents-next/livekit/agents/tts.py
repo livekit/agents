@@ -9,8 +9,6 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from opentelemetry import trace
@@ -68,7 +66,7 @@ AudioEmitter = _core.AudioEmitter
 
 class _EmitterOutput:
     """Where the native emitter's output goes: ``SynthesizedAudio`` into the synthesis channel,
-    span attributes onto its current span and ``LK_DUMP_TTS`` segments into ``lk_dump/``."""
+    and span attributes onto its current span."""
 
     def __init__(self, ch: utils.aio.Chan[SynthesizedAudio]) -> None:
         self._ch = ch
@@ -94,12 +92,6 @@ class _EmitterOutput:
         span = trace.get_current_span()
         if span.is_recording():
             span.set_attribute(key, values)
-
-    def dump(self, name: str, wav: bytes) -> None:
-        directory = Path("lk_dump")
-        directory.mkdir(exist_ok=True)
-        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        (directory / f"{name}_{stamp}.wav").write_bytes(wav)
 
     def closed(self) -> bool:
         return self._ch.closed

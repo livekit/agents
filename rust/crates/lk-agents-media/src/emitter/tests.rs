@@ -57,7 +57,7 @@ struct Fx {
 
 impl Fx {
     fn new(stream: bool) -> Fx {
-        let mut em = AudioEmitter::new("test");
+        let mut em = AudioEmitter::default();
         em.initialize("req", SR, CH, FRAME_MS, stream).unwrap();
         Fx { em, eff: Effects::new(), now: Ts::ZERO }
     }
@@ -248,7 +248,7 @@ fn misuse_of_the_lifecycle_is_refused() {
         EmitterError::EndSegmentNotStreaming
     );
 
-    let mut em = AudioEmitter::new("test");
+    let mut em = AudioEmitter::default();
     let mut eff = Effects::new();
     assert_eq!(em.push(Ts::ZERO, &pcm(10), &mut eff).unwrap_err(), EmitterError::NotStarted);
     em.stop(&mut eff);
@@ -284,7 +284,7 @@ fn the_request_id_is_normalised_once_and_rides_every_frame() {
     assert!(!sent(&fx.eff).is_empty());
     assert!(sent(&fx.eff).iter().all(|a| a.request_id == "req"), "every frame carries it");
 
-    let mut blank = AudioEmitter::new("test");
+    let mut blank = AudioEmitter::default();
     blank.initialize("", SR, CH, FRAME_MS, true).unwrap();
     assert_eq!(blank.request_id(), "unknown", "an empty id becomes `unknown`, not `\"\"`");
 }
@@ -307,18 +307,15 @@ fn provider_ids_accumulate_in_order_without_blanks_or_repeats() {
 
 // --------------------------------------------------------------------- the empty-segment guards
 
-// Catches: a silence marker or a debug dump for a segment that opened its byte stream (a zero-byte
-// push) but produced no audio.
+// Catches: a silence marker for a segment that opened its byte stream (a zero-byte push) but
+// produced no audio.
 #[test]
 fn a_segment_that_opened_a_byte_stream_but_produced_no_audio_stays_silent() {
     let mut fx = Fx::streaming("s");
-    fx.em.set_dump(true);
-
     fx.em.push(fx.now, &[], &mut fx.eff).unwrap();
     fx.end_segment();
 
     assert!(sent(&fx.eff).is_empty(), "no 10 ms click for a segment that never spoke");
-    assert!(fx.em.take_dumps().is_empty(), "and no empty dump file for it either");
     assert_eq!(fx.em.pushed_duration(0), 0.0);
 }
 
@@ -359,7 +356,7 @@ fn a_flush_keeps_a_partial_sample_and_an_ended_segment_drops_it() {
 // Catches: the drift floor written as `>=`; 20 ms frames land exactly on 0.150 s.
 #[test]
 fn exactly_150ms_of_sent_audio_is_not_yet_past_the_floor() {
-    let mut em = AudioEmitter::new("test");
+    let mut em = AudioEmitter::default();
     em.initialize("req", SR, CH, 20, true).unwrap(); // 20 ms frames: sends of 10, then 20
     let mut eff = Effects::new();
     em.start_segment("s").unwrap();
@@ -421,36 +418,6 @@ fn stopping_disarms_the_drift_timer() {
     assert!(armed_at(&fx.eff).is_some());
     fx.em.stop(&mut fx.eff);
     assert!(armed_at(&fx.eff).is_none());
-}
-
-// --------------------------------------------------------------------- LK_DUMP_TTS
-
-// Catches: an `LK_DUMP_TTS` switch connected to nothing (`test_tts.py:801,989` monkeypatch it),
-// or one segment's debug audio leaking into the next file.
-#[test]
-fn the_dump_switch_actually_gates_collection() {
-    let mut off = Fx::streaming("s");
-    off.push(100).end_segment();
-    assert!(off.em.take_dumps().is_empty(), "off by default, nothing retained");
-
-    let mut on = Fx::streaming("s");
-    on.em.set_dump(true);
-    on.push(100).end_segment();
-    let dumps = on.em.take_dumps();
-    assert_eq!(dumps.len(), 1);
-    assert_eq!(dumps[0].segment_id, "s");
-    assert_eq!(
-        dumps[0].frames.iter().map(|f| f.samples_per_channel).sum::<u32>(),
-        100,
-        "the real audio, and not the synthetic marker"
-    );
-    assert!(on.em.take_dumps().is_empty(), "draining is destructive");
-
-    on.em.start_segment("b").unwrap();
-    on.push(200).end_segment();
-    let dumps = on.em.take_dumps();
-    assert_eq!(dumps.len(), 1);
-    assert_eq!(dumps[0].frames.iter().map(|f| f.samples_per_channel).sum::<u32>(), 200);
 }
 
 // Catches: a framed chunk re-chunked into progressive frames, or taken outside a segment.

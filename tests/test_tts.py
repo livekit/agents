@@ -815,9 +815,7 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         await tts_v.aclose()
 
 
-async def test_tts_audio_emitter(monkeypatch):
-    monkeypatch.setattr(tts.tts, "lk_dump_tts", False)
-
+async def test_tts_audio_emitter():
     # build a known PCM chunk: 100 samples × 2 bytes each = 200 bytes
     # sample_rate=1000, frame_size_ms=100 => 100 samples per frame
     pcm_chunk = b"\xff\xff" * 100

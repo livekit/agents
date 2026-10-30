@@ -16,7 +16,6 @@ pub enum HostEffect {
     /// Relative, so the clocks need not agree.
     Arm(Duration),
     Cancel,
-    Dump(Box<SegmentDump>),
     Dropped(usize),
     ProviderIds(Vec<String>),
 }
@@ -34,44 +33,14 @@ const TAIL_MS: u32 = 10;
 /// The end-of-segment marker is 10 ms of silence: `sample_rate // 100` (`tts/tts.py:1155`).
 const MARKER_DIVISOR: u32 = 100;
 
-/// Pulled out by the owner when `LK_DUMP_TTS` is on; the host appends the local-time stamp.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SegmentDump {
-    pub label: String,
-    pub request_id: String,
-    /// Empty when `stream=False`; the reference leaves it out of the filename in that case.
-    pub segment_id: String,
-    pub streaming: bool,
-    pub sample_rate: u32,
-    pub num_channels: u16,
-    pub frames: Vec<Frame>,
-}
-
-impl SegmentDump {
-    /// `dump_segment()`'s file name before its `_<local time>.wav`.
-    pub fn name(&self) -> String {
-        if self.streaming {
-            format!("{}_{}_{}", self.label, self.request_id, self.segment_id)
-        } else {
-            format!("{}_{}", self.label, self.request_id)
-        }
-    }
-
-    /// `rtc.combine_audio_frames(frames).to_wav_bytes()`.
-    pub fn wav_bytes(&self) -> Vec<u8> {
-        let pcm: Vec<u8> = self.frames.iter().flat_map(|f| f.data.iter().copied()).collect();
-        crate::wav::encode(self.sample_rate, self.num_channels, &pcm)
-    }
-}
-
 #[derive(Debug, Clone)]
 struct SegmentCtx {
     segment_id: String,
     audio_duration: f64,
 }
 
+#[derive(Default)]
 pub struct AudioEmitter {
-    label: String,
     request_id: String,
     started: bool,
     /// Every mutator returns silently once set, as after `end_input()`.
@@ -100,45 +69,11 @@ pub struct AudioEmitter {
     sent_duration: f64,
     timer_armed: bool,
 
-    // --- LK_DUMP_TTS ---
-    dump: bool,
-    debug_frames: Vec<Frame>,
-    pending_dumps: Vec<SegmentDump>,
-
     /// Bytes of a partial sample an ended segment discarded; the binding logs them.
     dropped_bytes: usize,
 }
 
 impl AudioEmitter {
-    pub fn new(label: impl Into<String>) -> Self {
-        AudioEmitter {
-            label: label.into(),
-            request_id: String::new(),
-            started: false,
-            closed: false,
-            streaming: false,
-            sample_rate: 0,
-            num_channels: 0,
-            frame_size_ms: 0,
-            tail_samples: 0,
-            num_segments: 0,
-            audio_durations: Vec::new(),
-            provider_request_ids: Vec::new(),
-            pending_ids: None,
-            seg: None,
-            abs: None,
-            last_frame: None,
-            timed_transcripts: Vec::new(),
-            sent_start: None,
-            sent_duration: 0.0,
-            timer_armed: false,
-            dump: false,
-            debug_frames: Vec::new(),
-            pending_dumps: Vec::new(),
-            dropped_bytes: 0,
-        }
-    }
-
     // ----------------------------------------------------------------- lifecycle
 
     /// PCM only. An empty `request_id` becomes `"unknown"`.
@@ -359,22 +294,6 @@ impl AudioEmitter {
         self.flush(now, eff)
     }
 
-    // ----------------------------------------------------------------- LK_DUMP_TTS
-
-    /// A real field so the reference's monkeypatching tests keep working through the binding.
-    pub fn set_dump(&mut self, on: bool) {
-        self.dump = on;
-    }
-
-    pub fn dump(&self) -> bool {
-        self.dump
-    }
-
-    /// Always empty when dumping is off.
-    pub fn take_dumps(&mut self) -> Vec<SegmentDump> {
-        std::mem::take(&mut self.pending_dumps)
-    }
-
     pub fn take_dropped_bytes(&mut self) -> usize {
         std::mem::replace(&mut self.dropped_bytes, 0)
     }
@@ -417,7 +336,6 @@ impl AudioEmitter {
             self.emit_frame(Some(f), false, now, eff);
         }
         self.emit_frame(None, true, now, eff);
-        self.dump_segment();
         self.seg = None;
         self.abs = None;
         self.last_frame = None;
@@ -483,9 +401,6 @@ impl AudioEmitter {
 
     fn do_send(&mut self, frame: Frame, is_final: bool, now: Ts, eff: &mut Effects) {
         let dur = self.frame_duration(&frame);
-        if self.dump {
-            self.debug_frames.push(frame.clone());
-        }
         let ev = self.build_event(frame, is_final);
         // A final frame has nothing held back for a drift flush to release.
         self.send_audio(ev, !is_final, dur, now, eff);
@@ -506,9 +421,6 @@ impl AudioEmitter {
             return;
         };
         let dur = self.frame_duration(&tail);
-        if self.dump {
-            self.debug_frames.push(tail.clone());
-        }
         let ev = self.build_event(tail, false);
         self.send_audio(ev, false, dur, now, eff);
         self.account(dur);
@@ -589,21 +501,6 @@ impl AudioEmitter {
             return 0.0;
         }
         f64::from(f.samples_per_channel) / f64::from(self.sample_rate)
-    }
-
-    fn dump_segment(&mut self) {
-        if !self.dump || self.debug_frames.is_empty() {
-            return;
-        }
-        self.pending_dumps.push(SegmentDump {
-            label: self.label.clone(),
-            request_id: self.request_id.clone(),
-            segment_id: self.seg.as_ref().map(|s| s.segment_id.clone()).unwrap_or_default(),
-            streaming: self.streaming,
-            sample_rate: self.sample_rate,
-            num_channels: self.num_channels,
-            frames: std::mem::take(&mut self.debug_frames),
-        });
     }
 }
 

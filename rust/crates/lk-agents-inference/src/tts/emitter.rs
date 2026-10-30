@@ -95,31 +95,17 @@ struct Segment {
     decoding: bool,
 }
 
-/// `LK_DUMP_TTS`, read once; a non-integer value disables dumping. A developer's process-wide
-/// debug switch, like `RUST_LOG`: no application or server setting configures it.
-fn dump_default() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("LK_DUMP_TTS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i64>().ok())
-            .is_some_and(|v| v != 0)
-    })
-}
-
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl AudioEmitter {
     pub fn with_env(label: String, output: Arc<dyn EmitterOutput>, env: EmitterEnv) -> Self {
-        let mut machine = Machine::new(&label);
-        machine.set_dump(dump_default());
         Self(Arc::new(Inner {
             label,
             output,
             env,
-            machine: Mutex::new(machine),
+            machine: Mutex::default(),
             outbox: Mutex::default(),
             decode: OnceLock::new(),
             drift_at: watch::channel(None).0,
@@ -154,7 +140,6 @@ impl Inner {
             if let Some(ids) = machine.take_provider_ids_update() {
                 effects.push(HostEffect::ProviderIds(ids));
             }
-            effects.extend(machine.take_dumps().into_iter().map(|d| HostEffect::Dump(Box::new(d))));
             let dropped = machine.take_dropped_bytes();
             if dropped > 0 {
                 effects.push(HostEffect::Dropped(dropped));
@@ -197,7 +182,6 @@ impl Inner {
             }
             HostEffect::Arm(delay) => self.arm(delay),
             HostEffect::Cancel => self.disarm(),
-            HostEffect::Dump(dump) => self.output.dump(dump.name(), dump.wav_bytes()),
             HostEffect::Dropped(bytes) => log::warn!(
                 target: "livekit.agents",
                 "incomplete PCM sample at end of segment, discarding {bytes} trailing bytes"

@@ -46,8 +46,6 @@ impl EmitterOutput for Output {
         self.ids.lock().unwrap().push(values);
     }
 
-    fn dump(&self, _name: String, _wav: Vec<u8>) {}
-
     fn closed(&self) -> Result<bool, HostError> {
         Ok(false)
     }

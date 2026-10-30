@@ -26,9 +26,6 @@ pub trait EmitterOutput: Send + Sync {
     /// An attribute of the synthesis' current span, when it is recording.
     #[host(notify)]
     fn span_attribute(&self, key: String, values: Vec<String>);
-    /// `LK_DUMP_TTS`: one segment written to `lk_dump/<name>_<local time>.wav`.
-    #[host(notify)]
-    fn dump(&self, name: String, wav: Vec<u8>);
     #[host(call)]
     fn closed(&self) -> Result<bool, HostError>;
 }

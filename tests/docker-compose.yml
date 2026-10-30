@@ -29,10 +29,8 @@ services:
       - ../examples:/app/examples
       - ../pyproject.toml:/app/pyproject.toml
       - ../uv.lock:/app/uv.lock
-      - ../lk_dump:/app/lk_dump
     environment:
       # debug
-      - LK_DUMP_TTS=1
       - LK_OPENAI_DEBUG=1
 
       - LIVEKIT_URL

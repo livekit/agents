@@ -491,16 +491,6 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
             }));
     }
 
-    fn dump(&self, name: ::std::string::String, wav: ::std::vec::Vec<u8>) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let name_arg = name;
-        let wav_arg = wav;
-        ::lk_agents_runtime::host::notify(&self.notifier, "EmitterOutput.dump", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(name_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(wav_arg, py)?];
-                Ok((host.bind(py).getattr("dump")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
-    }
-
     fn closed(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
