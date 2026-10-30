@@ -5,9 +5,10 @@ import bisect
 import inspect
 import itertools
 import json
+import time
 import weakref
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from typing_extensions import TypedDict
@@ -30,6 +31,7 @@ from ..llm.tool_context import (
     ToolFlag,
     ToolResult,
     Toolset,
+    Transition,
     approval_granted,
     approval_scope,
     delivered,
@@ -292,12 +294,15 @@ class _RunningTask:
 class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
-    target: AgentActivity  # activity whose history received the eager insert
     seq: int  # call order across the executor's tools
     say: str | None = None  # exact text spoken as written, on its own
     tool_choice: ToolChoice | None = None
     """What the reply may call: an update's request, or None for a result to act on."""
     result: bool = False  # the call's end
+    transition: Transition | None = None  # what the activity acts on once it is in the history
+    target: AgentActivity | None = None  # activity whose history received the insert
+    inserted: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    """Resolves once the items are in the history, or the update is dropped."""
 
 
 def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | None:
@@ -328,7 +333,7 @@ class ToolSink(Protocol):
     def returned(self, ctx: RunContext, output: Any) -> Any:
         """What the tool's output is to the turn that called it, when it ends before an update."""
 
-    async def update(
+    def update(
         self,
         ctx: RunContext,
         pair: tuple[FunctionCall, FunctionCallOutput],
@@ -336,9 +341,10 @@ class ToolSink(Protocol):
         message: Any,
         *,
         silent: bool,
-    ) -> None: ...
+    ) -> asyncio.Future[None]:
+        """Takes the update in call order; the future resolves once its output is recorded."""
 
-    async def say(self, ctx: RunContext, text: str) -> None: ...
+    def say(self, ctx: RunContext, text: str) -> asyncio.Future[None]: ...
 
     async def ended(self, ctx: RunContext, output: Any) -> None:
         """The tool ended after its turn went on without it."""
@@ -577,6 +583,8 @@ class _ToolExecutor:
         """Cancel everything and drop any buffered replies."""
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if isinstance(self._sink, _CallSink):
+            # cancelled, a call's recorder drops what it still holds
+            tasks.extend(self._sink._recorders)
             for update in self._sink._pending_updates:
                 if update.result:
                     tool_replied(update.ctx)
@@ -658,6 +666,9 @@ class _CallSink:
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
         self._seq = itertools.count()
+        # per call let run in the background: its later updates, and the task recording them
+        self._queues: dict[str, utils.aio.Chan[_PendingUpdate]] = {}
+        self._recorders: set[asyncio.Task[None]] = set()
 
     def started(self, task: _RunningTask) -> None:
         session = task.ctx.session
@@ -690,6 +701,9 @@ class _CallSink:
             status, message = "done", None
         else:
             status, message = "done", str(output)
+
+        if (queue := self._queues.get(call_id)) is not None:
+            queue.close()  # the recorder ends once it recorded what the call queued
 
         entry_id = call_id + "_final" if run_ctx._updates else call_id
         session._tool_execution_updated(
@@ -725,7 +739,7 @@ class _CallSink:
             return delivered(output)
         return output
 
-    async def update(
+    def update(
         self,
         ctx: RunContext,
         pair: tuple[FunctionCall, FunctionCallOutput],
@@ -733,7 +747,7 @@ class _CallSink:
         message: Any,
         *,
         silent: bool,
-    ) -> None:
+    ) -> asyncio.Future[None]:
         ctx.session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
@@ -748,13 +762,11 @@ class _CallSink:
         assert ctx._first_update_fut is not None
         if not ctx._first_update_fut.done():
             self._executor._report(ctx, message, silent=silent)
-            ctx.function_call.extra["__livekit_agents_tool_non_blocking"] = True
-            ctx.speech_handle._background_tool_replies[ctx.function_call.call_id] = asyncio.Future()
-            return
+            return self._release(ctx)
 
-        await self._enqueue_reply(ctx, [pair[0], pair[1]], tool_choice="none")
+        return self._enqueue_reply(ctx, [pair[0], pair[1]], tool_choice="none")
 
-    async def say(self, ctx: RunContext, text: str) -> None:
+    def say(self, ctx: RunContext, text: str) -> asyncio.Future[None]:
         update_step = len(ctx._updates)
         pair = ctx._make_update_pair(
             ToolResult(DELIVERED.format(text=text), reply_required=False),
@@ -773,15 +785,14 @@ class _CallSink:
         if not ctx._first_update_fut.done():
             self._speaker(ctx)._say_exactly(text)
             ctx._first_update_fut.set_result(ToolResult(pair[1].output, reply_required=False))
-            ctx.function_call.extra["__livekit_agents_tool_non_blocking"] = True
-            ctx.speech_handle._background_tool_replies[ctx.function_call.call_id] = asyncio.Future()
-            return
+            return self._release(ctx)
 
-        await self._enqueue_reply(ctx, [pair[0], pair[1]], say=text)
+        return self._enqueue_reply(ctx, [pair[0], pair[1]], say=text)
 
     async def ended(self, ctx: RunContext, output: Any) -> None:
         if output is None or isinstance(output, StopResponse):
-            tool_replied(ctx)
+            # nothing to record: the call's turn hears it has no reply after its updates
+            self._enqueue_reply(ctx, [], result=True)
             return
 
         said: str | None = None
@@ -793,14 +804,13 @@ class _CallSink:
         # final return goes through the coalescer as a synthetic output
         pair = ctx._make_update_pair(output, call_id_suffix="_final")
         ctx._updates.append(pair)
-        if is_transition(output) and (activity := self._owning_activity) is not None:
+        if is_transition(output) and self._owning_activity is not None:
             # the activity acts on it as it does when a tool returns without updates:
             # an InputRequired speaks the question itself, so no reply is generated
             pair[1].reply_required = not isinstance(output, InputRequired)
-            await self._enqueue_reply(ctx, [pair[0], pair[1]], result=True)
-            activity._apply_transition(output, fnc_call_out=pair[1])
+            self._enqueue_reply(ctx, [pair[0], pair[1]], result=True, transition=output)
             return
-        await self._enqueue_reply(ctx, [pair[0], pair[1]], say=said, result=True)
+        self._enqueue_reply(ctx, [pair[0], pair[1]], say=said, result=True)
 
     def _speaker(self, ctx: RunContext) -> AgentActivity:
         """The activity that speaks for this executor's tools now."""
@@ -808,7 +818,22 @@ class _CallSink:
             return self._owning_activity
         return ctx.session._current_activity_or_raise()
 
-    async def _enqueue_reply(
+    def _release(self, ctx: RunContext) -> asyncio.Future[None]:
+        """The call runs on in the background: its later updates wait in its queue for its first
+        output, which the returned future says is in the history."""
+        call_id = ctx.function_call.call_id
+        ctx.function_call.extra["__livekit_agents_tool_non_blocking"] = True
+        ctx.speech_handle._background_tool_replies[call_id] = asyncio.Future()
+        recorded = ctx.speech_handle._tool_output_recorded(call_id)
+        queue = self._queues[call_id] = utils.aio.Chan[_PendingUpdate]()
+        task = asyncio.create_task(
+            self._record(ctx, recorded, queue), name=f"tool_updates_{ctx.function_call.name}"
+        )
+        self._recorders.add(task)
+        task.add_done_callback(self._recorders.discard)
+        return recorded
+
+    def _enqueue_reply(
         self,
         ctx: RunContext,
         items: list[ChatItem],
@@ -816,36 +841,76 @@ class _CallSink:
         say: str | None = None,
         tool_choice: ToolChoice | None = None,
         result: bool = False,
-    ) -> None:
-        """Queue a tool's progress or ``result`` for the next idle, in call order: ``say`` is
-        spoken as written, the items' outputs that ask for a reply are worded by the model,
-        which may call what ``tool_choice`` allows (its default for a result)."""
-        # eager insert so a reply firing before delivery sees the items
-        target = self._speaker(ctx)
-        chat_ctx = target._chat_ctx.copy()
-        chat_ctx.insert(items)
-        await target.update_chat_ctx(chat_ctx)
-        ctx.session.history.insert(items)
-
-        if say is None and not _asks_reply(items):
+        transition: Transition | None = None,
+    ) -> asyncio.Future[None]:
+        """Queue a tool's progress or ``result`` behind the call's previous items, to be told at
+        the next idle in call order: ``say`` is spoken as written, the items' outputs that ask
+        for a reply are worded by the model, which may call what ``tool_choice`` allows (its
+        default for a result). The future resolves once the items are in the history."""
+        update = _PendingUpdate(
+            ctx=ctx,
+            items=items,
+            seq=next(self._seq),
+            say=say,
+            tool_choice=tool_choice,
+            result=result,
+            transition=transition,
+        )
+        if say is not None or _asks_reply(items):
+            # the turn that let the call run in the background makes no reply to its older state
+            ctx.speech_handle._superseded_tool_replies.add(ctx.function_call.call_id)
+        try:
+            self._queues[ctx.function_call.call_id].send_nowait(update)
+        except (KeyError, utils.aio.ChanClosed):
+            # its recorder is gone with the activity: dropped
+            update.inserted.set_result(None)
             if result:
                 tool_replied(ctx)
-            return
+        return update.inserted
 
-        self._pending_updates.append(
-            _PendingUpdate(
-                ctx=ctx,
-                items=items,
-                target=target,
-                seq=next(self._seq),
-                say=say,
-                tool_choice=tool_choice,
-                result=result,
-            )
-        )
-        # the turn that let the call run in the background makes no reply to its older state
-        ctx.speech_handle._superseded_tool_replies.add(ctx.function_call.call_id)
-        self._schedule_delivery(ctx.session)
+    async def _record(
+        self,
+        ctx: RunContext,
+        recorded: asyncio.Future[None],
+        queue: utils.aio.Chan[_PendingUpdate],
+    ) -> None:
+        """Puts a call's later updates in the history in order once its first output is there,
+        so a realtime session never holds them before it, and queues their replies."""
+        try:
+            await recorded
+            async for update in queue:
+                if update.items:
+                    # the history orders by creation: stamped now, they follow the first output
+                    for item in update.items:
+                        item.created_at = time.time()
+                    # eager insert so a reply firing before delivery sees the items
+                    target = update.target = self._speaker(ctx)
+                    chat_ctx = target._chat_ctx.copy()
+                    chat_ctx.insert(update.items)
+                    await target.update_chat_ctx(chat_ctx)
+                    ctx.session.history.insert(update.items)
+                update.inserted.set_result(None)
+
+                if update.say is not None or _asks_reply(update.items):
+                    bisect.insort(self._pending_updates, update, key=lambda u: u.seq)
+                    self._schedule_delivery(ctx.session)
+                elif update.result:
+                    tool_replied(ctx)
+                if update.transition is not None and self._owning_activity is not None:
+                    fnc_call_out = update.items[1]
+                    assert isinstance(fnc_call_out, FunctionCallOutput)
+                    self._owning_activity._apply_transition(
+                        update.transition, fnc_call_out=fnc_call_out
+                    )
+        finally:
+            self._queues.pop(ctx.function_call.call_id, None)
+            queue.close()
+            # what was not recorded is dropped, as the delivery drops it
+            while not queue.empty():
+                dropped = queue.recv_nowait()
+                dropped.inserted.set_result(None)
+                if dropped.result:
+                    tool_replied(ctx)
 
     def _schedule_delivery(self, session: LiveSession) -> None:
         if self._reply_task is None or self._reply_task.done():

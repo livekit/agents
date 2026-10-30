@@ -58,7 +58,8 @@ a module-level agent. A subclass declares its tools as methods with
 `ctx.update(text)` is progress the model words; `ctx.say(text)` is exact
 text, said as written with no model step and recorded as the agent's
 message: spoken on a call, a flagged `working` status in text
-([a2a-live-ext.md](a2a-live-ext.md#exact-text)). On a call the first of
+([a2a-live-ext.md](a2a-live-ext.md#exact-text)). Neither waits: each returns a future set
+once its item is in the history, which the tool may await. On a call the first of
 them releases the tool to the background, and a first `say` is the turn's
 reply; in text a first `update` does so under the `live` inbox
 ([text-endpoints.md](text-endpoints.md)). On a call later ones are delivered

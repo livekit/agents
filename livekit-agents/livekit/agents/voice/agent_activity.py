@@ -4491,6 +4491,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._chat_ctx.insert(interrupted_tool_messages)
                 self._session._tool_items_added(interrupted_tool_messages)
+            speech_handle._mark_tool_outputs_recorded()
             return
 
         # wait for the tool execution to complete
@@ -4569,6 +4570,7 @@ class AgentActivity(RecognitionHooks):
             if tool_messages:
                 self._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
+            speech_handle._mark_tool_outputs_recorded()
             replies_to = [
                 out.fnc_call for out in tool_output.output if out.fnc_call_out.reply_required
             ]
@@ -5259,6 +5261,7 @@ class AgentActivity(RecognitionHooks):
                         "failed to sync the tool results of an interrupted generation",
                         extra={"error": str(e)},
                     )
+            speech_handle._mark_tool_outputs_recorded()
             return
 
         # wait for the tool execution to complete
@@ -5383,6 +5386,7 @@ class AgentActivity(RecognitionHooks):
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
+            speech_handle._mark_tool_outputs_recorded()
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:

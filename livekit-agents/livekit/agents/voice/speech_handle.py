@@ -63,6 +63,8 @@ class SpeechHandle:
         self._background_tool_replies: dict[str, asyncio.Future[list[llm.ChatMessage]]] = {}
         # the calls among them whose newer state is told after this speech instead of a reply here
         self._superseded_tool_replies: set[str] = set()
+        # set once a tool step recorded the first output of each of those calls
+        self._tool_outputs_recorded: dict[str, asyncio.Future[None]] = {}
         # one agent_turn span for the whole speech, however many generations (LLM steps) it
         # takes; opened by the first reply task, ended with the speech in _mark_done
         self._agent_turn_span: trace.Span | None = None
@@ -365,10 +367,25 @@ class SpeechHandle:
 
         if self._generations:
             self._mark_generation_done()
+        # a speech that ended without a tool step records nothing more
+        self._mark_tool_outputs_recorded()
 
         if self._interrupt_timeout_handle is not None:
             self._interrupt_timeout_handle.cancel()
             self._interrupt_timeout_handle = None
+
+    def _tool_output_recorded(self, call_id: str) -> asyncio.Future[None]:
+        """Set once a tool step recorded the first output of ``call_id``, which this speech let
+        run in the background, so the call's later items follow it into the history."""
+        fut = self._tool_outputs_recorded[call_id] = asyncio.Future()
+        if self.done():
+            fut.set_result(None)
+        return fut
+
+    def _mark_tool_outputs_recorded(self) -> None:
+        for fut in self._tool_outputs_recorded.values():
+            if not fut.done():
+                fut.set_result(None)
 
     def _take_agent_turn(self) -> tuple[trace.Span, float | None, str | None] | None:
         """Detach this speech's open ``agent_turn`` so a successor can continue it.

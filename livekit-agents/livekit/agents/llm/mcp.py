@@ -269,7 +269,8 @@ class MCPServer(ABC):
                             "lk.pii.progress_message": message,
                         },
                     )
-                    await ctx.update(message)
+                    # awaited, it would hold the MCP receive loop, result too, until it is recorded
+                    ctx.update(message)
 
                 tool_result = await self._call_tool(
                     name, raw_arguments, progress_callback=_on_progress

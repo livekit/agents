@@ -187,7 +187,7 @@ class A2ADelegate(Delegate, Toolset):
         # the person's answer to the expert's question: it continues the expert's task
         asked = ctx._answer_ref
         if session is not None and self._announce and asked is None:
-            await ctx.update(DISPATCHED)
+            ctx.update(DISPATCHED)
         try:
             result = await self.run(
                 request,

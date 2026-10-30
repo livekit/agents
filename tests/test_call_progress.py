@@ -5,6 +5,7 @@ realtime model and in what the call says."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -66,6 +67,15 @@ def spoken(session: LiveSession) -> list[str]:
 
 def outputs(ctx: ChatContext) -> list[str]:
     return [i.output for i in ctx.items if i.type == "function_call_output"]
+
+
+def tool_items(ctx: ChatContext) -> list[str]:
+    """The calls and outputs in ``ctx``, in order: an output reads ``<call id> out``."""
+    return [
+        i.call_id if i.type == "function_call" else f"{i.call_id} out"
+        for i in ctx.items
+        if i.type in ("function_call", "function_call_output")
+    ]
 
 
 class Booking:
@@ -217,26 +227,104 @@ async def test_a_barge_in_stops_the_speech_and_never_the_experts_task(
     assert ended == ["slots"]
 
 
-@pytest.mark.rule("B71")
-async def test_a_result_before_the_turn_ends_is_told_once_after_it_with_no_acknowledgement(
-    expert: Callable[..., A2ADelegate],
-) -> None:
+async def answer_before_the_turn_ends(
+    expert: Callable[..., A2ADelegate], progress: str = ""
+) -> tuple[LiveSession, ScriptedRealtimeModel]:
+    """A call whose expert answers, after ``progress`` when given, while the turn that released
+    it still speaks; the answer is told."""
     gate, ended, speaking = asyncio.Event(), list[str](), asyncio.Event()
     gate.set()
     model = ScriptedRealtimeModel(
         Reply("Let me check.", [call("ask", "a1", request="slots")], hold=speaking),
         Reply("We have 10 slots.", when=told("a1_final")),
     )
-    desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended))])
+    desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended, progress))])
     async with LiveSession(llm=model) as session:
         await session.start(desk)
         model.active_session.hear("any slots?")
-        await soon(lambda: "There are 10 slots." in outputs(session.history), "the answer")
+        await soon(lambda: ended, "the expert's answer")
+        await asyncio.sleep(0.1)
         speaking.set()
         await soon(lambda: len(spoken(session)) > 1, "the answer told")
+    return session, model
+
+
+@pytest.mark.rule("B71", "B96")
+async def test_a_result_before_the_turn_ends_is_told_once_after_it_with_no_acknowledgement(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    session, model = await answer_before_the_turn_ends(expert)
 
     assert spoken(session) == ["Let me check.", "We have 10 slots."]
     assert len(model.requests) == 2, "the acknowledgement asked no reply"
+    assert tool_items(model.requests[-1]) == ["a1", "a1 out", "a1_final", "a1_final out"]
+
+
+@pytest.mark.rule("B96")
+async def test_progress_and_a_result_before_the_turn_ends_follow_the_acknowledgement(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    session, model = await answer_before_the_turn_ends(expert, progress="Checking.")
+
+    assert spoken(session) == ["Let me check.", "We have 10 slots."]
+    assert tool_items(model.requests[-1]) == [
+        "a1",
+        "a1 out",
+        "a1_update_1",
+        "a1_update_1 out",
+        "a1_final",
+        "a1_final out",
+    ]
+
+
+@pytest.mark.rule("B96")
+async def test_updates_while_the_turn_speaks_never_pause_the_tool_and_follow_its_first_output() -> (
+    None
+):
+    speaking, worked = asyncio.Event(), asyncio.Event()
+    inserted: list[bool] = []
+    model = ScriptedRealtimeModel(
+        Reply("On it.", [call("book", "b1", day="monday")], hold=speaking)
+    )
+    desk = Agent(instructions="front desk")
+
+    @desk.tool
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book a cleaning.
+
+        Args:
+            day: the day
+        """
+        ctx.update("booking now")
+        for n in (1, 2):
+
+            def landed(_: asyncio.Future[None], call_id: str = f"b1_update_{n}") -> None:
+                inserted.append(call_id in tool_items(session.history))
+
+            ctx.update(f"still booking {n}").add_done_callback(landed)
+        worked.set()
+        return f"booked {day}"
+
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        model.active_session.hear("book monday")
+        await asyncio.wait_for(worked.wait(), 1)
+        recorded_while_speaking = list(inserted)
+        speaking.set()
+        await soon(lambda: len(inserted) == 2, "both updates recorded")
+
+    assert recorded_while_speaking == []
+    assert inserted == [True, True], "each future resolved after its insert"
+    assert tool_items(model.active_session.chat_ctx) == [
+        "b1",
+        "b1 out",
+        "b1_update_1",
+        "b1_update_1 out",
+        "b1_update_2",
+        "b1_update_2 out",
+        "b1_final",
+        "b1_final out",
+    ]
 
 
 @pytest.mark.rule("B71")
@@ -324,10 +412,48 @@ async def test_on_the_pipeline_a_result_before_the_turn_ends_is_told_after_it() 
 
     async def book(ctx: RunContext) -> str:
         """Book."""
-        await ctx.update("checking")
+        ctx.update("checking")
         return "booked Tuesday"
 
     spoken = await call_desk(model, book, [("Let me check.", 1.0), ("It is booked.", 1.0)])
 
     assert spoken == ["Let me check.", "It is booked."]
     assert len(model.requests) == 2, "the acknowledgement asked no reply"
+
+
+@pytest.mark.rule("B97")
+async def test_a_tool_that_times_out_its_wait_for_an_update_loses_none_of_its_later_ones() -> None:
+    speaking = asyncio.Event()
+    model = ScriptedRealtimeModel(
+        Reply("On it.", [call("book", "b1", day="monday")], hold=speaking),
+        Reply("Monday is booked.", when=told("b1_final")),
+    )
+    desk = Agent(instructions="front desk")
+
+    @desk.tool
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book a cleaning.
+
+        Args:
+            day: the day
+        """
+        for message in ("booking now", "still booking"):
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(ctx.update(message), 0.05)
+        return f"booked {day}"
+
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        model.active_session.hear("book monday")
+        await asyncio.sleep(0.3)  # both waits time out while the turn speaks
+        speaking.set()
+        await soon(lambda: "Monday is booked." in spoken(session), "the result told")
+
+    assert tool_items(model.active_session.chat_ctx) == [
+        "b1",
+        "b1 out",
+        "b1_update_1",
+        "b1_update_1 out",
+        "b1_final",
+        "b1_final out",
+    ]

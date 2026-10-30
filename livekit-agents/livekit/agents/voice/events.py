@@ -272,14 +272,15 @@ class RunContext(Generic[Deps_T, State_T]):
         async with self.session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
             yield activity
 
-    async def update(
+    def update(
         self,
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
         silent: bool = False,
-    ) -> None:
-        """Push a progress update into the conversation.
+    ) -> asyncio.Future[None]:
+        """Push a progress update into the conversation, without waiting: the returned future
+        resolves once it is in the history, which a tool may await or not.
 
         The first update releases control to the LLM with ``message`` as the tool's
         synthetic return; subsequent updates are coalesced into a deferred reply.
@@ -334,12 +335,19 @@ class RunContext(Generic[Deps_T, State_T]):
         self._updates.append(pair)
 
         if self._executor is not None:
-            await self._executor._sink.update(self, pair, raw_message, message, silent=silent)
+            # shielded: the tool may cancel its wait, and the sink still resolves its own future
+            return asyncio.shield(
+                self._executor._sink.update(self, pair, raw_message, message, silent=silent)
+            )
+        recorded = asyncio.Future[None]()
+        recorded.set_result(None)  # it is on the result, recorded with it
+        return recorded
 
-    async def say(self, text: str) -> None:
+    def say(self, text: str) -> asyncio.Future[None]:
         """Say ``text`` to the person exactly as written, now: spoken on a call, a flagged
         ``working`` status in text, and the agent's message in the history either way. The
-        counterpart of ``update``, whose text the model words.
+        counterpart of ``update``, whose text the model words, and like it returns a future
+        resolved once it is in the history.
 
         On a call the first ``say`` or ``update`` releases the tool to the background, and a
         first ``say`` is the turn's whole reply, with no model step; later ones are spoken at
@@ -349,9 +357,12 @@ class RunContext(Generic[Deps_T, State_T]):
             s.reset_dwell()
 
         if self._executor is not None:
-            await self._executor._sink.say(self, text)
-        elif self._run is not None:
-            await self._run._say(text)
+            return asyncio.shield(self._executor._sink.say(self, text))
+        if self._run is not None:
+            return asyncio.ensure_future(self._run._say(text))
+        said = asyncio.Future[None]()
+        said.set_result(None)
+        return said
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

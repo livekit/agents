@@ -192,6 +192,10 @@ class _ReplyInterrupted(Exception):
         self.shown = shown
 
 
+_Send = tuple[Callable[[], Awaitable[None]], asyncio.Future[None]]
+"""One step of a call's sends, and the future set once it ran."""
+
+
 class TextTools:
     """The sink of a text door's tools: under ``live`` a tool's first update lets its turn go on,
     and what it reports later is sent at once and queued for the next turn."""
@@ -207,17 +211,25 @@ class TextTools:
         self._queue: list[tuple[str, ToolExecutionOutput, bool]] = []
         """By task, in call order: each update, said text and end, and whether it is progress."""
         self._ended = asyncio.Event()
+        self._sends: dict[str, utils.aio.Chan[_Send]] = {}
+        """By call: its frames and queue entries, sent in call order by one task."""
+        self._senders: set[asyncio.Task[None]] = set()
+        self._sent: dict[str, asyncio.Future[None]] = {}
+        """By call: its latest send, set once it is sent."""
+        self._recorded: dict[str, asyncio.Future[None]] = {}
+        """By call: the first update of a call the turn let go on, set once the run records it."""
 
     def started(self, task: _RunningTask) -> None:
         pass
 
     def done(self, task: _RunningTask, output: Any) -> None:
         call_id = task.ctx.function_call.call_id
-        if call_id not in self._released:
-            return
-        # a call stopped or failed with no end of its own: its task still hears that it ended
-        error = "the call was cancelled" if task.exe_task.cancelled() else str(output)
-        self._end(task.ctx, ToolError(error))
+        if call_id in self._released:
+            # a call stopped or failed with no end of its own: its task still hears that it ended
+            error = "the call was cancelled" if task.exe_task.cancelled() else str(output)
+            self._end(task.ctx, ToolError(error))
+        if (sends := self._sends.pop(call_id, None)) is not None:
+            sends.close()  # its task ends once it sent what the call queued
 
     async def stop(self, task: _RunningTask) -> None:
         task.ctx._stop()
@@ -231,7 +243,7 @@ class TextTools:
     def returned(self, ctx: RunContext[Any, Any], output: Any) -> Any:
         return output
 
-    async def update(
+    def update(
         self,
         ctx: RunContext[Any, Any],
         pair: tuple[FunctionCall, FunctionCallOutput],
@@ -239,36 +251,47 @@ class TextTools:
         message: Any,
         *,
         silent: bool,
-    ) -> None:
+    ) -> asyncio.Future[None]:
         call_id = ctx.function_call.call_id
         if (task_id := self._released.get(call_id)) is None:
             # in its turn: progress on the turn's response, and under live the call's output
             hooks = current_run_hooks()
-            if not silent and hooks is not None and hooks.on_update is not None:
-                out = hooks.on_update(text)
+            on_update = hooks.on_update if hooks is not None and not silent else None
+
+            async def progress() -> None:
+                out = on_update(text) if on_update is not None else None
                 if inspect.isawaitable(out):
                     await out
-            if self._live and ctx._first_update_fut is not None:
-                self._released[call_id] = hooks.task_id or "" if hooks is not None else ""
-                # marked on the run now: the work may end before the run reads its output
-                assert ctx._run is not None
-                ctx._run._background_calls.add(call_id)
-                self.executor._report(ctx, message, silent=silent)
-            return
-        if not silent and self._on_update is not None:
-            await self._on_update(task_id, text, False)
-        self._queue.append(
-            (task_id, make_tool_output(fnc_call=pair[0], output=message, exception=None), True)
-        )
 
-    async def say(self, ctx: RunContext[Any, Any], text: str) -> None:
+            sent = self._send(call_id, progress)
+            if not self._live or ctx._first_update_fut is None:
+                return sent  # a frame only: the run's history never holds it
+            self._released[call_id] = hooks.task_id or "" if hooks is not None else ""
+            # marked on the run now: the work may end before the run reads its output
+            assert ctx._run is not None
+            ctx._run._background_calls.add(call_id)
+            self.executor._report(ctx, message, silent=silent)
+            recorded = self._recorded[call_id] = asyncio.Future[None]()
+            return recorded
+
+        out = make_tool_output(fnc_call=pair[0], output=message, exception=None)
+
+        async def queued() -> None:
+            if not silent and self._on_update is not None:
+                await self._on_update(task_id, text, False)
+            self._queue.append((task_id, out, True))
+
+        # queued, not recorded: a later turn records it, which may wait for the tool to end
+        return self._send(call_id, queued)
+
+    def say(self, ctx: RunContext[Any, Any], text: str) -> asyncio.Future[None]:
         call_id = ctx.function_call.call_id
         if (task_id := self._released.get(call_id)) is None:
-            assert ctx._run is not None
-            await ctx._run._say(text)
-            return
-        if self._on_update is not None:
-            await self._on_update(task_id, text, True)
+            run = ctx._run
+            assert run is not None
+            # recorded with the step's outputs once the tool returned, so the future is the frame's
+            run._said.append(ChatMessage(role="assistant", content=[text]))
+            return self._send(call_id, lambda: run._say(text, record=False))
         step = len(ctx._updates)
         pair = ctx._make_update_pair(
             ToolResult(DELIVERED.format(text=text), reply_required=False),
@@ -276,17 +299,65 @@ class TextTools:
         )
         ctx._updates.append(pair)
         out = make_tool_output(fnc_call=pair[0], output=pair[1].output, exception=None)
-        self._queue.append((task_id, out, True))
+
+        async def queued() -> None:
+            if self._on_update is not None:
+                await self._on_update(task_id, text, True)
+            self._queue.append((task_id, out, True))
+
+        return self._send(call_id, queued)
 
     async def ended(self, ctx: RunContext[Any, Any], output: Any) -> None:
-        self._end(ctx, output)
+        await self._end(ctx, output)
 
-    def _end(self, ctx: RunContext[Any, Any], output: Any) -> None:
-        task_id = self._released.pop(ctx.function_call.call_id)
+    def _end(self, ctx: RunContext[Any, Any], output: Any) -> asyncio.Future[None]:
+        call_id = ctx.function_call.call_id
         final_call, _ = ctx._make_update_pair(None, call_id_suffix="_final")
         out = make_tool_output(fnc_call=final_call, output=output, exception=None)
-        self._queue.append((task_id, out, False))
-        self._ended.set()
+
+        async def end() -> None:
+            # a call that ended and was then cancelled has its end queued already
+            if (task_id := self._released.pop(call_id, None)) is not None:
+                self._queue.append((task_id, out, False))
+                self._ended.set()
+
+        return self._send(call_id, end)
+
+    def _send(self, call_id: str, step: Callable[[], Awaitable[None]]) -> asyncio.Future[None]:
+        """Runs ``step`` after the call's earlier ones; the future resolves once it ran."""
+        if (sends := self._sends.get(call_id)) is None:
+            sends = self._sends[call_id] = utils.aio.Chan()
+            task = asyncio.create_task(self._sending(call_id, sends), name=f"tool_sends_{call_id}")
+            self._senders.add(task)
+            task.add_done_callback(self._senders.discard)
+        sent = self._sent[call_id] = asyncio.Future[None]()
+        sends.send_nowait((step, sent))
+        return sent
+
+    async def _sending(self, call_id: str, sends: utils.aio.Chan[_Send]) -> None:
+        try:
+            async for step, sent in sends:
+                try:
+                    await step()
+                except Exception:
+                    logger.exception("a tool's update could not be sent", extra={"call": call_id})
+                if not sent.done():
+                    sent.set_result(None)
+        finally:
+            self._sent.pop(call_id, None)
+
+    async def sent(self, call_id: str) -> None:
+        """Returns once what the call queued so far was sent."""
+        if (sent := self._sent.get(call_id)) is not None:
+            await asyncio.wait({sent})
+
+    def recorded(self, item: ChatItem) -> None:
+        """The run recorded ``item``: a first update that is its output is in the history."""
+        fut = (
+            self._recorded.pop(item.call_id, None) if isinstance(item, FunctionCallOutput) else None
+        )
+        if fut is not None and not fut.done():
+            fut.set_result(None)
 
     def stop_task(self, task_id: str) -> None:
         """A client canceled ``task_id``: all its calls stop, cancellable or not."""
@@ -627,6 +698,7 @@ class AgentRun(Generic[Run_T]):
                 item.extra.setdefault(TASK_KEY, task_id)
             chat_ctx.insert(item)
             new_items.append(item)
+            self._tools.recorded(item)
             if hooks is not None and hooks.on_item is not None:
                 hooks.on_item(item)
 
@@ -739,6 +811,8 @@ class AgentRun(Generic[Run_T]):
             tool = tool_ctx.get_function_tool(fnc_call.name)
             ref = forwarded.get(fnc_call.call_id)
             out = await self._execute(tool, fnc_call, answer_ref=ref)
+            # what the call sent so far goes out before the turn moves on
+            await self._tools.sent(fnc_call.call_id)
             said = out.raw_output if not isinstance(out, AgentTask) else None
             if isinstance(said, ToolResult) and said.verbatim and (said.reply_required or typed):
                 # said when its tool returns; the model reads that it was. On an agent whose
@@ -922,6 +996,8 @@ class AgentRun(Generic[Run_T]):
                     if not said.reply_required and not wants_tool_output:
                         held.append(_tool_text(said.output))
                     out.fnc_call_out.output = delivered(said).output
+                # in call order, whichever call ended first
+                out.fnc_call_out.created_at = time.time()
                 record(out.fnc_call_out)
                 if out.fnc_call_out.reply_required:
                     replies_to.append(fnc_call)
