@@ -341,3 +341,23 @@ impl SynthesisPreparation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcription::Heard;
+    use std::time::Duration;
+
+    // Catches: a transcript-only segment whose words a cut `transcription_node` never delivered
+    // ended its audio leg; the synchroniser took that audio end as a segment of its own, and the
+    // next speech's words joined it and were shown whole before their audio (seed 24984).
+    #[test]
+    fn only_delivered_words_end_the_audio_leg_unvoiced() {
+        let plan = SegmentPlan::new(VoiceKind::Synthesis, true, true, false, false);
+        let mut leg = TextLegState::default();
+        let _ = leg.handle(TextLegEvent::Forwarded);
+        let silent = Heard::complete(String::from("Hello."), Duration::ZERO, 0);
+        assert!(plan.end_unvoiced(&silent, Some(leg), true));
+        assert!(!plan.end_unvoiced(&silent, Some(leg), false));
+    }
+}

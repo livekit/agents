@@ -397,5 +397,9 @@ mod tests {
         };
         let _ = playout.handle(Event::TextDelta(delta), observed());
         assert!(playout.end_unvoiced(&silent, true, true), "its words end the audio leg with none");
+        assert!(
+            !playout.end_unvoiced(&silent, true, false),
+            "words a cancelled transcription chain never delivered end nothing"
+        );
     }
 }
