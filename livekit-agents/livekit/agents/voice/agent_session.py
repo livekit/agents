@@ -1322,7 +1322,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ),
     ) -> None:
         async with self._lock:
-            if not self._started:
+            # a start() that failed after it created the session span (room io, session
+            # host, or activity bring-up) still owns resources to release. the span is set
+            # at the top of start() and cleared below, so only a session that never
+            # started, or is already closed, is skipped
+            if not self._started and self._activity is None and self._session_span is None:
                 return
 
             # the whole close as one bar under agent_session: activity teardown, the close
