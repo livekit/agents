@@ -287,10 +287,15 @@ enum Phase {
         path: Path,
         step: RunStep,
     },
-    /// The run ended by the turn's error; `fail_task` when the message's task fails with it.
+    /// The run, ended by the turn's error, is being abandoned; with `fail_task` its tasks already
+    /// failed with it.
     Abandon {
         fail_task: bool,
     },
+    /// A run that could not be saved fails its own task once the rows its drain picked up failed.
+    FailRun,
+    /// A run that could not be saved failed its tasks; an ended turn's run is abandoned next.
+    RunFailed,
     Resolve,
     Answer {
         reason: Option<&'static str>,
@@ -355,6 +360,8 @@ pub struct TaskMachine {
     error: Option<StorageError>,
     run_id: Option<String>,
     poll: Option<LanePoll>,
+    /// How the turn that raised ended its run, until its tasks failed and it is abandoned.
+    ended: Option<(RunOutcome, String)>,
     /// When the watched `submitted` row's own waiter has surely given up the lane: its wait
     /// started at most a debounce after this machine first saw the row.
     waiter_gone_at: Option<Duration>,
@@ -414,6 +421,7 @@ impl TaskMachine {
             error: None,
             run_id: None,
             poll: None,
+            ended: None,
             waiter_gone_at: None,
             leased: false,
             rows: Vec::new(),
@@ -658,19 +666,19 @@ impl TaskMachine {
 
     /// A run whose save could not be written: the inbox rows its drain picked up fail, then the
     /// message's own task, `storage-unavailable`; nobody else would fail them but `worker-lost`.
+    /// They fail while the run still holds the lane: a holder taking it would find them `working`.
     fn fail_run(&mut self) -> Operation {
         self.answer = None;
         let own = self.task_id.clone();
         let picked: Vec<String> =
             std::mem::take(&mut self.task_ids).into_iter().filter(|t| *t != own).collect();
         if picked.is_empty() {
-            let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
-            return self.fail_task(own, REASON_STORAGE_UNAVAILABLE, then);
+            return self.fail_task(own, REASON_STORAGE_UNAVAILABLE, Phase::RunFailed);
         }
         self.phase = Phase::Failing;
         self.failing = Some(Failing {
             reason: REASON_STORAGE_UNAVAILABLE,
-            then: Phase::Abandon { fail_task: true },
+            then: Phase::FailRun,
             target: FailTarget::Orphans { skip: Vec::new() },
         });
         self.failed(REASON_STORAGE_UNAVAILABLE, picked)
@@ -866,7 +874,17 @@ impl TaskMachine {
                     ..Answer::row(task_id, task, Some("not-written"))
                 }));
             }
-            (Phase::Abandon { fail_task: true }, Completion::Done) => self.fail_run(),
+            (Phase::FailRun, Completion::Done) => self.fail_run(),
+            (Phase::RunFailed, Completion::Done) => match self.ended.take() {
+                Some((outcome, reason)) => {
+                    self.phase = Phase::Abandon { fail_task: true };
+                    Operation::Abandon { outcome, reason }
+                }
+                None => self.answer_task(Some(REASON_STORAGE_UNAVAILABLE)),
+            },
+            (Phase::Abandon { fail_task: true }, Completion::Done) => {
+                self.answer_task(Some(REASON_STORAGE_UNAVAILABLE))
+            }
             (Phase::Abandon { fail_task: false }, Completion::Done) => {
                 return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
                     StorageError::Invalid("a run was abandoned without its cause".into())
@@ -1071,8 +1089,13 @@ impl TaskMachine {
                 let reason = python_reason(&error);
                 self.error = Some(error);
                 self.turn = None;
-                self.phase = Phase::Abandon { fail_task };
-                Operation::Abandon { outcome, reason }
+                if fail_task {
+                    self.ended = Some((outcome, reason));
+                    self.fail_run()
+                } else {
+                    self.phase = Phase::Abandon { fail_task };
+                    Operation::Abandon { outcome, reason }
+                }
             }
             (Phase::Answer { reason }, _) => {
                 // the answer's row is unreadable: the task as this worker left it

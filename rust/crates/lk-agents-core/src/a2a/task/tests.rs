@@ -139,21 +139,26 @@ fn batch_preserves_the_callers_continuation_target() {
     assert_eq!(pending, Operation::ReadPending(Some("waiting".into())));
 }
 
+/// A2A_SEED=310 (worker_lost_only_when_it_died, Task): a turn that lost the database abandoned
+/// its run, releasing the lane, before failing its task; a waiting holder took the lane, found the
+/// task `working` and failed it `worker-lost`. The task fails first, under the lease.
 #[test]
-fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
+fn storage_failure_in_the_turn_fails_the_receipt_before_releasing_the_lane() {
     let mut m = machine(Policy::Queue);
     m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(4);
     assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(None));
-    let abandon =
+    let pickup =
         operation(at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("offline".into()))));
-    assert!(matches!(abandon, Operation::Abandon { outcome: RunOutcome::Failed, .. }));
-    assert!(matches!(step(&mut m, Completion::Done), Operation::Pickup(t) if t == "receipt"));
+    assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Working))),
         Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
             if failed.len() == 1 && failed[0].0 == "receipt"
     ));
+    let abandon = step(&mut m, Completion::Done);
+    assert!(matches!(abandon, Operation::Abandon { outcome: RunOutcome::Failed, .. }));
+    assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
 }
 
 /// A handler whose `save_context` raised (a stale save, a field that is not JSON, a state too
@@ -168,19 +173,19 @@ fn a_refused_save_in_the_handler_fails_the_receipt() {
         m.pending = Some(4);
         step(&mut m, Completion::Done);
         let raised = StorageError::Invalid(format!("{kind}: save_context refused"));
-        let abandon = operation(at(&mut m, Duration::ZERO, Err(raised)));
-        assert!(
-            matches!(&abandon, Operation::Abandon { outcome: RunOutcome::Failed, reason }
-                if *reason == format!("{kind}: save_context refused")),
-            "{abandon:?}"
-        );
-        let pickup = step(&mut m, Completion::Done);
+        let pickup = operation(at(&mut m, Duration::ZERO, Err(raised)));
         assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{kind}: {pickup:?}");
         assert!(matches!(
             step(&mut m, Completion::Picked(Some(TaskState::Working))),
             Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
                 if failed.len() == 1 && failed[0].0 == "receipt"
         ));
+        let abandon = step(&mut m, Completion::Done);
+        assert!(
+            matches!(&abandon, Operation::Abandon { outcome: RunOutcome::Failed, reason }
+                if *reason == format!("{kind}: save_context refused")),
+            "{abandon:?}"
+        );
     }
 }
 
@@ -195,8 +200,8 @@ fn a_task_failure_the_database_could_not_store_answers_its_error() {
     m.pending = Some(4);
     step(&mut m, Completion::Done);
     let unavailable = || Err(StorageError::Unavailable("unreachable".into()));
-    operation(at(&mut m, Duration::ZERO, unavailable()));
-    assert!(matches!(step(&mut m, Completion::Done), Operation::Pickup(t) if t == "receipt"));
+    let pickup = operation(at(&mut m, Duration::ZERO, unavailable()));
+    assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     let effects = at(&mut m, Duration::ZERO, unavailable());
     assert!(
         matches!(&effects[..], [Effect::Finished(Err(StorageError::Unavailable(_)))]),
