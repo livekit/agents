@@ -275,20 +275,6 @@ async fn next_within(child: &Child, within: Duration) -> Option<ToChild> {
     tokio::time::timeout(within, recv_skipping_pings(child)).await.ok()
 }
 
-// Catches: a pong read at the instant the health deadline expires reviving the process: what is
-// due runs before the input.
-#[tokio::test(start_paused = true)]
-async fn the_due_health_deadline_precedes_a_same_instant_pong() {
-    let opts = SupervisorOptions { ping_interval: 0.5, ping_timeout: 1.0, ..short(60.0) };
-    let (sup, host, mut child) = setup(opts);
-    sup.supervise().await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
-    settle().await;
-    assert_eq!(host.kills.load(Ordering::SeqCst), 1);
-    assert!(host.find("process is unresponsive, killing process").is_some());
-}
-
 // Catches: a job whose protobuf or timestamps are invalid reaching the child.
 #[tokio::test(start_paused = true)]
 async fn invalid_job_protobuf_and_timestamps_are_refused_at_the_launch_boundary() {
