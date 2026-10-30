@@ -118,6 +118,7 @@ impl ProcSupervisor {
             startup_at: None,
             supervising: false,
             next_ping: None,
+            ping_unanswered: false,
             pong_deadline: None,
             next_sample: None,
             baseline_mb: None,
@@ -272,6 +273,9 @@ struct Driver {
     startup_at: Option<Duration>,
     supervising: bool,
     next_ping: Option<Duration>,
+    /// A ping is unanswered: the next waits for its pong, so a stalled child never fills the
+    /// channel with pings.
+    ping_unanswered: bool,
     pong_deadline: Option<Duration>,
     next_sample: Option<Duration>,
     baseline_mb: Option<f64>,
@@ -716,7 +720,10 @@ impl Driver {
         if let Some(at) = self.next_ping
             && at <= now
         {
-            self.send(ToChild::Ping { sent_ms: unix_now_ms().max(0) as u64 });
+            if !self.ping_unanswered {
+                self.ping_unanswered = true;
+                self.send(ToChild::Ping { sent_ms: unix_now_ms().max(0) as u64 });
+            }
             self.next_ping =
                 Some(now + secs(self.opts.ping_interval).max(Duration::from_millis(1)));
         }
@@ -804,6 +811,7 @@ impl Driver {
         }
         match msg {
             ToParent::Pong { sent_ms } => {
+                self.ping_unanswered = false;
                 let delay = unix_now_ms().saturating_sub(sent_ms as i64);
                 if delay as f64 > self.opts.high_ping_threshold * 1000.0 {
                     let msg = if self.opts.killable {

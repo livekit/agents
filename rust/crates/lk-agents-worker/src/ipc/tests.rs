@@ -273,10 +273,12 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     let ToChild::Ping { sent_ms } = recv(&mut child).await else { panic!() };
     assert_eq!(start.elapsed(), Duration::ZERO);
     assert!((unix_now_ms() - sent_ms as i64).abs() < 5_000);
-    assert!(matches!(recv(&mut child).await, ToChild::Ping { .. }));
-    assert_eq!(start.elapsed(), Duration::from_millis(2500));
-
+    // the next ping waits for this one's pong
+    tokio::time::sleep(Duration::from_secs(4)).await;
     write(&mut child, &ToParent::Pong { sent_ms: (unix_now_ms() - 2_000) as u64 }).await.unwrap();
+    assert!(matches!(recv(&mut child).await, ToChild::Ping { .. }));
+    assert_eq!(start.elapsed(), Duration::from_millis(5000));
+
     while host.find("process is unresponsive").is_none() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -288,6 +290,18 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(host.messages().iter().filter(|m| *m == "process is unresponsive").count(), 1);
+}
+
+// Catches: pings queued to a child that stopped answering until the channel is full, which then
+// fails as a transport error instead of the pong deadline's diagnosis.
+#[tokio::test(start_paused = true)]
+async fn one_ping_is_in_flight_at_a_time() {
+    let (sup, _host, child) = setup(opts());
+    sup.supervise().await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert!(matches!(recv(&child).await, ToChild::Ping { .. }));
+    let next = tokio::time::timeout(Duration::from_millis(1), child.recv()).await;
+    assert!(next.is_err(), "a second ping went out unanswered: {next:?}");
 }
 
 // Catches: a hung child (no pongs) never being killed, or pongs not pushing the deadline back.
