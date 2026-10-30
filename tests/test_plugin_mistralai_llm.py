@@ -11,7 +11,7 @@ from mistralai.client.errors import (
     HTTPValidationErrorData,
     SDKError,
 )
-from mistralai.client.models import MessageOutputEvent, TextChunk, ThinkChunk
+from mistralai.client.models import CompletionArgs, MessageOutputEvent, TextChunk, ThinkChunk
 
 from livekit.agents import APIStatusError, llm
 from livekit.agents.types import APIConnectOptions
@@ -285,5 +285,31 @@ class TestReasoningEffort:
                     chunks.append(chunk)
 
             assert [chunk.delta.content for chunk in chunks if chunk.delta] == ["Hello"]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_completion_args_are_merged(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, reasoning_effort="high")
+
+        try:
+            await _run(model, extra_kwargs={"completion_args": CompletionArgs(max_tokens=50)})
+            completion_args = conversations.requests[0]["completion_args"]
+            assert completion_args.max_tokens == 50
+            assert completion_args.reasoning_effort == "high"
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_completion_args_take_precedence(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, temperature=0.2, reasoning_effort="high")
+
+        try:
+            await _run(model, extra_kwargs={"completion_args": {"reasoning_effort": "none"}})
+            completion_args = conversations.requests[0]["completion_args"]
+            assert completion_args.reasoning_effort == "none"
+            assert completion_args.temperature == 0.2
         finally:
             await model.aclose()

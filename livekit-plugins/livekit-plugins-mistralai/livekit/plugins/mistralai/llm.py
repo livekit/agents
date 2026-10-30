@@ -240,6 +240,14 @@ class LLM(llm.LLM):
                 completion_args["tool_choice"] = "auto" if has_provider_tools else "required"
             elif resolved_tool_choice in ("auto", "none"):
                 completion_args["tool_choice"] = resolved_tool_choice
+
+        # completion_args passed through extra_kwargs win over the configured options
+        caller_args = extra.get("completion_args")
+        if isinstance(caller_args, CompletionArgs):
+            completion_args.update(caller_args.model_dump(exclude_unset=True))
+        elif isinstance(caller_args, dict):
+            completion_args.update(caller_args)
+
         if completion_args:
             extra["completion_args"] = CompletionArgs(**completion_args)
 
