@@ -4,7 +4,7 @@
 //! installed here once.
 
 use lk_agents_abi::media::images::FrameReader;
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
@@ -43,7 +43,7 @@ struct State {
 
 static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, owner: None });
 
-fn state() -> parking_lot::MutexGuard<'static, State> {
+fn state() -> lk_agents_net::lock::MutexGuard<'static, State> {
     PROCESS.lock()
 }
 

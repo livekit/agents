@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
@@ -67,7 +68,7 @@ struct FakeHost {
 
 impl ProcessCallbacks for Arc<FakeHost> {
     fn log(&self, level: Level, msg: &str, extra: Extra) {
-        self.logs.lock().unwrap().push((level, msg.to_owned(), extra));
+        self.logs.lock().push((level, msg.to_owned(), extra));
         self.logged.notify_one();
     }
 
@@ -81,16 +82,16 @@ impl ProcessCallbacks for Arc<FakeHost> {
 
     fn kill(&self) -> Result<(), String> {
         self.kills.fetch_add(1, Ordering::SeqCst);
-        if let Some(cause) = self.kill_error.lock().unwrap().clone() {
+        if let Some(cause) = self.kill_error.lock().clone() {
             return Err(cause);
         }
         self.alive.store(false, Ordering::SeqCst);
-        self.child.lock().unwrap().take();
+        self.child.lock().take();
         Ok(())
     }
 
     fn sample_memory(&self) -> Sample {
-        self.samples.lock().unwrap().pop_front().unwrap_or(Ok((100.0, "uss".into())))
+        self.samples.lock().pop_front().unwrap_or(Ok((100.0, "uss".into())))
     }
 
     fn release(&self) {
@@ -98,21 +99,21 @@ impl ProcessCallbacks for Arc<FakeHost> {
     }
 
     fn incomplete_cleanup(&self, observation: CleanupObservation) {
-        self.incomplete.lock().unwrap().push(observation);
+        self.incomplete.lock().push(observation);
     }
 
     fn signal_failed(&self, failure: SignalFailure) {
-        self.signal_failures.lock().unwrap().push(failure);
+        self.signal_failures.lock().push(failure);
     }
 }
 
 impl FakeHost {
     fn messages(&self) -> Vec<String> {
-        self.logs.lock().unwrap().iter().map(|(_, m, _)| m.clone()).collect()
+        self.logs.lock().iter().map(|(_, m, _)| m.clone()).collect()
     }
 
     fn find(&self, msg: &str) -> Option<(Level, Extra)> {
-        let logs = self.logs.lock().unwrap();
+        let logs = self.logs.lock();
         logs.iter().find(|(_, m, _)| m == msg).map(|(l, _, e)| (*l, e.clone()))
     }
 }
@@ -352,7 +353,7 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
     let (level, extra) = host.find("process exiting").unwrap();
     assert_eq!((level, extra), (Level::Info, vec![("reason", ExtraValue::Str("shutdown".into()))]));
     assert!(
-        host.logs.lock().unwrap().iter().all(|(l, _, _)| *l != Level::Error),
+        host.logs.lock().iter().all(|(l, _, _)| *l != Level::Error),
         "{:?}",
         host.messages()
     );
@@ -364,7 +365,7 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
 #[tokio::test(start_paused = true)]
 async fn shutdown_kills_a_process_that_does_not_ack() {
     let (sup, host, child) = setup(opts());
-    *host.child.lock().unwrap() = Some(child);
+    *host.child.lock() = Some(child);
     sup.supervise().await;
     let start = Instant::now();
     let close = tokio::spawn({
@@ -449,7 +450,7 @@ fn memory_warning_is_rate_limited() {
 #[tokio::test]
 async fn a_native_memory_sample_enforces_the_process_limit() {
     let (sup, host, _child) = setup(SupervisorOptions { memory_limit_mb: 500.0, ..opts() });
-    host.samples.lock().unwrap().push_back(Ok((600.0, "pss".into())));
+    host.samples.lock().push_back(Ok((600.0, "pss".into())));
     sup.supervise().await;
     let message = "job process exceeded memory limit, killing it";
     let (level, _) = tokio::time::timeout(Duration::from_secs(1), async {

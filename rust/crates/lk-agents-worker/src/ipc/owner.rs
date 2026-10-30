@@ -3,7 +3,7 @@
 //! which continue whether or not the host still awaits them.
 
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 

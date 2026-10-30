@@ -28,7 +28,8 @@ use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
 use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use tokio::sync::{Notify, mpsc, watch};
 
 const ROOM_EVENT_CAPACITY: usize = 64;
@@ -168,7 +169,7 @@ impl RoomIo {
     }
 
     pub fn events(&self) -> Option<mpsc::Receiver<RoomIoEvent>> {
-        self.events_rx.lock().unwrap().take()
+        self.events_rx.lock().take()
     }
 
     async fn read_events(
@@ -440,7 +441,7 @@ impl RoomIo {
             self.finish_starting();
             return;
         };
-        *self.chat_registered.lock().unwrap() = true;
+        *self.chat_registered.lock() = true;
         let owner = self.clone();
         self.spawn_reserved("room chat listener", async move {
             owner.read_chat(streams).await;
@@ -485,7 +486,7 @@ impl RoomIo {
         .await;
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         self.record_cleanup(streams.close(deadline).await);
-        let registered = std::mem::take(&mut *self.chat_registered.lock().unwrap());
+        let registered = std::mem::take(&mut *self.chat_registered.lock());
         if registered && self.room.unregister_text_stream_handler(TOPIC_CHAT).is_err() {
             self.record_cleanup(Closed::Failed);
         }
@@ -549,7 +550,7 @@ impl RoomIo {
     }
 
     fn begin_work(&self) -> bool {
-        let mut state = self.execution.lock().unwrap();
+        let mut state = self.execution.lock();
         if state.closing {
             return false;
         }
@@ -558,7 +559,7 @@ impl RoomIo {
     }
 
     fn finish_starting(&self) {
-        self.execution.lock().unwrap().starting -= 1;
+        self.execution.lock().starting -= 1;
         self.started.notify_waiters();
     }
 
@@ -568,11 +569,11 @@ impl RoomIo {
     }
 
     fn is_closing(&self) -> bool {
-        self.execution.lock().unwrap().closing
+        self.execution.lock().closing
     }
 
     fn record_cleanup(&self, outcome: Closed) {
-        let mut state = self.execution.lock().unwrap();
+        let mut state = self.execution.lock();
         state.cleanup = state.cleanup.and(outcome);
     }
 
@@ -584,7 +585,7 @@ impl RoomIo {
 
     fn request_close(self: &Arc<Self>) {
         let closing = {
-            let mut execution = self.execution.lock().unwrap();
+            let mut execution = self.execution.lock();
             if execution.closing {
                 return;
             }
@@ -616,7 +617,7 @@ impl RoomIo {
             let started = self.started.notified();
             tokio::pin!(started);
             started.as_mut().enable();
-            if self.execution.lock().unwrap().starting == 0 {
+            if self.execution.lock().starting == 0 {
                 break;
             }
             if lk_agents_abi::timeout(
@@ -631,8 +632,8 @@ impl RoomIo {
             }
         }
         let joined = self.tasks.wait_empty(self.clock.as_ref(), Some(deadline)).await;
-        let mut outcome = self.execution.lock().unwrap().cleanup;
-        if !joined || self.execution.lock().unwrap().starting != 0 {
+        let mut outcome = self.execution.lock().cleanup;
+        if !joined || self.execution.lock().starting != 0 {
             outcome = outcome.and(Closed::TimedOut);
         }
         if let Some(pc) = &self.pre_connect {

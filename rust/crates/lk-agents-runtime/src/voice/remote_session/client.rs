@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
@@ -103,7 +104,7 @@ struct Unregister<'a> {
 
 impl Drop for Unregister<'_> {
     fn drop(&mut self) {
-        self.shared.pending.lock().expect("pending requests").remove(&self.id);
+        self.shared.pending.lock().remove(&self.id);
     }
 }
 
@@ -130,7 +131,7 @@ impl RemoteSession {
         sink: Arc<dyn ClientSink>,
     ) -> Result<(), HostError> {
         {
-            let mut st = self.shared.state.lock().expect("client state");
+            let mut st = self.shared.state.lock();
             if st.started {
                 return Ok(());
             }
@@ -150,7 +151,7 @@ impl RemoteSession {
     /// `aclose()`: cancel every pending request, stop reading, close the transport.
     pub async fn aclose(&self) {
         let transport = {
-            let mut st = self.shared.state.lock().expect("client state");
+            let mut st = self.shared.state.lock();
             if !st.started {
                 return;
             }
@@ -158,7 +159,7 @@ impl RemoteSession {
             st.transport.take()
         };
         // dropping the senders is the cancel: each waiting caller sees `Cancelled`
-        self.shared.pending.lock().expect("pending requests").clear();
+        self.shared.pending.lock().clear();
         self.shared.recv.cancel_and_wait(&*self.shared.clock).await;
         if let Some(t) = transport {
             t.close().await;
@@ -175,14 +176,13 @@ impl RemoteSession {
         let transport = sh
             .state
             .lock()
-            .expect("client state")
             .transport
             .clone()
             .ok_or(RequestError::NotStarted)?;
         let kind = request_name(&request);
         let id = sh.ids.mint();
         let (tx, rx) = oneshot::channel();
-        if sh.pending.lock().expect("pending requests").insert(id.clone(), tx).is_some() {
+        if sh.pending.lock().insert(id.clone(), tx).is_some() {
             // unreachable with a working id mint; the displaced caller sees `Cancelled`
             log::error!(target: LOG, request_id = id.as_str();
                 "duplicate remote session request id; cancelling the displaced caller");
@@ -276,7 +276,7 @@ async fn client_recv_loop(
         match msg.message {
             Some(Message::Response(resp)) => {
                 // a response to a request that already timed out finds nothing and is dropped
-                let slot = sh.pending.lock().expect("pending requests").remove(&resp.request_id);
+                let slot = sh.pending.lock().remove(&resp.request_id);
                 if let Some(tx) = slot {
                     let _ = tx.send(resp);
                 }

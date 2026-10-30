@@ -1,7 +1,7 @@
 //! [`AgentRunner`], the host's class: each `run` starts one invocation ([`start`]) on the process
 //! runtime and hands its updates out as a stream whose drop cancels it.
 
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, RunUpdate};

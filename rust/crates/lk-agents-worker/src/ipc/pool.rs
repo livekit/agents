@@ -10,7 +10,7 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 

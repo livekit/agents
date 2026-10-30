@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use parking_lot::Mutex;
+use lk_agents_runtime::net::lock::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::BoxFuture;
@@ -31,6 +31,16 @@ mod node_tests;
 mod parentage_tests;
 pub mod source;
 pub mod stream;
+
+/// Whether this thread holds the GIL. `PyGILState_Check` (CPython 3.4+) is outside the limited
+/// API pyo3 exposes under abi3, but every interpreter the wheel supports exports it.
+pub fn holds_gil() -> bool {
+    unsafe extern "C" {
+        fn PyGILState_Check() -> std::ffi::c_int;
+    }
+    // SAFETY: callable from any thread, initialized interpreter or not.
+    unsafe { PyGILState_Check() == 1 }
+}
 
 /// The dispatch a generated proxy's call takes, in `context`, requiring no scope.
 #[cfg(test)]

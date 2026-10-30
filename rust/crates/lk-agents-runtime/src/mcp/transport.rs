@@ -4,7 +4,8 @@ use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use futures_util::{Sink, Stream, StreamExt};
@@ -38,12 +39,12 @@ impl Drop for Reader {
 
 impl TransportReceipt {
     pub fn update<T>(&self, change: impl FnOnce(&mut TransportSettlement) -> T) -> T {
-        let out = change(&mut self.state.lock().unwrap());
+        let out = change(&mut self.state.lock());
         self.changed.notify_waiters();
         out
     }
     pub fn read<T>(&self, read: impl FnOnce(&TransportSettlement) -> T) -> T {
-        read(&self.state.lock().unwrap())
+        read(&self.state.lock())
     }
     fn reader(self: &Arc<Self>) -> Reader {
         self.update(TransportSettlement::reader_opened);

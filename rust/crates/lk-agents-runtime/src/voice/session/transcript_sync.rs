@@ -13,7 +13,8 @@ use lk_agents_voice::transcription::lifecycle::{
 };
 use lk_agents_voice::transcription::pacer::{PaceEffect, PacerOptions};
 use lk_agents_voice::transcription::synchronizer::{Hyphenator, SyncInput};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
+use lk_agents_net::lock::Mutex;
 use tokio::sync::mpsc;
 
 /// The actor's locked state. Its decisions belong to the synchronous lifecycle.
@@ -35,11 +36,11 @@ struct SyncCore {
 
 impl SyncCore {
     fn enabled(&self) -> bool {
-        self.state.lock().unwrap().lifecycle.segments.enabled()
+        self.state.lock().lifecycle.segments.enabled()
     }
 
     fn decide(&self, event: SyncEvent) -> Vec<SyncEffect> {
-        self.state.lock().unwrap().lifecycle.handle(event)
+        self.state.lock().lifecycle.handle(event)
     }
 
     /// Step the pure lifecycle and perform its ordered synchronous effects. The words released
@@ -80,7 +81,7 @@ impl SyncCore {
                 log::warn!(target: "livekit.agents", "{}", warning.message());
             }
             SyncEffect::Queue(output) => {
-                if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+                if let Some(tx) = self.tx.lock().as_ref() {
                     let _ = tx.send(output);
                 }
             }
@@ -153,7 +154,7 @@ impl SyncedAudioOutput {
         });
         let observer: Arc<dyn PlaybackObserver> = Arc::new(AudioEvents(Arc::downgrade(&node)));
         next.tracker().observe(observer.clone());
-        *node.observer.lock().unwrap() = Some(observer);
+        *node.observer.lock() = Some(observer);
         node
     }
 
@@ -422,7 +423,7 @@ impl TranscriptSynchronizer {
         for effect in self.core.decide(SyncEvent::Close) {
             match effect {
                 SyncEffect::CloseSender => {
-                    self.core.tx.lock().unwrap().take();
+                    self.core.tx.lock().take();
                 }
                 SyncEffect::BeginWait => {
                     for wait in self.core.decide(SyncEvent::WaitStarted(self.core.clock.now())) {

@@ -7,7 +7,8 @@
 //! [`ConsolePlayback`]'s; only the socket is here.
 
 use lk_agents_net::task::TaskSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::console::ConsolePort;
@@ -101,13 +102,13 @@ impl ConsolePort for ConsoleIo {
 impl ConsoleIo {
     fn send(&self, message: Message) {
         let msg = proto::AgentSessionMessage { message: Some(message) };
-        if let Some(tx) = self.outgoing.lock().unwrap().as_ref() {
+        if let Some(tx) = self.outgoing.lock().as_ref() {
             let _ = tx.send(frame(&msg.encode_to_vec()));
         }
     }
 
     fn finish(&self) {
-        let cleared = self.playback.lock().unwrap().clear();
+        let cleared = self.playback.lock().clear();
         if let Some((segment, finished)) = cleared {
             self.tracker.playback_finished(segment, finished);
         }
@@ -117,7 +118,7 @@ impl ConsoleIo {
 impl SessionTransport for Transport {
     fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
-            let Some(mut rx) = self.io.outgoing_rx.lock().unwrap().take() else {
+            let Some(mut rx) = self.io.outgoing_rx.lock().take() else {
                 return Ok(());
             };
             let addr = &self.io.addr;
@@ -174,7 +175,7 @@ impl SessionTransport for Transport {
                 }
                 match read.read(&mut chunk).await {
                     Ok(0) | Err(_) => {
-                        self.io.mic.lock().unwrap().take();
+                        self.io.mic.lock().take();
                         return Ok(None);
                     }
                     Ok(n) => decoder.push(&chunk[..n]),
@@ -185,21 +186,21 @@ impl SessionTransport for Transport {
 
     fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
         Box::pin(async move {
-            self.io.outgoing.lock().unwrap().take();
-            self.io.mic.lock().unwrap().take();
+            self.io.outgoing.lock().take();
+            self.io.mic.lock().take();
         })
     }
 }
 
 impl ConsoleSink for ConsoleIo {
     fn push_input_frame(&self, frame: &console_io::AudioFrame) {
-        if let Some(mic) = self.mic.lock().unwrap().as_ref() {
+        if let Some(mic) = self.mic.lock().as_ref() {
             let _ = mic.send(microphone_frame(frame));
         }
     }
 
     fn playout_finished(&self) {
-        let finished = self.playback.lock().unwrap().finished();
+        let finished = self.playback.lock().finished();
         if let Some((segment, finished)) = finished {
             self.tracker.playback_finished(segment, finished);
         }
@@ -243,7 +244,7 @@ impl AudioOutput for ConsoleIo {
             let now = lk_agents_abi::unix_secs(self.clock.wall());
             let segment =
                 self.tracker.current_segment().ok_or(IoError::PlaybackSegmentUnavailable)?;
-            let (message, opened) = self.playback.lock().unwrap().capture(f, segment)?;
+            let (message, opened) = self.playback.lock().capture(f, segment)?;
             if opened {
                 self.tracker.report_started(segment, now);
             }
@@ -253,7 +254,7 @@ impl AudioOutput for ConsoleIo {
     }
 
     fn flush_segment(&self) {
-        self.playback.lock().unwrap().flush();
+        self.playback.lock().flush();
         self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
     }
 

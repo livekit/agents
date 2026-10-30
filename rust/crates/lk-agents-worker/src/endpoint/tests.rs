@@ -7,21 +7,21 @@ use super::*;
 /// The node's side of one stream, in memory.
 #[derive(Default)]
 struct Fake {
-    inbox: std::sync::Mutex<VecDeque<Vec<u8>>>,
-    out: std::sync::Mutex<Vec<u8>>,
+    inbox: lk_agents_net::lock::Mutex<VecDeque<Vec<u8>>>,
+    out: lk_agents_net::lock::Mutex<Vec<u8>>,
     finished: AtomicBool,
-    reset: std::sync::Mutex<Option<Reset>>,
+    reset: lk_agents_net::lock::Mutex<Option<Reset>>,
 }
 
 impl Fake {
     fn with(request: &[u8]) -> Arc<Fake> {
         let f = Fake::default();
-        f.inbox.lock().unwrap().extend([request.to_vec(), Vec::new()]);
+        f.inbox.lock().extend([request.to_vec(), Vec::new()]);
         Arc::new(f)
     }
 
     fn out(&self) -> String {
-        String::from_utf8_lossy(&self.out.lock().unwrap()).into_owned()
+        String::from_utf8_lossy(&self.out.lock()).into_owned()
     }
 }
 
@@ -29,7 +29,7 @@ impl Fake {
 impl StreamIo for Fake {
     async fn read(&self, max: usize) -> Result<Vec<u8>, String> {
         let next = {
-            let mut inbox = self.inbox.lock().unwrap();
+            let mut inbox = self.inbox.lock();
             inbox.pop_front().map(|mut chunk| {
                 if chunk.len() > max {
                     let rest = chunk.split_off(max);
@@ -44,14 +44,14 @@ impl StreamIo for Fake {
         }
     }
     async fn write(&self, data: &[u8]) -> Result<(), String> {
-        self.out.lock().unwrap().extend_from_slice(data);
+        self.out.lock().extend_from_slice(data);
         Ok(())
     }
     async fn finish(&self) {
         self.finished.store(true, Ordering::Release);
     }
     async fn reset(&self, code: Reset) {
-        *self.reset.lock().unwrap() = Some(code);
+        *self.reset.lock() = Some(code);
     }
     async fn stop(&self, _code: Reset) {}
 }
@@ -109,7 +109,7 @@ async fn a_chunked_request_body_reaches_the_app_unframed_and_the_reply_is_chunke
     serve(io.clone(), info(0), &ECHO, &Registry::default()).await;
     assert_eq!(io.out(), "HTTP/1.1 200 \r\ntransfer-encoding: chunked\r\n\r\n1\r\n8\r\n0\r\n\r\n");
     assert!(io.finished.load(Ordering::Acquire));
-    assert_eq!(*io.reset.lock().unwrap(), None);
+    assert_eq!(*io.reset.lock(), None);
 }
 
 // Catches: a failure after the head reported as success (a clean `0\r\n\r\n`) or as a reset that
@@ -133,13 +133,13 @@ async fn a_failure_after_the_head_is_a_sanitized_completion_trailer() {
 async fn junk_is_a_protocol_reset_and_a_missed_deadline_a_timeout_reset() {
     let io = Fake::with(b"this is not http\r\n\r\n");
     serve(io.clone(), info(0), &ECHO, &Registry::default()).await;
-    assert_eq!(*io.reset.lock().unwrap(), Some(Reset::HsrProtocol));
+    assert_eq!(*io.reset.lock(), Some(Reset::HsrProtocol));
     assert!(io.out().is_empty());
 
     let io = Fake::with(b"GET /slow HTTP/1.1\r\nHost: a\r\n\r\n");
     let slow = Echo { sleep: Duration::from_secs(5), fail_after_head: false };
     serve(io.clone(), info(50), &slow, &Registry::default()).await;
-    assert_eq!(*io.reset.lock().unwrap(), Some(Reset::HsrTimeout));
+    assert_eq!(*io.reset.lock(), Some(Reset::HsrTimeout));
     assert!(io.out().is_empty());
 }
 
@@ -169,7 +169,7 @@ async fn endpoint_limit_vectors_reject_header_overflow() {
     head.extend(b"\r\n\r\n");
     let io = Fake::with(&head);
     serve(io.clone(), info(0), &RefuseInvalidBody, &Registry::default()).await;
-    assert_eq!(*io.reset.lock().unwrap(), Some(Reset::HsrProtocol));
+    assert_eq!(*io.reset.lock(), Some(Reset::HsrProtocol));
     assert!(io.out().is_empty());
 }
 
@@ -182,7 +182,7 @@ async fn endpoint_limit_vectors_reject_chunk_line_and_trailer_overflow() {
         request.extend(vec![b'x'; 1 << 20]);
         let io = Fake::with(&request);
         serve(io.clone(), info(0), &RefuseInvalidBody, &Registry::default()).await;
-        assert_eq!(*io.reset.lock().unwrap(), Some(Reset::HsrProtocol));
+        assert_eq!(*io.reset.lock(), Some(Reset::HsrProtocol));
     }
 }
 
@@ -298,8 +298,8 @@ async fn endpoint_worker_ceiling_refuses_before_read_and_recovers_after_cancel()
         }
         let refused = Fake::with(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n");
         serve(refused.clone(), info(0), &ECHO, &registry).await;
-        assert_eq!(*refused.reset.lock().unwrap(), Some(Reset::HsrRefused));
-        assert!(!refused.inbox.lock().unwrap().is_empty(), "admission precedes reads");
+        assert_eq!(*refused.reset.lock(), Some(Reset::HsrRefused));
+        assert!(!refused.inbox.lock().is_empty(), "admission precedes reads");
         tokio::time::timeout(Duration::from_millis(2), registry.close_all(1001, "closed"))
             .await
             .unwrap();
@@ -309,7 +309,7 @@ async fn endpoint_worker_ceiling_refuses_before_read_and_recovers_after_cancel()
         assert_eq!(registry.occupancy().payload_bytes, 0);
         let accepted = Fake::with(b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n");
         serve(accepted.clone(), info(0), &ECHO, &registry).await;
-        assert_eq!(*accepted.reset.lock().unwrap(), None);
+        assert_eq!(*accepted.reset.lock(), None);
         assert!(accepted.finished.load(Ordering::Acquire));
     }
 }
@@ -356,7 +356,7 @@ impl AsgiApp for SendOnWebsocket {
 #[tokio::test(start_paused = true)]
 async fn websocket_drain_does_not_wait_for_a_stalled_data_write() {
     let input = Fake::default();
-    input.inbox.lock().unwrap().push_back(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec());
+    input.inbox.lock().push_back(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec());
     let io = Arc::new(StalledWriter {
         input,
         writes: std::sync::atomic::AtomicUsize::new(0),
@@ -417,10 +417,10 @@ impl AsgiApp for CloseAfterAccept {
 #[tokio::test]
 async fn a_slow_peer_still_receives_the_graceful_websocket_close() {
     let input = Arc::new(Fake::default());
-    input.inbox.lock().unwrap().push_back(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec());
+    input.inbox.lock().push_back(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec());
     let io = Arc::new(SlowWriter(input.clone()));
     serve(io, info(0), &CloseAfterAccept, &Registry::default()).await;
-    assert_eq!(*input.reset.lock().unwrap(), None);
-    assert!(input.out.lock().unwrap().ends_with(&[0x88, 2, 3, 0xe9]));
+    assert_eq!(*input.reset.lock(), None);
+    assert!(input.out.lock().ends_with(&[0x88, 2, 3, 0xe9]));
     assert!(input.finished.load(Ordering::Acquire));
 }

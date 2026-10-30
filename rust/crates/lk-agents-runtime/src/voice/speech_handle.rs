@@ -10,7 +10,7 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Event, SpeechCommand};
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
 use std::collections::BTreeMap;
-use parking_lot::{Mutex, MutexGuard};
+use lk_agents_net::lock::{Mutex, MutexGuard};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{mpsc, watch};
 

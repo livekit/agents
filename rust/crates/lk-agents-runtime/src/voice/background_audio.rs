@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 pub use lk_agents_voice::background_audio::{
@@ -190,7 +191,7 @@ impl BackgroundAudioPlayer {
                 decoder: None,
             }),
         };
-        self.queued.lock().unwrap().push(Source {
+        self.queued.lock().push(Source {
             input,
             pending: None,
             playback,
@@ -210,7 +211,7 @@ impl BackgroundAudioPlayer {
                 if let Some(pcm) = state.round(self.timeout, self.clock.as_ref()).await {
                     return Some(pcm);
                 }
-                state.sources.is_empty() && self.queued.lock().unwrap().is_empty()
+                state.sources.is_empty() && self.queued.lock().is_empty()
             };
             // Nothing to mix: wait for the next sound instead of polling. A play or close since
             // `woken` was taken has left its permit.
@@ -306,7 +307,7 @@ impl BackgroundAudioPlayer {
     async fn stop_sounds(&self) {
         let mut state = self.state.lock().await;
         let mut sources: Vec<_> = std::mem::take(&mut state.sources).into_values().collect();
-        sources.extend(self.queued.lock().unwrap().drain(..));
+        sources.extend(self.queued.lock().drain(..));
         let retired = std::mem::take(&mut state.retired);
         for id in state.mixer.stream_ids() {
             state.mixer.remove_stream(id);
@@ -370,7 +371,7 @@ impl MixerState {
     }
 
     async fn round(&mut self, timeout: Duration, clock: &dyn Clock) -> Option<Vec<i16>> {
-        for source in self.queued.lock().unwrap().drain(..) {
+        for source in self.queued.lock().drain(..) {
             let id = self.mixer.add_stream();
             self.sources.insert(id, source);
         }
@@ -694,7 +695,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         thinking: bool,
         choose: bool,
     ) -> Result<(), PlaybackError> {
-        let mut handle = self.0.thinking.lock().unwrap();
+        let mut handle = self.0.thinking.lock();
         let last_done = handle.as_ref().map(|h| h.done());
         match thinking_sound(self.0.phase(), !sounds.is_empty(), thinking, last_done) {
             ThinkingSound::Keep => {}

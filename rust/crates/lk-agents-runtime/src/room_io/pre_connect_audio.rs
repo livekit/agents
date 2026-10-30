@@ -1,6 +1,7 @@
 //! Runtime subscriptions, bounded receiving and decoder cleanup for pre-connect audio.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::voice::io::{IoError, Result};
@@ -63,7 +64,7 @@ impl PreConnectAudioHandler {
 
     pub fn register(self: &Arc<Self>) -> bool {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.closed || state.registering || state.registered {
                 return false;
             }
@@ -74,17 +75,17 @@ impl PreConnectAudioHandler {
         let streams = match streams {
             Ok(streams) => streams,
             Err(_) => {
-                self.state.lock().unwrap().registering = false;
+                self.state.lock().registering = false;
                 self.changed.notify_waiters();
                 return false;
             }
         };
-        self.state.lock().unwrap().registered = true;
+        self.state.lock().registered = true;
         let owner = self.clone();
         self.tasks.spawn(self.spawner.as_ref(), "pre-connect stream listener", async move {
             owner.listen(streams).await;
         });
-        self.state.lock().unwrap().registering = false;
+        self.state.lock().registering = false;
         self.changed.notify_waiters();
         true
     }
@@ -94,7 +95,7 @@ impl PreConnectAudioHandler {
             let stopped = self.stopped.notified();
             tokio::pin!(stopped);
             stopped.as_mut().enable();
-            if self.state.lock().unwrap().closed {
+            if self.state.lock().closed {
                 break;
             }
             let stream = tokio::select! {
@@ -106,7 +107,7 @@ impl PreConnectAudioHandler {
                 Ok(Some(stream)) => stream,
                 Ok(None) => break,
                 Err(error) => {
-                    self.state.lock().unwrap().core.close();
+                    self.state.lock().core.close();
                     self.changed.notify_waiters();
                     log::warn!(target: "livekit.agents", "pre-connect stream listener failed: {error}");
                     break;
@@ -115,7 +116,6 @@ impl PreConnectAudioHandler {
             let admission = self
                 .state
                 .lock()
-                .unwrap()
                 .core
                 .receive_stream(&stream.info.attributes, stream.info.id.clone());
             self.changed.notify_waiters();
@@ -135,7 +135,7 @@ impl PreConnectAudioHandler {
         let cleanup = streams.close(deadline).await;
         self.record_cleanup(cleanup);
         let unregister = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             std::mem::take(&mut state.registered)
         };
         if unregister
@@ -146,13 +146,13 @@ impl PreConnectAudioHandler {
     }
 
     pub async fn wait_for_data(&self, track: &TrackSid) -> Result<Vec<AudioFrame>> {
-        let id = self.state.lock().unwrap().core.slot(track)?;
+        let id = self.state.lock().core.slot(track)?;
         let wait = async {
             loop {
                 let changed = self.changed.notified();
                 tokio::pin!(changed);
                 changed.as_mut().enable();
-                if let Some(outcome) = self.state.lock().unwrap().core.take(id) {
+                if let Some(outcome) = self.state.lock().core.take(id) {
                     return outcome;
                 }
                 changed.await;
@@ -161,7 +161,7 @@ impl PreConnectAudioHandler {
         let outcome = match lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, wait).await {
             Ok(outcome) => outcome?,
             Err(_) => {
-                self.state.lock().unwrap().core.expire(id);
+                self.state.lock().core.expire(id);
                 self.changed.notify_waiters();
                 return Err(IoError::PreConnectTimeout(track.clone()));
             }
@@ -174,7 +174,7 @@ impl PreConnectAudioHandler {
         tokio::pin!(stop);
         stop.as_mut().enable();
         let receive = async {
-            if self.state.lock().unwrap().closed {
+            if self.state.lock().closed {
                 return Err(HeadError::Closed);
             }
             receive_bytes(&mut stream).await
@@ -195,7 +195,7 @@ impl PreConnectAudioHandler {
             Err(error) => Err(error),
         };
         let received_at = self.clock.now();
-        self.state.lock().unwrap().core.complete(
+        self.state.lock().core.complete(
             &track,
             id,
             outcome.map(|frames| PreConnectBuffer { received_at, frames }),
@@ -208,7 +208,7 @@ impl PreConnectAudioHandler {
         let stopped = self.stopped.notified();
         tokio::pin!(stopped);
         stopped.as_mut().enable();
-        if self.state.lock().unwrap().closed {
+        if self.state.lock().closed {
             return Err(HeadError::Closed);
         }
         let format = self.format;
@@ -224,13 +224,13 @@ impl PreConnectAudioHandler {
     }
 
     fn record_cleanup(&self, outcome: Closed) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.cleanup = Some(state.cleanup.unwrap_or(Closed::Clean).and(outcome));
     }
 
     pub async fn aclose(&self) -> Closed {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.closed = true;
             state.core.close();
         }
@@ -241,7 +241,7 @@ impl PreConnectAudioHandler {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if !self.state.lock().unwrap().registering {
+            if !self.state.lock().registering {
                 break;
             }
             if lk_agents_abi::timeout(
@@ -256,7 +256,7 @@ impl PreConnectAudioHandler {
             }
         }
         let settled = self.tasks.wait_empty(self.clock.as_ref(), Some(deadline)).await;
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         if settled && !state.registering {
             state.cleanup.unwrap_or(Closed::Clean)
         } else {

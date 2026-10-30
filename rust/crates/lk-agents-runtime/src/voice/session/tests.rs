@@ -23,7 +23,7 @@ use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
 use lk_agents_voice::trace::Step;
 use std::future::Future as _;
-use std::sync::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,7 +98,7 @@ impl std::ops::Deref for Recorded {
 
 impl Recorded {
     fn steps(&self) -> Vec<Step> {
-        self.steps.lock().unwrap().clone()
+        self.steps.lock().clone()
     }
 }
 
@@ -107,7 +107,7 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> Recorded {
     let api = unobserved(room, hook_bound);
     let steps = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&steps);
-    api.observe(move |step: &Step| sink.lock().unwrap().push(step.clone()));
+    api.observe(move |step: &Step| sink.lock().push(step.clone()));
     Recorded { api, steps }
 }
 
@@ -227,7 +227,7 @@ impl SessionExecutor for Observing {
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
-        *self.1.lock().unwrap() = Some(cores.peer.journal.clone());
+        *self.1.lock() = Some(cores.peer.journal.clone());
         Box::new(self.0).own(cores)
     }
 }
@@ -263,7 +263,7 @@ async fn a_session_nobody_observes_keeps_no_journal() {
     }
     settle().await;
     assert!(
-        !journal.lock().unwrap().as_ref().unwrap().is_on(),
+        !journal.lock().as_ref().unwrap().is_on(),
         "a session nobody observes journals its steps"
     );
 }

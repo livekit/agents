@@ -194,7 +194,7 @@ pub struct ServerRuntime {
     drain_outcome: Outcome,
     /// The lifecycle task `run` starts, outliving a cancelled `run` caller; `close` takes and
     /// awaits it unless a missed cleanup deadline left it holding the stragglers.
-    serving: Arc<parking_lot::Mutex<Option<OwnedTask>>>,
+    serving: Arc<lk_agents_net::lock::Mutex<Option<OwnedTask>>>,
 }
 
 impl ServerRuntime {

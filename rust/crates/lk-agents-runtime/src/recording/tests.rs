@@ -1,5 +1,6 @@
 use std::io;
-use std::sync::{Mutex, mpsc as sync_mpsc};
+use std::sync::mpsc as sync_mpsc;
+use lk_agents_net::lock::Mutex;
 
 use lk_agents_media::recorder::{EncodeError, PCM_ENCODER_TRAILER};
 
@@ -38,11 +39,11 @@ struct Encoder(Arc<Mutex<Vec<&'static str>>>);
 
 impl OggOpusEncoder for Encoder {
     fn push(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EncodeError> {
-        self.0.lock().unwrap().push("encode");
+        self.0.lock().push("encode");
         Ok(lk_agents_media::pcm_bytes(pcm))
     }
     fn finish(self) -> Result<Vec<u8>, EncodeError> {
-        self.0.lock().unwrap().push("finalize");
+        self.0.lock().push("finalize");
         Ok(PCM_ENCODER_TRAILER.to_vec())
     }
 }
@@ -63,8 +64,8 @@ impl Write for Writer {
         if self.fail {
             return Err(io::Error::new(io::ErrorKind::StorageFull, "full disk"));
         }
-        self.trace.lock().unwrap().push("write");
-        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        self.trace.lock().push("write");
+        self.bytes.lock().extend_from_slice(bytes);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -119,7 +120,7 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
     tokio::task::yield_now().await;
     assert!(!flushing.is_finished(), "flush must await its write outcome");
     assert!(!finishing.is_finished(), "finish must await the older write");
-    assert!(!trace.lock().unwrap().contains(&"finalize"));
+    assert!(!trace.lock().contains(&"finalize"));
     release.send(()).unwrap();
     flushing.await.unwrap().unwrap();
     let summary = finishing.await.unwrap().unwrap();
@@ -130,8 +131,8 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
     );
     let mut want = lk_agents_media::pcm_bytes(&[1234, 0, 2345, 0]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
-    assert_eq!(*bytes.lock().unwrap(), want);
-    assert_eq!(*trace.lock().unwrap(), ["encode", "write", "encode", "write", "finalize", "write"]);
+    assert_eq!(*bytes.lock(), want);
+    assert_eq!(*trace.lock(), ["encode", "write", "encode", "write", "finalize", "write"]);
     assert_eq!(recorder.retained_bytes(), 0);
 }
 
@@ -245,7 +246,7 @@ async fn sequential_playback_segments_release_previous_pcm() {
     recorder.finish(0.3).await.unwrap();
     let mut want = lk_agents_media::pcm_bytes(&[0, 100, 0, 200, 0, 300]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
-    assert_eq!(*bytes.lock().unwrap(), want);
+    assert_eq!(*bytes.lock(), want);
     assert_eq!(recorder.retained_bytes(), 0);
 }
 
@@ -273,7 +274,7 @@ async fn cancelled_finish_waiter_does_not_abandon_accepted_audio() {
     assert_eq!(summary.started_at, Some(100.0));
     let mut want = lk_agents_media::pcm_bytes(&[4444, 0]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
-    assert_eq!(*bytes.lock().unwrap(), want);
+    assert_eq!(*bytes.lock(), want);
 }
 
 #[tokio::test]
@@ -325,7 +326,7 @@ async fn finalization_preserves_the_input_resamplers_tail() {
             recorder.flush(0.01).await.unwrap();
         }
         recorder.finish(0.01).await.unwrap();
-        let bytes = bytes.lock().unwrap();
+        let bytes = bytes.lock();
         let left = bytes[..bytes.len() - PCM_ENCODER_TRAILER.len()]
             .chunks_exact(4)
             .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
@@ -366,7 +367,7 @@ async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
     lk_agents_abi::recorder::SessionRecorder::finish(&*recorder, None).await.unwrap();
     let mut expected = lk_agents_media::pcm_bytes(&[1234, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expected.extend_from_slice(PCM_ENCODER_TRAILER);
-    assert_eq!(*bytes.lock().unwrap(), expected);
+    assert_eq!(*bytes.lock(), expected);
 }
 
 #[tokio::test]
@@ -395,7 +396,7 @@ async fn recording_burst_preserves_input_timing_and_discarded_output_offsets() {
     expected.extend([0; 8]);
     let mut encoded = lk_agents_media::pcm_bytes(&expected);
     encoded.extend_from_slice(PCM_ENCODER_TRAILER);
-    assert_eq!(*bytes.lock().unwrap(), encoded);
+    assert_eq!(*bytes.lock(), encoded);
 }
 
 #[tokio::test]
@@ -433,5 +434,5 @@ async fn recording_fallback_drains_played_audio_and_retires_each_segment_once() 
     expected[30 * 2 + 1] = 301;
     let mut encoded = lk_agents_media::pcm_bytes(&expected);
     encoded.extend_from_slice(PCM_ENCODER_TRAILER);
-    assert_eq!(*bytes.lock().unwrap(), encoded);
+    assert_eq!(*bytes.lock(), encoded);
 }

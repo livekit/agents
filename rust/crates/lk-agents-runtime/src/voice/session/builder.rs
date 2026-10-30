@@ -395,7 +395,7 @@ impl DriverBuilder {
             view: self.view.clone(),
             time: self.time.clone(),
             output: tokio::sync::watch::channel(outputs).0,
-            recorder: Arc::new(parking_lot::RwLock::new(None)),
+            recorder: Arc::new(lk_agents_net::lock::RwLock::new(None)),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
                 self.config.effective.speech.tts_text_transforms(),
             ),

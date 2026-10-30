@@ -22,7 +22,7 @@ async fn ready(sup: &ProcSupervisor, child: &Child) {
 }
 
 fn errors(host: &FakeHost) -> Vec<String> {
-    let logs = host.logs.lock().unwrap();
+    let logs = host.logs.lock();
     logs.iter().filter(|(level, ..)| *level == Level::Error).map(|(_, m, _)| m.clone()).collect()
 }
 
@@ -34,12 +34,12 @@ async fn process_reap_deadline_retains_ownership_after_os_exit() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     settle().await;
     assert_eq!(
-        *host.incomplete.lock().unwrap(),
+        *host.incomplete.lock(),
         [CleanupObservation { pid: 42, exited: true, reaped: false }]
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
     settle().await;
-    assert_eq!(host.incomplete.lock().unwrap().len(), 1, "the deadline reports once");
+    assert_eq!(host.incomplete.lock().len(), 1, "the deadline reports once");
     sup.reaped(0).await;
     assert!(sup.wait_cleaned().await);
 }
@@ -52,12 +52,12 @@ async fn cancelled_launch_is_terminated_when_the_process_appears() {
     host.alive.store(false, Ordering::SeqCst);
     sup.kill().await;
     host.alive.store(true, Ordering::SeqCst);
-    *host.kill_error.lock().unwrap() = Some("permission denied".into());
+    *host.kill_error.lock() = Some("permission denied".into());
     sup.launched(43).await;
     settle().await;
     assert_eq!(host.kills.load(Ordering::SeqCst), 1, "the late process is killed");
     assert_eq!(
-        *host.signal_failures.lock().unwrap(),
+        *host.signal_failures.lock(),
         [SignalFailure { pid: 43, cause: "permission denied".into() }]
     );
     assert!(!sup.killed(), "a failed signal does not establish the process's death");
@@ -119,7 +119,7 @@ async fn post_spawn_launch_failure_keeps_termination_and_reaping_obligations() {
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
     tokio::time::sleep(Duration::from_secs(2)).await;
     settle().await;
-    assert_eq!(host.incomplete.lock().unwrap().len(), 1, "unreaped past its deadline");
+    assert_eq!(host.incomplete.lock().len(), 1, "unreaped past its deadline");
     assert!(!host.released.load(Ordering::SeqCst));
 }
 
@@ -243,7 +243,7 @@ async fn child_initiated_shutdown_uses_the_exit_deadline_instead_of_health_pings
 async fn memory_warnings_include_the_job_baseline() {
     let opts = SupervisorOptions { memory_warn_mb: 500.0, ..short(60.0) };
     let (sup, host, mut child) = setup(opts);
-    host.samples.lock().unwrap().extend([Ok((100.0, "uss".into())), Ok((600.04, "uss".into()))]);
+    host.samples.lock().extend([Ok((100.0, "uss".into())), Ok((600.04, "uss".into()))]);
     ready(&sup, &mut child).await;
     let first = sup.clone();
     let started = tokio::spawn(async move { first.start_job(job()).await });
@@ -333,7 +333,7 @@ async fn unavailable_or_interrupted_memory_sampling_stops_without_retrying() {
         let opts = SupervisorOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..short(60.0) };
         let (sup, host, mut child) = setup(opts);
         // A retry would read the second sample and warn.
-        host.samples.lock().unwrap().extend([Err(failed), Ok((600.0, "uss".into()))]);
+        host.samples.lock().extend([Err(failed), Ok((600.0, "uss".into()))]);
         ready(&sup, &mut child).await;
         sup.supervise().await;
         let drain = tokio::spawn(async move { while child.recv().await.is_ok() {} });

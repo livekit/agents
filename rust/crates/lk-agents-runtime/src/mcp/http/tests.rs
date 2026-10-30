@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -45,7 +45,7 @@ impl Peer {
                             request.extend_from_slice(&bytes[..n]);
                             if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") { break; }
                         }
-                        *wire.lock().unwrap() = request;
+                        *wire.lock() = request;
                         count.fetch_add(1, Ordering::SeqCst);
                         if let Some(response) = &response {
                             socket.write_all(response.as_bytes()).await.unwrap();
@@ -170,7 +170,7 @@ async fn request_authorization_overrides_the_default_and_sdk_bearer() {
         .post_message(peer.url.clone(), tool_call(), None, Some("sdk".into()), custom)
         .await
         .unwrap();
-    let wire = String::from_utf8(peer.received.lock().unwrap().clone()).unwrap();
+    let wire = String::from_utf8(peer.received.lock().clone()).unwrap();
     assert!(
         wire.lines().any(|line| line.eq_ignore_ascii_case("authorization: Bearer custom")),
         "{wire}"

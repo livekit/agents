@@ -24,6 +24,7 @@ pub mod clock;
 pub mod credentials;
 pub mod env;
 pub mod http;
+pub mod lock;
 pub mod monotone;
 pub mod session_report;
 pub mod source;

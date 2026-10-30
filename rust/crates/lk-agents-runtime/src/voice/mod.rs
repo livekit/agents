@@ -102,7 +102,7 @@ pub struct Runtime {
 pub(crate) struct SpeechTasks {
     tasks: Arc<TaskSet>,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
-    owned: Arc<parking_lot::Mutex<std::collections::BTreeMap<SpeechId, Vec<TaskId>>>>,
+    owned: Arc<lk_agents_net::lock::Mutex<std::collections::BTreeMap<SpeechId, Vec<TaskId>>>>,
 }
 
 impl SpeechTasks {
@@ -316,7 +316,7 @@ impl Runtime {
         &mut self,
         requests: &'a Requests,
         now: Now,
-    ) -> parking_lot::MutexGuard<'a, Vec<SpeechCommand>> {
+    ) -> lk_agents_net::lock::MutexGuard<'a, Vec<SpeechCommand>> {
         loop {
             let mut held = requests.lock();
             if held.is_empty() {

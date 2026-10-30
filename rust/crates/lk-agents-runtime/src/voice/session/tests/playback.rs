@@ -64,7 +64,7 @@ impl lk_agents_abi::voice::nodes::TextNode for ClosingTextNode {
     }
     fn flush(&self) {}
     fn retain_until_drained(&self, owner: Box<dyn Send>) {
-        let mut retained = self.0.retained.lock().unwrap();
+        let mut retained = self.0.retained.lock();
         if !self.0.completed.get() {
             assert!(retained.is_none());
             *retained = Some(owner);
@@ -105,7 +105,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
             state.allow_cleanup.wait_for(|allowed| *allowed).await;
             below.flush();
             let owner = {
-                let mut retained = state.retained.lock().unwrap();
+                let mut retained = state.retained.lock();
                 state.completed.set(true);
                 retained.take()
             };

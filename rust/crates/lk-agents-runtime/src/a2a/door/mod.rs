@@ -38,7 +38,7 @@ pub struct Door {
     /// Accepted operations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
-    budget: Arc<parking_lot::Mutex<EndpointBudget>>,
+    budget: Arc<lk_agents_net::lock::Mutex<EndpointBudget>>,
 }
 
 struct Inner {
@@ -87,7 +87,7 @@ impl A2ADoor for Door {
             }),
             tasks: Arc::default(),
             runtime,
-            budget: Arc::new(parking_lot::Mutex::new(EndpointBudget::new(EndpointLimits::default()))),
+            budget: Arc::new(lk_agents_net::lock::Mutex::new(EndpointBudget::new(EndpointLimits::default()))),
         })
     }
 
@@ -165,7 +165,7 @@ impl A2ADoor for Door {
 }
 
 struct Admission {
-    budget: Arc<parking_lot::Mutex<EndpointBudget>>,
+    budget: Arc<lk_agents_net::lock::Mutex<EndpointBudget>>,
     bytes: usize,
 }
 

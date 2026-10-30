@@ -3,7 +3,8 @@
 //! wait is bounded on the session clock.
 
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use crate::voice::session::Timebase;
@@ -63,12 +64,12 @@ impl SessionServer {
         }
     }
     pub fn started(&self) -> bool {
-        self.shared.state.lock().expect("host state").started
+        self.shared.state.lock().started
     }
 
     /// `register_session`; until set, requests get no response.
     pub fn set_port(&self, port: Arc<dyn SessionPort>) {
-        self.shared.state.lock().expect("host state").host =
+        self.shared.state.lock().host =
             Some(Arc::new(SessionHost::new(port, self.shared.time.clone())));
     }
 
@@ -79,7 +80,7 @@ impl SessionServer {
 
     /// Queue one event for the writer. After the queue is closed (`aclose`), dropped.
     pub fn send_message(&self, msg: proto::AgentSessionMessage) {
-        if let Some(tx) = self.shared.events.lock().expect("event queue").as_ref() {
+        if let Some(tx) = self.shared.events.lock().as_ref() {
             let _ = tx.send(msg);
         }
     }
@@ -113,7 +114,7 @@ impl SessionServer {
         console: Option<Arc<dyn ConsoleSink>>,
     ) -> Result<(), HostError> {
         {
-            let mut st = self.shared.state.lock().expect("host state");
+            let mut st = self.shared.state.lock();
             if st.started {
                 return Ok(());
             }
@@ -126,7 +127,7 @@ impl SessionServer {
         if !self.started() {
             return Ok(());
         }
-        if let Some(rx) = sh.events_rx.lock().expect("event queue").take() {
+        if let Some(rx) = sh.events_rx.lock().take() {
             sh.writer.spawn(
                 &*sh.spawner,
                 "SessionHost._write_loop",
@@ -152,19 +153,19 @@ impl SessionServer {
         let clock = sh.time.clock();
         let clock = &*clock;
         // First, so no new event is queued during the rest.
-        sh.state.lock().expect("host state").started = false;
+        sh.state.lock().started = false;
         let deadline = clock.now().saturating_add(drain);
         // Before the drain, so no new request handler starts.
         sh.recv.cancel_and_wait(clock).await;
         // Not a cancel: that would drop responses of requests that already did their work.
         let mut cancelled = sh.handlers.drain(clock, deadline).await;
         // After the drain: handlers' events on their way out are still sent.
-        sh.events.lock().expect("event queue").take();
-        sh.events_rx.lock().expect("event queue").take();
+        sh.events.lock().take();
+        sh.events_rx.lock().take();
         // Let the writer flush what is queued, then exit.
         sh.writer.drain(clock, deadline).await;
         // Last: everything above still needs to write.
-        let transport = sh.state.lock().expect("host state").transport.take();
+        let transport = sh.state.lock().transport.take();
         if let Some(t) = transport {
             t.close().await;
         }
@@ -303,7 +304,7 @@ async fn recv_loop(
         // `_dispatch_transport_message` (`remote_session.py:454`): requests, then the console legs.
         match (msg.message, console.as_deref()) {
             (Some(Message::Request(req)), _) => {
-                let host = sh.state.lock().expect("host state").host.clone();
+                let host = sh.state.lock().host.clone();
                 if let Some(host) = host {
                     let name = req.request.as_ref().map(request_name).unwrap_or("unknown");
                     sh.handlers.spawn(
@@ -377,7 +378,7 @@ mod tests {
                 if self.fail.load(Ordering::SeqCst) {
                     return Err(HostError::new("transport is down"));
                 }
-                self.sent.lock().unwrap().push(msg.clone());
+                self.sent.lock().push(msg.clone());
                 let _ = self.tx.send(msg.clone());
                 Ok(())
             })
@@ -470,7 +471,7 @@ mod tests {
     struct Events(Mutex<Vec<String>>);
     impl ClientSink for Events {
         fn event(&self, name: &str, _event: &proto::AgentSessionEvent) {
-            self.0.lock().unwrap().push(name.to_owned());
+            self.0.lock().push(name.to_owned());
         }
     }
 
@@ -542,7 +543,7 @@ mod tests {
             .unwrap();
         runtime.start(transport.clone(), None).await.unwrap();
         runtime.aclose(Duration::from_secs(1)).await;
-        let sent = transport.sent.lock().unwrap();
+        let sent = transport.sent.lock();
         let Some(Message::Event(event)) = &sent[0].message else { panic!("event expected") };
         let stamp = event.created_at.as_ref().unwrap();
         let after = time.wall_secs();
@@ -668,7 +669,6 @@ mod tests {
         let sent: Vec<String> = ht
             .sent
             .lock()
-            .unwrap()
             .iter()
             .map(|m| match &m.message {
                 Some(proto::agent_session_message::Message::Event(e)) => match &e.event {
@@ -718,13 +718,13 @@ mod tests {
         let ping = || proto::session_request::Request::Ping(Default::default());
         assert_eq!(client.request(ping(), secs(0.05)).await.unwrap_err(), RequestError::Timeout);
         assert!(
-            client.shared.pending.lock().unwrap().is_empty(),
+            client.shared.pending.lock().is_empty(),
             "a timed-out request kept its slot"
         );
 
         let c = Arc::clone(&client);
         let waiting = tokio::spawn(async move { c.request(ping(), secs(5.0)).await });
-        while ct.sent.lock().unwrap().len() < 2 {
+        while ct.sent.lock().len() < 2 {
             nap(secs(0.005)).await;
         }
         client.aclose().await;
@@ -732,7 +732,6 @@ mod tests {
         let ids: Vec<String> = ct
             .sent
             .lock()
-            .unwrap()
             .iter()
             .map(|m| match &m.message {
                 Some(proto::agent_session_message::Message::Request(r)) => r.request_id.clone(),

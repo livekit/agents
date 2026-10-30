@@ -59,12 +59,12 @@ impl Rig {
     fn next_peer(&self) -> Peer {
         let (peer, incoming) = tokio::sync::mpsc::unbounded_channel();
         peer.send(register_message("worker")).unwrap();
-        self.connections.lock().unwrap().push_back(incoming);
+        self.connections.lock().push_back(incoming);
         peer
     }
 
     fn set_load(&self, load: f32) {
-        *self.load.value.lock().unwrap() = load;
+        *self.load.value.lock() = load;
     }
 
     /// Offers `id`, lets its decision accept and waits for the acceptance on the wire.
@@ -79,7 +79,7 @@ impl Rig {
         self.accept(id).await;
         self.launches.add_permits(1);
         self.peer.send(Ok(assignment_message(id))).unwrap();
-        while self.launched.lock().unwrap().iter().all(|info| info.job.id != id) {
+        while self.launched.lock().iter().all(|info| info.job.id != id) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         while self.handle.snapshot().active_jobs == 0 {
@@ -266,7 +266,7 @@ async fn a_full_assignment_history_rolls_over_after_pending_assignments_settle()
     let next = rig.next_peer();
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(
-        rig.connections.lock().unwrap().len(),
+        rig.connections.lock().len(),
         1,
         "no rollover while an assignment is pending"
     );
@@ -335,7 +335,7 @@ async fn the_assignment_deadline_precedes_a_simultaneous_assignment() {
     rig.peer.send(Ok(assignment_message("late"))).unwrap();
     until_sent(&mut rig.sent, |m| job_status(m, "late") == Some(protocol::JobStatus::JsFailed))
         .await;
-    assert!(rig.launched.lock().unwrap().is_empty());
+    assert!(rig.launched.lock().is_empty());
     assert_eq!(rig.handle.snapshot().reserved_slots, 0);
     close(rig, task).await;
 }
@@ -413,10 +413,10 @@ async fn the_launch_runs_the_offered_job_at_the_assigned_or_worker_url() {
         until_sent(&mut rig.sent, |m| accepted(m, id)).await;
         rig.peer.send(Ok(assignment_with(id, "from-assignment", url))).unwrap();
     }
-    while rig.launched.lock().unwrap().len() < 3 {
+    while rig.launched.lock().len() < 3 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let launched = rig.launched.lock().unwrap().clone();
+    let launched = rig.launched.lock().clone();
     let got: Vec<_> = launched
         .iter()
         .map(|i| (i.job.id.as_str(), i.url.as_str(), i.job.metadata.as_str()))
@@ -445,10 +445,10 @@ async fn a_launched_job_carries_when_it_was_offered_accepted_and_assigned() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     rig.launches.add_permits(1);
     rig.peer.send(Ok(assignment_message("a"))).unwrap();
-    while rig.launched.lock().unwrap().is_empty() {
+    while rig.launched.lock().is_empty() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let info = rig.launched.lock().unwrap()[0].clone();
+    let info = rig.launched.lock()[0].clone();
     let after = |at: f64| ((at - info.received_at) * 1000.0).round() / 1000.0;
     assert_eq!((after(info.accepted_at), after(info.assigned_at)), (2.0, 5.0));
     close(rig, task).await;

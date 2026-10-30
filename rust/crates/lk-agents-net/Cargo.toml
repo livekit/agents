@@ -13,6 +13,7 @@ license.workspace = true
 doctest = false
 
 [dependencies]
+parking_lot.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi" }
 # Ephemeral transport and worker operation identifiers.
 rand = "0.9"

@@ -4,7 +4,8 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
@@ -89,7 +90,7 @@ impl Llm for ScriptedLlm {
         _req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
-            let reply = self.replies.lock().unwrap().pop_front().expect("a scripted reply");
+            let reply = self.replies.lock().pop_front().expect("a scripted reply");
             let delta = |content: Option<&str>, tool_calls| LlmChunk {
                 id: "c".into(),
                 delta: Some(ChoiceDelta {
@@ -164,7 +165,7 @@ impl FakeHost {
     }
 
     fn saw(&self, callback: &'static str, invocation: &Invocation) {
-        self.seen.lock().unwrap().push((callback, invocation.clone()));
+        self.seen.lock().push((callback, invocation.clone()));
     }
 }
 
@@ -185,7 +186,7 @@ impl AgentCallbacks for FakeHost {
     ) -> lk_agents_abi::BoxFuture<'a, Result<bool, HostError>> {
         Box::pin(async move {
             Ok(self.body == Body::YieldAfterTool
-                && self.seen.lock().unwrap().iter().any(|(callback, _)| *callback == "run"))
+                && self.seen.lock().iter().any(|(callback, _)| *callback == "run"))
         })
     }
 
@@ -241,7 +242,7 @@ impl AgentCallbacks for FakeHost {
                 }
                 Body::Stuck => std::future::pending::<()>().await,
                 Body::Reports => {
-                    let progress = self.progress.lock().unwrap().clone().expect("the run started");
+                    let progress = self.progress.lock().clone().expect("the run started");
                     assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
                 }
             }
@@ -281,7 +282,7 @@ impl AgentCallbacks for FakeHost {
     }
 
     fn cancel(&self, invocation: &Invocation) {
-        self.cancelled.lock().unwrap().push(invocation.operation);
+        self.cancelled.lock().push(invocation.operation);
         self.cancel.notify_waiters();
     }
 }
@@ -368,7 +369,7 @@ fn setup(
     };
     let (handle, updates) =
         start(&tokio::runtime::Handle::current(), agent, input, setup, 4).unwrap();
-    *host.progress.lock().unwrap() = Some(handle.progress());
+    *host.progress.lock() = Some(handle.progress());
     Setup { handle, updates, host, closed }
 }
 
@@ -454,7 +455,7 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
         .expect("the original tool call is recorded");
     assert_eq!(recorded_call.extra["application_receipt"], "confirmed-appointment");
 
-    let seen = s.host.seen.lock().unwrap().clone();
+    let seen = s.host.seen.lock().clone();
     let callbacks: Vec<_> = seen
         .iter()
         .map(|(c, i)| (*c, i.function_call.as_ref().map(|f| f.call_id.clone())))
@@ -489,7 +490,7 @@ async fn cancel_reaches_the_running_tool_through_the_host_and_waits_for_it() {
         OutputSpec::Text { validated: false },
         Arc::new(Registry::default()),
     );
-    while !s.host.seen.lock().unwrap().iter().any(|(c, _)| *c == "run") {
+    while !s.host.seen.lock().iter().any(|(c, _)| *c == "run") {
         tokio::task::yield_now().await;
     }
     s.handle.cancel();
@@ -497,8 +498,8 @@ async fn cancel_reaches_the_running_tool_through_the_host_and_waits_for_it() {
     assert!(matches!(finished(&updates), Err(RunError::Cancelled)));
     assert!(!updates.iter().any(|u| matches!(u, RunUpdate::IncompleteCleanup(_))));
     let run_operation =
-        s.host.seen.lock().unwrap().iter().find(|(c, _)| *c == "run").unwrap().1.operation;
-    assert_eq!(*s.host.cancelled.lock().unwrap(), [run_operation]);
+        s.host.seen.lock().iter().find(|(c, _)| *c == "run").unwrap().1.operation;
+    assert_eq!(*s.host.cancelled.lock(), [run_operation]);
 }
 
 // Catches: a body that never settles holding the run forever, or the deadline
@@ -511,7 +512,7 @@ async fn a_body_that_ignores_cancel_is_reported_incomplete_at_the_deadline() {
         OutputSpec::Text { validated: false },
         Arc::new(Registry::default()),
     );
-    while !s.host.seen.lock().unwrap().iter().any(|(c, _)| *c == "run") {
+    while !s.host.seen.lock().iter().any(|(c, _)| *c == "run") {
         tokio::task::yield_now().await;
     }
     s.handle.cancel();

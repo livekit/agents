@@ -372,7 +372,7 @@ impl Segment for Frames<'_> {
 pub(super) struct TextLeg<'a> {
     out: Option<Arc<dyn TextOutput>>,
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
-    state: parking_lot::Mutex<TextLegState>,
+    state: lk_agents_net::lock::Mutex<TextLegState>,
     shared: &'a Arc<SessionShared>,
     speech: SpeechId,
 }
@@ -387,7 +387,7 @@ impl<'a> TextLeg<'a> {
         TextLeg { out, buffered, state: Default::default(), shared, speech }
     }
 
-    fn state(&self) -> parking_lot::MutexGuard<'_, TextLegState> {
+    fn state(&self) -> lk_agents_net::lock::MutexGuard<'_, TextLegState> {
         self.state.lock()
     }
 

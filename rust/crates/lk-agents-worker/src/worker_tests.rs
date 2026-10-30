@@ -4,7 +4,8 @@ use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -51,7 +52,7 @@ struct Sink(Arc<Mutex<Wire>>);
 #[async_trait]
 impl WorkerSink for Sink {
     async fn send(&self, message: protocol::WorkerMessage) -> Result<(), TransportError> {
-        self.0.lock().unwrap().sent.push(message);
+        self.0.lock().sent.push(message);
         Ok(())
     }
     async fn close(&self) {}
@@ -79,8 +80,8 @@ impl WorkerTransport for ScriptedTransport {
         _token: Option<&str>,
         _headers: Vec<(String, String)>,
     ) -> Result<Connected, TransportError> {
-        self.wire.lock().unwrap().attempts += 1;
-        match self.script.lock().unwrap().pop_front() {
+        self.wire.lock().attempts += 1;
+        match self.script.lock().pop_front() {
             Some(Step::ConnectFails) | None => Err(TransportError::Io("refused".into())),
             Some(Step::Serves(frames)) => Ok(Connected {
                 sink: Arc::new(Sink(self.wire.clone())),
@@ -111,7 +112,7 @@ impl WorkerHost for LoadHost {
         Ok(())
     }
     async fn user_load(&self) -> Option<f32> {
-        *self.user_calls.lock().unwrap() += 1;
+        *self.user_calls.lock() += 1;
         self.user
     }
 }
@@ -189,7 +190,7 @@ async fn register_is_the_first_message_written_and_the_worker_id_lands() {
     let (mut c, wire, _h) = conn(vec![Step::Serves(vec![register_message("W-7")])], 0);
     // The stream blocks after the register response, so drive one connection with a deadline.
     let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
-    let sent = &wire.lock().unwrap().sent;
+    let sent = &wire.lock().sent;
     assert!(!sent.is_empty(), "nothing was written to the socket");
     let first = &sent[0];
     assert!(
@@ -207,7 +208,7 @@ async fn max_retry_two_means_three_connect_attempts() {
         conn(vec![Step::ConnectFails, Step::ConnectFails, Step::ConnectFails], 2);
     let err = c.run().await.unwrap_err();
     assert!(matches!(err, RuntimeError::RetriesExhausted { retries: 2, .. }), "got {err:?}");
-    assert_eq!(wire.lock().unwrap().attempts, 3);
+    assert_eq!(wire.lock().attempts, 3);
 }
 
 // Catches: treating a mid-session close as fatal instead of reconnecting.
@@ -225,7 +226,7 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
         5,
     );
     let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
-    assert_eq!(wire.lock().unwrap().attempts, 2, "did not reconnect after the close");
+    assert_eq!(wire.lock().attempts, 2, "did not reconnect after the close");
     assert_eq!(c.snapshot_now().worker_id, "W-2", "did not re-register on the new socket");
 }
 
@@ -247,7 +248,7 @@ async fn a_connection_restores_the_retry_budget() {
         1,
     );
     let _ = tokio::time::timeout(Duration::from_secs(30), c.run()).await;
-    assert_eq!(wire.lock().unwrap().attempts, 3);
+    assert_eq!(wire.lock().attempts, 3);
     assert_eq!(c.snapshot_now().worker_id, "W-2", "gave up after the second outage");
 }
 
@@ -280,7 +281,7 @@ async fn close_during_the_reconnect_backoff_stops_the_ladder() {
     });
     c.run().await.expect("close should be a clean return, not GaveUp");
     // 0s + 2s of backoff elapsed, so only a handful of attempts -- nowhere near 50
-    assert!(wire.lock().unwrap().attempts < 5, "kept reconnecting after Close");
+    assert!(wire.lock().attempts < 5, "kept reconnecting after Close");
     assert_eq!(h.snapshot().finished.as_deref(), Some("closed"));
 }
 
@@ -339,7 +340,7 @@ async fn a_user_load_function_wins_and_is_asked_exactly_once() {
     let (mut c, h) = load_conn(LoadHost { user: Some(0.42), user_calls: user_calls.clone() });
     c.sample_load_now().await.expect("sampled");
     assert!((c.snapshot_now().worker_load - 0.42).abs() < 1e-6, "{}", c.snapshot_now().worker_load);
-    assert_eq!(*user_calls.lock().unwrap(), 1);
+    assert_eq!(*user_calls.lock(), 1);
     assert_eq!(h.snapshot().worker_load, c.snapshot_now().worker_load);
 }
 
@@ -409,7 +410,6 @@ impl WorkerTransport for ChannelTransport {
         let incoming = self
             .incoming
             .lock()
-            .unwrap()
             .pop_front()
             .ok_or_else(|| TransportError::Io("no more connections".into()))?;
         Ok(Connected {
@@ -484,7 +484,7 @@ impl WorkerHost for GatedHost {
     }
     async fn launch_job(&self, info: crate::RunningJobInfo) -> Result<JobId, HostError> {
         let _guard = OperationGuard(self.dropped.clone());
-        self.launched.lock().unwrap().push(info.clone());
+        self.launched.lock().push(info.clone());
         self.started.send("launch").unwrap();
         self.launches.acquire().await.unwrap().forget();
         if self.failing_launches.load(std::sync::atomic::Ordering::SeqCst) {
@@ -500,7 +500,7 @@ impl WorkerHost for GatedHost {
             self.load.gate.acquire().await.unwrap().forget();
         }
         self.load.samples.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Some(*self.load.value.lock().unwrap())
+        Some(*self.load.value.lock())
     }
 }
 
@@ -917,7 +917,7 @@ async fn accepting_tcp_without_registering_does_not_restore_the_retry_budget() {
     let (mut worker, wire, _) = conn(vec![Step::Serves(vec![]), Step::Serves(vec![])], 1);
     let error = worker.run().await.unwrap_err();
     assert!(matches!(&error, RuntimeError::RetriesExhausted { retries: 1, .. }));
-    assert_eq!(wire.lock().unwrap().attempts, 2, "only registration restores the retry budget");
+    assert_eq!(wire.lock().attempts, 2, "only registration restores the retry budget");
     assert!(error.to_string().contains("registration timed out"));
 }
 

@@ -16,7 +16,7 @@ use lk_agents_abi::worker::ipc_host::{
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use super::channel::Channel;

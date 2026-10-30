@@ -6,7 +6,8 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 
 struct NoRegistry;
 
@@ -61,7 +62,7 @@ impl SessionHooks for ScriptedHooks {
         _: Option<&'a lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<'a, ()> {
         Box::pin(async move {
-            *self.toolsets_closed.lock().unwrap() += 1;
+            *self.toolsets_closed.lock() += 1;
         })
     }
     fn setup_tools<'a>(
@@ -113,7 +114,7 @@ impl SessionHooks for ScriptedHooks {
         })
     }
     fn hook_failed(&self, hook: &str, _: Option<lk_agents_abi::errors::CapturedError>) {
-        self.failed.lock().unwrap().push(hook.to_owned());
+        self.failed.lock().push(hook.to_owned());
     }
 }
 
@@ -168,7 +169,7 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
         HookOutcome::Failed
     ));
     settle().await;
-    assert_eq!(*hooks.toolsets_closed.lock().unwrap(), 1, "on_exit left the agent's toolsets open");
+    assert_eq!(*hooks.toolsets_closed.lock(), 1, "on_exit left the agent's toolsets open");
 
     let turn = |text: &str| HookCall::OnUserTurnCompleted {
         id,
@@ -233,9 +234,9 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
         answered(&hooks, filler(0, None)).await,
         HookOutcome::Filler { text: None, spoke: false }
     ));
-    assert!(hooks.failed.lock().unwrap().is_empty());
+    assert!(hooks.failed.lock().is_empty());
 
     let raising = Arc::new(ScriptedHooks { raise: true, ..Default::default() });
     assert!(matches!(answered(&raising, turn("x")).await, HookOutcome::Failed));
-    assert_eq!(*raising.failed.lock().unwrap(), ["on_user_turn_completed"]);
+    assert_eq!(*raising.failed.lock(), ["on_user_turn_completed"]);
 }

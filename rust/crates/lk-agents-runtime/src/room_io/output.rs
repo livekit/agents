@@ -13,7 +13,8 @@ use lk_agents_voice::room_io::output::{
     CaptureAdmission, Playback, PlaybackReport, capture_chunks,
 };
 use lk_agents_voice::room_io::publication::Publication;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
 
@@ -42,8 +43,8 @@ struct Shared {
 impl Shared {
     /// Never held across an await, nor across a call into the source: a host source takes the GIL,
     /// which a host thread calling into this leg already holds.
-    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap()
+    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, State> {
+        self.state.lock()
     }
 
     /// `clear_queue` on the source, closing the open run at what passed the speaker. A pause
@@ -379,7 +380,7 @@ impl ParticipantAudioOutput {
     }
 
     fn begin_start(&self) {
-        let mut started = self.started.lock().unwrap();
+        let mut started = self.started.lock();
         if self.shared.lock().publication.begin() {
             let (tasks, spawner) = (&self.tasks, self.spawner.as_ref());
             started.push(tasks.spawn(
@@ -503,7 +504,7 @@ impl ParticipantAudioOutput {
             // Stop frame/progress producers before the terminal playback event. Creation keeps its
             // separate obligation to deliver or retire the track, even if start() was cancelled.
             {
-                let mut started = self.started.lock().unwrap();
+                let mut started = self.started.lock();
                 let workers = started.len().min(3);
                 for task in started.drain(..workers) {
                     self.tasks.cancel(task);
@@ -564,7 +565,7 @@ impl ParticipantAudioOutput {
             state.cleanup_outcome.unwrap_or(Closed::TimedOut)
         };
         if settled {
-            for task in self.started.lock().unwrap().drain(..) {
+            for task in self.started.lock().drain(..) {
                 self.tasks.cancel(task);
             }
         }

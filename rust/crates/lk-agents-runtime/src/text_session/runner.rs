@@ -8,7 +8,7 @@ use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 
 #[derive(Clone)]
 struct Control {
@@ -65,7 +65,7 @@ impl TextSessionRunner for Runner {
     }
 
     fn usage(&self) -> Usage {
-        let current = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        let current = self.control.lock();
         current.as_ref().map(|c| c.usage.borrow().clone()).unwrap_or_default()
     }
 

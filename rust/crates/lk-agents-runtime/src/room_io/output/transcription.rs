@@ -20,7 +20,8 @@ use lk_agents_voice::room_io::transcription::{
 };
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use tokio::sync::Notify;
 
 struct WriterState {
@@ -182,7 +183,7 @@ impl ParticipantTranscriptionOutput {
         let task = spawner.spawn(async move {
             owner.run(Performer { room, writer: None }).await;
         });
-        *output.performer.lock().unwrap() = Some(task);
+        *output.performer.lock() = Some(task);
         output
     }
 
@@ -194,7 +195,7 @@ impl ParticipantTranscriptionOutput {
     }
 
     fn fail(&self, error: IoError) {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         if writer.admission.failure().is_some() {
             return;
         }
@@ -217,7 +218,7 @@ impl ParticipantTranscriptionOutput {
     /// Ends the open segment and submits; a refusal is latched after the guard.
     fn end_segment(&self, subject: Option<Subject>) {
         let refused = {
-            let mut writer = self.writer.lock().unwrap();
+            let mut writer = self.writer.lock();
             let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
             writer.core.end_segment(segment);
             let refused = self.submit(&mut writer);
@@ -233,7 +234,7 @@ impl ParticipantTranscriptionOutput {
 
     fn disconnected(&self) {
         let refused = {
-            let mut writer = self.writer.lock().unwrap();
+            let mut writer = self.writer.lock();
             writer.core.disconnected();
             self.submit(&mut writer)
         };
@@ -243,7 +244,7 @@ impl ParticipantTranscriptionOutput {
     }
 
     fn status(&self) -> (Option<IoError>, Option<Ts>) {
-        let writer = self.writer.lock().unwrap();
+        let writer = self.writer.lock();
         (writer.admission.failure().cloned(), writer.deadline)
     }
 
@@ -298,7 +299,7 @@ impl ParticipantTranscriptionOutput {
                 break;
             }
         }
-        self.writer.lock().unwrap().admission.performed(ticket);
+        self.writer.lock().admission.performed(ticket);
         result
     }
 
@@ -308,7 +309,7 @@ impl ParticipantTranscriptionOutput {
             tokio::pin!(changed);
             changed.as_mut().enable();
             let next = {
-                let mut writer = self.writer.lock().unwrap();
+                let mut writer = self.writer.lock();
                 if writer.admission.drained() {
                     break;
                 }
@@ -340,7 +341,7 @@ impl ParticipantTranscriptionOutput {
         match event {
             RoomEvent::TrackPublished { participant, publication } => {
                 let attributes = participant.attributes()?;
-                self.writer.lock().unwrap().subject.on_track_published(
+                self.writer.lock().subject.on_track_published(
                     participant.identity(),
                     &attributes,
                     publication.source(),
@@ -349,7 +350,7 @@ impl ParticipantTranscriptionOutput {
             }
             RoomEvent::LocalTrackPublished { publication } => {
                 let local = self.room.local().identity()?;
-                self.writer.lock().unwrap().subject.on_local_track_published(
+                self.writer.lock().subject.on_local_track_published(
                     &local,
                     publication.source(),
                     publication.sid(),
@@ -367,7 +368,7 @@ impl ParticipantTranscriptionOutput {
     pub async fn aclose(&self) -> Result<()> {
         let requested_deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         let (deadline, refused) = {
-            let mut writer = self.writer.lock().unwrap();
+            let mut writer = self.writer.lock();
             let WriterState { core, admission, subject, .. } = &mut *writer;
             let refused = admission.finish(core, subject).err();
             (*writer.deadline.get_or_insert(requested_deadline), refused)
@@ -386,9 +387,9 @@ impl ParticipantTranscriptionOutput {
             self.fail(IoError::Rtc("transcription cleanup deadline expired".into()));
         }
         if self.performer_done.get() {
-            self.performer.lock().unwrap().take();
+            self.performer.lock().take();
         }
-        self.writer.lock().unwrap().admission.failure().cloned().map_or(Ok(()), Err)
+        self.writer.lock().admission.failure().cloned().map_or(Ok(()), Err)
     }
 }
 
@@ -409,7 +410,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let (shown, refused) = {
-                let mut writer = self.writer.lock().unwrap();
+                let mut writer = self.writer.lock();
                 let WriterState { core, admission, .. } = &mut *writer;
                 match core.admit_text(&text.text) {
                     Ok(()) => {

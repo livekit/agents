@@ -1,6 +1,7 @@
 //! Cancellation before the host loop starts a call and while it publishes the host task.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_runtime::net::lock::Mutex;
 use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::invoke::HostEntry;
@@ -83,7 +84,7 @@ fn cancellation_during_task_creation_is_applied_when_the_task_is_published() {
         let globals = host.0.bind(py);
         let cancel = started.clone();
         let hook = PyCFunction::new_closure(py, None, None, move |_, _| -> PyResult<()> {
-            cancel.lock().unwrap().as_ref().unwrap().cancel();
+            cancel.lock().as_ref().unwrap().cancel();
             Ok(())
         })
         .unwrap();
@@ -102,7 +103,7 @@ fn cancellation_during_task_creation_is_applied_when_the_task_is_published() {
             move |py| callback.bind(py).call0(),
         )
         .unwrap();
-        *started.lock().unwrap() = Some(call);
+        *started.lock() = Some(call);
     });
     host.tick();
     host.tick();

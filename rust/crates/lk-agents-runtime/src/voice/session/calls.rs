@@ -6,7 +6,7 @@ use crate::voice::session::Tx;
 use lk_agents_voice::agent_session::{Answer, Command, Event, Input, Origin, QueueClosed, RequestId, Sent};
 use crate::voice::speech_handle::SpeechHandle;
 use std::collections::BTreeMap;
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 

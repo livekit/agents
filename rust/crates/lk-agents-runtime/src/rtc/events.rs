@@ -1,6 +1,7 @@
 //! Bounded room observations and admitted SDK streams, using the shared source lifecycle.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -71,7 +72,7 @@ impl RoomEventBus {
     pub fn subscribe(&self) -> Receiver<RoomEvent> {
         let (events, receiver) = mpsc::channel(EVENT_CAPACITY);
         let (failure, outcome) = watch::channel(None);
-        let mut subscribers = self.subscribers.lock().unwrap();
+        let mut subscribers = self.subscribers.lock();
         subscribers.retain(|subscriber| !subscriber.events.is_closed());
         subscribers.push(Subscriber { events, failure });
         Box::new(EventReceiver { events: receiver, failure: outcome, ended: false })
@@ -79,7 +80,7 @@ impl RoomEventBus {
 
     /// Overflow terminates this subscription explicitly; callbacks never block under the GIL.
     pub fn emit(&self, event: RoomEvent) -> usize {
-        let mut subscribers = self.subscribers.lock().unwrap();
+        let mut subscribers = self.subscribers.lock();
         subscribers.retain(|subscriber| match subscriber.events.try_send(event.clone()) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Closed(_)) => false,
@@ -94,7 +95,6 @@ impl RoomEventBus {
     pub fn subscriber_count(&self) -> usize {
         self.subscribers
             .lock()
-            .unwrap()
             .iter()
             .filter(|subscriber| !subscriber.events.is_closed())
             .count()

@@ -5,7 +5,7 @@ use crate::voice::session::{DriverBuilder, SessionExecutor, SessionHandle, Timeb
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::trace::{Journal, Step};
 use std::future::Future as _;
-use std::sync::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::time::Duration;
 
 type Steps = Arc<Mutex<Vec<Step>>>;
@@ -20,7 +20,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
     let observed = steps.clone();
     let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
     let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
-    builder.journal = Journal::observed(move |step| observed.lock().unwrap().push(step.clone()));
+    builder.journal = Journal::observed(move |step| observed.lock().push(step.clone()));
     builder.session_id = name.into();
     (builder, steps)
 }
@@ -36,18 +36,18 @@ pub(super) async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
 async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
     let (mut runtime, mut handle, steps) = session("effect-boundary").await;
     while handle.events.try_recv().is_ok() {}
-    let before = steps.lock().unwrap().clone();
+    let before = steps.lock().clone();
     let effects = runtime.driver.open(runtime.shared.time.read());
     assert!(handle.events.try_recv().is_err(), "the decision step delivered a host event");
     assert_eq!(
-        steps.lock().unwrap().clone(),
+        steps.lock().clone(),
         before,
         "the decision step invoked the journal observer"
     );
     runtime.perform_voice(effects);
     assert!(handle.events.try_recv().is_ok(), "runtime never delivered the opening event");
     assert!(
-        steps.lock().unwrap().clone().len() > before.len(),
+        steps.lock().clone().len() > before.len(),
         "runtime never delivered journal observations"
     );
 }
@@ -172,7 +172,7 @@ impl lk_agents_abi::StreamSource<lk_agents_abi::SpeechEvent> for StartupSource {
         deadline: lk_agents_abi::Ts,
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
-            *self.2.lock().unwrap() = Some(deadline);
+            *self.2.lock() = Some(deadline);
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.1.notify_one();
             lk_agents_abi::Closed::Clean
@@ -297,6 +297,6 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
         .await
         .expect("an executor dropped before adoption left its provider stream open");
     assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(*deadline.lock().unwrap(), Some(expected_deadline));
+    assert_eq!(*deadline.lock(), Some(expected_deadline));
     assert!(resources.audio_sink(sink).is_none(), "the abandoned initial sink remained registered");
 }

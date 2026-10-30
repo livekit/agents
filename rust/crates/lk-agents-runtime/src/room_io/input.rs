@@ -17,7 +17,8 @@ use lk_agents_voice::room_io::input_state::{
     end_of_track, replayed_head,
 };
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 use tokio::sync::Notify;
 
 use super::pre_connect_audio::PreConnectAudioHandler;
@@ -51,18 +52,18 @@ impl<T> Readers<T> {
 
     /// Applies a decision and wakes the readers it may have retired.
     fn decide<R>(&self, decision: impl FnOnce(&mut TrackReaders) -> R) -> R {
-        let outcome = decision(&mut self.state.lock().unwrap().readers);
+        let outcome = decision(&mut self.state.lock().readers);
         self.changed.notify_waiters();
         outcome
     }
 
     fn reading(&self) -> Option<TrackSid> {
-        self.state.lock().unwrap().readers.reading().cloned()
+        self.state.lock().readers.reading().cloned()
     }
 
     /// `false` stops the reader.
     fn deliver(&self, generation: u64, item: Result<T>) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         match state.readers.admit(generation) {
             Admit::Stop => false,
             Admit::Drop => true,
@@ -79,7 +80,7 @@ impl<T> Readers<T> {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if !self.state.lock().unwrap().readers.producing(generation) {
+            if !self.state.lock().readers.producing(generation) {
                 return;
             }
             changed.await;
@@ -89,7 +90,7 @@ impl<T> Readers<T> {
     async fn recv(&self) -> Result<Option<T>> {
         let mut queue = self.queue.lock().await;
         while let Some(frame) = queue.recv().await {
-            if self.state.lock().unwrap().readers.accepts(frame.identity) {
+            if self.state.lock().readers.accepts(frame.identity) {
                 return frame.item.map(Some);
             }
         }
@@ -99,7 +100,7 @@ impl<T> Readers<T> {
     /// Readers keep retiring their streams after the waiter reaches the deadline.
     async fn close(&self, clock: &dyn Clock, deadline: Ts) -> Closed {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.readers.close();
             state.queue.take();
         }
@@ -109,7 +110,7 @@ impl<T> Readers<T> {
                 let changed = self.changed.notified();
                 tokio::pin!(changed);
                 changed.as_mut().enable();
-                if let Some(outcome) = self.state.lock().unwrap().readers.settled() {
+                if let Some(outcome) = self.state.lock().readers.settled() {
                     return outcome;
                 }
                 changed.await;

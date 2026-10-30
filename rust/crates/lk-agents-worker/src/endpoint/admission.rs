@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
 
-use parking_lot::Mutex;
+use lk_agents_net::lock::Mutex;
 
 use super::WsExchange;
 

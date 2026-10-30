@@ -2,7 +2,8 @@
 //! one message per stream, read in the order the streams opened, written one stream at a time.
 
 use lk_agents_net::task::TaskSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use lk_agents_net::lock::Mutex;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
@@ -52,7 +53,7 @@ impl RoomTransport {
 
 impl Inner {
     fn closed(&self) -> bool {
-        self.state.lock().expect("transport state").closed
+        self.state.lock().closed
     }
 
     async fn send(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError> {
@@ -88,7 +89,7 @@ impl SessionTransport for RoomTransport {
         Box::pin(async move {
             let this = &self.0;
             {
-                let mut state = this.state.lock().expect("transport state");
+                let mut state = this.state.lock();
                 if state.registered || state.closed {
                     return Ok(());
                 }
@@ -164,7 +165,7 @@ impl SessionTransport for RoomTransport {
     fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
         Box::pin(async move {
             let registered = {
-                let mut state = self.0.state.lock().expect("transport state");
+                let mut state = self.0.state.lock();
                 if state.closed {
                     return;
                 }
