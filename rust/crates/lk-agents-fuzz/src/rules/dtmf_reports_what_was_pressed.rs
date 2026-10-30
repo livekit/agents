@@ -10,7 +10,7 @@
 //! them, space-separated, when there are `num_digits` of them; `Incomplete` when there are not;
 //! `Stopped` only once the collection was ended -- a `Stop`, a newer `Start`, or a close (the
 //! host's, or the session's own).
-use lk_agents_voice::trace::{RoomLinkStep, RoomStep, Step};
+use lk_agents_voice::trace::{CloseStep, RoomLinkStep, RoomStep, Step};
 use lk_agents_voice::workflows::dtmf::{DtmfEvent, DtmfOutcome, GetDtmfResult};
 
 use crate::{
@@ -40,6 +40,7 @@ impl Rule for DtmfReportsWhatWasPressed {
             a_press_dropped,
             a_guests_press_heard,
             a_press_dropped_before_the_close,
+            a_press_dropped_before_a_draining_close,
         ],
         probe: Some(two_collections),
     };
@@ -54,25 +55,37 @@ impl Rule for DtmfReportsWhatWasPressed {
                 _ => None,
             })
             .collect();
-        // The person's presses the room took, and how many came before the session began closing.
-        let closing = inputs
-            .close_asked_at()
-            .into_iter()
-            .chain(internal.close_requested().map(|(at, _)| at))
-            .min();
+        // The person's presses the room took, and how many came before the session began closing:
+        // when it began, and whether it drains (room I/O stays up while it does).
+        let host_close = inputs.sent().iter().find_map(|a| match a.input {
+            Input::Close { drain } if a.accepted => Some((a.at, drain)),
+            _ => None,
+        });
+        let own_close = r.journal_where(|step| match step {
+            Step::Close(CloseStep::Requested { drain, .. }) => Some(*drain),
+            _ => None,
+        });
+        let closing = host_close.into_iter().chain(own_close.into_iter().take(1)).min();
         let presses: Vec<_> = inputs
             .sent()
             .iter()
-            .filter(|a| a.accepted && matches!(a.input, Input::Dtmf { input: DtmfInput::Digit, .. }))
+            .filter(|a| {
+                a.accepted && matches!(a.input, Input::Dtmf { input: DtmfInput::Digit, .. })
+            })
             .collect();
-        // The room link forwards a press on its own task: a close the session began in the
-        // driver's first turn after the press may beat it, as the room's events and a failing
-        // provider race in a real call. A press the driver had a whole turn to take is owed.
+        // The room link forwards a press on its own task: a close that tears room I/O down, begun
+        // in the driver's first turn after the press, may beat it, as the room's events and a
+        // failing provider race in a real call. A draining close keeps room I/O up, so a press
+        // before it is owed; so is one the driver had a whole turn to take.
         let owed = presses
             .iter()
             .filter(|a| {
-                closing.is_none_or(|c| {
-                    inputs.driver_turn_after(a.at).is_some_and(|t| t.ended.is_some_and(|e| e < c))
+                closing.is_none_or(|(c, drain)| {
+                    a.at < c
+                        && (drain
+                            || inputs
+                                .driver_turn_after(a.at)
+                                .is_some_and(|t| t.ended.is_some_and(|e| e < c)))
                 })
             })
             .count();
@@ -114,7 +127,8 @@ impl Rule for DtmfReportsWhatWasPressed {
             let mut pressed: Vec<&str> = Vec::new();
             let mut stop_key = false;
             for &(when, key) in &journaled {
-                if when <= started || when >= at || ended_at.is_some_and(|e| when >= e) || stop_key {
+                if when <= started || when >= at || ended_at.is_some_and(|e| when >= e) || stop_key
+                {
                     continue;
                 }
                 match key {
@@ -201,7 +215,8 @@ trait Press {
 impl Press for Authored {
     fn press(self, k: DtmfKey) -> Self {
         let pressed = DtmfEvent::parse(k.digit());
-        self.sent(key(k)).journal(Step::Room(RoomStep::Link(RoomLinkStep::KeyPressed { key: pressed })))
+        self.sent(key(k))
+            .journal(Step::Room(RoomStep::Link(RoomLinkStep::KeyPressed { key: pressed })))
     }
 }
 
@@ -251,7 +266,10 @@ fn stopped_while_running() -> Recording {
 /// completes on the debounce; the second is cut short by the stop key and answers incomplete.
 fn two_collections() -> Case {
     Case {
-        setup: Setup { room: Some(RoomSetup { close_on_disconnect: false, delete_room_on_close: false }), ..Setup::default() },
+        setup: Setup {
+            room: Some(RoomSetup { close_on_disconnect: false, delete_room_on_close: false }),
+            ..Setup::default()
+        },
         inputs: vec![
             Input::Room { event: RoomIn::Linked },
             Input::Advance { ms: Millis(20) },
@@ -308,8 +326,18 @@ fn a_press_dropped_before_the_close() -> Recording {
         .done()
 }
 
+/// A draining close keeps room I/O up: the press it began right after is still owed.
+fn a_press_dropped_before_a_draining_close() -> Recording {
+    let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
+    collecting(0)
+        .sent(key(DtmfKey::One))
+        .sent(Input::Advance { ms: Millis(20) })
+        .journal(Step::Close(CloseStep::Requested { reason, drain: true }))
+        .sent(Input::Advance { ms: Millis(20) })
+        .done()
+}
+
 fn error_close() -> Step {
-    use lk_agents_voice::trace::CloseStep;
     let reason = lk_agents_abi::voice::events::CloseReason::Error;
     Step::Close(CloseStep::Requested { reason, drain: false })
 }
