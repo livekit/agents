@@ -5,6 +5,11 @@
 //! offered). A hosted call's body runs only once the machine admits it (`CallAdmitted`): an
 //! approval's read-back, refused arguments or a refused duplicate run nothing. So an admitted call
 //! must reach the runner, a body must never run unadmitted, and an unhosted call never runs.
+//!
+//! Admission happens inside the call's task, so a task that never runs never admits, and that
+//! looks like a read-back. What tells them apart is the answer: a hosted call, run or not, ends
+//! before its step finishes. One that started (the host told `ToolExecutionUpdated::Started`) and
+//! ended no way at all was dropped by its task (9f070e85f).
 use lk_agents_voice::trace::{Step, ToolStep};
 
 use crate::{
@@ -18,9 +23,9 @@ pub struct ToolCallReachesRunner;
 impl Rule for ToolCallReachesRunner {
     const CONTRACT: Contract = Contract {
         id: "tool_call_reaches_runner",
-        guarantee: "A tool call's body runs exactly when the tool machine admitted the hosted call; an unhosted call never runs.",
+        guarantee: "A tool call's body runs exactly when the tool machine admitted the hosted call, and the hosted call ends before its step finishes; an unhosted call never runs.",
         examples: &[admitted_and_run, hosted_unadmitted_not_run, unhosted_and_not_run],
-        counterexamples: &[admitted_not_run, run_unadmitted, unhosted_but_run],
+        counterexamples: &[admitted_not_run, run_unadmitted, unhosted_but_run, started_never_ended],
         probe: None,
     };
 
@@ -55,6 +60,27 @@ impl Rule for ToolCallReachesRunner {
                 },
             );
         }
+        let mut open: Vec<(u64, &str)> = Vec::new();
+        for (_, step) in internal.steps() {
+            match step {
+                Step::Tool(ToolStep::CallStarted { speech, call_id, hosted: true, .. }) => {
+                    open.push((speech.0, call_id));
+                }
+                Step::Tool(ToolStep::CallEnded { call_id, .. }) => {
+                    open.retain(|(_, c)| c != call_id);
+                }
+                Step::Tool(ToolStep::Finished { speech, .. }) => {
+                    for (_, call_id) in open.extract_if(.., |(s, _)| *s == speech.0) {
+                        check.expect(
+                            Subject::Session,
+                            false,
+                            format!("tool {call_id} started, its step finished, it never ended"),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -83,9 +109,28 @@ fn admitted_and_run() -> Recording {
         .done()
 }
 
-/// Handed over, never admitted (a read-back asked instead): no body.
+fn ended(call_id: &str) -> Step {
+    use lk_agents_voice::{agent_activity::scheduling::SpeechId, tool_executor::ToolEnd};
+    Step::Tool(ToolStep::CallEnded {
+        speech: SpeechId(1),
+        call_id: call_id.into(),
+        end: ToolEnd::Done,
+    })
+}
+
+fn step_finished() -> Step {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    Step::Tool(ToolStep::Finished { speech: SpeechId(1), committed: 2 })
+}
+
+/// Handed over, never admitted (a read-back asked instead): no body, the call answered.
 fn hosted_unadmitted_not_run() -> Recording {
-    Authored::new().journal(started("c9", true)).then_act().done()
+    Authored::new()
+        .journal(started("c9", true))
+        .journal(ended("c9"))
+        .journal(step_finished())
+        .then_act()
+        .done()
 }
 
 /// The driver answered an unadvertised name itself, and no body ran.
@@ -106,4 +151,9 @@ fn run_unadmitted() -> Recording {
 /// The driver said it answered in place, yet a body ran for that call.
 fn unhosted_but_run() -> Recording {
     Authored::new().journal(started("c1", false)).tool_call("c1", 1).then_act().done()
+}
+
+/// Handed over and announced, then its task dropped it: the step finished with the call unended.
+fn started_never_ended() -> Recording {
+    Authored::new().journal(started("c9", true)).journal(step_finished()).then_act().done()
 }
