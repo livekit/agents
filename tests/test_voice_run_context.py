@@ -92,6 +92,8 @@ async def test_a_delegated_run_reports_its_own_usage_apart_from_the_call() -> No
         await session._run(user_input="again")
     assert requests == [1]
     assert session.usage.settled
+    # Each turn's `check` body started once: the call counts tool bodies (usage.md).
+    assert session.usage.tool_calls == 2
 
 
 async def test_a_duplicate_call_on_a_call_is_refused_with_the_agents_template() -> None:

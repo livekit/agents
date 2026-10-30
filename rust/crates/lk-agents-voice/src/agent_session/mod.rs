@@ -37,6 +37,9 @@ pub use time::*;
 /// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
 pub(crate) struct VoiceSession {
+    /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
+    /// sessions"), published with the view.
+    pub(crate) usage: lk_agents_core::usage::Ledger,
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
     /// Guard 1. Cleared when the adaptive detector takes interruption over.
@@ -125,6 +128,7 @@ impl VoiceSession {
         }
         let cfg = &config.effective;
         VoiceSession {
+            usage: Default::default(),
             states: AgentUserState::new(cfg.timers.user_away()),
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),
@@ -393,6 +397,9 @@ pub struct SessionView {
     pub config: DriverConfig,
     pub agent: String,
     pub vad: Option<lk_agents_abi::resources::VadRef>,
+    /// `session.usage`'s latest snapshot, and the ledger revision it was taken at.
+    pub usage: lk_agents_abi::usage::Usage,
+    pub usage_revision: u64,
 }
 
 /// `session.output`: the outputs by id and their switches, decided by the core alone and published

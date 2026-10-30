@@ -732,12 +732,15 @@ impl Driver {
             || view.config != self.session.config
             || view.agent != self.activity.agent
             || view.vad != self.session.vad
+            || view.usage_revision != self.session.usage.revision()
         {
             self.view = Arc::new(crate::agent_session::SessionView {
                 launch_holds,
                 config: self.session.config.clone(),
                 agent: self.activity.agent.clone(),
                 vad: self.session.vad.clone(),
+                usage: self.session.usage.snapshot(),
+                usage_revision: self.session.usage.revision(),
             });
             effects.push(Effect::SessionView(Arc::clone(&self.view)));
         }
@@ -813,6 +816,9 @@ impl Driver {
                 text,
                 is_final: t.is_final,
             }));
+        }
+        if let SessionEvent::MetricsCollected { metrics, .. } = &ev {
+            self.session.usage.observe(metrics);
         }
         // The user state and away deadline are decided on the way to the host.
         self.on_session_edge(now, &ev, out);

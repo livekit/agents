@@ -196,8 +196,6 @@ struct HostParts {
     remote: Option<RemoteSessionConfig>,
     /// The job whose room the session runs in.
     job: Option<Arc<dyn lk_agents_abi::worker::job::SessionJob>>,
-    /// `session.usage`: every provider metrics record the host is handed, accounted.
-    usage: Arc<Mutex<lk_agents_core::usage::Ledger>>,
 }
 
 /// The providers a host call hands over, registered.
@@ -377,7 +375,7 @@ impl VoiceSession {
             events: self.host.events.clone(),
             hooks: self.host.hooks.clone(),
             remote: remote.clone(),
-            usage: Arc::clone(&self.host.usage),
+            view: self.view.clone(),
             anchor: self.anchor,
             agents: self.agents.clone(),
             spawner: Arc::clone(&self.spawner),
@@ -911,7 +909,8 @@ struct HostDrain {
     events: Option<Arc<dyn SessionEvents>>,
     hooks: Option<Arc<dyn SessionHooks>>,
     remote: Option<Arc<dyn SessionHosting>>,
-    usage: Arc<Mutex<lk_agents_core::usage::Ledger>>,
+    /// The session's view, whose usage a remote client is told of as it moves.
+    view: tokio::sync::watch::Receiver<Arc<lk_agents_voice::agent_session::SessionView>>,
     anchor: lk_agents_abi::WallAnchor,
     agents: HostAgents,
     spawner: Arc<dyn Spawner>,
@@ -921,6 +920,7 @@ struct HostDrain {
 impl HostDrain {
     async fn run(self, mut runner: SessionRunner) {
         let mut answering = Vec::new();
+        let mut forwarded = 0;
         while let Some(ev) = runner.next_host_event().await {
             match ev {
                 HostEvent::Hook(call) => {
@@ -958,18 +958,13 @@ impl HostDrain {
                     let Some(wire) = ev.wire(self.anchor, &|id| speeches.object(id)) else {
                         continue;
                     };
-                    // A provider record is accounted before the host sees it; only a remote
-                    // client is told the usage moved (`session_usage_updated`).
-                    if let HostWire::MetricsCollected(m) = &wire {
-                        let moved = {
-                            let mut usage = self.usage.lock();
-                            let revision = usage.revision();
-                            usage.observe(&m.metrics);
-                            (usage.revision() != revision && self.remote.is_some())
-                                .then(|| usage.snapshot())
-                        };
-                        if let (Some(usage), Some(remote)) = (moved, &self.remote) {
-                            remote.forward_usage(&usage);
+                    // The core accounted the record before the host sees it; only a remote client
+                    // is told the usage moved (`session_usage_updated`).
+                    if let (HostWire::MetricsCollected(_), Some(remote)) = (&wire, &self.remote) {
+                        let view = Arc::clone(&self.view.borrow());
+                        if view.usage_revision != forwarded {
+                            forwarded = view.usage_revision;
+                            remote.forward_usage(&view.usage);
                         }
                     }
                     self.deliver(wire);

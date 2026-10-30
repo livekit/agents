@@ -266,6 +266,7 @@ impl Driver {
                     self.render_refusal(speech, call, template, out)
                 }
                 RunEffect::ToolExecute { call, function_call, .. } => {
+                    self.session.usage.tool_started();
                     self.reply_executes(speech, &function_call, out);
                     let item = Box::new(function_call);
                     self.reply_move(speech, call, ToolGo::Execute { item });

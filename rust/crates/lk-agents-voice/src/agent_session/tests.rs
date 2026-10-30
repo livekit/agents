@@ -209,6 +209,8 @@ fn driver() -> Driver {
         config: config.clone(),
         agent: "agent".into(),
         vad: None,
+        usage: Default::default(),
+        usage_revision: 0,
     });
     Driver::new(InitialSession {
         rt_resolved: config.effective.turn.owner(),

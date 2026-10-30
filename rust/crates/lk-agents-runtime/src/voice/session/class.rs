@@ -244,7 +244,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 call_room: rtc_room,
                 remote,
                 job: args.job,
-                usage: Arc::default(),
             },
             resources,
             conn,
@@ -256,7 +255,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn usage(&self) -> lk_agents_abi::usage::Usage {
-        self.host.usage.lock().snapshot()
+        self.view.borrow().usage.clone()
     }
 
     fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {
@@ -557,7 +556,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let eot = self.host.eot.clone().filter(|_| was_running);
         let hooks = self.host.hooks.clone().filter(|_| was_running);
         let closed = Arc::clone(&self.host.closed);
-        let usage = Arc::clone(&self.host.usage);
         Ok(Box::pin(async move {
             closed
                 .get_or_init(|| async move {
@@ -579,8 +577,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                     if let Some(hooks) = &hooks {
                         hooks.close_toolsets(None).await;
                     }
-                    // The final local accounting boundary (usage.md "Voice sessions").
-                    usage.lock().settle();
                 })
                 .await;
         }))

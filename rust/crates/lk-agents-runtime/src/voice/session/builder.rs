@@ -194,6 +194,8 @@ impl DriverBuilder {
             config: config.clone(),
             agent: agent.clone(),
             vad: None,
+            usage: Default::default(),
+            usage_revision: 0,
         };
         DriverBuilder {
             speeches: Default::default(),

@@ -289,6 +289,8 @@ impl Driver {
         {
             out.machine().emit(SessionEvent::Close { reason, error });
         }
+        // The final local accounting boundary (usage.md "Voice sessions").
+        self.session.usage.settle();
         let mut effects = self.settle_step(out);
         self.settle_waiters_at_end();
         self.release_all_providers();
