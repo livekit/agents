@@ -20,8 +20,9 @@ PERSONA = (
     "pleasantries, the hours (weekdays, 9 to 5) and the conversation itself are yours."
 )
 
-# the back office as the front desk's one tool, described from its card
-back_office = A2ADelegate(BACKEND)
+# the back office as the front desk's one tool, described from its card; on a call the turn
+# waits for its answer, or for its first progress on a longer check
+back_office = A2ADelegate(BACKEND, announce=False)
 
 chat = Agent(
     instructions=PERSONA + " By text: one or two plain sentences, no lists.",
