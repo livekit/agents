@@ -194,3 +194,20 @@ jobs:
 
       - name: Smoke
         run: .venv-next/bin/python livekit-agents-next/scripts/smoke.py
+
+      # Tests that embed the interpreter: the binding crate's own tests and the abi tests behind its
+      # `python` feature, against the venv built above (its site-packages hold pydantic_core). The
+      # abi tests set process globals (the fork guard, cached host classes): one process per test.
+      - name: Install cargo-nextest
+        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+
+      - name: The binding's tests against the interpreter
+        working-directory: rust
+        run: |
+          py=$PWD/../.venv-next/bin/python
+          export PYO3_PYTHON=$py
+          export PYTHONHOME=$("$py" -c 'import sys; print(sys.base_prefix)')
+          export PYTHONPATH=$("$py" -c 'import site; print(site.getsitepackages()[0])')
+          cargo test --locked -q -p lk-agents-py
+          cargo nextest run --locked --cargo-quiet --status-level fail --final-status-level fail \
+            -p lk-agents-abi --features python
