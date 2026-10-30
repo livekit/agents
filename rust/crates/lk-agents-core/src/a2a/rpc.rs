@@ -325,13 +325,20 @@ pub fn admit(
     }
 }
 
-/// A method's failure on a storage error: invalid params for a caller error, else internal.
+/// A method's failure on a storage error: a `reject` lane's refusal names the running task,
+/// a caller error is invalid params, anything else internal.
 pub fn storage_failure(id: JsonRpcId, error: &StorageError) -> DoorFrame {
-    let code = match error {
-        StorageError::Invalid(_) => error_code::INVALID_PARAMS,
-        _ => error_code::INTERNAL_ERROR,
-    };
-    wire::frame(failure(id, rpc_error(code, error.to_string())), None)
+    let mut rpc = rpc_error(error_code::INTERNAL_ERROR, error.to_string());
+    match error {
+        StorageError::Rejected { running_task_id } => {
+            rpc.code = error_code::UNSUPPORTED_OPERATION;
+            rpc.data =
+                running_task_id.as_ref().map(|id| serde_json::json!({ "runningTaskId": id }));
+        }
+        StorageError::Invalid(_) => rpc.code = error_code::INVALID_PARAMS,
+        _ => {}
+    }
+    wire::frame(failure(id, rpc), None)
 }
 
 /// `TaskNotFoundError` for a task not in the named thread.
@@ -736,6 +743,17 @@ mod tests {
         assert_eq!(from.iter().map(|r| r.follow).collect::<Vec<_>>(), [false, true]);
         let ended = TaskRow { status: TaskState::Completed, ..running.clone() };
         assert!(resume(&task, &ended, None).unwrap().iter().all(|r| !r.follow));
+    }
+
+    // Catches: a `reject` lane answering INTERNAL_ERROR, which hides the task the client must
+    // cancel first (server.md, interruption policies).
+    #[test]
+    fn a_rejected_message_names_the_running_task() {
+        let rejected = StorageError::Rejected { running_task_id: Some("AST_r".into()) };
+        let frame = storage_failure(JsonRpcId::Number(1), &rejected);
+        let error = &serde_json::from_str::<Value>(&frame.json).unwrap()["error"];
+        assert_eq!(error["code"], json!(error_code::UNSUPPORTED_OPERATION));
+        assert_eq!(error["data"], json!({"runningTaskId": "AST_r"}));
     }
 
     #[test]
