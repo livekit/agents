@@ -29,6 +29,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APITimeoutError,
+    create_api_error_from_http,
     tts,
     utils,
 )
@@ -279,6 +280,11 @@ class ChunkedStream(tts.ChunkedStream):
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:
+                if not resp.ok:
+                    status_error = create_api_error_from_http(status=resp.status)
+                    # ChunkedStream swallows APIStatusError(499), so retryable codes aren't raised
+                    if not status_error.retryable:
+                        raise status_error
                 resp.raise_for_status()
 
                 output_emitter.initialize(
@@ -305,5 +311,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError as e:
+            raise e from None  # keep ChunkedStream's StopAsyncIteration out of the traceback
         except Exception as e:
             raise APIConnectionError() from e
