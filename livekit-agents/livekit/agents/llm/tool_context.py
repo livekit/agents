@@ -376,7 +376,7 @@ DELIVERED = "delivered to the person as written: {text}"
 """What the model reads as the output of a verbatim result it did not write."""
 
 SAY_EXACTLY = (
-    "Read this aloud to the person, word for word, as your whole reply; it is not for you: {text}"
+    'Your whole reply is the quoted text, said exactly, with nothing before or after it: "{text}"'
 )
 """How a model that cannot speak text as written is asked to say exact text."""
 
