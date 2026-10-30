@@ -38,10 +38,11 @@ impl _core_TelemetryPolicy {
     /// depth. `destination=False` copies a value into the framework's own queue, keeping the
     /// destination-private markers.
     #[pyo3(signature = (value, destination))]
-    fn snapshot(&self, value: ::lk_agents_abi::telemetry::policy::TelemetryValue, destination: bool) -> PyResult<::lk_agents_abi::telemetry::policy::TelemetryValue> {
+    fn snapshot<'py>(&self, py: Python<'py>, value: Bound<'_, PyAny>, destination: bool) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let value = crate::conversions::telemetry_value_from_py(&value)?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::snapshot(&self.0, value, destination);
-        Ok(out)
+        Ok(crate::conversions::telemetry_value_to_py(py, out)?)
     }
 
     #[pyo3(signature = (name))]
@@ -98,8 +99,9 @@ pub fn _core_export_action<'py>(py: Python<'py>, registered: bool, signal_enable
 /// Conservative retained bytes of an SDK value; more than `SDK_RECORD_BYTES` refuses it.
 #[pyfunction]
 #[pyo3(signature = (value))]
-pub fn _core_value_bytes(value: ::lk_agents_abi::telemetry::policy::TelemetryValue) -> PyResult<usize> {
+pub fn _core_value_bytes(value: Bound<'_, PyAny>) -> PyResult<usize> {
     crate::host::check_pid()?;
+    let value = crate::conversions::telemetry_value_from_py(&value)?;
     let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_value_bytes(value);
     Ok(out)
 }

@@ -1,9 +1,9 @@
 //! Shared content filtering and conservative SDK retention accounting. No host objects cross here.
 
 use lk_agents_abi::telemetry::policy::{
-    MAX_COLLECTION, MAX_DEPTH, MAX_EVENTS, REDACTED_EXCEPTION, REDACTED_LOG_BODY,
-    SDK_PENDING_RECORDS as MAX_PENDING, SDK_RECORD_BYTES as MAX_RECORD_BYTES, TelemetryAdmission,
-    TelemetryExportAction, TelemetryPolicy, TelemetryRecordKind, TelemetryValue,
+    MAX_EVENTS, REDACTED_EXCEPTION, REDACTED_LOG_BODY, SDK_PENDING_RECORDS as MAX_PENDING,
+    SDK_RECORD_BYTES as MAX_RECORD_BYTES, TelemetryAdmission, TelemetryExportAction,
+    TelemetryPolicy, TelemetryRecordKind, TelemetryValue,
 };
 
 const REFUSED_BYTES: usize = MAX_RECORD_BYTES + 1;
