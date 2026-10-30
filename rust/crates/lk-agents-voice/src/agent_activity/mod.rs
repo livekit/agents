@@ -1,7 +1,7 @@
 //! `voice/agent_activity.py`'s `AgentActivity`: the running agent and its components, the driver's
 //! configuration, and the agent commands (prompt, tools, context, IO) the driver applies.
 
-use crate::tts::markup::ChatMessageExt;
+use lk_agents_core::tts::markup::ChatMessageExt;
 pub mod drain;
 mod experts;
 pub mod false_interruption;

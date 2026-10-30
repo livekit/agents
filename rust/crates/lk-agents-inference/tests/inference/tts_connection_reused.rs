@@ -13,7 +13,6 @@ use std::{
 
 use base64::Engine;
 use lk_agents_abi::Tts;
-use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_inference::tts::{GatewayTts, TtsOptions};
 use lk_agents_net::clock::SimClock;
 use lk_agents_net::task::TokioSpawner;
@@ -55,8 +54,7 @@ fn each_reply_pays_only_the_voice() {
                 opts,
                 Arc::new(gateway),
                 Arc::new(TokioSpawner::current()),
-                Arc::new(SimClock::new()),
-                SpeechTextProcessors::VERBATIM,
+                Arc::new(SimClock::new())
             );
             // The session prewarms its voice as it starts; the greeting comes a moment later.
             voice.prewarm();

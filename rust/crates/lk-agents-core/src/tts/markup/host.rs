@@ -10,7 +10,7 @@ use super::MarkupExt;
 
 pub struct SpeechMarkup;
 
-impl lk_agents_core::llm::chat_dict::AssistantMarkup for SpeechMarkup {
+impl crate::llm::chat_dict::AssistantMarkup for SpeechMarkup {
     fn strip_expr_markup(text: &str) -> String {
         super::strip_expr_markup(text)
     }

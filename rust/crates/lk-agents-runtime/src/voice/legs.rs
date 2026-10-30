@@ -98,7 +98,6 @@ impl SessionExecutor for Executor {
         Arc::new(|tts, clock, budget| {
             lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
                 tts,
-                lk_agents_voice::tts::processing::SpeechText::PROCESSORS,
                 clock,
                 budget,
             )

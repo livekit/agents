@@ -10,7 +10,7 @@ use lk_agents_abi::utils::audio::AudioFrame;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamSource};
 use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
-use lk_agents_voice::tts::markup::{Markup, MarkupExt};
+use lk_agents_core::tts::markup::{Markup, MarkupExt};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -76,7 +76,7 @@ fn observed(tts: Arc<FakeTts>) -> Observed {
             Arc::new(move |_| {
                 Box::new(DotSplitter { buf: String::new(), seen: s.clone(), flushes: f.clone() })
             }),
-            lk_agents_voice::tts::markup::text_processor_factory(),
+            lk_agents_core::tts::markup::text_processor_factory(),
             Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
         ),
         seen,
@@ -202,7 +202,7 @@ fn adapter(tts: Arc<FakeTts>) -> StreamAdapter {
     StreamAdapter::new(
         tts,
         Arc::new(|_| Box::new(DotSplitter::default())),
-        lk_agents_voice::tts::markup::text_processor_factory(),
+        lk_agents_core::tts::markup::text_processor_factory(),
         Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
     )
 }
@@ -491,7 +491,7 @@ fn retrying_adapter(tts: Arc<FakeTts>) -> StreamAdapter {
     };
     let clock = Arc::new(lk_agents_net::clock::SimClock::new());
     let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
-    StreamAdapter::new(tts, splitter, lk_agents_voice::tts::markup::text_processor_factory(), clock)
+    StreamAdapter::new(tts, splitter, lk_agents_core::tts::markup::text_processor_factory(), clock)
         .with_budget(budget)
 }
 
@@ -617,7 +617,7 @@ async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
                 seen.store(xml, Ordering::Relaxed);
                 Box::new(DotSplitter::default())
             }),
-            lk_agents_voice::tts::markup::text_processor_factory(),
+            lk_agents_core::tts::markup::text_processor_factory(),
             Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
         );
         assert!(adapter.lowers_markup());

@@ -13,9 +13,11 @@ pub mod pacer;
 mod ports;
 mod pump;
 pub mod sentence_adapter;
+pub mod sentences;
 pub mod stream;
 pub mod wire;
 
+use lk_agents_core::tts::transcript::AudioTranscriptNormalizer;
 use crate::abi::{
     StreamSink, StreamSource, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
@@ -30,7 +32,6 @@ use futures_util::future::{Either, select};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
-use lk_agents_abi::tts::text::{SpeechTextProcessors, TranscriptProcessor};
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_net::connection_pool::ConnectionPool;
@@ -86,7 +87,6 @@ impl Default for TtsOptions {
 /// job that session serves (two sessions sharing an instance bill each its own job).
 #[derive(Clone)]
 pub struct GatewayTts {
-    speech: SpeechTextProcessors,
     shared: Arc<TtsClient>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
@@ -176,7 +176,6 @@ impl GatewayTts {
         ws: Arc<dyn WsTransport>,
         spawner: Arc<dyn Spawner>,
         clock: Arc<dyn Clock>,
-        speech: SpeechTextProcessors,
     ) -> Self {
         let shared = TtsClient {
             opts: Arc::new(Mutex::new(opts)),
@@ -187,7 +186,6 @@ impl GatewayTts {
             connections: Arc::default(),
         };
         GatewayTts {
-            speech,
             shared: Arc::new(shared),
             identity: Arc::default(),
             conn_options: None,
@@ -208,7 +206,6 @@ impl GatewayTts {
             self.ws.clone(),
             self.spawner.clone(),
             self.clock.clone(),
-            self.speech,
         );
         let shared = Arc::get_mut(&mut view.shared).expect("a newly constructed view is unshared");
         shared.opts = self.opts.clone();
@@ -359,14 +356,16 @@ impl GatewayTts {
             sample_rate: opts.sample_rate,
             opts,
             provider,
-            transcript: (self.speech.transcript)(expressive),
+            transcript: AudioTranscriptNormalizer::new(expressive),
             text_rx,
             audio_tx,
         };
         let prep = TextPrep {
             pending_bytes: 0,
-            markup: (self.speech.markup)(wire::markup_provider_key(&pump.opts.model)),
-            sentences: (self.speech.sentence_splitter)(Some(&pump.provider), expressive),
+            markup: lk_agents_core::tts::markup::text_processor(wire::markup_provider_key(
+                &pump.opts.model,
+            )),
+            sentences: Box::new(sentences::sentence_splitter(Some(&pump.provider), expressive)),
         };
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 
@@ -654,7 +653,7 @@ struct Pump {
     opts: TtsOptions,
     provider: String,
     sample_rate: u32,
-    transcript: Box<dyn TranscriptProcessor>,
+    transcript: AudioTranscriptNormalizer,
     text_rx: mpsc::Receiver<TextCmd>,
     audio_tx: mpsc::Sender<Result<SynthesizedAudio, ApiError>>,
 }

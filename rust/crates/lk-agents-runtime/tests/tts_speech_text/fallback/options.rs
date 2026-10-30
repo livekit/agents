@@ -13,8 +13,7 @@ async fn fallback_tts_resolves_each_operation_for_streaming_and_sentence_backend
                 ChainPolicy::tts_defaults(),
                 clock,
                 spawner,
-                observer,
-                crate::speech(),
+                observer
             )
             .unwrap(),
         );
@@ -47,8 +46,7 @@ async fn a_fallback_deadline_includes_the_wait_for_its_runtime_task() {
         ChainPolicy::tts_defaults(),
         clock.clone(),
         spawner,
-        observer,
-        crate::speech(),
+        observer
     )
     .unwrap();
     let call = fallback

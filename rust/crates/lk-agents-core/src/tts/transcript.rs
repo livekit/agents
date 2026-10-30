@@ -84,12 +84,3 @@ mod tests {
         assert_eq!(text, format!("[{long}] hello"));
     }
 }
-
-impl lk_agents_abi::tts::text::TranscriptProcessor for AudioTranscriptNormalizer {
-    fn push_alignment(&mut self, segment_id: String, tokens: Vec<TimedString>) {
-        AudioTranscriptNormalizer::push_alignment(self, segment_id, tokens);
-    }
-    fn take_audio_transcript(&mut self, segment_id: &str, is_final: bool) -> Vec<TimedString> {
-        AudioTranscriptNormalizer::take_audio_transcript(self, segment_id, is_final)
-    }
-}

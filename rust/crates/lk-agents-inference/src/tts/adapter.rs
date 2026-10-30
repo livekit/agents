@@ -30,7 +30,7 @@ impl StreamAdapterFunctions for AdapterStreams {
         let (sink, source) = StreamAdapter::new(
             provider,
             Arc::new(|_| Box::new(PreSplit)),
-            Arc::new(env.speech_text.markup),
+            Arc::new(lk_agents_core::tts::markup::text_processor),
             env.clock.clone(),
         )
         .with_budget(conn_options)

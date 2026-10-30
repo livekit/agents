@@ -191,8 +191,7 @@ fn tts_chain(entries: Vec<Arc<dyn Tts>>) -> FallbackTts {
         },
         clock,
         spawner,
-        obs,
-        crate::speech(),
+        obs
     )
     .expect("a usable list")
 }

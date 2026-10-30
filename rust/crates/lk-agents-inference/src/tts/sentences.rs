@@ -6,7 +6,7 @@ use lk_agents_media::blingfire::{Error, split_sentences};
 // The incremental splitter
 // ==================================================================================================
 
-use crate::tokenize::{
+use lk_agents_core::tokenize::{
     NativeTokenBuffer as TokenBuffer, Span as TextSpan, TokenBufferOptions, Tokenize,
 };
 use lk_agents_abi::tts::markup::SentenceTokenizerConfig;
@@ -18,7 +18,7 @@ pub struct Blingfire {
     pub retain_format: bool,
 }
 
-impl super::token_buffer::sealed::NativeTokenizer for Blingfire {}
+impl lk_agents_core::tokenize::sealed::NativeTokenizer for Blingfire {}
 
 impl Tokenize for Blingfire {
     fn tokenize(&self, text: &str) -> Vec<TextSpan> {
@@ -136,6 +136,27 @@ impl lk_agents_abi::SentenceSplitter for SentenceBuffer {
     fn flush(&mut self) -> Vec<String> {
         self.0.flush()
     }
+}
+
+/// The sentence splitting a synthesis applies: `None` selects the sentence adapter's default; a
+/// provider selects its gateway limits.
+pub fn sentence_splitter(provider: Option<&str>, expressive: bool) -> SentenceBuffer {
+    let opts = match provider {
+        Some(provider) => {
+            let (max_token_len, min_token_len, xml_aware) =
+                lk_agents_core::tts::markup::sentence_tokenizer_of(provider, expressive);
+            SentenceBufferOptions {
+                retain_format: false,
+                ..SentenceBufferOptions::from_config(SentenceTokenizerConfig {
+                    max_token_len,
+                    min_token_len,
+                    xml_aware,
+                })
+            }
+        }
+        None => SentenceBufferOptions { xml_aware: expressive, ..Default::default() },
+    };
+    SentenceBuffer::with_options(opts)
 }
 
 #[cfg(test)]
@@ -306,7 +327,7 @@ mod splitter_tests {
     // the text whole -- held by the buffer, said at the flush -- not a panic and not silence.
     #[test]
     fn blingfire_as_a_tokenizer_hands_back_what_it_cannot_split() {
-        use crate::tokenize::Tokenize as _;
+        use lk_agents_core::tokenize::Tokenize as _;
         let tok = Blingfire { min_sentence_len: 1, retain_format: false };
         let spans = tok.tokenize("Hello there. How are you?");
         assert_eq!(
@@ -317,7 +338,7 @@ mod splitter_tests {
         let held = tok.tokenize("a\0b");
         assert_eq!(held.len(), 1);
         assert_eq!(held[0].text, "a\0b");
-        assert_eq!(tok.tokenize("   "), Vec::<crate::tokenize::Span>::new());
+        assert_eq!(tok.tokenize("   "), Vec::<lk_agents_core::tokenize::Span>::new());
     }
 
     // A-31, under the real model. Catches: a `<break time="1s"/>` arriving one character at a
@@ -347,7 +368,7 @@ mod splitter_tests {
         );
         for token in &out {
             assert!(
-                !crate::tokenize::xml::has_unclosed_tags(token),
+                !lk_agents_core::tokenize::xml::has_unclosed_tags(token),
                 "a token split a tag: {token:?}"
             );
         }

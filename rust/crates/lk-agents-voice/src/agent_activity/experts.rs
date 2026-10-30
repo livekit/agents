@@ -13,7 +13,7 @@ use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
 use crate::generation::ReplySource;
 use crate::tool_executor::{Delivery, ToolEnd, ToolOutcome, answer};
-use crate::tts::markup::ChatMessageExt;
+use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
 use lk_agents_abi::{ChatItem, Ts};
 

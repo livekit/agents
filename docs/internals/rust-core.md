@@ -41,8 +41,8 @@ tools and host RTC objects.
 | Crate | Responsibility |
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data only |
-| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; telemetry destination policy and metric admission (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
-| `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; speech tokenization, markup and pacing decisions; composes agent execution from `lk-agents-core` |
+| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy and metric admission (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
+| `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
 | `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks, the shared attempt machine and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
@@ -103,7 +103,7 @@ on the runtime. It is a plain struct:
 | `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
 | `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
 | `http` | The shared HTTP pool |
-| `images`, `strip_assistant_markup`, `speech_text` | Image preparation and encoding, and the voice core's text algorithms providers and judges apply |
+| `images` | Image preparation and encoding |
 
 Process-wide resources that need no runtime are owned by the crate whose work
 they bound, made on first use in each process (a forked child makes its own):
@@ -131,10 +131,9 @@ passes the runtime's value (`lk_agents_runtime::process::env()`), hidden from th
 host's signature. Internal constructors take the handles they need; there is no
 `Env` type parameter. Runtime-bound handles are read on use, so constructing a
 class starts nothing. Rust callers and tests build their own value
-(`ProcessEnv::current_runtime()`, with fakes as needed). The voice core's text
-algorithms (`strip_assistant_markup`, `speech_text`) are the only functions it
-lends from another layer: plain functions the runtime selects, so providers and
-judges need no voice dependency; nothing registers into it at run time.
+(`ProcessEnv::current_runtime()`, with fakes as needed). Providers and judges call
+the speech text algorithms (`lk_agents_core::tts`) directly; a synthesis's
+sentence splitting is inference's, over media's BlingFire.
 
 The sans-I/O crates and ABI have no runtime, executor, Tokio, futures,
 async-trait or pyo3 dependency. Async I/O crates use Tokio, process and database
@@ -763,8 +762,8 @@ uncertain and require reconciliation under the application transaction contract.
 
 Pure algorithms belong to the subject that owns their behavior, under the
 [crate responsibilities](#crates-and-dependencies). Chat formatting,
-tool-argument processing and JSON repair belong to `lk-agents-core`; speech
-tokenization, markup and pacing belong to `lk-agents-voice`; media codecs,
+tool-argument processing, JSON repair, speech tokenization and expressive markup
+belong to `lk-agents-core`; transcript pacing belongs to `lk-agents-voice`; media codecs,
 filters and sample arithmetic belong to `lk-agents-media`. Schema and protocol
 transformations belong to their corresponding subjects. These algorithms take
 supplied data and return data without I/O or host objects.

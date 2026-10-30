@@ -25,7 +25,7 @@ fn tts(ws: Arc<FakeWs>) -> GatewayTts {
 
 fn tts_on(ws: Arc<FakeWs>, clock: Arc<dyn lk_agents_abi::Clock>) -> GatewayTts {
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    GatewayTts::new(opts(), ws, spawner, clock, super::speech())
+    GatewayTts::new(opts(), ws, spawner, clock)
 }
 
 fn map(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
@@ -241,8 +241,7 @@ async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignme
         opts,
         ws.clone(),
         spawner,
-        Arc::new(lk_agents_net::clock::RealClock::new()),
-        super::speech(),
+        Arc::new(lk_agents_net::clock::RealClock::new())
     );
     let (sink, mut source) = Tts::stream(&tts, true).await.unwrap();
     sink.push("say <expr type=\"prosody\" label=\"whisper\">this</expr> now".into()).unwrap();
@@ -340,8 +339,7 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
         opts,
         ws,
         spawner,
-        Arc::new(lk_agents_net::clock::RealClock::new()),
-        super::speech(),
+        Arc::new(lk_agents_net::clock::RealClock::new())
     );
     let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
         .into_iter()
@@ -424,8 +422,7 @@ async fn each_synthesis_carries_its_own_expressive_option() {
         options,
         ws.clone(),
         Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-        Arc::new(lk_agents_net::clock::RealClock::new()),
-        super::speech(),
+        Arc::new(lk_agents_net::clock::RealClock::new())
     );
     for expressive in [true, false] {
         ws.feed(text(

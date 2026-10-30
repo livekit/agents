@@ -23,7 +23,7 @@
 //! * `text_session_history_mode`: a fresh child starts without its parent's dialogue; a forked
 //!   one never with a call that has no output.
 
-use lk_agents_voice::tts::markup::ChatMessageExt;
+use lk_agents_core::tts::markup::ChatMessageExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, UNIX_EPOCH};
 

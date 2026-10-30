@@ -40,7 +40,6 @@ impl port::FallbackTts for FallbackTts {
             env.clock.clone(),
             spawner,
             observer,
-            env.speech_text,
         )
         .map_err(|error| InvalidPayload(error.to_string()))
     }

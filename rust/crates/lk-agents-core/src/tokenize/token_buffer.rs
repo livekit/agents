@@ -39,7 +39,8 @@ pub fn spans_from_tokens(text: &str, tokens: Vec<TokenizerToken>) -> Vec<Span> {
         .collect()
 }
 
-pub(crate) mod sealed {
+/// Implemented only by native tokenizers: a host callback cannot run under a native buffer.
+pub mod sealed {
     pub trait NativeTokenizer {}
 }
 

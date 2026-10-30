@@ -63,7 +63,7 @@ fn every_item_kind_reaches_the_transcript_in_order() {
         handoff("h0", None, "greeter"),
     ];
     assert_eq!(
-        transcript::format_items(&items, str::to_owned),
+        transcript::format_items(&items),
         "user: book me a table\n\
          [function call: find_table({\"party\":2})]\n\
          [function output: table 7 at 8pm]\n\

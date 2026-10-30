@@ -44,7 +44,6 @@ pub struct Judges {
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
-    strip_assistant_markup: fn(&str) -> String,
 }
 
 enum Judge {
@@ -66,7 +65,6 @@ impl JudgeRunner for Judges {
             tools,
             host,
             clock: env.clock.clone(),
-            strip_assistant_markup: env.strip_assistant_markup,
         }
     }
 
@@ -160,7 +158,7 @@ impl Judges {
                 judge.name
             )
         })?;
-        let prompt = judge.prompt(chat_ctx, reference, self.strip_assistant_markup);
+        let prompt = judge.prompt(chat_ctx, reference);
         let (arguments, _) = self
             .call(
                 llm,

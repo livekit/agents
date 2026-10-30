@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
-use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
@@ -180,13 +179,14 @@ impl TtsBackend {
     pub fn new(
         tts: &Arc<dyn Tts>,
         clock: Arc<dyn Clock>,
-        speech: SpeechTextProcessors,
     ) -> Arc<Self> {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
-            splitter: Arc::new(move |expressive| (speech.sentence_splitter)(None, expressive)),
-            text_processor: Arc::new(speech.markup),
+            splitter: Arc::new(|expressive| {
+                Box::new(crate::tts::sentences::sentence_splitter(None, expressive))
+            }),
+            text_processor: Arc::new(lk_agents_core::tts::markup::text_processor),
             clock,
         })
     }
@@ -317,12 +317,11 @@ impl FallbackTts {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-        speech: SpeechTextProcessors,
     ) -> Result<Self, TtsChainError> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
-            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock), speech)).collect();
+            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
         let Some(&num_channels) = channels.first() else { return Err(TtsChainError::NoBackends) };
         if channels.iter().any(|c| *c != num_channels) {

@@ -9,7 +9,7 @@
 //! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
 //! agent asks for no reply to it.
 use lk_agents_abi::{ChatItem, Role, llm::tool_executor::WAITING_PREFIX};
-use lk_agents_voice::tts::markup::ChatMessageExt;
+use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{
     events::SessionEvent,
     trace::{HandoffStep, Step},

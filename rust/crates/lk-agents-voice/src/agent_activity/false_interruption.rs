@@ -10,7 +10,7 @@ use crate::agent_session::{Answer, Driver, RequestId};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
-use crate::tokenize::{WordTokenizerOptions, count_words};
+use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use crate::trace::{InputStep, InterruptCause, InterruptStep, SpeechStep};
 use crate::turn::InterruptionOptions;
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;

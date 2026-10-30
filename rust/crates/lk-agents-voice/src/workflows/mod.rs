@@ -9,7 +9,7 @@ pub mod prompts;
 pub mod twilio;
 pub mod warm_transfer;
 
-use crate::tokenize::{is_py_space, py_strip};
+use lk_agents_core::tokenize::{is_py_space, py_strip};
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::voice::workflows::{
     CaptureRefused, DateOfBirthRefused, UnknownDtmfSymbol, WorkflowChecks,

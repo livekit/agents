@@ -5,6 +5,5 @@ pub mod markup;
 pub mod stream_adapter;
 pub mod stream_pacer;
 pub mod streams;
-pub mod text;
 pub mod timed;
 pub mod tts;

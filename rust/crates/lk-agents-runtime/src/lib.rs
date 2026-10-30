@@ -23,11 +23,11 @@ pub mod cores {
     pub use lk_agents_core::telemetry::transport::TraceParents;
     pub use lk_agents_core::text::Languages;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
-    pub use lk_agents_voice::tokenize::{
+    pub use lk_agents_core::tokenize::{
         BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,
-        SpeechTokenizer,
     };
-    pub use lk_agents_voice::tts::markup::{
+    pub use lk_agents_voice::tokenize::SpeechTokenizer;
+    pub use lk_agents_core::tts::markup::{
         ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper,
     };
 }

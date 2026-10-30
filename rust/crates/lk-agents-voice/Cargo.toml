@@ -19,7 +19,7 @@ lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # The shared agent execution core: the tool outcome table, approval and AgentRun.
 lk-agents-core = { path = "../lk-agents-core" }
 # BlingFire supplies sentence boundaries for the TTS leg's batching.
-lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
+lk-agents-media = { path = "../lk-agents-media" }
 log.workspace = true
 serde_json.workspace = true
 # The warm transfer's Twilio basic auth.

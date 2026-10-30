@@ -24,9 +24,11 @@ pub mod mcp;
 pub mod request;
 pub mod telemetry;
 pub mod text_session;
+pub mod tokenize;
 pub mod tool_calls;
 pub mod tool_outcome;
 pub mod tool_search;
+pub mod tts;
 pub mod usage;
 
 pub use agent::AgentError;

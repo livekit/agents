@@ -8,7 +8,7 @@ pub mod playout;
 pub mod realtime;
 pub mod tts;
 
-use crate::tts::markup::MarkupExt;
+use lk_agents_core::tts::markup::MarkupExt;
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::tool_executor::Toolset;
@@ -338,8 +338,8 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
             }
         }
         None => {
-            crate::tts::markup::remove_expressive_instructions(&mut ctx);
-            crate::tts::markup::strip_assistant_markup(&mut ctx);
+            lk_agents_core::tts::markup::remove_expressive_instructions(&mut ctx);
+            lk_agents_core::tts::markup::strip_assistant_markup(&mut ctx);
         }
     }
 
@@ -366,7 +366,7 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
 /// `update_expressive_instructions`: the keyed system message, replaced in place (its stamp kept)
 /// or appended.
 fn upsert_expressive_instructions(ctx: &mut ChatContext, text: &str, now: SystemTime) {
-    use crate::tts::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
+    use lk_agents_core::tts::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
     match ctx.items.iter().position(|it| it.id() == ID) {
         Some(idx) => {
             let created_at = ctx.items[idx].created_at();
@@ -398,7 +398,7 @@ impl ExpressiveLayers {
         tts: Option<&lk_agents_abi::resources::TtsRef>,
         modality: lk_agents_abi::Modality,
     ) -> Option<String> {
-        use crate::tts::markup::SpeechSteering;
+        use lk_agents_core::tts::markup::SpeechSteering;
         use lk_agents_abi::voice::session_options::Instructions;
         let tts = tts?;
         let markup = tts.markup;
@@ -927,7 +927,7 @@ pub enum GenEvent {
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
-    use crate::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
+    use lk_agents_core::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
     use lk_agents_abi::Modality;
     use lk_agents_abi::resources::{ResourceId, TtsRef};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};

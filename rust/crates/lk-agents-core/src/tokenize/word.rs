@@ -10,7 +10,7 @@ pub const PUNCTUATIONS: [char; 39] = [
     '…',
 ];
 
-pub use lk_agents_core::text::{is_py_space, py_strip};
+pub use crate::text::{is_py_space, py_strip};
 
 /// `char_based_codes`, verbatim. Deliberately no Hangul or Arabic/Hebrew/Indic (#2366).
 #[inline]

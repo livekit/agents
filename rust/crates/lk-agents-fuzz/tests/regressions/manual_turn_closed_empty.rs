@@ -3,7 +3,7 @@ use lk_agents_abi::{ChatItem, Role};
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
 use lk_agents_fuzz::input::{Input, Millis, TurnMode};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::tts::markup::ChatMessageExt;
+use lk_agents_core::tts::markup::ChatMessageExt;
 
 // Catches: the close's trailing commit skipped when the turn held no words. The reference's close
 // always runs `_commit_user_turn`, and in manual turn detection `_run_eou_detection` proceeds with

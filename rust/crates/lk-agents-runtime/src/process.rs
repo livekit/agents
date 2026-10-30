@@ -8,7 +8,6 @@ use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
-use lk_agents_voice::tts::processing::SpeechText;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProcessError {
@@ -123,8 +122,6 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
         images: images(),
-        strip_assistant_markup: lk_agents_voice::tts::markup::strip_expr_markup,
-        speech_text: SpeechText::PROCESSORS,
     }
 }
 

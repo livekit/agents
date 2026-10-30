@@ -13,7 +13,7 @@ use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 };
-use crate::tokenize::{WordTokenizerOptions, count_words};
+use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{EotPrediction, SpeechEvent, SpeechEventType, Ts};
 use std::time::Duration;

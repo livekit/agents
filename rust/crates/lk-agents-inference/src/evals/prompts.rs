@@ -122,7 +122,6 @@ impl BuiltIn {
         &self,
         chat_ctx: &[ChatItem],
         reference: Option<&[ChatItem]>,
-        strip_assistant: fn(&str) -> String,
     ) -> String {
         let mut parts = match self.frame {
             Frame::Criteria => vec![format!("Criteria: {}", self.criteria), String::new()],
@@ -134,10 +133,10 @@ impl BuiltIn {
             parts.push(format!("Agent Instructions:\n{instructions}"));
             parts.push(String::new());
         }
-        parts.push(format!("Conversation:\n{}", format_items(chat_ctx, strip_assistant)));
+        parts.push(format!("Conversation:\n{}", format_items(chat_ctx)));
         if let Some(reference) = reference {
             parts.push(String::new());
-            parts.push(format!("Reference:\n{}", reference_transcript(reference, strip_assistant)));
+            parts.push(format!("Reference:\n{}", reference_transcript(reference)));
         }
         if self.frame == Frame::Criteria {
             parts.push(String::new());

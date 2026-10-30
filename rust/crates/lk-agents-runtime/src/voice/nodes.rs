@@ -571,7 +571,6 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         let clock = Arc::clone(&env.clock);
         let tts = lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
             tts,
-            env.speech_text.clone(),
             Arc::clone(&clock),
             conn_options,
         );
