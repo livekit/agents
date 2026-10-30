@@ -72,3 +72,22 @@ fn a_machine_verdict_waits_for_both_the_silence_and_the_end_of_turn_in_either_or
         assert_eq!(predictions, [AmdCategory::MachineVm]);
     }
 }
+
+// Catches: an invalid detection timeout reported under its config field name instead of the
+// `timeout` key the host passed (c1470eb08).
+#[test]
+fn an_invalid_timeout_is_reported_by_the_hosts_key() {
+    let kw = lk_agents_abi::voice::amd::AmdConfigKwargs {
+        detection: lk_agents_abi::voice::amd::AmdDetectionOptions {
+            timeout: Some(-1.0),
+            ..Default::default()
+        },
+        max_endpointing_delay: None,
+        source: None,
+        wait_until_finished: false,
+        interrupt_on_machine: false,
+        ivr_detection: false,
+    };
+    let error = AmdConfig::resolve(&kw).unwrap_err();
+    assert_eq!((error.key, error.value), ("timeout", -1.0));
+}
