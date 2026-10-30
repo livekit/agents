@@ -427,6 +427,7 @@ pub fn room_io_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<RoomIoConfig> 
             num_channels: a.get_item("num_channels")?.extract()?,
             frame_size_ms: a.get_item("frame_size_ms")?.extract()?,
             noise_cancellation: a.get_item("noise_cancellation")?.extract()?,
+            session: a.get_item("session")?.extract()?,
             auto_gain_control: a.get_item("auto_gain_control")?.extract()?,
             pre_connect_audio: a.get_item("pre_connect_audio")?.extract()?,
             pre_connect_audio_timeout: Duration::from_secs_f64(

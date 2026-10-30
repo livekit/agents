@@ -453,6 +453,7 @@ impl Reader for ParticipantAudioInput {
             num_channels: self.config.num_channels,
             frame_size_ms: Some(self.config.frame_size_ms),
             noise_cancellation: self.config.noise_cancellation.clone(),
+            session: self.config.session.clone(),
             auto_gain_control: self.config.auto_gain_control,
             participant_identity: participant.identity().clone(),
             queue_capacity: lk_agents_abi::utils::bounded_lossy::AUDIO_QUEUE_FRAMES,

@@ -181,8 +181,9 @@ class RoomOptions:
             return self.text_output
         return TextOutputOptions() if self.text_output is not False else None
 
-    def _to_core(self) -> dict[str, Any]:
-        """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off."""
+    def _to_core(self, session: VoiceSession[Any]) -> dict[str, Any]:
+        """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off.
+        ``session`` is told when one of its input processors fails."""
         audio_in = self.get_audio_input_options()
         audio_out = self.get_audio_output_options()
         text_out = self.get_text_output_options()
@@ -203,6 +204,7 @@ class RoomOptions:
                 "num_channels": audio_in.num_channels,
                 "frame_size_ms": audio_in.frame_size_ms,
                 "noise_cancellation": audio_in.noise_cancellation,
+                "session": session,
                 # unsaid: off when noise cancellation is configured directly
                 "auto_gain_control": (
                     audio_in.auto_gain_control
@@ -238,10 +240,9 @@ def _name(names: list[str], value: int, unknown: str) -> str:
     return names[value] if 0 <= value < len(names) else unknown
 
 
-class Room(rtc.EventEmitter[Literal["audio_processing_error"]]):
+class Room:
     """An ``rtc.Room`` as the core sees it. Its SDK events are re-emitted into the core's event
-    bus; one per room (``of``), so the handlers are registered once. Its input streams emit
-    ``audio_processing_error`` for the sessions in the room."""
+    bus; one per room (``of``), so the handlers are registered once."""
 
     @classmethod
     def of(cls, room: rtc.Room) -> Room:
@@ -252,7 +253,6 @@ class Room(rtc.EventEmitter[Literal["audio_processing_error"]]):
         return adapter
 
     def __init__(self, room: rtc.Room) -> None:
-        super().__init__()
         self._room = room
         self._bus = _core.RoomEventBus()
         self._local = LocalParticipant(self)
@@ -619,7 +619,8 @@ class TrackPublication:
                 except BaseException as cleanup_error:
                     error.add_note(f"Audio input processor cleanup failed: {cleanup_error!r}")
             raise
-        return _AudioStream(self._room, stream, noise_cancellation, apm, owns_processor=owned)
+        session = cast("VoiceSession[Any] | None", opts.session)
+        return _AudioStream(session, stream, noise_cancellation, apm, owns_processor=owned)
 
     def _core_open_video_stream(self) -> _VideoStream:
         track = self._publication.track
@@ -643,9 +644,13 @@ class AudioProcessingError(BaseModel):
 
 
 class _AudioStream(AsyncIterator[rtc.AudioFrame]):
+    """One input track's frames, through its processors. A processor failing reports to the
+    session that opened the stream once per failing span, which ends at the next frame processed
+    cleanly."""
+
     def __init__(
         self,
-        room: rtc.EventEmitter[Literal["audio_processing_error"]],
+        session: VoiceSession[Any] | None,
         stream: rtc.AudioStream,
         noise_cancellation: rtc.NoiseCancellationOptions
         | rtc.FrameProcessor[rtc.AudioFrame]
@@ -654,7 +659,8 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
         *,
         owns_processor: bool = False,
     ) -> None:
-        self._room = room
+        self._session = session
+        self._failing = False
         self._stream = stream
         self._noise_cancellation = noise_cancellation
         self._apm = apm
@@ -692,6 +698,7 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
             if self._apm is not None:
                 processor = self._apm
                 self._apm.process_stream(frame)
+            self._failing = False
             return frame
         except Exception as cause:
             self._report_processing_error(processor, cause)
@@ -704,6 +711,9 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
             )
 
     def _report_processing_error(self, processor: object, cause: Exception) -> None:
+        if self._failing:
+            return
+        self._failing = True
         kind = type(processor)
         error = AudioProcessingError(label=f"{kind.__module__}.{kind.__qualname__}", error=cause)
         logger.warning(
@@ -711,7 +721,8 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
             exc_info=cause,
             extra={"label": error.label},
         )
-        self._room.emit("audio_processing_error", error, processor)
+        if self._session is not None:
+            self._session._on_audio_processing_error(error, processor)
 
     def __aiter__(self) -> _AudioStream:
         return self

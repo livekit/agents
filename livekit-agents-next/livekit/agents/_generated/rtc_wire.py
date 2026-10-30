@@ -47,6 +47,10 @@ class AudioStreamOptions:
     """The host-side `rtc.FrameProcessor` / `rtc.NoiseCancellationOptions`, an opaque host object
     Rust never inspects.
     """
+    session: object | None
+    """The host's session the stream feeds, told when an input processor fails on a span; an
+    opaque host object Rust never inspects.
+    """
     auto_gain_control: bool
     """`AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream."""
     queue_capacity: int

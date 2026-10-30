@@ -320,6 +320,9 @@ pub struct AudioStreamOptions {
     /// The host-side `rtc.FrameProcessor` / `rtc.NoiseCancellationOptions`, an opaque host object
     /// Rust never inspects.
     pub noise_cancellation: Option<HostRef>,
+    /// The host's session the stream feeds, told when an input processor fails on a span; an
+    /// opaque host object Rust never inspects.
+    pub session: Option<HostRef>,
     /// `AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream.
     pub auto_gain_control: bool,
     /// Bounds the SDK queue before frames reach the core's equally bounded input queue.
@@ -334,6 +337,7 @@ impl Default for AudioStreamOptions {
             num_channels: 1,
             frame_size_ms: None,
             noise_cancellation: None,
+            session: None,
             auto_gain_control: true,
             queue_capacity: crate::utils::bounded_lossy::AUDIO_QUEUE_FRAMES,
         }

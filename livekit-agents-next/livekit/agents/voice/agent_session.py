@@ -642,7 +642,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 tools=frame["tools"],
                 tools_host=frame["tools_host"],
                 voice_agent=frame["voice_agent"],
-                room_io_config=room_options._to_core() if is_given(room_options) else None,
+                room_io_config=options._to_core(self),
                 video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
                 using_default_vad=self._using_default_vad,
                 turn_detector=self._turn_detector,
@@ -661,8 +661,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             rtc_room = _RtcRoom.of(room) if room is not None else None
             room_session = _core._core_create_room_session(rtc_room)
             self._core = _core.VoiceSession(room_session, args, self._options)
-            if rtc_room is not None:
-                rtc_room.on("audio_processing_error", self._on_audio_processing_error)
         except BaseException:
             # a core that never started never closes the toolsets
             await hooks._core_close_toolsets(None)
@@ -738,8 +736,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
     async def _aclose(self, reason: CloseReason) -> None:
         if self._core is not None:
             await self._core.aclose(reason=reason.value, drain=False)
-        if self._room is not None:
-            _RtcRoom.of(self._room).off("audio_processing_error", self._on_audio_processing_error)
         if self._voice_store is not None:
             from ..storage.errors import StorageError
 
@@ -1231,7 +1227,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
 
-    def _on_audio_processing_error(self, error: AudioProcessingError, processor: Any) -> None:
+    def _on_audio_processing_error(self, error: AudioProcessingError, processor: object) -> None:
+        """One of this session's input processors started failing on a span."""
         self.emit("error", ErrorEvent(error=error, source=processor))
 
     def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
