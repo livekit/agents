@@ -3,8 +3,8 @@
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
 Uses mypy's incremental mode (.mypy_cache) for fast re-checks after the first run.
-Use --checker=mypy or --checker=pyright for one checker. Other arguments go to mypy.
-Arguments after `--` go to `uv run`.
+Use --checker=mypy or --checker=pyright for one checker. `--no-sync` and arguments after `--` go
+to `uv run`; other arguments go to mypy.
 
 Third-party type stubs are declared in the `typing` dependency group in
 pyproject.toml and locked in uv.lock. We intentionally do NOT use
@@ -82,7 +82,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checker", choices=("mypy", "pyright", "all"), default="all")
+    # uv's, not mypy's: `--no-sync` before or after `--` keeps uv from rebuilding the extension
+    parser.add_argument("--no-sync", action="store_true")
     options, mypy_args = parser.parse_known_args(mypy_args)
+    if options.no_sync and "--no-sync" not in uv_run_args:
+        uv_run_args.append("--no-sync")
 
     pkg_args: list[str] = []
     for pkg in packages:
