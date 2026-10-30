@@ -270,17 +270,19 @@ impl SessionChatCtx {
     }
 
     /// The lane as storage reloaded it for a turn that read `read`, in the lane's order. Rows the
-    /// turn read are the lane's to change: another turn's edits replace them, and rows it
-    /// removed, compacted away or abandoned leave. Rows the turn did not read (another agent's,
+    /// turn read are the lane's to change: another turn's edits replace them (a row given back as
+    /// the turn read it is the turn's own rendering, never an edit), and rows it removed,
+    /// compacted away or abandoned leave. Rows the turn did not read (another agent's,
     /// one dropped from the view, one committed since) stay where their instant puts them, and
     /// what another turn added joins as the host's, everyone's to read. An entry kept keeps its
     /// source, visibility and agent. True when the record changed.
     pub(crate) fn reload_transport(
         &mut self,
-        read: &BTreeSet<String>,
+        read: &[ChatItem],
         items: Vec<ChatItem>,
         agent: &str,
     ) -> bool {
+        let read: BTreeMap<&str, &ChatItem> = read.iter().map(|item| (item.id(), item)).collect();
         let before: Vec<ChatItem> = self.items.iter().map(|entry| entry.item.clone()).collect();
         let mut held: BTreeMap<String, Committed> =
             self.items.drain(..).map(|entry| (entry.item.id().to_owned(), entry)).collect();
@@ -290,8 +292,9 @@ impl SessionChatCtx {
             .into_iter()
             .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
             .filter_map(|item| match held.remove(item.id()) {
+                Some(entry) if read.get(item.id()) == Some(&&item) => Some(entry),
                 Some(entry) => Some(Committed { item, ..entry }),
-                None if read.contains(item.id()) => None,
+                None if read.contains_key(item.id()) => None,
                 None => Some(Committed {
                     item,
                     source: Source::HostCtx,
@@ -301,7 +304,7 @@ impl SessionChatCtx {
             })
             .collect();
         self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
-        for (id, entry) in held.into_iter().filter(|(id, _)| !read.contains(id)) {
+        for (id, entry) in held.into_iter().filter(|(id, _)| !read.contains_key(id.as_str())) {
             let at = self.find_insertion_index(&entry.item);
             self.ids.insert(id);
             self.items.insert(at, entry);

@@ -95,6 +95,7 @@ mod skip_reply_turn_no_hook;
 mod speculative_segment_takes_current_output;
 mod speech_announced_before_user_item;
 mod step_cut_text_conserved;
+mod stored_answer_reaches_the_read_back;
 mod stored_turn_keeps_the_history;
 mod stt_end_resumes_pause;
 mod swap_ends_the_servers_turn;

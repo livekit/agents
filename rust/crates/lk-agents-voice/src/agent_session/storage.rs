@@ -34,7 +34,7 @@ impl StorageTurns {
 impl Driver {
     pub(crate) fn storage_reloaded(
         &mut self,
-        read: BTreeSet<String>,
+        read: Vec<ChatItem>,
         history: Vec<ChatItem>,
         out: &mut Out,
     ) {

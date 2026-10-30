@@ -240,9 +240,10 @@ impl Runtime {
                     if let Some(storage) = storage {
                         match storage.acquire(task.id().0, context.request.chat_ctx.items.clone()).await {
                             Ok(history) => {
-                                let read = context.request.chat_ctx.items.iter();
-                                let read = read.map(|item| item.id().to_owned()).collect();
-                                context.request.chat_ctx.items = history.clone();
+                                let read = std::mem::replace(
+                                    &mut context.request.chat_ctx.items,
+                                    history.clone(),
+                                );
                                 let _ = queue.send(Input::StorageReloaded { read, history });
                                 let _ = storage.clone().dispatch(
                                     lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss { speech: task.id().0 },

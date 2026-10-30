@@ -69,9 +69,9 @@ pub enum Input {
     /// Forwarded from the loop so they share one arrival order.
     RoomIo(crate::room_io::RoomIoEvent),
     Gen(GenEvent),
-    /// The lane storage gave back for a speech, and the ids of the request it was read with.
+    /// The lane storage gave back for a speech, and the request items it was read with.
     StorageReloaded {
-        read: std::collections::BTreeSet<String>,
+        read: Vec<lk_agents_abi::ChatItem>,
         history: Vec<lk_agents_abi::ChatItem>,
     },
     StorageSettled(crate::agent_activity::scheduling::SpeechId),
