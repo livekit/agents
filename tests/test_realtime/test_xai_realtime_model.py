@@ -1,4 +1,4 @@
-"""Provider declarations cross the native realtime boundary without losing validation."""
+"""Provider declarations cross the OpenAI-protocol realtime boundary without losing validation."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ async def peer() -> AsyncIterator[tuple[str, asyncio.Queue[list[dict[str, object
         FileSearch(vector_store_ids=["store"], max_num_results=3),
     ],
 )
-async def test_provider_tools_and_nested_functions_reach_the_native_realtime_peer(
+async def test_provider_tools_and_nested_functions_reach_the_openai_protocol_realtime_peer(
     provider_tool: XAITool,
     peer: tuple[str, asyncio.Queue[list[dict[str, object]]]],
 ) -> None:

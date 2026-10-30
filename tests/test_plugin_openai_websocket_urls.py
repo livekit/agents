@@ -43,7 +43,7 @@ async def test_realtime_stt_connect_url_includes_model() -> None:
     assert parse_qs(parsed_url.query) == {"intent": ["transcription"], "model": [model]}
 
 
-async def test_native_realtime_stt_connect_url_omits_model() -> None:
+async def test_openai_realtime_stt_connect_url_omits_model() -> None:
     instance = stt.STT(api_key="test-key", model="gpt-realtime-whisper")
     session = _FakeSession()
     instance._session = session

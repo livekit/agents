@@ -508,7 +508,7 @@ async def _openai_server(ws: web.WebSocketResponse, sessions: list[dict[str, Any
             tail = item
 
 
-async def native_realtime() -> None:
+async def openai_protocol_realtime() -> None:
     sessions: list[dict[str, Any]] = []
 
     async def socket(request: web.Request) -> web.WebSocketResponse:
@@ -532,7 +532,7 @@ async def native_realtime() -> None:
     session.on("conversation_item_added", print_item)
     usage: list[Any] = []
     session.on("session_usage_updated", lambda ev: usage.append(ev.usage.model_usage))
-    await session.start(Agent(instructions="You are realtime.", name="native"), room=None)
+    await session.start(Agent(instructions="You are realtime.", name="openai_realtime"), room=None)
     handle = session.generate_reply(instructions="greet the user")
     await until(handle.done, "the OpenAI-protocol realtime reply did not finish")
     assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
@@ -1369,7 +1369,7 @@ async def main() -> int:
     await realtime_fallback()
 
     print("== OpenAI-protocol realtime")
-    await native_realtime()
+    await openai_protocol_realtime()
 
     await console()
     await job()
