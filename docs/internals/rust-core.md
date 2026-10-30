@@ -1030,6 +1030,28 @@ initialization, fork guards, async bridging and resource handles belong in
 registration table supplies the module's names. Tests compare `dir(_core)`
 with `core_names.json`.
 
+### The GIL boundary
+
+A thread holding Python's GIL never waits on a Rust lock, and Rust never calls
+the host while holding a lock, so no lock and the GIL wait on each other:
+
+- Every generated synchronous entry (constructor, method, getter, setter,
+  function, an eager await's call, a duplex stream's `push`/`flush`/`end_input`)
+  converts its arguments with the GIL, runs the Rust call inside `py.detach`,
+  then converts the result with the GIL again. A mutable class's methods keep
+  the GIL: PyO3's borrow of the instance, which the GIL serializes, is the
+  class's only guard, and released it would refuse another thread's call. A
+  getter that provably takes no lock may opt out with `#[host(getter, attached)]`.
+- Live state shared with the host has one owner. Rust takes a lock only to read
+  or update state, then calls the host (a proxy, a sink, HostInvoker) after the
+  guard drops; host objects taken out of a locked queue are dropped after it.
+  Log lines are queued and never wait for the GIL, so logging under a lock is
+  allowed.
+- `lk-agents-py` holds no lock while Python code runs; a lock that must is
+  PyO3's `MutexExt::lock_py_attached` or a `PyOnceLock`.
+- Locks are plain `parking_lot` locks; std's poisoning `Mutex`/`RwLock` stay
+  banned in the I/O crates.
+
 ### Enforcement
 
 Enforcement must cover:

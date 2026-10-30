@@ -265,10 +265,12 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   hold only ABI-declared proxy traits. Log forwarding is the one host entry outside
   HostInvoker: `log` lines are queued without the GIL and `lk-agents-py`'s drain thread forwards
   them to Python's `logging`, so logging anywhere, under any lock, never waits for the GIL.
-- The I/O crates and py lock only through `lk_agents_net::lock`: a thread holding the GIL
-  waits for a contended lock with the GIL released, so a host call under a lock (a log line, a
-  proxy, an emit) cannot deadlock. The I/O Clippy policy (`rust/architecture/io/clippy.toml`)
-  bans raw `Mutex`/`RwLock` types there, and every entry to Tokio's blocking pool
+- The GIL boundary (rust-core.md "The GIL boundary"): every generated synchronous Python entry
+  releases the GIL (`py.detach`) for its Rust call, except a mutable class's methods and a
+  getter declared `attached`; Rust never calls the host (proxy, sink, HostInvoker) while it
+  holds a lock, and drops host objects after the guard. Locks are plain `parking_lot`. The I/O
+  Clippy policy (`rust/architecture/io/clippy.toml`) bans std's poisoning `Mutex`/`RwLock`
+  there, and every entry to Tokio's blocking pool
   (`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`): blocking work runs on the
   media pool or `lk_agents_net::blocking_io`, and names resolve through `lk_agents_net::dns`.
 - Rust has no telemetry exporter: observations are recorded synchronously and reach the host's
