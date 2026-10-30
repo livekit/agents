@@ -298,8 +298,9 @@ impl FallbackLlm {
     }
 
     #[pyo3(signature = (chat_ctx_host, *, tools, tools_host = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
-    fn chat<'py>(&self, py: Python<'py>, chat_ctx_host: ::lk_agents_abi::HostRef, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn chat<'py>(&self, py: Python<'py>, chat_ctx_host: ::lk_agents_abi::HostRef, tools: Bound<'_, PyAny>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let tools = tools.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let tool_choice = tool_choice.map(|v| ::lk_agents_abi::python::value_from_py(&v, "tool_choice")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -614,9 +615,11 @@ impl InferenceLlm {
     /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
     /// caller's job, read in its context.
     #[pyo3(signature = (items, *, tools, conn_options, parallel_tool_calls = None, tool_choice = None, response_format = None, extra_kwargs = None, headers = None))]
-    fn chat(&self, py: Python<'_>, items: Bound<'_, PyAny>, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
+    fn chat(&self, py: Python<'_>, items: Bound<'_, PyAny>, tools: Bound<'_, PyAny>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
         crate::host::check_pid()?;
         let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let tools = tools.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let tool_choice = tool_choice.map(|v| crate::conversions::tool_choice_from_py(&v)).transpose()?;
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let out = py.detach(|| <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers)).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -718,8 +721,8 @@ impl ChatRequest {
     #[getter]
     fn chat_ctx<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::chat_ctx(&self.0));
-        Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::chat_ctx(&self.0)).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
     }
 
     /// The names of the tools this turn offers, in order: the host pool is narrowed to these.
@@ -733,10 +736,10 @@ impl ChatRequest {
     /// Canonical declarations of every function offered by this request, including tools
     /// executed by the core that have no callable object in the host pool.
     #[getter]
-    fn function_schemas(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::lk_agents_abi::llm::provider_format::tools::RawFunctionDescription>> {
+    fn function_schemas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::function_schemas(&self.0));
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::tool_context::raw_function_description_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// The key of the host's live `list[Tool]` pool.
@@ -1526,7 +1529,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let instructions_arg = instructions;
         let tool_choice_arg = tool_choice;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DuplexSession._core_generate", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_choice_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?, match tool_choice_arg { None => py.None().into_bound(py), Some(x) => crate::conversions::tool_choice_to_py(py, x)? }];
                 Ok((host.bind(py).getattr("_core_generate")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

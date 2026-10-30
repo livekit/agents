@@ -149,7 +149,6 @@ mod session_bridge {
     use crate::python::value_to_py;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
-    use serde_json::Value;
 
     fn attach<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         Python::initialize();
@@ -166,53 +165,6 @@ mod session_bridge {
         )
         .unwrap();
         globals.get_item("out").unwrap().unwrap().unbind()
-    }
-
-    /// One tool spec as `agent_activity.py` builds it, with `patch` applied after.
-    fn parse_specs(py: Python<'_>, patch: &str) -> PyResult<Vec<crate::ToolSpec>> {
-        let list = out(
-            py,
-            &format!(
-                "out = [{{'name': 'lookup', 'description': 'look something up', \
-                 'json_schema': {{'type': 'object', 'properties': {{}}}}, 'ignore_on_enter': True}}]\n{patch}"
-            ),
-        );
-        list.bind(py).extract::<Vec<crate::ToolSpec>>()
-    }
-
-    // Catches: a key that reaches this reader and stops there. `ignore_on_enter` is asserted `true`
-    // because `false` is both the default and what the N184 bug produced.
-    #[test]
-    fn every_key_of_a_tool_spec_lands_including_the_flag_that_used_to_be_dropped() {
-        attach(|py| {
-            let specs = parse_specs(py, "").expect("the producers' dict reads");
-            let [crate::ToolSpec { name, description, json_schema, flags, provider_tool }] =
-                <[_; 1]>::try_from(specs).unwrap();
-            assert_eq!((name.as_str(), description.as_str()), ("lookup", "look something up"));
-            assert_eq!(json_schema["type"], "object");
-            assert!(provider_tool.is_none());
-            assert!(
-                flags.ignore_on_enter,
-                "the flag was read as the default rather than the value"
-            );
-        });
-    }
-
-    // Defaults apply only to omission. Explicit JSON null remains a JSON value; fields whose
-    // types are not nullable must refuse it.
-    #[test]
-    fn tool_defaults_apply_to_omission_and_nonnullable_fields_refuse_null() {
-        attach(|py| {
-            let none = parse_specs(py, "out[0]['json_schema'] = None").unwrap();
-            assert_eq!(none[0].json_schema, Value::Null);
-            assert!(parse_specs(py, "out[0]['description'] = None").is_err());
-            assert!(parse_specs(py, "out[0]['ignore_on_enter'] = None").is_err());
-            assert!(parse_specs(py, "del out[0]['json_schema']").is_err());
-            assert!(
-                !parse_specs(py, "del out[0]['ignore_on_enter']").unwrap()[0].flags.ignore_on_enter
-            );
-            assert_eq!(parse_specs(py, "del out[0]['description']").unwrap()[0].description, "");
-        });
     }
 
     /// The keys of a built kwargs dict, sorted and compared whole, so an extra key fails too.

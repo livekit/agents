@@ -9,9 +9,13 @@
 
 from __future__ import annotations
 
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from typing_extensions import NotRequired, Required, TypedDict
+from typing_extensions import TypedDict
+
+if TYPE_CHECKING:
+    from typing import NotRequired
+
 
 # The declared records.
 
@@ -42,10 +46,6 @@ DuplicateScope: TypeAlias = Literal["name", "name_and_args"]
 """
 
 
-class Function(TypedDict, total=False):
-    name: Required[str]
-
-
 class RawFunctionDescription(TypedDict):
     """Represents the raw function schema format used in LLM function calling APIs.
 
@@ -61,18 +61,10 @@ class RawFunctionDescription(TypedDict):
     parameters: dict[str, object]
 
 
+RawFunctionDescription.__module__ = "livekit.agents.llm.tool_context"
+
+
 CONFIRM_DUPLICATE_DESCRIPTION: Final = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed."
 """The description the model reads for that parameter. A prompt, so rewording it changes
 behaviour: it must say the user asked for the repeat.
 """
-
-
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
-Function.__module__ = "livekit.agents.llm.tool_context"
-RawFunctionDescription.__module__ = "livekit.agents.llm.tool_context"

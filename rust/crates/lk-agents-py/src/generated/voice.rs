@@ -1441,8 +1441,9 @@ impl VoiceSession {
     /// `Agent.update_tools()` on a running agent. All three parts go together: the agent hosts
     /// its tools.
     #[pyo3(signature = (tools, *, tools_host, voice_agent))]
-    fn update_tools(&self, py: Python<'_>, tools: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ToolSpec>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    fn update_tools(&self, py: Python<'_>, tools: Option<Bound<'_, PyAny>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let tools = tools.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let voice_agent = voice_agent.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_tools(&self.0, tools, tools_host, voice_agent)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -1479,9 +1480,11 @@ impl VoiceSession {
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
     /// apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
     #[pyo3(signature = (*, user_input = None, instructions = None, allow_interruptions = None, tool_choice = None, chat_ctx = None, tools = None, tools_host = None, voice_agent = None, on_enter = false, origin = None))]
-    fn generate_reply(&self, py: Python<'_>, user_input: ::std::option::Option<::std::string::String>, instructions: ::std::option::Option<::std::string::String>, allow_interruptions: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, chat_ctx: Option<Bound<'_, PyAny>>, tools: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ToolSpec>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>, on_enter: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
+    fn generate_reply(&self, py: Python<'_>, user_input: ::std::option::Option<::std::string::String>, instructions: ::std::option::Option<::std::string::String>, allow_interruptions: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, chat_ctx: Option<Bound<'_, PyAny>>, tools: Option<Bound<'_, PyAny>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>, on_enter: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
         crate::host::check_pid()?;
+        let tool_choice = tool_choice.map(|v| crate::conversions::tool_choice_from_py(&v)).transpose()?;
         let chat_ctx = chat_ctx.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let tools = tools.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let voice_agent = voice_agent.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).transpose()?;
         let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, allow_interruptions, tool_choice, chat_ctx, tools, tools_host, voice_agent, on_enter, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::handles::SpeechHandle::from(out))
@@ -1490,8 +1493,9 @@ impl VoiceSession {
     /// `IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
     /// `IVRActivity.tools`. A second start is journalled, not run.
     #[pyo3(signature = (max_silence = 5.0, tools = None, *, tools_host = None))]
-    fn ivr_start(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_voice_session_ivr_start_max_silence)] max_silence: f64, tools: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ToolSpec>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<()> {
+    fn ivr_start(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_voice_session_ivr_start_max_silence)] max_silence: f64, tools: Option<Bound<'_, PyAny>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let tools = tools.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::ivr_start(&self.0, max_silence, tools, tools_host)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }

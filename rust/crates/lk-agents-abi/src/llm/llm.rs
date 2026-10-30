@@ -15,7 +15,7 @@ use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
 
 /// Plain data: reflection and invocation stay Python. The host passes the dict of these keys.
 // The omission-only defaults below move to the record declaration with the records family.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+#[crate::host(handwritten(extract, host = "dict[str, object]", py))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSpec {
     pub name: String,
@@ -43,48 +43,7 @@ pub struct ToolFlags {
     pub ignore_on_enter: bool,
 }
 
-/// Required identity/schema; declared description/flag defaults apply only to omission.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolSpec {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{item, item_or, item_with, value_from_py};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "ToolSpecFromPy";
-        let obj = &*obj;
-        Ok(ToolSpec {
-            provider_tool: item_or(
-                obj,
-                OWNER,
-                "provider_tool",
-                |value| {
-                    if value.is_none() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(ProviderToolDeclaration {
-                            provider: item(value, OWNER, "provider")?,
-                            payload: item_with(value, OWNER, "payload", |payload| {
-                                value_from_py(payload, "ToolSpec.provider_tool.payload")
-                            })?,
-                        }))
-                    }
-                },
-                || None,
-            )?,
-            name: item(obj, OWNER, "name")?,
-            description: item_or(obj, OWNER, "description", |v| v.extract(), String::new)?,
-            json_schema: item_with(obj, OWNER, "json_schema", |v| {
-                value_from_py(v, "ToolSpec.json_schema")
-            })?,
-            flags: ToolFlags {
-                ignore_on_enter: item_or(obj, OWNER, "ignore_on_enter", |v| v.extract(), || false)?,
-            },
-        })
-    }
-}
-
-#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolChoice"))]
+#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolChoice", py))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolChoice {
     Auto,
@@ -92,42 +51,6 @@ pub enum ToolChoice {
     /// `"none"`. Not `Option::None`, which here means `NOT_GIVEN`.
     Forbidden,
     Named(String),
-}
-
-/// The JSON form: a literal string, or the two-level named-tool dict.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for ToolChoice {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        crate::python::value_to_py(py, &self.to_host_json())
-    }
-}
-
-/// `None` is not a choice: an `Option<ToolChoice>` reads it as "the provider decides".
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolChoice {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::exceptions::PyValueError;
-        use pyo3::types::PyAnyMethods as _;
-        if obj.is_none() {
-            return Err(PyValueError::new_err("tool_choice"));
-        }
-        if let Ok(name) = obj.extract::<String>() {
-            return ToolChoice::from_literal(&name)
-                .ok_or_else(|| PyValueError::new_err(format!("unknown tool_choice {name:?}")));
-        }
-        // Strict, unlike `from_host_json`: a malformed dict raises the record's own error.
-        let d = obj.cast::<pyo3::types::PyDict>().map_err(|_| {
-            PyValueError::new_err("tool_choice must be a string or a named-tool dict")
-        })?;
-        let named: crate::voice::calls::NamedToolChoice = d.extract()?;
-        Ok(ToolChoice::Named(named.function.name))
-    }
 }
 
 /// Everything `LLM.chat()` takes, as one value `FallbackChain` can hold and replay for recovery
@@ -159,7 +82,7 @@ pub struct ChatRequest {
 
 impl ToolChoice {
     /// `Forbidden` is `"none"`: `None` means the caller said nothing; `"none"` forbids tools.
-    fn from_literal(s: &str) -> Option<ToolChoice> {
+    pub fn from_literal(s: &str) -> Option<ToolChoice> {
         match s {
             "auto" => Some(ToolChoice::Auto),
             "required" => Some(ToolChoice::Required),
@@ -203,7 +126,7 @@ pub trait ChatRequestView: Send + Sync + Sized + 'static {
     /// `ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
     /// rendered): the context of a request the core minted itself.
     #[host(getter)]
-    fn chat_ctx(&self) -> serde_json::Value;
+    fn chat_ctx(&self) -> Result<Extra, crate::llm::to_dict::ToDictError>;
     /// The names of the tools this turn offers, in order: the host pool is narrowed to these.
     #[host(getter)]
     fn tool_names(&self) -> Vec<String>;
@@ -232,14 +155,12 @@ impl ChatRequestView for ChatRequest {
         self.chat_ctx_host.as_ref().map(HostRef::id)
     }
 
-    fn chat_ctx(&self) -> serde_json::Value {
+    fn chat_ctx(&self) -> Result<Extra, crate::llm::to_dict::ToDictError> {
         use crate::llm::to_dict::{DumpCx, ModelDump, ToDictOptions};
         let opts = ToDictOptions { exclude_timestamp: false, ..Default::default() };
         let cx = DumpCx { opts: &opts, host: &Default::default() };
-        match self.chat_ctx.items.model_dump(&cx, "ChatItem") {
-            Ok(items) => serde_json::json!({ "items": items }),
-            Err(_) => serde_json::Value::Null,
-        }
+        let items = self.chat_ctx.items.model_dump(&cx, "ChatItem")?;
+        Ok(Extra::from_iter([("items".to_owned(), items.unwrap_or_default())]))
     }
 
     fn tool_names(&self) -> Vec<String> {

@@ -1,11 +1,10 @@
 //! Tool metadata and duplicate-call vocabulary (`llm/tool_context.py`). `ToolFlag`
 //! stays a Python `Flag` (callers write `A | B`); Rust holds the bits.
 
-use lk_agents_host_derive::Host;
 use serde_json::Value;
 
 /// The values are the reference's `auto()` order and the wire to the shim: never reorder.
-#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolFlag"))]
+#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolFlag", py))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ToolFlag(u8);
 
@@ -22,30 +21,6 @@ impl ToolFlag {
     }
     pub const fn contains(self, other: ToolFlag) -> bool {
         self.0 & other.0 == other.0
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for ToolFlag {
-    type Target = pyo3::types::PyInt;
-    type Output = pyo3::Bound<'py, pyo3::types::PyInt>;
-    type Error = std::convert::Infallible;
-
-    fn into_pyobject(
-        self,
-        py: pyo3::Python<'py>,
-    ) -> Result<pyo3::Bound<'py, pyo3::types::PyInt>, std::convert::Infallible> {
-        self.0.into_pyobject(py)
-    }
-}
-
-/// Unknown bits raise: dropping one could make a cancellable tool uncancellable.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolFlag {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        ToolFlag::try_from(obj.extract::<u8>()?).map_err(pyo3::exceptions::PyValueError::new_err)
     }
 }
 
@@ -126,22 +101,6 @@ pub enum DuplicateScope {
     NameAndArgs,
 }
 
-// `llm.Function`, the inner half of a `NamedToolChoice`. `total=False` with a `Required` key is
-// the reference's spelling.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    module = "tool_context",
-    path = "livekit.agents.llm.tool_context",
-    name = "Function"
-)]
-pub struct ToolChoiceFunction {
-    // `Required[str]`: under `total=False` a bare `str` is an optional key.
-    #[python(ty = "Required[str]", import = "typing_extensions:Required")]
-    pub name: String,
-}
-
 // `bare_urls`: the `///` below is a Python docstring, and the reference writes the URL bare.
 #[allow(rustdoc::bare_urls)]
 /// Represents the raw function schema format used in LLM function calling APIs.
@@ -151,24 +110,13 @@ pub struct ToolChoiceFunction {
 ///
 /// It is also compatible with other LLM providers that support raw JSON Schema-based
 /// function definitions.
-//
-// The reference's docstring, verbatim. `total=True`: `name` and `parameters` are required.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    module = "tool_context",
-    path = "livekit.agents.llm.tool_context",
-    name = "RawFunctionDescription"
-)]
-#[binding(emit)]
+#[crate::host(record(module = "tool_context", path = "livekit.agents.llm.tool_context", typed_dict, emit))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RawFunctionDescription {
-    #[python(ty = "str")]
     pub name: String,
-    // `NotRequired[str | None]`: absent and explicitly null are both legal.
-    #[python(ty = "NotRequired[str | None]", import = "typing_extensions:NotRequired")]
+    #[host(annotation = "typing.NotRequired[str | None]")]
     pub description: Option<String>,
-    // As the reference says; the equivalence gate diffs annotation text.
-    #[python(ty = "dict[str, object]")]
+    #[host(annotation = "dict[str, object]")]
     pub parameters: Value,
 }
 

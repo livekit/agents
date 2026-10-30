@@ -21,10 +21,10 @@ from typing import (
 )
 
 from pydantic import Field, JsonValue
-from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeVar
+from typing_extensions import ParamSpec, Required, Self, TypedDict, TypeVar
 
 from .. import _core
-from .._generated.tool_context import CONFIRM_DUPLICATE_DESCRIPTION
+from .._generated.tool_context import CONFIRM_DUPLICATE_DESCRIPTION, RawFunctionDescription
 from . import _provider_format
 
 if TYPE_CHECKING:
@@ -307,22 +307,6 @@ ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
 """``needs_approval=`` as a function: the read-back the person approves. It takes the tool's
 own parameters, ``self`` and the context included, and is called with the call's arguments.
 An ``InputRequired`` instead asks for what is missing before there is anything to approve."""
-
-
-class RawFunctionDescription(TypedDict):
-    """
-    Represents the raw function schema format used in LLM function calling APIs.
-
-    This structure directly maps to OpenAI's function definition format as documented at:
-    https://platform.openai.com/docs/guides/function-calling?api-mode=responses
-
-    It is also compatible with other LLM providers that support raw JSON Schema-based
-    function definitions.
-    """
-
-    name: str
-    description: NotRequired[str | None]
-    parameters: dict[str, object]
 
 
 @dataclass

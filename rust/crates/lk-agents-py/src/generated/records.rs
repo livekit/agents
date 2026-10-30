@@ -721,7 +721,7 @@ pub mod agent_run {
                 return Err(super::not_a(obj, "FunctionToolInfo"));
             }
             Ok(::lk_agents_abi::agent::FunctionToolInfo {
-                spec: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "spec", |v| v.extract::<::lk_agents_abi::ToolSpec>().map_err(::std::convert::Into::<PyErr>::into))?,
+                spec: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "spec", |v| crate::conversions::tool_spec_from_py(v))?,
                 raw_schema: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "raw_schema", |v| v.extract::<bool>())?,
                 needs_approval: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "needs_approval", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::agent_run::read_back_from_py(v)).map(Some) })?,
                 on_duplicate: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "on_duplicate", |v| crate::generated::records::tool_context::duplicate_mode_from_py(v))?,
@@ -2258,7 +2258,7 @@ pub mod mcp {
     pub fn resolved_tool_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::mcp::McpToolOptions) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::llm::mcp::McpToolOptions { flags, on_duplicate, duplicate_scope, report_progress, retries } = value;
             let dict = ::pyo3::types::PyDict::new(py);
-            dict.set_item("flags", ::pyo3::IntoPyObjectExt::into_bound_py_any(flags, py)?)?;
+            dict.set_item("flags", crate::conversions::tool_flag_to_py(py, flags)?)?;
             dict.set_item("on_duplicate", crate::generated::records::tool_context::duplicate_mode_to_py(py, on_duplicate)?)?;
             dict.set_item("duplicate_scope", crate::generated::records::tool_context::duplicate_scope_to_py(py, duplicate_scope)?)?;
             dict.set_item("report_progress", ::pyo3::IntoPyObjectExt::into_bound_py_any(report_progress, py)?)?;
@@ -2271,7 +2271,7 @@ pub mod mcp {
     pub fn mcp_tool_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptionsPatch> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::llm::mcp::McpToolOptionsPatch {
-                flags: match obj.get_item("flags")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::lk_agents_abi::llm::mcp::ToolFlag>().map_err(::std::convert::Into::<PyErr>::into))?) }, _ => None },
+                flags: match obj.get_item("flags")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::conversions::tool_flag_from_py(v))?) }, _ => None },
                 on_duplicate: match obj.get_item("on_duplicate")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::tool_context::duplicate_mode_from_py(v))?) }, _ => None },
                 duplicate_scope: match obj.get_item("duplicate_scope")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::tool_context::duplicate_scope_from_py(v))?) }, _ => None },
                 report_progress: match obj.get_item("report_progress")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
@@ -2770,7 +2770,7 @@ pub mod realtime_options {
                 input_audio_transcription: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_transcription", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.input_audio_transcription")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
                 input_audio_noise_reduction: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_noise_reduction", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.input_audio_noise_reduction")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
                 turn_detection: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "turn_detection", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.turn_detection")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
-                tool_choice: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tool_choice", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ToolChoice>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                tool_choice: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tool_choice", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::conversions::tool_choice_from_py(v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
                 speed: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "speed", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeOptions.speed")).map(::lk_agents_abi::Maybe::Given) })?,
                 tracing: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tracing", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.tracing")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
                 truncation: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "truncation", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.truncation")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
@@ -3177,7 +3177,7 @@ pub mod realtime_wire {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("req_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(req_id, py)?)?;
             kwargs.set_item("instructions", match instructions { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("tool_choice", match tool_choice { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("tool_choice", match tool_choice { None => py.None().into_bound(py), Some(x) => crate::conversions::tool_choice_to_py(py, x)? })?;
             crate::host::construct(GENERATE_REPLY.import(py, "livekit.agents._generated.realtime_wire", "GenerateReply")?.as_any(), (), Some(&kwargs))
     }
 
@@ -5633,6 +5633,17 @@ pub mod tool_context {
             };
             Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs.
+
+    pub fn raw_function_description_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::provider_format::tools::RawFunctionDescription) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::provider_format::tools::RawFunctionDescription { name, description, parameters } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+            dict.set_item("description", match description { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("parameters", ::lk_agents_abi::python::value_to_py(py, &parameters)?)?;
+            Ok(dict.into_any())
+    }
 }
 
 pub mod tool_report {
@@ -6370,7 +6381,7 @@ pub mod voice_session {
                 dynamic_instructions: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "dynamic_instructions", |v| if v.is_none() { Ok(None) } else { (crate::generated::agent::HostInstructionsProxy::from_host(&v)).map(Some) })?,
                 agent: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "agent", |v| v.extract::<::std::string::String>())?,
                 agent_host: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "agent_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
-                tools: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tools", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::lk_agents_abi::ToolSpec>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("UpdateAgentArgs.tools: expected a list or tuple")) }).map(Some) })?,
+                tools: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tools", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; crate::conversions::tool_spec_from_py(item) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("UpdateAgentArgs.tools: expected a list or tuple")) }).map(Some) })?,
                 tools_host: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tools_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
                 voice_agent: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "voice_agent", |v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)"))))?,
                 chat_ctx: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "chat_ctx", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; crate::generated::records::chat_items::chat_item_from_py(item) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("UpdateAgentArgs.chat_ctx: expected a list or tuple")) }).map(Some) })?,

@@ -13,9 +13,11 @@ use lk_agents_abi::voice::room_io::{
     StreamInfo, TextOutputConfig, TrackPublishOptions, TrackSource,
 };
 use std::time::Duration;
+use lk_agents_abi::llm::llm::ProviderToolDeclaration;
+use lk_agents_abi::llm::provider_format::tools::ToolFlag;
 use lk_agents_abi::{
     AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef, SynthesizedAudio, TimedString,
-    VadEvent, VadEventType,
+    ToolChoice, ToolFlags, ToolSpec, VadEvent, VadEventType,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -532,6 +534,76 @@ pub fn stream_info_to_py<'py>(py: Python<'py>, value: StreamInfo) -> PyResult<Bo
     crate::host::construct(&py.import("livekit.rtc")?.getattr(class)?, (), Some(&kwargs))
 }
 
+/// One offered tool as the host's dict: identity and schema are required (an explicit JSON null
+/// stays a value); `description` and `ignore_on_enter` default only when omitted.
+pub fn tool_spec_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolSpec> {
+    use lk_agents_abi::python::{item, item_or, item_with, value_from_py};
+    const OWNER: &str = "ToolSpec";
+    let provider_tool = item_or(
+        obj,
+        OWNER,
+        "provider_tool",
+        |value| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            Ok(Some(ProviderToolDeclaration {
+                provider: item(value, OWNER, "provider")?,
+                payload: item_with(value, OWNER, "payload", |payload| {
+                    value_from_py(payload, "ToolSpec.provider_tool.payload")
+                })?,
+            }))
+        },
+        || None,
+    )?;
+    Ok(ToolSpec {
+        provider_tool,
+        name: item(obj, OWNER, "name")?,
+        description: item_or(obj, OWNER, "description", |v| v.extract(), String::new)?,
+        json_schema: item_with(obj, OWNER, "json_schema", |v| value_from_py(v, "ToolSpec.json_schema"))?,
+        flags: ToolFlags {
+            ignore_on_enter: item_or(obj, OWNER, "ignore_on_enter", |v| v.extract(), || false)?,
+        },
+    })
+}
+
+/// A literal (`"auto"`, `"required"`, `"none"`) or the named-tool dict. `None` is not a choice: an
+/// optional `tool_choice` reads it as "the provider decides" before it gets here.
+pub fn tool_choice_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolChoice> {
+    if obj.is_none() {
+        return Err(PyValueError::new_err("tool_choice"));
+    }
+    if let Ok(name) = obj.extract::<String>() {
+        return ToolChoice::from_literal(&name)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown tool_choice {name:?}")));
+    }
+    let named = obj.cast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("tool_choice must be a string or a named-tool dict")
+    })?;
+    let function = named
+        .get_item("function")?
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("NamedToolChoice.function"))?;
+    let name = function
+        .get_item("name")
+        .map_err(|_| pyo3::exceptions::PyKeyError::new_err("NamedToolChoice.function.name"))?;
+    Ok(ToolChoice::Named(name.extract()?))
+}
+
+/// A literal string, or the two-level named-tool dict.
+pub fn tool_choice_to_py<'py>(py: Python<'py>, value: ToolChoice) -> PyResult<Bound<'py, PyAny>> {
+    lk_agents_abi::python::value_to_py(py, &value.to_host_json())
+}
+
+/// Unknown bits raise: dropping one could make a cancellable tool uncancellable.
+pub fn tool_flag_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolFlag> {
+    ToolFlag::try_from(obj.extract::<u8>()?).map_err(PyValueError::new_err)
+}
+
+/// The flag's bits: the host's `ToolFlag` is an `IntFlag`.
+pub fn tool_flag_to_py<'py>(py: Python<'py>, value: ToolFlag) -> PyResult<Bound<'py, PyAny>> {
+    Ok(value.bits().into_pyobject(py)?.into_any())
+}
+
 #[cfg(test)]
 mod tests {
     use pyo3::prelude::*;
@@ -554,6 +626,46 @@ class VADEvent:
         self.inference_duration = 0.0; self.speaking = False
         self.raw_accumulated_silence = 0.0; self.raw_accumulated_speech = 0.0
 "#;
+
+    /// One tool spec as `agent_activity.py` builds it, with `patch` applied after.
+    fn parse_spec(py: Python<'_>, patch: &str) -> PyResult<lk_agents_abi::ToolSpec> {
+        let globals = PyDict::new(py);
+        let program = format!(
+            "out = {{'name': 'lookup', 'description': 'look something up', \
+             'json_schema': {{'type': 'object', 'properties': {{}}}}, 'ignore_on_enter': True}}\n{patch}\n"
+        );
+        py.run(&std::ffi::CString::new(program).unwrap(), Some(&globals), None).unwrap();
+        super::tool_spec_from_py(&globals.get_item("out").unwrap().unwrap())
+    }
+
+    // Catches: a key that reaches this reader and stops there. `ignore_on_enter` is asserted `true`
+    // because `false` is both the default and what the N184 bug produced.
+    #[test]
+    fn every_key_of_a_tool_spec_lands_including_the_flag_that_used_to_be_dropped() {
+        Python::initialize();
+        Python::attach(|py| {
+            let spec = parse_spec(py, "").expect("the producers' dict reads");
+            assert_eq!((spec.name.as_str(), spec.description.as_str()), ("lookup", "look something up"));
+            assert_eq!(spec.json_schema["type"], "object");
+            assert!(spec.provider_tool.is_none());
+            assert!(spec.flags.ignore_on_enter, "the flag was read as the default rather than the value");
+        });
+    }
+
+    // Defaults apply only to omission. Explicit JSON null remains a JSON value; fields whose
+    // types are not nullable must refuse it.
+    #[test]
+    fn tool_defaults_apply_to_omission_and_nonnullable_fields_refuse_null() {
+        Python::initialize();
+        Python::attach(|py| {
+            assert_eq!(parse_spec(py, "out['json_schema'] = None").unwrap().json_schema, serde_json::Value::Null);
+            assert!(parse_spec(py, "out['description'] = None").is_err());
+            assert!(parse_spec(py, "out['ignore_on_enter'] = None").is_err());
+            assert!(parse_spec(py, "del out['json_schema']").is_err());
+            assert!(!parse_spec(py, "del out['ignore_on_enter']").unwrap().flags.ignore_on_enter);
+            assert_eq!(parse_spec(py, "del out['description']").unwrap().description, "");
+        });
+    }
 
     // Catches: copying the audio of every VAD event off the host (`inference_done` fires ~30 a
     // second per stream) when only an end of speech's is recognized.

@@ -515,6 +515,7 @@ fn model(
             }
             for f in fields {
                 let ann = match &f.ty {
+                    _ if let Some(text) = &f.annotation => typing.annotation(text, &r.rust),
                     Ty::Maybe(inner) => {
                         runtime.add("typing", "NotRequired");
                         format!("NotRequired[{}]", annotation(inner, module, own, out, false, typing))

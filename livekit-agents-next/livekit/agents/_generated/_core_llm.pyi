@@ -23,6 +23,7 @@ from .llm import ChatChunk, SerializedImage
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .realtime import RealtimeCapabilities
 from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
+from .tool_context import RawFunctionDescription
 from .tts import TTSCapabilities
 
 def chat_ctx_copy_plan(
@@ -275,7 +276,7 @@ class ChatRequest:
     def chat_ctx_host(self) -> int | None:
         """The key of the host's canonical `llm.ChatContext`, when the request came from one."""
     @property
-    def chat_ctx(self) -> object:
+    def chat_ctx(self) -> dict[str, object]:
         """`ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
         rendered): the context of a request the core minted itself.
         """
@@ -283,7 +284,7 @@ class ChatRequest:
     def tool_names(self) -> list[str]:
         """The names of the tools this turn offers, in order: the host pool is narrowed to these."""
     @property
-    def function_schemas(self) -> list[dict[str, object]]:
+    def function_schemas(self) -> list[RawFunctionDescription]:
         """Canonical declarations of every function offered by this request, including tools
         executed by the core that have no callable object in the host pool.
         """
