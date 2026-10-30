@@ -2,7 +2,9 @@
 //! abandon lands at once, until the lease is lost at the setup's `lost_at`-th of them. That one
 //! reports the loss with its answer, every speech watching the lease hears it, and every later
 //! acquire is refused, as a real store's lease stays lost. Between voice turns a text turn takes
-//! the lane now and then: an acquire after it reloads the person's text and the agent's answer.
+//! the lane now and then, at a cadence the seed draws: an acquire after it reloads what that turn
+//! left, the person's text and the agent's answer appended, an earlier answer of the agent's
+//! edited, or the oldest exchange compacted into a summary.
 //! Storage's own lease, renewal and fenced commit are its own tests' and the A2A DST's.
 use std::sync::{Arc, Mutex};
 
@@ -17,14 +19,14 @@ type Events = Arc<dyn StreamSink<VoiceStorageEvent>>;
 
 pub struct FakeVoiceStorage {
     lost_at: u32,
+    /// Every this many acquires, a text turn moved the lane before it.
+    text_turn_every: u32,
     state: Mutex<State>,
 }
 
-/// Every this many acquires, a text turn moved the lane before it.
-const TEXT_TURN_EVERY: u32 = 3;
-
 #[derive(Default)]
 struct State {
+    rng: Option<fastrand::Rng>,
     answered: u32,
     acquired: u32,
     lost: bool,
@@ -32,8 +34,11 @@ struct State {
 }
 
 impl FakeVoiceStorage {
-    pub fn new(lost_at: u32) -> Arc<Self> {
-        Arc::new(Self { lost_at, state: Mutex::default() })
+    pub fn new(lost_at: u32, seed: u64) -> Arc<Self> {
+        let mut rng = fastrand::Rng::with_seed(seed ^ 0x6c61_6e65);
+        let text_turn_every = rng.u32(2..=6);
+        let state = State { rng: Some(rng), ..State::default() };
+        Arc::new(Self { lost_at, text_turn_every, state: Mutex::new(state) })
     }
 }
 
@@ -82,20 +87,14 @@ impl VoiceStorage for FakeVoiceStorage {
         let lost = state.lost;
         state.acquired += 1;
         let turn = state.acquired;
+        let what = state.rng.as_mut().expect("a seeded store").u32(0..4);
         drop(state);
         Box::pin(async move {
             if lost {
                 return Err(StorageError::LeaseLost("the voice lane lease was lost".into()));
             }
-            if turn % TEXT_TURN_EVERY == 0 {
-                // Written after everything the call had: the lane's last item's instant.
-                let at = local.iter().map(ChatItem::created_at).max().unwrap_or(UNIX_EPOCH);
-                let said = |role, text: &str| {
-                    let id = format!("lane_text_{turn}_{role:?}");
-                    ChatItem::Message(ChatMessage::text(id, role, text, at))
-                };
-                local.push(said(Role::User, "can you also text me the address?"));
-                local.push(said(Role::Assistant, "Sure, I've sent it."));
+            if turn % self.text_turn_every == 0 {
+                text_turn(&mut local, turn, what);
             }
             Ok(local)
         })
@@ -104,4 +103,61 @@ impl VoiceStorage for FakeVoiceStorage {
     fn lease_lost(&self) -> bool {
         self.state.lock().unwrap().lost
     }
+}
+
+/// What a text turn leaves of the lane: an earlier answer of the agent's edited (`what` 0), the
+/// two oldest plain messages compacted into a summary (1), or an exchange appended (otherwise).
+/// Tool calls and their outputs are never rewritten: a text turn answers in messages.
+fn text_turn(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
+    let plain = |item: &ChatItem| {
+        item.as_message().is_some_and(|m| matches!(m.role, Role::User | Role::Assistant))
+    };
+    let said =
+        |id: String, role, text: &str, at| ChatItem::Message(ChatMessage::text(id, role, text, at));
+    match what {
+        0 => {
+            let answer = lane
+                .iter_mut()
+                .find(|item| item.as_message().is_some_and(|m| m.role == Role::Assistant));
+            if let Some(answer) = answer {
+                *answer = said(
+                    answer.id().to_owned(),
+                    Role::Assistant,
+                    "Sure, edited.",
+                    answer.created_at(),
+                );
+                return;
+            }
+        }
+        1 => {
+            let oldest: Vec<usize> = lane
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| plain(item))
+                .map(|(i, _)| i)
+                .take(2)
+                .collect();
+            if let [first, second] = oldest[..] {
+                let at = lane[first].created_at();
+                lane.remove(second);
+                lane[first] = said(
+                    format!("lane_summary_{turn}"),
+                    Role::Assistant,
+                    "Summary of the start.",
+                    at,
+                );
+                return;
+            }
+        }
+        _ => {}
+    }
+    // Written after everything the call had: the lane's last item's instant.
+    let at = lane.iter().map(ChatItem::created_at).max().unwrap_or(UNIX_EPOCH);
+    lane.push(said(
+        format!("lane_text_{turn}_user"),
+        Role::User,
+        "can you also text me the address?",
+        at,
+    ));
+    lane.push(said(format!("lane_text_{turn}_agent"), Role::Assistant, "Sure, I've sent it.", at));
 }
