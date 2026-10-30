@@ -409,6 +409,7 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
+                    main_stream._on_provider_progress = self._mark_provider_progress
                     # update main_stream start time offset so transcript timestamps are properly adjusted
                     main_stream.start_time_offset = self.start_time_offset + (
                         time.time() - self._start_time

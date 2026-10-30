@@ -124,14 +124,6 @@ logging. Precedence is constructor argument, then process environment, then the
 selected file. An empty required value fails instead of falling back silently.
 Use owner-only file permissions and never copy this file into commits.
 
-The smoke script additionally accepts `--env-file`. It preflights all selected
-service configurations before making any request, so an empty/partial template
-cannot accidentally start a selected live test. On POSIX it requires the selected
-file to have mode `0600`. Never commit endpoints,
-credentials, recordings, transcripts or request/response captures. Provider
-errors deliberately omit response bodies and transport exception details that
-could echo this information.
-
 ## STT contract and lifecycle
 
 See [Service availability](#service-availability) first: there is no publicly
@@ -209,10 +201,10 @@ transport completion, not that the backend decoded an incomplete model chunk.
 There is no invented padding rule. The acknowledged completion is authoritative,
 even when it removes an interim hypothesis. Comparing final and revisable text
 cannot distinguish legitimate revision from recognition or audio-tail loss;
-discarded hypotheses are never appended to the final. The opt-in fixture smoke
-must verify the full expected transcript, particularly the last
-word, for both a short clip and a non-chunk-aligned tail. Obtain a documented
-backend drain/flush mechanism if commit does not decode the tail.
+discarded hypotheses are never appended to the final. Verify the full expected
+transcript, particularly the last word, for both a short clip and a
+non-chunk-aligned tail. Obtain a documented backend drain/flush mechanism if
+commit does not decode the tail.
 
 After VAD detects speech, `flush()` drains its real audio tail and commits,
 waiting internally before processing subsequent input; it leaves the socket
@@ -329,185 +321,8 @@ reported in `DecisionResponse.errors` without dropping the rest of the batch.
 Non-2xx responses raise `APIStatusError` with the response body and request ID;
 408, 429 and 5xx are retried according to `conn_options`.
 
-## Examples and validation
+## Validation
 
-### Microphone echo with STT and TTS, without an LLM
-
-`examples/microsoft/microsoft_ai_echo.py` receives a browser microphone track
-through a real LiveKit room, transcribes it with `microsoft_ai.STT`, then echoes
-the completed user turn with `microsoft_ai.TTS`. It uses
-`Agent.on_user_turn_completed` and `AgentSession.say()`; `StopResponse` suppresses
-an additional model reply. There is no LLM, manual transcription injection,
-per-utterance `flush()` call, or paid LiveKit Inference.
-
-The same local Silero VAD model is passed to **both** STT and AgentSession;
-each opens its own stream. The plugin's VAD drives provider commits after
-0.5 seconds of observed silence. Session VAD detects barge-in after 0.2 seconds
-of speech. Echoes are interruptible and never automatically resumed after a
-false interruption; preemptive generation and provider retries are disabled.
-Do not add backend padding or promote interim text to a final to hide tail loss.
-
-With the same local-server `LIVEKIT_*` settings described below and an external
-file containing both providers' configuration:
-
-```sh
-uv run --package livekit-plugins-microsoft-ai --no-default-groups \
-  python examples/microsoft/microsoft_ai_echo.py dev --no-reload --log-level info
-```
-
-In the browser, explicitly click Start microphone and grant permission.
-Publish only a microphone audio track using the official `livekit-client` SDK
-and a short-lived, room-scoped token minted server-side. Set `canPublish: true`
-**and** `canPublishSources: ["microphone"]`; the browser SDK requires the
-publish gate as well as the source allowlist. Do not grant video, room admin,
-or remote agent control. Enable
-playback from a user gesture, attach the agent audio, and consume the standard
-`lk.transcription` streams for transient interim/final captions. No microphone
-may start on page load or automatically after reconnect. Stop must release the
-capture track and disconnect. Use headphones to avoid feeding the echo back in.
-
-While connected, microphone audio is sent to the configured STT service and
-recognized final text is sent to TTS. The example disables recording and remote
-session control, accepts no typed-text input, and does not log transcripts.
-Its room captions and session state are transient. Do not enable audio dumps,
-debug transcript logs, external telemetry exporters, or browser recording when
-testing private speech. Each room session is limited to three minutes and
-closes both providers when its participant leaves. Initial participant/audio
-readiness is bounded to ten seconds, so a failed browser join cannot leave
-the example waiting for a user turn until its session limit.
-
-Automated fixture audio published through the same browser/LiveKit track is a
-useful transport and lifecycle test, but it does **not** validate a physical
-microphone, acoustic echo cancellation, or subjective sound quality.
-
-The bounded acceptance used the installed wheel with released Agents 1.8.2,
-local LiveKit server 1.13.7 and browser client 2.22.3. It covered five short
-synthetic turns across two STT sessions, including a 180 ms internal pause
-below the configured 500 ms VAD silence threshold. The fifth turn interrupted
-the fourth echo; the old speech handle was interrupted, its output cleared,
-no server frames followed its completion, and browser audio energy stayed
-flat during the observed quiet interval after transport settling. All five
-STT finals, the four completed echoes, and disconnect cleanup passed.
-This test did not count punctuation-only shutdown fallbacks as user turns.
-A nonfatal SDK FFI-handle warning occurred during teardown; public session
-and provider closure checks passed.
-
-### TTS only in a real room, without a LiveKit Cloud account
-
-`examples/microsoft/microsoft_ai_tts_room.py` uses only `microsoft_ai.TTS` and
-`AgentSession.say()`. There is no LLM, STT, VAD, microphone, text-input handler,
-remote session control or paid LiveKit Inference. It waits for a participant
-and an audio subscription, says `Hello, this is a Microsoft AI voice test.`
-once, waits for playback, closes its session and TTS client, and ends the
-one-shot job. Synthesis retries and recording are disabled. A fresh room/job
-triggers another paid TTS request; do not repeatedly reconnect to test playback
-controls.
-
-Use a [local open-source LiveKit server](https://docs.livekit.io/home/self-hosting/local/)
-bound to loopback, or an existing LiveKit server. Set standard `LIVEKIT_*`
-variables separately from the private Microsoft AI configuration:
-
-```sh
-export LIVEKIT_URL=ws://127.0.0.1:7880
-export LIVEKIT_API_KEY=devkey
-export LIVEKIT_API_SECRET=secret
-export MICROSOFT_AI_ENV_FILE=/path/outside/checkout/endpoints.env
-
-uv run --package livekit-plugins-microsoft-ai --no-default-groups \
-  python examples/microsoft/microsoft_ai_tts_room.py dev --no-reload
-```
-
-`devkey` / `secret` are the public local-server development defaults, **not**
-Azure credentials and not suitable for a production or externally exposed
-server. Only the agent loads the private TTS file.
-
-Connect a subscribe-only participant using the official `livekit-client`
-browser SDK and a short-lived room-scoped token minted by a local backend.
-Call `room.startAudio()` from a click, attach subscribed audio tracks, and
-enable playback before the greeting. Do not give the browser the Microsoft AI
-key, server API secret or microphone access. Run only this unnamed demo agent
-against the local server so that automatic dispatch chooses it. This example
-uses the room transport; use `dev`, not the local-device `console` mode.
-
-The same example can run from a clean environment with the built wheel and
-the declared minimum released SDK, rather than relying on editable sources:
-
-```sh
-uv build --package livekit-plugins-microsoft-ai --out-dir /tmp/microsoft-ai-dist
-uv venv /tmp/microsoft-ai-room
-uv pip install --python /tmp/microsoft-ai-room/bin/python \
-  /tmp/microsoft-ai-dist/livekit_plugins_microsoft_ai-1.8.3-py3-none-any.whl \
-  'livekit-agents==1.8.3'
-/tmp/microsoft-ai-room/bin/python \
-  examples/microsoft/microsoft_ai_tts_room.py dev --no-reload
-```
-
-### Full STT/LLM/TTS agent
-
-See `examples/microsoft/microsoft_ai_agent.py` for an AgentSession using the
-existing OpenAI LLM, bundled VAD and this STT/TTS package. Its OpenAI credential
-is used by the LLM only. This full agent requires STT access as well as TTS.
-It cannot run with only an Azure Speech TTS key: `microsoft_ai.STT` also needs
-its separate endpoint/model/credentials, and the LLM needs `OPENAI_API_KEY`.
-The CLI's `console` mode removes the Cloud requirement, not those provider
-requirements. Use the TTS-only room example when STT/LLM access is unavailable.
-
-```sh
-uv run --package livekit-agents --extra microsoft-ai --extra openai --no-default-groups \
-  python examples/microsoft/microsoft_ai_agent.py console
-```
-
-To use an external config file with the agent, set `MICROSOFT_AI_ENV_FILE` to
-its path first. Keep the LLM's `OPENAI_API_KEY` separate; the Microsoft AI config
-loader does not copy unrelated variables into the process environment.
-
-### Direct endpoint smoke test
-
-`examples/microsoft/microsoft_ai_smoke.py` is a direct, explicit-opt-in smoke path
-without LiveKit Cloud or an LLM. It sends at most one short TTS request and one
-user-approved speech fixture, with no automatic retries, recording, transcript
-printing, audio playback or load testing. TTS uses the Azure Speech subscription
-key; STT uses the explicitly configured auth selector (Bearer by default, or
-raw `api-key`). The smoke script reads it from the same external dotenv file;
-no key or header value belongs in CLI arguments. The whole smoke run is bounded
-to 50 seconds.
-
-```sh
-uv run --package livekit-plugins-microsoft-ai --no-default-groups \
-  python examples/microsoft/microsoft_ai_smoke.py --help
-```
-
-After confirming the exact TTS endpoint and approving the fixed short text,
-opt in to **TTS only**, with no STT URL, key, model or fixture required:
-
-```sh
-uv run --package livekit-plugins-microsoft-ai --no-default-groups \
-  python examples/microsoft/microsoft_ai_smoke.py --run-live --tts \
-  --env-file /path/outside/checkout/endpoints.env
-```
-
-Only when STT access and its protocol are separately confirmed, test a tiny
-approved STT fixture (add `--tts` to test both services):
-
-```sh
-uv run --package livekit-plugins-microsoft-ai --no-default-groups \
-  python examples/microsoft/microsoft_ai_smoke.py --run-live \
-  --env-file /path/outside/checkout/endpoints.env \
-  --stt-wav /path/outside/checkout/approved-speech.wav \
-  --expected-text-file /path/outside/checkout/approved-expected.txt
-```
-
-The WAV must be PCM16 mono at 16 kHz, nonempty and no longer than five seconds.
-The script checks the complete expected words, ignoring only case/punctuation.
-It sends no additional silence and does not fabricate a final transcript from
-an intermediate hypothesis. Repeat manually with a separately approved short,
-non-chunk-aligned clip to check the deployment's tail handling; one successful
-clip is not a universal tail guarantee. `--tts` sends only the fixed text
-`Hello, this is a Microsoft AI voice test.` It validates framing, not subjective
-voice quality. Omit either service's flags to test only the other.
-The reported elapsed time covers the client synthesis call through complete
-stream closure; it is **not model TTFA** because audio is emitted only after
-the complete WAV response has been validated.
 
 Focused hermetic tests:
 

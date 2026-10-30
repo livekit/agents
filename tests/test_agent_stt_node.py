@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, Agent, AgentSession, stt, vad
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    Agent,
+    AgentSession,
+    SessionConnectOptions,
+    stt,
+    vad,
+)
 from livekit.agents.types import APIConnectOptions
 
 from .fake_llm import FakeLLM
@@ -313,3 +320,26 @@ async def test_only_final_text_restarts_eot_after_vad_eos(event_type) -> None:
         detector.supports_language.assert_awaited_with("en")
     finally:
         await session.aclose()
+
+
+@pytest.mark.parametrize("stt_on_agent", [False, True])
+@pytest.mark.parametrize("use_fallback", [False, True])
+async def test_session_passes_liveness_timeout_to_stt(stt_on_agent, use_fallback):
+    provider = _FlushableSTT(manual_flush=False)
+    model = stt.FallbackAdapter([provider]) if use_fallback else provider
+    options = APIConnectOptions(liveness_timeout=3.0)
+    agent = Agent(instructions="test", **({"stt": model} if stt_on_agent else {}))
+    session = AgentSession(
+        **({} if stt_on_agent else {"stt": model}),
+        vad=FakeVAD(),
+        turn_handling={"turn_detection": "manual"},
+        session_close_transcript_timeout=0.0,
+        conn_options=SessionConnectOptions(stt_conn_options=options),
+    )
+    await session.start(agent)
+    try:
+        stream = await asyncio.wait_for(provider.streams.get(), 5)
+        assert stream._conn_options.liveness_timeout == 3.0
+    finally:
+        await session.aclose()
+        await model.aclose()

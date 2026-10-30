@@ -142,7 +142,7 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
         # accumulate instead of being forgiven by a successful transcript.
         async for ev in event_aiter:
             if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                self._num_retries = 0
+                self._mark_provider_progress()
 
     async def _run(self) -> None:
         async def _forward_input(stream: RecognizeStream) -> None:
@@ -171,6 +171,7 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
                     )
 
         stream = self._wrapped_stt.stream(language=self._language, conn_options=self._conn_options)
+        stream._on_provider_progress = self._mark_provider_progress
         tasks = [
             asyncio.create_task(
                 _forward_input(stream), name="DiarizationAdapterWrapper.forward_input"

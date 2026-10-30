@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEventType
 
@@ -226,6 +226,9 @@ class _FakeWebSocket:
 
     def __aiter__(self) -> _FakeWebSocket:
         return self
+
+    async def receive(self) -> _FakeWSMessage:
+        return await self.__anext__()
 
     async def __anext__(self) -> _FakeWSMessage:
         await asyncio.sleep(0)
@@ -606,12 +609,10 @@ async def test_usage_event_excludes_non_final_tokens():
         },
     ]
 
-    # message 1: START_OF_SPEECH + INTERIM; message 2: FINAL + END_OF_SPEECH + USAGE.
-    events = await _drive_recv(stream, messages, expect_events=5)
-    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
-
-    assert usage.recognition_usage is not None
-    assert usage.recognition_usage.output_tokens == 2
+    # Both messages report usage; only the final tokens contribute output tokens.
+    events = await _drive_recv(stream, messages, expect_events=6)
+    usages = [e.recognition_usage for e in events if e.type == SpeechEventType.RECOGNITION_USAGE]
+    assert [usage.output_tokens for usage in usages if usage is not None] == [0, 2]
 
 
 async def test_usage_events_report_incremental_output_tokens():
@@ -926,10 +927,8 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
 # ---------------------------------------------------------------------------
 
 
-async def test_socket_is_opened_with_a_heartbeat():
-    """aiohttp defaults `heartbeat` to None, so without it the read side of a
-    half-open socket parks forever and the reconnect in `_run`, which only fires
-    when `_recv_messages_task` ends, never gets a turn."""
+async def test_socket_exposes_control_frames_to_monitor():
+    """Control frames must reach the shared monitor to reset its silence deadline."""
     stream = _make_stream()
 
     class RecordingWebSocket:
@@ -949,10 +948,11 @@ async def test_socket_is_opened_with_a_heartbeat():
     await stream._connect_ws()
 
     assert session.kwargs is not None
-    assert session.kwargs.get("heartbeat") == 30.0
+    assert session.kwargs.get("autoping") is False
 
 
-async def test_keepalive_write_drop_requests_reconnect():
+@pytest.mark.parametrize("task_name", ["_keepalive_task", "_send_audio_task"])
+async def test_write_drop_uses_retry_budget(task_name):
     """The keepalive used to catch every exception and return. When no audio is
     flowing that write is the only thing touching the socket, so swallowing it
     left the stream on a dead connection with nothing ever logged."""
@@ -964,11 +964,58 @@ async def test_keepalive_write_drop_requests_reconnect():
         async def send_str(self, message: str) -> None:
             raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
 
+        async def send_bytes(self, message: bytes) -> None:
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
     stream._ws = DeadWebSocket()
+    stream.audio_queue.put_nowait(b"audio")
 
-    await asyncio.wait_for(stream._keepalive_task(), timeout=1.0)
+    with pytest.raises(APIConnectionError) as exc_info:
+        await asyncio.wait_for(getattr(stream, task_name)(), timeout=1.0)
+    assert exc_info.value.retryable
+    assert isinstance(exc_info.value.__cause__, aiohttp.ClientConnectionResetError)
 
-    assert stream._reconnect_event.is_set()
+
+async def test_closed_socket_reconnect_exhausts_retry_budget(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.soniox import STT
+    from livekit.plugins.soniox.stt import SpeechStream
+
+    connections = 0
+
+    class ClosedWebSocket:
+        closed = True
+
+        async def close(self):
+            pass
+
+        def exception(self):
+            return aiohttp.ServerTimeoutError("liveness timeout")
+
+    async def connect(self):
+        nonlocal connections
+        connections += 1
+        return ClosedWebSocket()
+
+    async def idle(self):
+        await asyncio.Future()
+
+    async def request_reconnect(self):
+        self._reconnect_event.set()
+
+    monkeypatch.setattr(SpeechStream, "_connect_ws", connect)
+    monkeypatch.setattr(SpeechStream, "_prepare_audio_task", idle)
+    monkeypatch.setattr(SpeechStream, "_send_audio_task", idle)
+    monkeypatch.setattr(SpeechStream, "_keepalive_task", idle)
+    monkeypatch.setattr(SpeechStream, "_recv_messages_task", request_reconnect)
+    instance = STT(api_key="test-key")
+    stream = instance.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+    try:
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, 1)
+        assert connections == 2
+    finally:
+        await stream.aclose()
 
 
 async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
@@ -989,6 +1036,9 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
 
         def __aiter__(self) -> HeartbeatTimeoutWebSocket:
             return self
+
+        async def receive(self) -> _FakeWSMessage:
+            return await self.__anext__()
 
         async def __anext__(self) -> _FakeWSMessage:
             self.receives += 1
