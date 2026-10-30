@@ -582,13 +582,13 @@ impl AgentNodes {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
-type _core_NodeCallsImpl = <crate::Selected as super::Implementations>::NodeCalls;
+type CoreNodeCallsImpl = <crate::Selected as super::Implementations>::NodeCalls;
 
 #[pyclass(frozen, name = "_core_NodeCalls", module = "livekit.agents._core")]
-pub struct _core_NodeCalls(pub(crate) ::std::sync::Arc<_core_NodeCallsImpl>);
+pub struct CoreNodeCalls(pub(crate) ::std::sync::Arc<CoreNodeCallsImpl>);
 
 #[pymethods]
-impl _core_NodeCalls {
+impl CoreNodeCalls {
 }
 
 // Wherever the host passes a `::lk_agents_abi::voice::nodes::ProviderCalls`, an instance of this class is itself.
@@ -596,7 +596,7 @@ impl _core_NodeCalls {
     ::lk_agents_abi::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(),
         read: |obj| {
-            let this = obj.cast::<_core_NodeCalls>().ok()?;
+            let this = obj.cast::<CoreNodeCalls>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
@@ -2085,15 +2085,15 @@ impl RoomVideoInput {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
-type _core_RoomSessionImpl = <crate::Selected as super::Implementations>::RoomSession;
+type CoreRoomSessionImpl = <crate::Selected as super::Implementations>::RoomSession;
 
-/// `_core_RoomSession`: what a session's room I/O is built from, handed to the host and taken
+/// `CoreRoomSession`: what a session's room I/O is built from, handed to the host and taken
 /// back as itself.
 #[pyclass(frozen, name = "_core_RoomSession", module = "livekit.agents._core")]
-pub struct _core_RoomSession(pub(crate) ::std::sync::Arc<_core_RoomSessionImpl>);
+pub struct CoreRoomSession(pub(crate) ::std::sync::Arc<CoreRoomSessionImpl>);
 
 #[pymethods]
-impl _core_RoomSession {
+impl CoreRoomSession {
 }
 
 // Wherever the host passes a `::lk_agents_abi::voice::room_owner::SessionRoom`, an instance of this class is itself.
@@ -2101,7 +2101,7 @@ impl _core_RoomSession {
     ::lk_agents_abi::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(),
         read: |obj| {
-            let this = obj.cast::<_core_RoomSession>().ok()?;
+            let this = obj.cast::<CoreRoomSession>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::SessionRoom> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
@@ -2121,12 +2121,12 @@ fn _extract_room_runtime_wait_for_track_publication_kinds(obj: &Bound<'_, PyAny>
 
 #[pyfunction]
 #[pyo3(signature = (room))]
-pub fn _core_create_room_session(room: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::_core_RoomSession> {
+pub fn _core_create_room_session(room: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::CoreRoomSession> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     let room = room.map(|v| crate::generated::voice::RtcRoomProxy::from_host(&v)).transpose()?;
     let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::create_room_session(&env, room);
-    Ok(super::voice::_core_RoomSession(::std::sync::Arc::new(out)))
+    Ok(super::voice::CoreRoomSession(::std::sync::Arc::new(out)))
 }
 
 /// Wait for the supplied room's connection, avatar participant and subscribed video track.

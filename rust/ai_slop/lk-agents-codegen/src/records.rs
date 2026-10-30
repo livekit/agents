@@ -278,7 +278,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             .replace("Self::", &format!("{rust}::"));
         s.push_str(&format!(
             "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n{}{extract}}}\n",
-            if classes.is_empty() { "" } else { "    let py = obj.py();\n" }
+            if classes.is_empty() || !uses_py(&extract) { "" } else { "    let py = obj.py();\n" }
         ));
     }
     if r.emit {
@@ -347,23 +347,23 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
         let read = match &f.ty {
             // An omittable key: absent (or `NOT_GIVEN`) is not given.
             Ty::Maybe(_) => format!(
-                "match obj.get_item({key:?})? {{ Some(v) => ({})?, None => ::lk_agents_abi::Maybe::NotGiven }}",
-                read(&f.ty, "(&v)", &path)?
+                "match obj.get_item({key:?})? {{ Some(v) => {{ let v = &v; ({})? }}, None => ::lk_agents_abi::Maybe::NotGiven }}",
+                read(&f.ty, "v", &path)?
             ),
             // `default = None`: absent, `None` and `NOT_GIVEN` alike hold nothing.
             Ty::Optional(inner) if omitted_none => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => Some(({})?), _ => None }}",
-                read(inner, "(&v)", &path)?
+                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => {{ let v = &v; Some(({})?) }}, _ => None }}",
+                read(inner, "v", &path)?
             ),
             // A defaulted key reads absent, `None` and `NOT_GIVEN` alike as its default.
             ty if let Some(default) = &f.default => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => ({})?, _ => {} }}",
-                read(ty, "(&v)", &path)?,
+                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => {{ let v = &v; ({})? }}, _ => {} }}",
+                read(ty, "v", &path)?,
                 crate::adapter::rust_literal(default, ty)
             ),
             ty => format!(
-                "{{ let v = obj.get_item({key:?})?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err({path:?}))?; ({})? }}",
-                read(ty, "(&v)", &path)?
+                "{{ let v = &obj.get_item({key:?})?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err({path:?}))?; ({})? }}",
+                read(ty, "v", &path)?
             ),
         };
         reads.push_str(&format!(
@@ -658,8 +658,8 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Tuple(_) => ("tuple", "obj.is_instance_of::<::pyo3::types::PyTuple>()".into()),
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
-            Ty::Int(_) => ("number", "(obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
-            Ty::Float | Ty::Duration | Ty::Timestamp => ("number", "(obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()))".into()),
+            Ty::Int(_) => ("number", "obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
+            Ty::Float | Ty::Duration | Ty::Timestamp => ("number", "obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
             Ty::Map(..)
             | Ty::OrderedMap(..)
             | Ty::JsonObject
@@ -709,4 +709,14 @@ fn never_crosses(rust: &str, variant: &str) -> String {
         "        {rust}::{variant} {{ .. }} => return Err(::pyo3::exceptions::PyTypeError::new_err({:?})),\n",
         format!("{variant} never crosses to the host")
     )
+}
+
+/// Whether generated code names `py` (a `py` binding would otherwise be unused).
+fn uses_py(code: &str) -> bool {
+    code.match_indices("py").any(|(i, _)| {
+        let before = code[..i].chars().next_back();
+        let after = code[i + 2..].chars().next();
+        let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':');
+        !ident(before) && !ident(after)
+    })
 }

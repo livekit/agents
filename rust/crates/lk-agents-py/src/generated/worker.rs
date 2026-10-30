@@ -35,7 +35,7 @@ fn _extract_endpoint_stream_read_max_bytes(obj: &Bound<'_, PyAny>) -> PyResult<u
 }
 
 fn _extract_endpoint_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
+    if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) }
 }
 
 fn _extract_endpoint_stream_reset_code(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
@@ -168,18 +168,18 @@ impl EndpointServer {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
-type _core_AsgiReceiveImpl = <crate::Selected as super::Implementations>::AsgiReceive;
+type CoreAsgiReceiveImpl = <crate::Selected as super::Implementations>::AsgiReceive;
 
 #[pyclass(frozen, name = "_core_AsgiReceive", module = "livekit.agents._core")]
-pub struct _core_AsgiReceive(pub(crate) ::std::sync::Arc<_core_AsgiReceiveImpl>);
+pub struct CoreAsgiReceive(pub(crate) ::std::sync::Arc<CoreAsgiReceiveImpl>);
 
 #[pymethods]
-impl _core_AsgiReceive {
+impl CoreAsgiReceive {
     fn __call__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <_core_AsgiReceiveImpl as ::lk_agents_abi::worker::endpoint_host::AsgiReceive>::__call__(&this, )
+            let out = <CoreAsgiReceiveImpl as ::lk_agents_abi::worker::endpoint_host::AsgiReceive>::__call__(&this, )
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::worker_endpoint::asgi_received_to_py(py, out)?, py))
         })
@@ -191,7 +191,7 @@ impl _core_AsgiReceive {
     ::lk_agents_abi::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(),
         read: |obj| {
-            let this = obj.cast::<_core_AsgiReceive>().ok()?;
+            let this = obj.cast::<CoreAsgiReceive>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
@@ -199,20 +199,20 @@ impl _core_AsgiReceive {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
-type _core_AsgiSendImpl = <crate::Selected as super::Implementations>::AsgiSend;
+type CoreAsgiSendImpl = <crate::Selected as super::Implementations>::AsgiSend;
 
 #[pyclass(frozen, name = "_core_AsgiSend", module = "livekit.agents._core")]
-pub struct _core_AsgiSend(pub(crate) ::std::sync::Arc<_core_AsgiSendImpl>);
+pub struct CoreAsgiSend(pub(crate) ::std::sync::Arc<CoreAsgiSendImpl>);
 
 #[pymethods]
-impl _core_AsgiSend {
+impl CoreAsgiSend {
     #[pyo3(signature = (message))]
     fn __call__<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let message = crate::generated::records::worker_endpoint::asgi_sent_from_py(&message)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <_core_AsgiSendImpl as ::lk_agents_abi::worker::endpoint_host::AsgiSend>::__call__(&this, message)
+            let out = <CoreAsgiSendImpl as ::lk_agents_abi::worker::endpoint_host::AsgiSend>::__call__(&this, message)
                 .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
@@ -224,7 +224,7 @@ impl _core_AsgiSend {
     ::lk_agents_abi::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(),
         read: |obj| {
-            let this = obj.cast::<_core_AsgiSend>().ok()?;
+            let this = obj.cast::<CoreAsgiSend>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
@@ -431,15 +431,15 @@ fn _extract_process_supervisor_new_high_ping_threshold(obj: &Bound<'_, PyAny>) -
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "high_ping_threshold")
 }
 
-fn _extract_process_supervisor__core_launched_process_pid(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+fn _extract_process_supervisor_core_launched_process_pid(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
     ::lk_agents_abi::python::number_from_py::<u32>(&obj, "pid")
 }
 
-fn _extract_process_supervisor__core_launched_process_sentinel(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+fn _extract_process_supervisor_core_launched_process_sentinel(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
     ::lk_agents_abi::python::number_from_py::<i64>(&obj, "sentinel")
 }
 
-fn _extract_process_supervisor__core_launched_process_owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<i64>> {
+fn _extract_process_supervisor_core_launched_process_owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<i64>> {
     obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<i64>(&item, "owned") }).collect::<PyResult<Vec<_>>>())
 }
 
@@ -480,7 +480,7 @@ impl ProcSupervisor {
 
     /// The launch's receipt, reported on the launch worker right after the OS created the child.
     #[pyo3(signature = (pid, sentinel, method, owned))]
-    fn _core_launched_process(&self, #[pyo3(from_py_with = _extract_process_supervisor__core_launched_process_pid)] pid: u32, #[pyo3(from_py_with = _extract_process_supervisor__core_launched_process_sentinel)] sentinel: i64, method: ::std::string::String, #[pyo3(from_py_with = _extract_process_supervisor__core_launched_process_owned)] owned: ::std::vec::Vec<i64>) -> PyResult<()> {
+    fn _core_launched_process(&self, #[pyo3(from_py_with = _extract_process_supervisor_core_launched_process_pid)] pid: u32, #[pyo3(from_py_with = _extract_process_supervisor_core_launched_process_sentinel)] sentinel: i64, method: ::std::string::String, #[pyo3(from_py_with = _extract_process_supervisor_core_launched_process_owned)] owned: ::std::vec::Vec<i64>) -> PyResult<()> {
         crate::host::check_pid()?;
         <ProcSupervisorImpl as ::lk_agents_abi::worker::ipc_host::ProcessSupervisor>::_core_launched_process(&self.0, pid, sentinel, method, owned).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())

@@ -11,24 +11,24 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/evals.rs.
-type _core_JudgeRunnerImpl = <crate::Selected as super::Implementations>::JudgeRunner;
+type CoreJudgeRunnerImpl = <crate::Selected as super::Implementations>::JudgeRunner;
 
 /// Runs judges on one model. A model the host implements is offered `tools`, the host's live
 /// judge tools (`judge_tool_schemas`).
 #[pyclass(frozen, name = "_core_JudgeRunner", module = "livekit.agents._core")]
-pub struct _core_JudgeRunner(pub(crate) ::std::sync::Arc<_core_JudgeRunnerImpl>);
+pub struct CoreJudgeRunner(pub(crate) ::std::sync::Arc<CoreJudgeRunnerImpl>);
 
 #[pymethods]
-impl _core_JudgeRunner {
+impl CoreJudgeRunner {
     #[new]
     #[pyo3(signature = (llm, tools, host))]
-    fn new(llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<_core_JudgeRunner> {
+    fn new(llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<CoreJudgeRunner> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
-        let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host);
-        Ok(_core_JudgeRunner(::std::sync::Arc::new(out)))
+        let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host);
+        Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
     }
 
     /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
@@ -41,7 +41,7 @@ impl _core_JudgeRunner {
         let reference = reference.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
                 .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::evals::judge_outcome_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
         })
@@ -53,7 +53,7 @@ impl _core_JudgeRunner {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
                 .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::evals::intent_judgment_to_py(py, out)?, py))
         })

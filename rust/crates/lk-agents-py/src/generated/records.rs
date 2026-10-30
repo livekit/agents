@@ -25,7 +25,7 @@ pub mod _retry {
     static _CORE__RETRY_DECISION_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn _core__retry_decision_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::types::retry::RetryDecision) -> PyResult<Bound<'py, PyAny>> {
+    pub fn _core_retry_decision_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::types::retry::RetryDecision) -> PyResult<Bound<'py, PyAny>> {
             match value {
                 ::lk_agents_abi::types::retry::RetryDecision::Stop => crate::host::construct(_CORE__RETRY_DECISION_STOP.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionStop")?.as_any(), (), None),
                 ::lk_agents_abi::types::retry::RetryDecision::Raise => crate::host::construct(_CORE__RETRY_DECISION_RAISE.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRaise")?.as_any(), (), None),
@@ -1037,7 +1037,6 @@ pub mod amd {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn amd_category_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::amd::AmdCategory> {
-        let py = obj.py();
             let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
             match &*value {
                 "human" => Ok(::lk_agents_abi::voice::amd::AmdCategory::Human),
@@ -1306,8 +1305,8 @@ pub mod chat_items {
     pub fn metrics_metadata_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::MetricsMetadata> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::MetricsMetadata {
-                model_name: match obj.get_item("model_name")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<::std::string::String>())?), _ => None },
-                model_provider: match obj.get_item("model_provider")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<::std::string::String>())?), _ => None },
+                model_name: match obj.get_item("model_name")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
+                model_provider: match obj.get_item("model_provider")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
             })
     }
 
@@ -1328,21 +1327,21 @@ pub mod chat_items {
     pub fn metrics_report_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::MetricsReport> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::MetricsReport {
-                started_speaking_at: match obj.get_item("started_speaking_at")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.started_speaking_at"))?), _ => None },
-                stopped_speaking_at: match obj.get_item("stopped_speaking_at")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.stopped_speaking_at"))?), _ => None },
-                transcription_delay: match obj.get_item("transcription_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.transcription_delay"))?), _ => None },
-                end_of_turn_delay: match obj.get_item("end_of_turn_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.end_of_turn_delay"))?), _ => None },
-                on_user_turn_completed_delay: match obj.get_item("on_user_turn_completed_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.on_user_turn_completed_delay"))?), _ => None },
-                llm_node_ttft: match obj.get_item("llm_node_ttft")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.llm_node_ttft"))?), _ => None },
-                llm_node_tps: match obj.get_item("llm_node_tps")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.llm_node_tps"))?), _ => None },
-                llm_node_ttfs: match obj.get_item("llm_node_ttfs")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.llm_node_ttfs"))?), _ => None },
-                tts_node_ttfb: match obj.get_item("tts_node_ttfb")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.tts_node_ttfb"))?), _ => None },
-                playback_latency: match obj.get_item("playback_latency")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.playback_latency"))?), _ => None },
-                e2e_latency: match obj.get_item("e2e_latency")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "MetricsReport.e2e_latency"))?), _ => None },
-                provider_request_ids: match obj.get_item("provider_request_ids")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((if (&v).is_instance_of::<::pyo3::types::PyList>() || (&v).is_instance_of::<::pyo3::types::PyTuple>() { (&v).try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("MetricsReport.provider_request_ids: expected a list or tuple")) })?), _ => None },
-                llm_metadata: match obj.get_item("llm_metadata")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::chat_items::metrics_metadata_from_py((&v)))?), _ => None },
-                tts_metadata: match obj.get_item("tts_metadata")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::chat_items::metrics_metadata_from_py((&v)))?), _ => None },
-                stt_metadata: match obj.get_item("stt_metadata")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::chat_items::metrics_metadata_from_py((&v)))?), _ => None },
+                started_speaking_at: match obj.get_item("started_speaking_at")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.started_speaking_at"))?) }, _ => None },
+                stopped_speaking_at: match obj.get_item("stopped_speaking_at")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.stopped_speaking_at"))?) }, _ => None },
+                transcription_delay: match obj.get_item("transcription_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.transcription_delay"))?) }, _ => None },
+                end_of_turn_delay: match obj.get_item("end_of_turn_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.end_of_turn_delay"))?) }, _ => None },
+                on_user_turn_completed_delay: match obj.get_item("on_user_turn_completed_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.on_user_turn_completed_delay"))?) }, _ => None },
+                llm_node_ttft: match obj.get_item("llm_node_ttft")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.llm_node_ttft"))?) }, _ => None },
+                llm_node_tps: match obj.get_item("llm_node_tps")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.llm_node_tps"))?) }, _ => None },
+                llm_node_ttfs: match obj.get_item("llm_node_ttfs")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.llm_node_ttfs"))?) }, _ => None },
+                tts_node_ttfb: match obj.get_item("tts_node_ttfb")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.tts_node_ttfb"))?) }, _ => None },
+                playback_latency: match obj.get_item("playback_latency")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.playback_latency"))?) }, _ => None },
+                e2e_latency: match obj.get_item("e2e_latency")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "MetricsReport.e2e_latency"))?) }, _ => None },
+                provider_request_ids: match obj.get_item("provider_request_ids")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("MetricsReport.provider_request_ids: expected a list or tuple")) })?) }, _ => None },
+                llm_metadata: match obj.get_item("llm_metadata")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::chat_items::metrics_metadata_from_py(v))?) }, _ => None },
+                tts_metadata: match obj.get_item("tts_metadata")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::chat_items::metrics_metadata_from_py(v))?) }, _ => None },
+                stt_metadata: match obj.get_item("stt_metadata")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::chat_items::metrics_metadata_from_py(v))?) }, _ => None },
             })
     }
 
@@ -1988,7 +1987,6 @@ pub mod events {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn close_reason_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::events::CloseReason> {
-        let py = obj.py();
             let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
             match &*value {
                 "error" => Ok(::lk_agents_abi::voice::events::CloseReason::Error),
@@ -2020,8 +2018,8 @@ pub mod inference_stt {
     pub fn fallback_model_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::inference::fallback::SttFallbackModel> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::inference::fallback::SttFallbackModel {
-                model: { let v = obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model"))?; ((&v).extract::<::std::string::String>())? },
-                extra_kwargs: match obj.get_item("extra_kwargs")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((match ::lk_agents_abi::python::value_from_py((&v), "FallbackModel.extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FallbackModel.extra_kwargs: expected a dict")) })?), _ => None },
+                model: { let v = &obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model"))?; (v.extract::<::std::string::String>())? },
+                extra_kwargs: match obj.get_item("extra_kwargs")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((match ::lk_agents_abi::python::value_from_py(v, "FallbackModel.extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FallbackModel.extra_kwargs: expected a dict")) })?) }, _ => None },
             })
     }
 
@@ -2044,9 +2042,9 @@ pub mod inference_tts {
     pub fn fallback_model_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::inference::fallback::TtsFallbackModel> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::inference::fallback::TtsFallbackModel {
-                model: { let v = obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model"))?; ((&v).extract::<::std::string::String>())? },
-                voice: match obj.get_item("voice")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => ((&v).extract::<::std::string::String>())?, _ => "".to_owned() },
-                extra_kwargs: match obj.get_item("extra_kwargs")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((match ::lk_agents_abi::python::value_from_py((&v), "FallbackModel.extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FallbackModel.extra_kwargs: expected a dict")) })?), _ => None },
+                model: { let v = &obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model"))?; (v.extract::<::std::string::String>())? },
+                voice: match obj.get_item("voice")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; (v.extract::<::std::string::String>())? }, _ => "".to_owned() },
+                extra_kwargs: match obj.get_item("extra_kwargs")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((match ::lk_agents_abi::python::value_from_py(v, "FallbackModel.extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FallbackModel.extra_kwargs: expected a dict")) })?) }, _ => None },
             })
     }
 
@@ -2308,11 +2306,11 @@ pub mod mcp {
     pub fn mcp_tool_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptionsPatch> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::llm::mcp::McpToolOptionsPatch {
-                flags: match obj.get_item("flags")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<::lk_agents_abi::llm::mcp::ToolFlag>().map_err(::std::convert::Into::<PyErr>::into))?), _ => None },
-                on_duplicate: match obj.get_item("on_duplicate")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::tool_context::duplicate_mode_from_py((&v)))?), _ => None },
-                duplicate_scope: match obj.get_item("duplicate_scope")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::tool_context::duplicate_scope_from_py((&v)))?), _ => None },
-                report_progress: match obj.get_item("report_progress")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<bool>())?), _ => None },
-                retries: match obj.get_item("retries")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<u32>((&v), "MCPToolOptions.retries"))?), _ => None },
+                flags: match obj.get_item("flags")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::lk_agents_abi::llm::mcp::ToolFlag>().map_err(::std::convert::Into::<PyErr>::into))?) }, _ => None },
+                on_duplicate: match obj.get_item("on_duplicate")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::tool_context::duplicate_mode_from_py(v))?) }, _ => None },
+                duplicate_scope: match obj.get_item("duplicate_scope")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::tool_context::duplicate_scope_from_py(v))?) }, _ => None },
+                report_progress: match obj.get_item("report_progress")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                retries: match obj.get_item("retries")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<u32>(v, "MCPToolOptions.retries"))?) }, _ => None },
             })
     }
 }
@@ -3370,19 +3368,19 @@ pub mod session_options {
     pub fn session_kwargs_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::SessionKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::SessionKwargs {
-                turn_handling: match obj.get_item("turn_handling")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::turn_handling_options_from_py((&v)))?), _ => None },
-                stt_context_options: { let v = obj.get_item("stt_context_options")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.stt_context_options"))?; (crate::conversions::host_value_from_py((&v)))? },
-                max_tool_steps: { let v = obj.get_item("max_tool_steps")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.max_tool_steps"))?; (::lk_agents_abi::python::number_from_py::<i64>((&v), "SessionKwargs.max_tool_steps"))? },
-                use_tts_aligned_transcript: match obj.get_item("use_tts_aligned_transcript")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { ((&v).extract::<bool>()).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                tts_text_transforms: match obj.get_item("tts_text_transforms")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (crate::conversions::text_transform_set_from_py((&v))).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                min_consecutive_speech_delay: { let v = obj.get_item("min_consecutive_speech_delay")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.min_consecutive_speech_delay"))?; (::lk_agents_abi::python::number_from_py::<f64>((&v), "SessionKwargs.min_consecutive_speech_delay"))? },
-                expressive: { let v = obj.get_item("expressive")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.expressive"))?; (crate::conversions::expressive_from_py((&v)))? },
-                aec_warmup_duration: match obj.get_item("aec_warmup_duration")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>((&v), "SessionKwargs.aec_warmup_duration")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                ivr_detection: { let v = obj.get_item("ivr_detection")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.ivr_detection"))?; ((&v).extract::<bool>())? },
-                user_away_timeout: { let v = obj.get_item("user_away_timeout")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.user_away_timeout"))?; (if (&v).is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>((&v), "SessionKwargs.user_away_timeout")).map(Some) })? },
-                transcription_timeout: { let v = obj.get_item("transcription_timeout")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.transcription_timeout"))?; (if (&v).is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>((&v), "SessionKwargs.transcription_timeout")).map(Some) })? },
-                session_close_transcript_timeout: { let v = obj.get_item("session_close_transcript_timeout")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.session_close_transcript_timeout"))?; (::lk_agents_abi::python::number_from_py::<f64>((&v), "SessionKwargs.session_close_transcript_timeout"))? },
-                conn_options: { let v = obj.get_item("conn_options")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.conn_options"))?; (crate::conversions::session_conn_options_from_py((&v)))? },
+                turn_handling: match obj.get_item("turn_handling")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::turn_handling_options_from_py(v))?) }, _ => None },
+                stt_context_options: { let v = &obj.get_item("stt_context_options")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.stt_context_options"))?; (crate::conversions::host_value_from_py(v))? },
+                max_tool_steps: { let v = &obj.get_item("max_tool_steps")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.max_tool_steps"))?; (::lk_agents_abi::python::number_from_py::<i64>(v, "SessionKwargs.max_tool_steps"))? },
+                use_tts_aligned_transcript: match obj.get_item("use_tts_aligned_transcript")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<bool>()).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                tts_text_transforms: match obj.get_item("tts_text_transforms")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::conversions::text_transform_set_from_py(v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                min_consecutive_speech_delay: { let v = &obj.get_item("min_consecutive_speech_delay")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.min_consecutive_speech_delay"))?; (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionKwargs.min_consecutive_speech_delay"))? },
+                expressive: { let v = &obj.get_item("expressive")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.expressive"))?; (crate::conversions::expressive_from_py(v))? },
+                aec_warmup_duration: match obj.get_item("aec_warmup_duration")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionKwargs.aec_warmup_duration")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                ivr_detection: { let v = &obj.get_item("ivr_detection")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.ivr_detection"))?; (v.extract::<bool>())? },
+                user_away_timeout: { let v = &obj.get_item("user_away_timeout")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.user_away_timeout"))?; (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionKwargs.user_away_timeout")).map(Some) })? },
+                transcription_timeout: { let v = &obj.get_item("transcription_timeout")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.transcription_timeout"))?; (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionKwargs.transcription_timeout")).map(Some) })? },
+                session_close_transcript_timeout: { let v = &obj.get_item("session_close_transcript_timeout")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.session_close_transcript_timeout"))?; (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionKwargs.session_close_transcript_timeout"))? },
+                conn_options: { let v = &obj.get_item("conn_options")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.conn_options"))?; (crate::conversions::session_conn_options_from_py(v))? },
             })
     }
 
@@ -3391,13 +3389,13 @@ pub mod session_options {
     pub fn update_kwargs_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::UpdateKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::UpdateKwargs {
-                endpointing_opts: match obj.get_item("endpointing_opts")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::endpointing_options_from_py((&v)))?), _ => None },
-                turn_detection: match obj.get_item("turn_detection")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::turn_detection_kwarg_from_py((&v))).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                expressive: match obj.get_item("expressive")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::expressive_from_py((&v))).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                keyterms: match obj.get_item("keyterms")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((if (&v).is_instance_of::<::pyo3::types::PyList>() || (&v).is_instance_of::<::pyo3::types::PyTuple>() { (&v).try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("UpdateKwargs.keyterms: expected a list or tuple")) })?), _ => None },
-                interruption: match obj.get_item("interruption")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::interruption_options_from_py((&v)))?), _ => None },
-                min_consecutive_speech_delay: match obj.get_item("min_consecutive_speech_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "UpdateKwargs.min_consecutive_speech_delay"))?), _ => None },
-                tts_text_transforms: match obj.get_item("tts_text_transforms")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (crate::conversions::text_transform_set_from_py((&v))).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
+                endpointing_opts: match obj.get_item("endpointing_opts")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::endpointing_options_from_py(v))?) }, _ => None },
+                turn_detection: match obj.get_item("turn_detection")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::turn_detection_kwarg_from_py(v)).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                expressive: match obj.get_item("expressive")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::expressive_from_py(v)).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                keyterms: match obj.get_item("keyterms")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("UpdateKwargs.keyterms: expected a list or tuple")) })?) }, _ => None },
+                interruption: match obj.get_item("interruption")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::interruption_options_from_py(v))?) }, _ => None },
+                min_consecutive_speech_delay: match obj.get_item("min_consecutive_speech_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "UpdateKwargs.min_consecutive_speech_delay"))?) }, _ => None },
+                tts_text_transforms: match obj.get_item("tts_text_transforms")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::conversions::text_transform_set_from_py(v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
             })
     }
 
@@ -3406,17 +3404,17 @@ pub mod session_options {
     pub fn session_legs_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::SessionLegs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::SessionLegs {
-                stt: { let v = obj.get_item("stt")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.stt"))?; ((&v).extract::<bool>())? },
-                vad: { let v = obj.get_item("vad")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.vad"))?; ((&v).extract::<bool>())? },
-                using_default_vad: { let v = obj.get_item("using_default_vad")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.using_default_vad"))?; ((&v).extract::<bool>())? },
-                llm: { let v = obj.get_item("llm")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.llm"))?; ((&v).extract::<bool>())? },
-                tts: { let v = obj.get_item("tts")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.tts"))?; ((&v).extract::<bool>())? },
-                realtime: { let v = obj.get_item("realtime")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.realtime"))?; ((&v).extract::<bool>())? },
-                detector: { let v = obj.get_item("detector")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.detector"))?; (if (&v).is_none() { Ok(None) } else { (crate::generated::records::session_options::detector_kind_from_py((&v))).map(Some) })? },
-                adaptive_detector: { let v = obj.get_item("adaptive_detector")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.adaptive_detector"))?; ((&v).extract::<bool>())? },
-                audio_enabled: { let v = obj.get_item("audio_enabled")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_enabled"))?; ((&v).extract::<bool>())? },
-                audio_output: { let v = obj.get_item("audio_output")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_output"))?; ((&v).extract::<bool>())? },
-                sink_can_pause: { let v = obj.get_item("sink_can_pause")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.sink_can_pause"))?; ((&v).extract::<bool>())? },
+                stt: { let v = &obj.get_item("stt")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.stt"))?; (v.extract::<bool>())? },
+                vad: { let v = &obj.get_item("vad")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.vad"))?; (v.extract::<bool>())? },
+                using_default_vad: { let v = &obj.get_item("using_default_vad")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.using_default_vad"))?; (v.extract::<bool>())? },
+                llm: { let v = &obj.get_item("llm")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.llm"))?; (v.extract::<bool>())? },
+                tts: { let v = &obj.get_item("tts")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.tts"))?; (v.extract::<bool>())? },
+                realtime: { let v = &obj.get_item("realtime")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.realtime"))?; (v.extract::<bool>())? },
+                detector: { let v = &obj.get_item("detector")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.detector"))?; (if v.is_none() { Ok(None) } else { (crate::generated::records::session_options::detector_kind_from_py(v)).map(Some) })? },
+                adaptive_detector: { let v = &obj.get_item("adaptive_detector")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.adaptive_detector"))?; (v.extract::<bool>())? },
+                audio_enabled: { let v = &obj.get_item("audio_enabled")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_enabled"))?; (v.extract::<bool>())? },
+                audio_output: { let v = &obj.get_item("audio_output")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_output"))?; (v.extract::<bool>())? },
+                sink_can_pause: { let v = &obj.get_item("sink_can_pause")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.sink_can_pause"))?; (v.extract::<bool>())? },
             })
     }
 
@@ -4500,7 +4498,7 @@ pub mod storage_options {
         if obj.is_none() {
             return Ok(::lk_agents_abi::a2a::options::DebounceSpec::Default);
         }
-        if (obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())) {
+        if obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()) {
             return Ok(::lk_agents_abi::a2a::options::DebounceSpec::All(::lk_agents_abi::python::number_from_py::<f64>(obj, "DebounceSpec.All").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("DebounceSpec.All: {e}"))))?));
         }
         if obj.is_instance_of::<::pyo3::types::PyDict>() {
@@ -4686,7 +4684,6 @@ pub mod stt {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn speech_event_type_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::SpeechEventType> {
-        let py = obj.py();
             let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
             match &*value {
                 "start_of_speech" => Ok(::lk_agents_abi::SpeechEventType::StartOfSpeech),
@@ -5792,10 +5789,10 @@ pub mod turn {
     pub fn endpointing_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::EndpointingKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::EndpointingKwargs {
-                mode: match obj.get_item("mode")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::endpointing_mode_from_py((&v)))?), _ => None },
-                min_delay: match obj.get_item("min_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "EndpointingOptions.min_delay"))?), _ => None },
-                max_delay: match obj.get_item("max_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "EndpointingOptions.max_delay"))?), _ => None },
-                alpha: match obj.get_item("alpha")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "EndpointingOptions.alpha"))?), _ => None },
+                mode: match obj.get_item("mode")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::endpointing_mode_from_py(v))?) }, _ => None },
+                min_delay: match obj.get_item("min_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "EndpointingOptions.min_delay"))?) }, _ => None },
+                max_delay: match obj.get_item("max_delay")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "EndpointingOptions.max_delay"))?) }, _ => None },
+                alpha: match obj.get_item("alpha")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "EndpointingOptions.alpha"))?) }, _ => None },
             })
     }
 
@@ -5804,14 +5801,14 @@ pub mod turn {
     pub fn interruption_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::InterruptionKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::InterruptionKwargs {
-                enabled: match obj.get_item("enabled")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<bool>())?), _ => None },
-                mode: match obj.get_item("mode")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::interruption_mode_from_py((&v)))?), _ => None },
-                discard_audio_if_uninterruptible: match obj.get_item("discard_audio_if_uninterruptible")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<bool>())?), _ => None },
-                min_duration: match obj.get_item("min_duration")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "InterruptionOptions.min_duration"))?), _ => None },
-                min_words: match obj.get_item("min_words")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<i64>((&v), "InterruptionOptions.min_words"))?), _ => None },
-                resume_false_interruption: match obj.get_item("resume_false_interruption")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<bool>())?), _ => None },
-                false_interruption_timeout: match obj.get_item("false_interruption_timeout")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>((&v), "InterruptionOptions.false_interruption_timeout")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                backchannel_boundary: match obj.get_item("backchannel_boundary")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (crate::conversions::backchannel_boundary_from_py((&v))).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
+                enabled: match obj.get_item("enabled")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                mode: match obj.get_item("mode")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::interruption_mode_from_py(v))?) }, _ => None },
+                discard_audio_if_uninterruptible: match obj.get_item("discard_audio_if_uninterruptible")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                min_duration: match obj.get_item("min_duration")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "InterruptionOptions.min_duration"))?) }, _ => None },
+                min_words: match obj.get_item("min_words")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<i64>(v, "InterruptionOptions.min_words"))?) }, _ => None },
+                resume_false_interruption: match obj.get_item("resume_false_interruption")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                false_interruption_timeout: match obj.get_item("false_interruption_timeout")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "InterruptionOptions.false_interruption_timeout")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                backchannel_boundary: match obj.get_item("backchannel_boundary")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::conversions::backchannel_boundary_from_py(v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
             })
     }
 
@@ -5820,10 +5817,10 @@ pub mod turn {
     pub fn preemptive_generation_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::PreemptiveKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::PreemptiveKwargs {
-                enabled: match obj.get_item("enabled")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<bool>())?), _ => None },
-                preemptive_tts: match obj.get_item("preemptive_tts")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some(((&v).extract::<bool>())?), _ => None },
-                max_speech_duration: match obj.get_item("max_speech_duration")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<f64>((&v), "PreemptiveGenerationOptions.max_speech_duration"))?), _ => None },
-                max_retries: match obj.get_item("max_retries")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((::lk_agents_abi::python::number_from_py::<i64>((&v), "PreemptiveGenerationOptions.max_retries"))?), _ => None },
+                enabled: match obj.get_item("enabled")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                preemptive_tts: match obj.get_item("preemptive_tts")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                max_speech_duration: match obj.get_item("max_speech_duration")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "PreemptiveGenerationOptions.max_speech_duration"))?) }, _ => None },
+                max_retries: match obj.get_item("max_retries")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<i64>(v, "PreemptiveGenerationOptions.max_retries"))?) }, _ => None },
             })
     }
 
@@ -5832,8 +5829,8 @@ pub mod turn {
     pub fn user_turn_limit_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::UserTurnLimitKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::UserTurnLimitKwargs {
-                max_words: match obj.get_item("max_words")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>((&v), "UserTurnLimitOptions.max_words")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                max_duration: match obj.get_item("max_duration")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if (&v).is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>((&v), "UserTurnLimitOptions.max_duration")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
+                max_words: match obj.get_item("max_words")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "UserTurnLimitOptions.max_words")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                max_duration: match obj.get_item("max_duration")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "UserTurnLimitOptions.max_duration")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
             })
     }
 
@@ -5842,11 +5839,11 @@ pub mod turn {
     pub fn turn_handling_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::TurnHandlingKwargs> {
             let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
             Ok(::lk_agents_abi::voice::session_options::TurnHandlingKwargs {
-                turn_detection: match obj.get_item("turn_detection")? { Some(v) => (if ::lk_agents_abi::python::is_not_given((&v))? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::turn_detection_kwarg_from_py((&v))).map(::lk_agents_abi::Maybe::Given) })?, None => ::lk_agents_abi::Maybe::NotGiven },
-                endpointing: match obj.get_item("endpointing")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::endpointing_options_from_py((&v)))?), _ => None },
-                interruption: match obj.get_item("interruption")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::interruption_options_from_py((&v)))?), _ => None },
-                preemptive_generation: match obj.get_item("preemptive_generation")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::preemptive_generation_options_from_py((&v)))?), _ => None },
-                user_turn_limit: match obj.get_item("user_turn_limit")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => Some((crate::generated::records::turn::user_turn_limit_options_from_py((&v)))?), _ => None },
+                turn_detection: match obj.get_item("turn_detection")? { Some(v) => { let v = &v; (if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::turn_detection_kwarg_from_py(v)).map(::lk_agents_abi::Maybe::Given) })? }, None => ::lk_agents_abi::Maybe::NotGiven },
+                endpointing: match obj.get_item("endpointing")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::endpointing_options_from_py(v))?) }, _ => None },
+                interruption: match obj.get_item("interruption")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::interruption_options_from_py(v))?) }, _ => None },
+                preemptive_generation: match obj.get_item("preemptive_generation")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::preemptive_generation_options_from_py(v))?) }, _ => None },
+                user_turn_limit: match obj.get_item("user_turn_limit")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::turn::user_turn_limit_options_from_py(v))?) }, _ => None },
             })
     }
 }
@@ -5876,7 +5873,7 @@ pub mod turn_events {
     // Declared in rust/crates/lk-agents-abi/src/tokenize/language/eot_thresholds.rs.
 
     pub fn threshold_override_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tokenize::language::ThresholdOverride> {
-        if (obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())) {
+        if obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()) {
             return Ok(::lk_agents_abi::tokenize::language::ThresholdOverride::All(::lk_agents_abi::python::number_from_py::<f64>(obj, "ThresholdOverride.All")?));
         }
         if obj.is_instance_of::<::pyo3::types::PyDict>() {

@@ -1120,3 +1120,14 @@ fn merged_record_annotations_keep_both_modules_typing_imports() {
     assert!(merged.contains("    from ..existing import Existing\n"), "{merged}");
     assert_eq!(merged.matches("if TYPE_CHECKING:").count(), 1, "{merged}");
 }
+
+// Catches: the generated bindings warning (non-CamelCase `_core_X` types, non-snake helpers)
+// or the rename reaching the Python name a string carries.
+#[test]
+fn private_core_classes_take_rust_names_and_keep_their_python_names() {
+    let text = "#[pyclass(name = \"_core_Policy\")]\npub struct _core_Policy(::std::sync::Arc<_core_PolicyImpl>);\nfn _extract_supervisor__core_pid() {}\npub fn _core__retry_to_py() {}\n";
+    assert_eq!(
+        crate::adapter::rust_names(text),
+        "#[pyclass(name = \"_core_Policy\")]\npub struct CorePolicy(::std::sync::Arc<CorePolicyImpl>);\nfn _extract_supervisor_core_pid() {}\npub fn _core_retry_to_py() {}\n"
+    );
+}

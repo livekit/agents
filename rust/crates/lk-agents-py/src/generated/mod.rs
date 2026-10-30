@@ -179,7 +179,7 @@ pub trait Implementations: 'static {
 
 /// Adds every declared class to `_core`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<a2a::_core_Credentials>()?;
+    m.add_class::<a2a::CoreCredentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_extensions_header, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
@@ -187,16 +187,16 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_message_data, m)?)?;
     m.add_class::<a2a::Reply>()?;
     m.add_class::<a2a::AgentClient>()?;
-    m.add_class::<a2a::_core_A2ADoor>()?;
-    m.add_class::<a2a::_core_A2AResponse>()?;
-    m.add_class::<a2a::_core_RemoteInteraction>()?;
+    m.add_class::<a2a::CoreA2ADoor>()?;
+    m.add_class::<a2a::CoreA2AResponse>()?;
+    m.add_class::<a2a::CoreRemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
     m.add_class::<agent::VoiceAgent>()?;
     m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
     m.add_function(wrap_pyfunction!(errors::http_error_display, m)?)?;
-    m.add_class::<evals::_core_JudgeRunner>()?;
+    m.add_class::<evals::CoreJudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_resolve_api_key, m)?)?;
@@ -273,20 +273,20 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(metrics::otel_usage_records, m)?)?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
-    m.add_class::<storage::_core_ContextActivation>()?;
-    m.add_class::<storage::_core_AppTransaction>()?;
-    m.add_class::<storage::_core_VoiceStore>()?;
+    m.add_class::<storage::CoreContextActivation>()?;
+    m.add_class::<storage::CoreAppTransaction>()?;
+    m.add_class::<storage::CoreVoiceStore>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;
     m.add_class::<stt::InferenceStt>()?;
     m.add_class::<stt::InferenceSttStream>()?;
     m.add_class::<stt::SttStreamAdapter>()?;
     m.add_class::<stt::SttAdapterStream>()?;
-    m.add_class::<telemetry::_core_TelemetryPolicy>()?;
+    m.add_class::<telemetry::CoreTelemetryPolicy>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_export_action, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_value_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_record_bytes, m)?)?;
-    m.add_class::<telemetry::_core_MetricSeries>()?;
+    m.add_class::<telemetry::CoreMetricSeries>()?;
     m.add_function(wrap_pyfunction!(telemetry::stt_batch_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::stt_stream_metrics, m)?)?;
     m.add_class::<telemetry::LlmMetricState>()?;
@@ -295,12 +295,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::UploadGate>()?;
     m.add_function(wrap_pyfunction!(telemetry::recording_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_session_chat_record, m)?)?;
-    m.add_class::<telemetry::_core_SessionReportProjection>()?;
-    m.add_class::<telemetry::_core_EventRetention>()?;
+    m.add_class::<telemetry::CoreSessionReportProjection>()?;
+    m.add_class::<telemetry::CoreEventRetention>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_format_trace_parent, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_trace_parent, m)?)?;
-    m.add_class::<telemetry::_core_SessionReportUpload>()?;
-    m.add_class::<telemetry::_core_PreparedTranscript>()?;
+    m.add_class::<telemetry::CoreSessionReportUpload>()?;
+    m.add_class::<telemetry::CorePreparedTranscript>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
     m.add_function(wrap_pyfunction!(tokenize::split_words, m)?)?;
@@ -343,7 +343,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(turn::resolve_keyterm_detection, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_connect_options_check, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_retry_interval, m)?)?;
-    m.add_class::<types::_core_ProviderAttempts>()?;
+    m.add_class::<types::CoreProviderAttempts>()?;
     m.add_class::<utils::AudioByteStream>()?;
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;
@@ -367,7 +367,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_playback_progressed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_finished, m)?)?;
     m.add_class::<voice::AgentNodes>()?;
-    m.add_class::<voice::_core_NodeCalls>()?;
+    m.add_class::<voice::CoreNodeCalls>()?;
     m.add_class::<voice::TtsNodeFrames>()?;
     m.add_class::<voice::SttNodeEvents>()?;
     m.add_function(wrap_pyfunction!(voice::tts_node, m)?)?;
@@ -408,7 +408,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::ConsoleIo>()?;
     m.add_class::<voice::RoomAudioInput>()?;
     m.add_class::<voice::RoomVideoInput>()?;
-    m.add_class::<voice::_core_RoomSession>()?;
+    m.add_class::<voice::CoreRoomSession>()?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_avatar_join, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;
@@ -417,8 +417,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
     m.add_class::<worker::EndpointStream>()?;
     m.add_class::<worker::EndpointServer>()?;
-    m.add_class::<worker::_core_AsgiReceive>()?;
-    m.add_class::<worker::_core_AsgiSend>()?;
+    m.add_class::<worker::CoreAsgiReceive>()?;
+    m.add_class::<worker::CoreAsgiSend>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;
@@ -451,7 +451,7 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::nodes::ProviderCalls {
     fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
         match native.downcast::<<crate::Selected as Implementations>::NodeCalls>() {
-            Ok(native) => Ok(Py::new(py, voice::_core_NodeCalls(native))?.into_bound(py).into_any()),
+            Ok(native) => Ok(Py::new(py, voice::CoreNodeCalls(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::nodes::ProviderCalls` is no declared class")),
         }
     }
@@ -501,7 +501,7 @@ impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver {
     fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
         match native.downcast::<<crate::Selected as Implementations>::AsgiReceive>() {
-            Ok(native) => Ok(Py::new(py, worker::_core_AsgiReceive(native))?.into_bound(py).into_any()),
+            Ok(native) => Ok(Py::new(py, worker::CoreAsgiReceive(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::endpoint_host::AsgiReceiver` is no declared class")),
         }
     }
@@ -511,7 +511,7 @@ impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender {
     fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
         match native.downcast::<<crate::Selected as Implementations>::AsgiSend>() {
-            Ok(native) => Ok(Py::new(py, worker::_core_AsgiSend(native))?.into_bound(py).into_any()),
+            Ok(native) => Ok(Py::new(py, worker::CoreAsgiSend(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::endpoint_host::AsgiSender` is no declared class")),
         }
     }

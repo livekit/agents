@@ -238,7 +238,7 @@ fn extractor_name(c: &Class, m: &Method, p: &Param) -> String {
     format!(
         "_extract_{}_{}_{}",
         crate::decl::resolve::snake(&c.rust_name),
-        m.rust_name.trim_start_matches("r#"),
+        m.rust_name.trim_start_matches("r#").trim_start_matches('_'),
         p.name.trim_start_matches("r#")
     )
 }
@@ -256,6 +256,7 @@ fn numeric_extractors(c: &Class) -> Result<String, String> {
                 true => format!("::lk_agents_abi::python::pcm_bytes(obj, {path})"),
                 false => from_object("obj", &parameter.ty, &path, &at)?,
             };
+            let conversion = unblock(&conversion);
             source.push_str(&format!(
                 "\nfn {}(obj: &Bound<'_, PyAny>) -> PyResult<{}> {{\n    {conversion}\n}}\n",
                 extractor_name(c, method, parameter),
@@ -925,4 +926,74 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
             crate::records::emit(other, "{}").map_err(|e| format!("{at}: {e}"))?,
         ),
     })
+}
+
+/// `{ expr }` as `expr` when the braces enclose the whole expression: a function body is a block.
+fn unblock(expr: &str) -> &str {
+    let Some(inner) = expr.strip_prefix("{ ").and_then(|e| e.strip_suffix(" }")) else {
+        return expr;
+    };
+    let mut depth = 0i32;
+    for c in inner.chars() {
+        depth += match c {
+            '{' => 1,
+            '}' => -1,
+            _ => 0,
+        };
+        if depth < 0 {
+            return expr;
+        }
+    }
+    if depth == 0 && !inner.starts_with("let ") { inner } else { expr }
+}
+
+/// Rust names for the private `_core_X` classes and their helpers: `CoreX` types and
+/// snake-case functions. String literals (the Python names) are left as they are.
+pub fn rust_names(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    let mut in_str = false;
+    while let Some((i, c)) = chars.next() {
+        if in_str {
+            out.push(c);
+            if c == '\\' {
+                if let Some((_, next)) = chars.next() {
+                    out.push(next);
+                }
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            out.push(c);
+            continue;
+        }
+        if c.is_alphanumeric() || c == '_' {
+            let start = i;
+            let mut end = i + c.len_utf8();
+            while let Some(&(j, d)) = chars.peek() {
+                if !(d.is_alphanumeric() || d == '_') {
+                    break;
+                }
+                end = j + d.len_utf8();
+                chars.next();
+            }
+            let word = &text[start..end];
+            let prev = text[..start].chars().next_back();
+            // A lifetime or a char literal is not an identifier.
+            if prev == Some('\'') {
+                out.push_str(word);
+                continue;
+            }
+            out.push_str(&match word.strip_prefix("_core_") {
+                Some(rest) if rest.starts_with(char::is_uppercase) => format!("Core{rest}"),
+                _ => word.replace("__core_", "_core_").replace("_core__", "_core_"),
+            });
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }

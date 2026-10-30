@@ -214,10 +214,10 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
     let conversions = records::conversions(&declared)?;
-    o.add(Path::new(adapter::DIR).join(&conversions.path), &conversions.text);
+    o.add(Path::new(adapter::DIR).join(&conversions.path), &adapter::rust_names(&conversions.text));
     o.dirs.push(PathBuf::from(adapter::DIR));
     for out in adapter::emit(&declared)? {
-        o.add(Path::new(adapter::DIR).join(&out.path), &out.text);
+        o.add(Path::new(adapter::DIR).join(&out.path), &adapter::rust_names(&out.text));
     }
     let class_stubs = class_stub::emit(&declared)?;
     let models = records::python(&declared)?;
