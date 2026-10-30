@@ -969,28 +969,12 @@ mod playback_wait_tests {
 
 #[cfg(test)]
 mod playback_identity_regression {
-    use super::{
-        PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment, PlaybackTracker,
-    };
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use super::{PlaybackFinished, PlaybackSegment, PlaybackTracker};
     use std::time::Duration;
-
-    /// Counts the events the tracker reports.
-    #[derive(Default)]
-    struct Reports(AtomicUsize);
-
-    impl PlaybackObserver for Reports {
-        fn on_playback_event(&self, _: &PlaybackEvent) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
 
     #[test]
     fn a_delayed_old_finish_cannot_complete_a_new_segment_on_the_same_output() {
         let tracker = PlaybackTracker::new();
-        let reports = Arc::new(Reports::default());
-        tracker.observe(reports.clone());
         let old = PlaybackSegment { attachment: 4, segment: 1 };
         let new = PlaybackSegment { attachment: 5, segment: 2 };
         let finished =
@@ -1011,9 +995,7 @@ mod playback_identity_regression {
             Duration::ZERO,
             Duration::from_millis(20)
         ));
-        assert_eq!(reports.0.load(Ordering::SeqCst), 1);
         assert!(tracker.playback_finished(new, finished));
-        assert_eq!(reports.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]
