@@ -25,7 +25,7 @@ use lk_agents_abi::{
 use lk_agents_net::monotone::Monotone;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
-use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
+use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf_of};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -231,8 +231,7 @@ impl RoomIo {
 
         // Replay participants who joined before the handler was registered.
         for p in self.room.remote_participants()? {
-            let attrs = p.attributes()?;
-            self.consider(p.identity(), p.sid(), p.kind(), publishes_on_behalf_of(&attrs)).await?;
+            self.consider(p.identity(), p.sid(), p.kind(), &p.attributes()?).await?;
         }
 
         {
@@ -280,7 +279,7 @@ impl RoomIo {
         candidate: &ParticipantIdentity,
         sid: &str,
         kind: ParticipantKind,
-        on_behalf_of: Option<&str>,
+        attrs: &BTreeMap<String, String>,
     ) -> Result<()> {
         let agent_identity = self.room.local().identity()?;
         if self.coordinate(|coordinator| {
@@ -288,14 +287,15 @@ impl RoomIo {
                 candidate,
                 sid,
                 kind,
-                on_behalf_of,
+                publishes_on_behalf_of(attrs),
                 &agent_identity,
                 accepted_kinds(&self.config),
             )
         }) {
-            self.emit(RoomIoEvent::ParticipantLinked(ParticipantLinked {
-                identity: candidate.clone(),
-            }))?;
+            self.emit(RoomIoEvent::ParticipantLinked {
+                participant: ParticipantLinked { identity: candidate.clone() },
+                outbound_sip: outbound_sip(kind, attrs),
+            })?;
             self.attach_participant(None).await?;
             self.attach_participant(Some(candidate.clone())).await?;
         }
@@ -336,13 +336,8 @@ impl RoomIo {
             }
             RoomEvent::ParticipantConnected { participant } => {
                 let attrs = participant.attributes()?;
-                self.consider(
-                    participant.identity(),
-                    participant.sid(),
-                    participant.kind(),
-                    publishes_on_behalf_of(&attrs),
-                )
-                .await?;
+                self.consider(participant.identity(), participant.sid(), participant.kind(), &attrs)
+                    .await?;
             }
             RoomEvent::ParticipantDisconnected { participant, reason } => {
                 self.on_participant_disconnected(
@@ -814,9 +809,14 @@ impl room_owner::RoomIo for RoomIo {
             if relink.announce
                 && let Some(identity) = &identity
             {
-                self.emit(RoomIoEvent::ParticipantLinked(ParticipantLinked {
-                    identity: identity.clone(),
-                }))?;
+                let outbound_sip = match &participant {
+                    Some(p) => outbound_sip(p.kind(), &p.attributes()?),
+                    None => false,
+                };
+                self.emit(RoomIoEvent::ParticipantLinked {
+                    participant: ParticipantLinked { identity: identity.clone() },
+                    outbound_sip,
+                })?;
             }
             if relink.detach {
                 self.attach_participant(None).await?;

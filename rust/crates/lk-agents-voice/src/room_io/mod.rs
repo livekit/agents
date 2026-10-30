@@ -102,6 +102,14 @@ pub fn publishes_on_behalf_of(attributes: &BTreeMap<String, String>) -> Option<&
     attributes.get(lk_agents_abi::ATTRIBUTE_PUBLISH_ON_BEHALF).map(String::as_str)
 }
 
+/// A SIP participant no dispatch rule admitted (`sip.ruleID` unset): a call the agent dialed.
+pub fn outbound_sip(
+    kind: lk_agents_abi::voice::rtc::ParticipantKind,
+    attributes: &BTreeMap<String, String>,
+) -> bool {
+    kind == lk_agents_abi::voice::rtc::ParticipantKind::Sip && !attributes.contains_key("sip.ruleID")
+}
+
 /// `_ParticipantInputStream._on_track_available`: not the track already read (reopening would
 /// restart the STT mid-utterance), nor a screenshare on the microphone leg.
 pub fn decide_track(
@@ -183,9 +191,17 @@ impl Driver {
                     self.begin_closing(now, Close { reason, drain: false, error: None }, out);
                 }
             }
-            RoomIoEvent::ParticipantLinked(_) => {
+            RoomIoEvent::ParticipantLinked { outbound_sip, .. } => {
                 out.trace(RoomStep::Link(RoomLinkStep::Linked));
                 out.machine().append(self.session.states.on_link(now, true, closing));
+                // `_on_room_io_participant_linked`: an outbound SIP call has no warmup, unless the
+                // application set `aec_warmup_duration` itself.
+                if *outbound_sip && !self.session.config.aec_warmup_given() {
+                    let patch = crate::agent_activity::options::aec_warmup_layer(None);
+                    let diff = self.session.config.configure(&patch);
+                    let layer = crate::agent_activity::options::ConfigLayer::Session;
+                    self.apply_config(now, layer, diff, out);
+                }
             }
             RoomIoEvent::KeyPressed(digit) => {
                 let key = crate::workflows::dtmf::DtmfEvent::parse(digit);

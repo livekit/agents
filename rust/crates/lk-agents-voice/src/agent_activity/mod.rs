@@ -257,6 +257,12 @@ impl DriverConfig {
         self.effective = self.stack.resolve(&self.legs);
     }
 
+    /// Whether the application set `aec_warmup_duration` (on the session or the agent).
+    pub fn aec_warmup_given(&self) -> bool {
+        self.stack.session.timers.aec_warmup.is_given()
+            || self.stack.agent.as_ref().is_some_and(|a| a.timers.aec_warmup.is_given())
+    }
+
     /// Merged into the session layer, re-resolved.
     pub fn configure(&mut self, update: &AgentSessionOptions) -> ConfigDiff {
         self.stack.session.merge(update);

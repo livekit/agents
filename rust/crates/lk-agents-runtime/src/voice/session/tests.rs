@@ -685,6 +685,29 @@ async fn options_view_changes_only_after_core_acceptance() {
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
 }
 
+// Catches: an outbound SIP call kept the default AEC warmup, muting the callee's first words
+// (`_on_room_io_participant_linked`); an application's own `aec_warmup_duration` is kept.
+#[tokio::test(start_paused = true)]
+async fn an_outbound_sip_call_has_no_aec_warmup_unless_the_application_set_one() {
+    use lk_agents_abi::voice::room_io::ParticipantLinked;
+    use lk_agents_abi::voice::room_owner::RoomIoEvent;
+    async fn linked(explicit: Maybe<Option<f64>>) -> Option<f64> {
+        let kwargs = SessionKwargs { aec_warmup_duration: explicit, ..option_kwargs() };
+        let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(kwargs);
+        let api = running(assembled(no_room(), None, Some(options))).await;
+        let participant = ParticipantLinked { identity: "callee".into() };
+        api.api().unwrap().send(RoomIoEvent::ParticipantLinked { participant, outbound_sip: true }).unwrap();
+        let (call, answer) = api.call(Answer::idle).unwrap();
+        let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
+        api.send_awaited(Origin::Host, wait, call).unwrap();
+        assert!(answer.await.unwrap().is_ok());
+        api.resolved_options().unwrap().aec_warmup_duration
+    }
+    use lk_agents_abi::voice::session_options::SessionKwargs;
+    assert_eq!(linked(Maybe::NotGiven).await, None);
+    assert_eq!(linked(Maybe::Given(Some(2.0))).await, Some(2.0));
+}
+
 pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
     use lk_agents_abi::voice::session_options::{HostValue, SessionKwargs, TurnHandlingKwargs};
     SessionKwargs {

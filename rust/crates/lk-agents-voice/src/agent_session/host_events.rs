@@ -115,7 +115,7 @@ impl HostEvent {
         Some(match self {
             HostEvent::Session(ev) => ev.wire(anchor, speeches),
             HostEvent::Room(ev) => match ev {
-                crate::room_io::RoomIoEvent::ParticipantLinked(e) => {
+                crate::room_io::RoomIoEvent::ParticipantLinked { participant: e, .. } => {
                     HostWire::ParticipantLinked(e.clone())
                 }
                 crate::room_io::RoomIoEvent::ParticipantUnlinked(e) => {
