@@ -101,6 +101,23 @@ def test_stt_model_property():
     assert stt.model == "vachana-stt-v3"
 
 
+def test_stt_default_model_is_unset():
+    """STT sends no model by default, so the API picks its default."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.model is None
+
+
+def test_stt_custom_model():
+    """STT accepts a model id and reports it as its model."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key", model="prisma-v3.0")
+    assert stt._opts.model == "prisma-v3.0"
+    assert stt.model == "prisma-v3.0"
+
+
 def test_stt_provider_property():
     """STT provider property returns 'Gnani'."""
     from livekit.plugins.gnani import STT
