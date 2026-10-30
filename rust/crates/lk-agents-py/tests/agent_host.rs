@@ -6,33 +6,30 @@ use lk_agents_abi::agent::{Invocation, OutputCandidate, ValidatedOutput};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-const HOST: &str = r#"
-import asyncio, contextvars, importlib.util, sys, threading, types
+/// The generated models, as the package holds them (they import nothing at runtime).
+const MODELS: &str = r#"
+import importlib.util, sys, types
 
 for parent in ("livekit", "livekit.agents", "livekit.agents.voice", "livekit.agents._generated"):
     sys.modules.setdefault(parent, types.ModuleType(parent))
-# The generated models, as the package holds them (they import nothing at runtime); loaded
-# once per process, as the classes the conversions cache are.
-if "livekit.agents._generated.agent_run" not in sys.modules:
-    spec = importlib.util.spec_from_file_location("livekit.agents._generated.agent_run", MODELS)
+reports = MODELS.rsplit("/", 1)[0] + "/tool_report.py"
+for name, path in (("agent_run", MODELS), ("tool_report", reports)):
+    spec = importlib.util.spec_from_file_location("livekit.agents._generated." + name, path)
     loaded = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = loaded
     spec.loader.exec_module(loaded)
-    host_module = types.ModuleType("livekit.agents.voice.agent_host")
-    class ToolArgumentError(Exception):
-        pass
-    host_module.ToolArgumentError = ToolArgumentError
-    sys.modules["livekit.agents.voice.agent_host"] = host_module
+host_module = types.ModuleType("livekit.agents.voice.agent_host")
+class ToolArgumentError(Exception):
+    pass
+host_module.ToolArgumentError = ToolArgumentError
+sys.modules["livekit.agents.voice.agent_host"] = host_module
+"#;
+
+const HOST: &str = r#"
+import asyncio, contextvars, sys, threading
+
 models = sys.modules["livekit.agents._generated.agent_run"]
 ToolArgumentError = sys.modules["livekit.agents.voice.agent_host"].ToolArgumentError
-
-if "livekit.agents._generated.tool_report" not in sys.modules:
-    spec = importlib.util.spec_from_file_location(
-        "livekit.agents._generated.tool_report", MODELS.rsplit("/", 1)[0] + "/tool_report.py"
-    )
-    loaded = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = loaded
-    spec.loader.exec_module(loaded)
 reports = sys.modules["livekit.agents._generated.tool_report"]
 
 var = contextvars.ContextVar("var", default="unset")
@@ -84,8 +81,30 @@ class Host:
 host = Host()
 "#;
 
-/// The tests share one interpreter and the host modules they install: one at a time.
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Installs `MODELS` once per process, as the conversions cache the classes they load; outside
+/// the interpreter lock, so a test waiting for the install never holds it.
+fn install_models() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
+            );
+            globals.set_item("MODELS", path).unwrap();
+            py.run(&std::ffi::CString::new(MODELS).unwrap(), Some(&globals), None).unwrap();
+        });
+    });
+}
+
+/// A fresh `HOST` in its own globals.
+fn host_globals(py: Python<'_>) -> Bound<'_, PyDict> {
+    let globals = PyDict::new(py);
+    py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
+    globals
+}
 
 fn invocation(context: lk_agents_abi::HostRef) -> Invocation {
     Invocation {
@@ -123,16 +142,9 @@ fn tool_call(invocation: &Invocation) -> Invocation {
 // by anything but its declaration, or a notification that never reaches the host.
 #[test]
 fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    Python::initialize();
+    install_models();
     let (globals, proxy, inv) = Python::attach(|py| {
-        let globals = PyDict::new(py);
-        let models = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
-        );
-        globals.set_item("MODELS", models).unwrap();
-        py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
+        let globals = host_globals(py);
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
         let context = lk_agents_abi::python::intern_host(pair.unbind());
         let host = globals.get_item("host").unwrap().unwrap();
@@ -209,16 +221,9 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
 // body with no call scope), or a refusal that enters the host anyway.
 #[test]
 fn a_tool_callback_without_a_tool_call_scope_is_refused_before_the_host() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    Python::initialize();
+    install_models();
     let (globals, proxy, inv) = Python::attach(|py| {
-        let globals = PyDict::new(py);
-        let models = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
-        );
-        globals.set_item("MODELS", models).unwrap();
-        py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
+        let globals = host_globals(py);
         py.run(c"async def entered(invocation, arguments):\n    host.seen['entered'] = True\nhost.prepare_tool = entered\n", Some(&globals), None).unwrap();
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
         let context = lk_agents_abi::python::intern_host(pair.unbind());
@@ -243,16 +248,9 @@ fn a_tool_callback_without_a_tool_call_scope_is_refused_before_the_host() {
 #[test]
 fn records_cross_as_their_models_with_declared_presence() {
     use lk_agents_abi::agent::Retries;
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    Python::initialize();
+    install_models();
     Python::attach(|py| {
-        let globals = PyDict::new(py);
-        let models = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
-        );
-        globals.set_item("MODELS", models).unwrap();
-        py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
+        let globals = host_globals(py);
         let eval = |code: &str| {
             py.eval(&std::ffi::CString::new(code).unwrap(), Some(&globals), None).unwrap()
         };
