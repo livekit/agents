@@ -33,34 +33,24 @@ pub enum WorkerError {
     Host(#[from] HostError),
 }
 
-/// The executor of one job process (`ipc.JobExecutor`): it spawns the process, owns its
-/// start-method bookkeeping and receives the supervisor's diagnostics.
+/// The executor of one job runner (`ipc.JobExecutor`): it starts the job process or thread,
+/// owns the start method's bookkeeping and receives the supervisor's diagnostics.
 #[crate::host(proxy(host = "livekit.agents.ipc.JobExecutor"))]
 pub trait JobExecutor: Any + Send + Sync {
-    /// Spawn the process on its socket; it reports its receipt through `_core_launched_process`.
+    /// Start the runner on the job's end of the channel. A process reports its receipt through
+    /// `_core_launched_process`, a thread its return through `_core_thread_exited`.
     #[host(await, name = "_core_launch")]
     fn launch<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
+        endpoint: i64,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_launched")]
-    fn launched<'a>(
-        &'a self,
-        #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_launch_failed")]
-    fn launch_failed<'a>(
-        &'a self,
-        #[host(context)] context: &'a CallContext,
-        cause: String,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    /// The process exited and was reaped.
+    /// The runner ended and its supervision is over.
     #[host(await, name = "_core_completed")]
     fn completed<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
         completion: ProcessCompletion,
-        pid: u32,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// One supervision diagnostic on the host's logger, with the failure that caused it.
     #[host(call, name = "_core_log")]
@@ -114,11 +104,12 @@ pub trait ProcessSupervisor: Send + Sync + Sized + 'static {
 
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
+    /// `thread`: the runner is a thread of this process, else a process of the host's start
+    /// method.
     fn new(
         env: &Self::Env,
-        fd: i64,
         host: Arc<dyn JobExecutor>,
-        #[host(kw)] pid: u32,
+        #[host(kw)] thread: bool,
         initialize_timeout: f64,
         close_timeout: f64,
         memory_warn_mb: f64,
@@ -126,7 +117,6 @@ pub trait ProcessSupervisor: Send + Sync + Sized + 'static {
         ping_interval: f64,
         ping_timeout: f64,
         high_ping_threshold: f64,
-        #[host(default = true)] killable: bool,
         #[host(context)] context: CallContext,
     ) -> Result<Self, WorkerError>;
     /// The seconds the process took to be ready.
@@ -147,8 +137,11 @@ pub trait ProcessSupervisor: Send + Sync + Sized + 'static {
         method: String,
         owned: Vec<i64>,
     ) -> Result<(), WorkerError>;
-    /// Launch, supervise, observe the exit and reap; whether the process ran (an OS child was
-    /// reaped). Cancelling the wait leaves the process owned.
+    /// A job thread returned, reported from that thread.
+    #[host(call)]
+    fn _core_thread_exited(&self) -> Result<(), WorkerError>;
+    /// Launch, supervise and wait for the runner's end; whether one ran (a process reaped, a
+    /// thread returned). Cancelling the wait leaves the runner owned.
     #[host(await)]
     async fn run(&self) -> bool;
     #[host(await)]

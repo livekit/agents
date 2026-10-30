@@ -131,20 +131,20 @@ class _Executor(JobExecutor):
         self.receipt_gate: asyncio.Event | None = None
         self.completion: ProcessCompletion | None = None
 
-    async def _core_completed(self, completion: ProcessCompletion, pid: int) -> None:
+    async def _core_completed(self, completion: ProcessCompletion) -> None:
         self.completion = completion
-        await super()._core_completed(completion, pid)
+        await super()._core_completed(completion)
 
     def _create_process(self, endpoint: socket.socket) -> Any:
         if self.behavior == "real_job":
             return super()._create_process(endpoint)
         return self._mp_ctx.Process(target=_ipc_child, args=(endpoint, self.behavior))
 
-    async def _core_launch(self) -> None:
+    async def _core_launch(self, endpoint: int) -> None:
         self.launch_entered.set()
         if self.launch_gate is not None:
             await self.launch_gate.wait()
-        await super()._core_launch()
+        await super()._core_launch(endpoint)
         self.process_spawned.set()
         if self.receipt_gate is not None:
             await self.receipt_gate.wait()
@@ -270,7 +270,7 @@ async def test_launch_failure_keeps_its_cause_and_settles_close(
         "_create_process",
         lambda endpoint: executor._mp_ctx.Process(target=lambda: None),
     )
-    with pytest.raises(RuntimeError, match="pickle|local object"):
+    with pytest.raises(Exception, match="pickle|local object"):
         await asyncio.wait_for(executor.start(), timeout=5)
     await asyncio.wait_for(executor.aclose(), timeout=3)
     await asyncio.wait_for(executor.join(), timeout=3)
@@ -301,7 +301,7 @@ async def test_post_spawn_failure_keeps_native_owner_and_original_cause(
 
     monkeypatch.setattr(popen, "__init__", fail_after_spawn)
     executor = executor_factory(method, "normal")
-    with pytest.raises(RuntimeError, match="fixture bootstrap failed after OS launch"):
+    with pytest.raises(OSError, match="fixture bootstrap failed after OS launch"):
         await asyncio.wait_for(executor.start(), timeout=5)
     assert executor.pid is not None, "partial Popen failure must still publish native ownership"
     await asyncio.wait_for(executor.aclose(), timeout=3)

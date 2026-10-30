@@ -1648,12 +1648,23 @@ pool policy, in three layers:
   bound free text. `close()` stops sending, flushes and finishes the stream, then
   drains the peer to its end, so closing with unread data never resets the peer;
   a side whose peer finished finishes too.
-- `ipc/process`: the only code touching the OS process: exit observation,
-  termination, reaping receipts, memory samples.
-- Supervisor, pool and dispatch: policy over a channel and a process, never
-  sockets or framing.
+- `ipc/process`: the process executor, the only code touching the OS process:
+  the start method's spawn and reaping receipts, exit observation, termination,
+  memory samples.
+- Supervisor, pool and dispatch: policy over a channel and a runner, never
+  sockets, framing or the OS.
 
-`_core.ipc_pair()` creates the two endpoints; the host transfers the job's.
+What a job runs in is a `JobExecutor`: `launch()` creates the channel, has the
+host start the runner on the job's end and returns the `Runner` with the
+worker's end. A `Runner` has three operations: `finished()` resolves with its
+`Exit` (code, and whether it was killed) once nothing of it is left, `stop()`
+ends it where it can be forced and `memory_mb()` samples its own footprint.
+The process executor's runner is killed by `stop()` and finishes once reaped;
+a launch that fails after the OS created the child still returns the runner,
+which kills it. The thread executor runs the job on a thread of the worker: `stop()` cannot force it, it has no footprint of its own, and
+it finishes when the thread reports its return. Supervision ends a runner the
+same way whichever it is: it asks it to shut down over the channel, then calls
+`stop()`, and waits for `finished()` within its deadlines.
 Each child has one Rust-owned control connection. Malformed/truncated input
 and unexpected EOF settle pending operations as failures and enter supervision
 cleanup; they cannot appear as successful exit. The peer closing after it said

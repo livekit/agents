@@ -38,21 +38,29 @@ async def _run_job() -> None:
         def _core_log(
             self, level: int, message: str, extra: dict[str, Any], exc: Any = None
         ) -> None:
-            if message == "job runner initialized":
+            if message == "job thread initialized":
                 entered.set()
                 if not release.wait(timeout=10):
                     raise TimeoutError("test did not release the diagnostic writer")
             records.append((level, message, extra))
 
+        def __init__(self) -> None:
+            self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+
+        async def _core_launch(self, endpoint: int) -> None:
+            self.endpoint.set_result(endpoint)
+
+        async def _core_completed(self, completion: Any) -> None:
+            pass
+
     async def entrypoint(ctx: JobContext) -> None:
         ctx.shutdown("done ✓")
 
     runner = _JobProc(entrypoint, None, session_end_timeout=1, executor_type=JobExecutorType.THREAD)
-    parent_fd, child_fd = _core.ipc_pair()
+    parent = Parent()
     supervisor = _core.ProcSupervisor(
-        parent_fd,
-        Parent(),
-        pid=0,
+        parent,
+        thread=True,
         initialize_timeout=3,
         close_timeout=3,
         memory_warn_mb=0,
@@ -60,8 +68,8 @@ async def _run_job() -> None:
         ping_interval=0,
         ping_timeout=0,
         high_ping_threshold=1,
-        killable=False,
     )
+    child_fd = await parent.endpoint
     initializing = asyncio.ensure_future(
         supervisor.initialize(asyncio_debug=False, http_proxy=None)
     )
@@ -100,15 +108,16 @@ async def _run_job() -> None:
         assert not release.is_set()
         release.set()
         async with asyncio.timeout(3):
-            while not any(message == "job exiting" for _, message, _ in records):
+            while not any(message == "job thread exiting" for _, message, _ in records):
                 await asyncio.sleep(0.01)
-        assert (logging.DEBUG, "job exiting", {"reason": "done ✓"}) in records, records
+        assert (logging.INFO, "job thread exiting", {"reason": "done ✓"}) in records, records
     finally:
         release.set()
         await client.aclose()
         serving.cancel()
         await asyncio.gather(serving, return_exceptions=True)
         await runner.aclose()
+        supervisor._core_thread_exited()
 
 
 if __name__ == "__main__":

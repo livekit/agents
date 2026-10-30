@@ -1,10 +1,25 @@
-//! Native process ownership and multiprocessing's start-method reaping receipts.
+//! The process executor: the only code touching the OS process (exit observation, termination,
+//! multiprocessing's start-method reaping receipts, memory samples), behind [`JobExecutor`].
 //!
-//! This is an OS adapter, not worker policy. All polls are nonblocking. The supervisor decides
-//! deadlines; an exit observation never substitutes for the start method's reaping receipt.
+//! All polls are nonblocking. An exit observation never substitutes for the start method's
+//! reaping receipt.
 
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
+
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::worker::ipc_host;
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::lock::Mutex;
+use lk_agents_net::task::TokioSpawner;
+use tokio::sync::{Notify, watch};
+
+use super::Level;
+use super::channel::{self, Channel};
+use super::executor::{Connection, Exit, JobExecutor, Runner};
+use super::owner::queue_diagnostic;
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -15,14 +30,12 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 pub enum StartMethod {
     Spawn,
     ForkServer,
-    Thread,
 }
 
 impl StartMethod {
     pub fn parse(method: &str) -> io::Result<Self> {
         match method {
             "spawn" => Ok(Self::Spawn),
-            "thread" if cfg!(unix) => Ok(Self::Thread),
             "forkserver" if cfg!(target_os = "linux") => Ok(Self::ForkServer),
             _ => {
                 Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported process start method"))
@@ -47,10 +60,7 @@ pub struct ProcessControl {
 
 fn signal_pid(pid: u32) -> io::Result<i32> {
     i32::try_from(pid).ok().filter(|pid| *pid > 0).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a thread or invalid PID cannot receive process signals",
-        )
+        io::Error::new(io::ErrorKind::InvalidInput, "an invalid PID cannot receive process signals")
     })
 }
 
@@ -61,19 +71,11 @@ impl ProcessControl {
         let _ = method;
         #[cfg(target_os = "linux")]
         let (pidfd, already_exited, pidfd_error) = {
-            let fd = if method == StartMethod::Thread {
-                -1
-            } else {
-                // SAFETY: pid is a validated process identity, flags is zero.
-                unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0_u32) }
-            };
+            // SAFETY: pid is a validated process identity, flags is zero.
+            let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0_u32) };
             if fd < 0 {
                 let error = io::Error::last_os_error();
-                (
-                    None,
-                    method != StartMethod::Thread && error.raw_os_error() == Some(libc::ESRCH),
-                    Some(error.to_string()),
-                )
+                (None, error.raw_os_error() == Some(libc::ESRCH), Some(error.to_string()))
             } else {
                 // SAFETY: pidfd_open returned a newly owned descriptor.
                 (Some(unsafe { OwnedFd::from_raw_fd(fd as i32) }), false, None)
@@ -175,8 +177,7 @@ impl ProcessResource {
         method: StartMethod,
         bootstrap_handles: Vec<i64>,
     ) -> io::Result<Self> {
-        if (pid == 0 && !matches!(method, StartMethod::Thread | StartMethod::ForkServer))
-            || (cfg!(unix) && pid > i32::MAX as u32)
+        if (pid == 0 && method != StartMethod::ForkServer) || (cfg!(unix) && pid > i32::MAX as u32)
         {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid process PID"));
         }
@@ -322,23 +323,6 @@ impl ProcessResource {
         if control.already_exited {
             return Ok(true);
         }
-        #[cfg(unix)]
-        if self.method == StartMethod::Thread {
-            let mut poll = libc::pollfd {
-                fd: self.sentinel.as_raw_fd(),
-                events: libc::POLLIN | libc::POLLHUP,
-                revents: 0,
-            };
-            // SAFETY: one valid descriptor, zero timeout never waits.
-            let rc = unsafe { libc::poll(&mut poll, 1, 0) };
-            if rc < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if rc > 0 {
-                self.exitcode = Some(0);
-            }
-            return Ok(rc > 0);
-        }
         #[cfg(target_os = "linux")]
         if self.method == StartMethod::ForkServer {
             let Some(fd) = control.pidfd.as_ref() else {
@@ -413,9 +397,6 @@ impl ProcessResource {
 
     /// The OS parent's wait receipt, or the forkserver's separate signed exit-status receipt.
     pub fn poll_reaped(&mut self) -> io::Result<Option<i64>> {
-        if self.method == StartMethod::Thread {
-            return Ok(self.exitcode);
-        }
         if self.control().is_none() {
             return Ok(None);
         }
@@ -460,7 +441,7 @@ impl ProcessResource {
     }
 }
 
-/// Only installed in an isolated child process, never in the thread executor.
+/// Only installed in an isolated child process, never in a job thread.
 pub fn terminate_current_process() {
     #[cfg(unix)]
     // SAFETY: _exit deliberately ends this isolated child without Python/GIL participation.
@@ -615,15 +596,16 @@ mod tests {
     }
 }
 
-/// Called only on the supervisor's globally bounded sampling workers.
-pub fn sample_memory(pid: u32) -> io::Result<(f64, String)> {
+/// The process's footprint in MB: its PSS where Linux reports it, else its RSS. Blocking: called
+/// only on the supervisor's bounded sampling workers.
+fn sample_memory(pid: u32) -> io::Result<f64> {
     #[cfg(target_os = "linux")]
     if let Ok(rollup) = std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
         && let Some(pss_kb) = rollup.lines().find_map(|line| {
             line.strip_prefix("Pss:")?.split_whitespace().next()?.parse::<f64>().ok()
         })
     {
-        return Ok((pss_kb / 1024.0, "pss".into()));
+        return Ok(pss_kb / 1024.0);
     }
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let pid = Pid::from_u32(pid);
@@ -636,14 +618,204 @@ pub fn sample_memory(pid: u32) -> io::Result<(f64, String)> {
     let process = system
         .process(pid)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "process no longer exists"))?;
-    Ok((process.memory() as f64 / (1024.0 * 1024.0), "rss".into()))
+    Ok(process.memory() as f64 / (1024.0 * 1024.0))
 }
 
-pub enum ProcessLaunch {
-    Pending,
-    Started(ProcessResource),
-    Claimed,
-    Failed(String),
+/// A job process of the host's start method: the host spawns it on the job's end of the channel
+/// and reports its receipt through [`ProcessExecutor::launched`].
+pub struct ProcessExecutor {
+    host: Arc<dyn ipc_host::JobExecutor>,
+    context: CallContext,
+    receipt: Mutex<Option<ProcessResource>>,
+    reported: Notify,
+}
+
+impl ProcessExecutor {
+    pub fn new(host: Arc<dyn ipc_host::JobExecutor>, context: CallContext) -> Self {
+        Self { host, context, receipt: Mutex::new(None), reported: Notify::new() }
+    }
+
+    /// The launch's receipt, reported on the launch worker right after the OS created the child.
+    pub fn launched(
+        &self,
+        pid: u32,
+        sentinel: i64,
+        method: &str,
+        owned: Vec<i64>,
+    ) -> io::Result<()> {
+        let resource = ProcessResource::new(pid, sentinel, StartMethod::parse(method)?, owned)?;
+        let mut receipt = self.receipt.lock();
+        if receipt.is_some() {
+            return Err(io::Error::other("launch already reported"));
+        }
+        *receipt = Some(resource);
+        self.reported.notify_one();
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl JobExecutor for ProcessExecutor {
+    /// Returns once a process exists to own: a host launch failing after its receipt kills it.
+    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
+        let (parent, child) = channel::pair().map_err(|error| error.to_string())?;
+        let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;
+        let (host, context) = (self.host.clone(), self.context.clone());
+        let mut launching =
+            TokioSpawner::current().spawn(async move { host.launch(&context, child).await });
+        let launch = tokio::select! {
+            biased;
+            () = self.reported.notified() => None,
+            launched = &mut launching => Some(launched),
+        };
+        let Some(resource) = self.receipt.lock().take() else {
+            return Err(match launch {
+                Some(Ok(Ok(()))) => "the launch reported no process".into(),
+                Some(Ok(Err(error))) => error.to_string(),
+                Some(Err(error)) => error.to_string(),
+                None => unreachable!("a receipt was reported"),
+            });
+        };
+        let process = Arc::new(Mutex::new(Tracked {
+            resource,
+            stopping: false,
+            killed: false,
+            exited: false,
+            failed: false,
+        }));
+        let (exit, finished) = watch::channel(None);
+        let host = self.host.clone();
+        let launching = launch.is_none().then_some(launching);
+        let watching = TokioSpawner::current().spawn(watch(process.clone(), launching, exit, host));
+        let host = self.host.clone();
+        Ok((Box::new(JobProcess { host, process, finished, _watching: watching }), connection))
+    }
+}
+
+/// The launched process, its termination request and what was observed of it.
+struct Tracked {
+    resource: ProcessResource,
+    stopping: bool,
+    killed: bool,
+    exited: bool,
+    /// An observation or signal failure was reported (once).
+    failed: bool,
+}
+
+impl Tracked {
+    fn poll(&mut self, host: &Arc<dyn ipc_host::JobExecutor>) -> Option<Exit> {
+        self.observe().unwrap_or_else(|error| {
+            self.report(host, format!("native process observation failed: {error}"));
+            None
+        })
+    }
+
+    /// The first failure only: the watcher keeps retrying.
+    fn report(&mut self, host: &Arc<dyn ipc_host::JobExecutor>, message: String) {
+        if !std::mem::replace(&mut self.failed, true) {
+            queue_diagnostic(host.clone(), Level::Error, &message, Vec::new(), None);
+        }
+    }
+
+    fn observe(&mut self) -> io::Result<Option<Exit>> {
+        if !self.resource.poll_identity()? {
+            return Ok(None);
+        }
+        if self.stopping {
+            self.kill()?;
+        }
+        if !self.exited {
+            self.exited = self.resource.poll_exit()?;
+            if !self.exited {
+                return Ok(None);
+            }
+        }
+        let killed = self.killed;
+        Ok(self.resource.poll_reaped()?.map(|code| Exit { code, killed }))
+    }
+
+    /// Kills it once its identity is known and until a signal was delivered.
+    fn kill(&mut self) -> io::Result<()> {
+        if self.killed || self.exited {
+            return Ok(());
+        }
+        let Some(control) = self.resource.control() else { return Ok(()) };
+        control.kill()?;
+        self.killed = true;
+        Ok(())
+    }
+}
+
+/// Polls the process until its reaping receipt, finishing the host's launch on the way.
+async fn watch(
+    process: Arc<Mutex<Tracked>>,
+    mut launching: Option<OwnedTask<Result<(), HostError>>>,
+    exit: watch::Sender<Option<Exit>>,
+    host: Arc<dyn ipc_host::JobExecutor>,
+) {
+    loop {
+        if let Some(launch) = launching.as_mut().filter(|launch| launch.is_finished()) {
+            let cause = match launch.await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error.to_string()),
+                Err(error) => Some(error.to_string()),
+            };
+            launching = None;
+            if let Some(cause) = cause {
+                let message = format!("process launch failed: {cause}");
+                queue_diagnostic(host.clone(), Level::Error, &message, Vec::new(), None);
+                process.lock().stopping = true;
+            }
+        }
+        if let Some(code) = process.lock().poll(&host) {
+            exit.send_replace(Some(code));
+            return;
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+const POLL: Duration = Duration::from_millis(10);
+
+struct JobProcess {
+    host: Arc<dyn ipc_host::JobExecutor>,
+    process: Arc<Mutex<Tracked>>,
+    finished: watch::Receiver<Option<Exit>>,
+    _watching: OwnedTask,
+}
+
+#[async_trait::async_trait]
+impl Runner for JobProcess {
+    async fn finished(&self) -> Exit {
+        let exit =
+            self.finished.clone().wait_for(Option::is_some).await.ok().and_then(|exit| *exit);
+        match exit {
+            Some(exit) => exit,
+            // the watcher was dropped with the runner: it never finishes
+            None => std::future::pending().await,
+        }
+    }
+
+    fn stop(&self) {
+        let mut process = self.process.lock();
+        process.stopping = true;
+        if let Err(error) = process.kill() {
+            process.report(&self.host, format!("process termination failed: {error}"));
+        }
+    }
+
+    fn memory_mb(&self) -> Option<f64> {
+        let pid = self.process.lock().resource.control()?.pid;
+        let error = match sample_memory(pid) {
+            Ok(mb) => return Some(mb),
+            Err(error) => error,
+        };
+        if !self.process.lock().exited {
+            let message = format!("failed to get memory info for process: {error}");
+            queue_diagnostic(self.host.clone(), Level::Warning, &message, Vec::new(), None);
+        }
+        None
+    }
 }
 
 /// `cli.rs` still reaches the pair here; it is owner-owned (`channel::pair` is the home).

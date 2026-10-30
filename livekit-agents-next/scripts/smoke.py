@@ -677,21 +677,21 @@ async def job() -> None:
         def _core_log(self, level: int, msg: str, extra: dict[str, Any], exc: Any = None) -> None:
             self.logs.append((msg, extra))
 
-        def _core_is_alive(self) -> bool:
-            return True
+        def __init__(self) -> None:
+            self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
 
-        def _core_kill(self) -> None:
+        async def _core_launch(self, endpoint: int) -> None:
+            self.endpoint.set_result(endpoint)
+
+        async def _core_completed(self, completion: Any) -> None:
             pass
 
-        def _sample_memory_mb(self) -> tuple[float, str]:
-            return 0.0, "rss"
-
-    # the worker's side is the core's supervisor of a job thread: no pings, nothing killed
-    pch, cch = _core.ipc_pair()
+    # the worker's side is the core's supervisor of a job thread: no pings, nothing killed; the
+    # "thread" is this loop serving the job's end
+    parent = Parent()
     sup = _core.ProcSupervisor(
-        pch,
-        Parent(),
-        pid=0,
+        parent,
+        thread=True,
         initialize_timeout=30,
         close_timeout=30,
         memory_warn_mb=0,
@@ -699,8 +699,8 @@ async def job() -> None:
         ping_interval=0,
         ping_timeout=0,
         high_ping_threshold=10,
-        killable=False,
     )
+    cch = await parent.endpoint
     initialized = asyncio.ensure_future(sup.initialize(asyncio_debug=False, http_proxy=None))
     client = await asyncio.to_thread(_core.IpcClient, cch, runner.initialize)
     await initialized
@@ -734,6 +734,8 @@ async def job() -> None:
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 30)
     await client.aclose()
+    sup._core_thread_exited()
+    assert await sup.run()
     print(f"job {seen} told its parent {[m for m, _ in Parent.logs]}")
     # the participant's entrypoint runs beside the entrypoint, in no set order with it
     assert sorted(seen) == [
@@ -743,7 +745,7 @@ async def job() -> None:
         "shutdown callback, no reason",
         "waited for mock_user",
     ], seen
-    assert ("job exiting", {"reason": "done"}) in Parent.logs, Parent.logs
+    assert ("job thread exiting", {"reason": "done"}) in Parent.logs, Parent.logs
     events, attributes = _core.job_timeline(1.0, 2.0, 0.0, 4.0, 5.0, 3_000_000_000_000_000_000)
     assert [e[0] for e in events][-1] == "job_started_on_server" and len(events) == 5, events
     assert dict(attributes) == {

@@ -127,10 +127,9 @@ class ExitSignals:
 class ProcSupervisor:
     def __new__(
         cls,
-        fd: int,
         host: JobExecutor,
         *,
-        pid: int,
+        thread: bool,
         initialize_timeout: float,
         close_timeout: float,
         memory_warn_mb: float,
@@ -138,8 +137,10 @@ class ProcSupervisor:
         ping_interval: float,
         ping_timeout: float,
         high_ping_threshold: float,
-        killable: bool = True,
-    ) -> Self: ...
+    ) -> Self:
+        """`thread`: the runner is a thread of this process, else a process of the host's start
+        method.
+        """
     async def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> float:
         """The seconds the process took to be ready."""
     @property
@@ -152,9 +153,11 @@ class ProcSupervisor:
         owned: Sequence[int],
     ) -> None:
         """The launch's receipt, reported on the launch worker right after the OS created the child."""
+    def _core_thread_exited(self) -> None:
+        """A job thread returned, reported from that thread."""
     async def run(self) -> bool:
-        """Launch, supervise, observe the exit and reap; whether the process ran (an OS child was
-        reaped). Cancelling the wait leaves the process owned.
+        """Launch, supervise and wait for the runner's end; whether one ran (a process reaped, a
+        thread returned). Cancelling the wait leaves the runner owned.
         """
     async def _core_wait_exit(self) -> bool: ...
     async def _core_join(self) -> bool: ...

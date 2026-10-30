@@ -48,24 +48,13 @@ impl Host {
 struct Numbered(usize);
 
 impl JobExecutor for Numbered {
-    fn launch<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn launched<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn launch_failed<'a>(
-        &'a self,
-        _: &'a CallContext,
-        _: String,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
+    fn launch<'a>(&'a self, _: &'a CallContext, _: i64) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
     fn completed<'a>(
         &'a self,
         _: &'a CallContext,
         _: ProcessCompletion,
-        _: u32,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }

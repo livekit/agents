@@ -50,7 +50,8 @@ pub fn extra_fields(extra: Extra) -> serde_json::Map<String, serde_json::Value> 
 
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
-    pub pid: u32,
+    /// What the logs call the runner: "process" or "job thread".
+    pub runner: &'static str,
     pub initialize_timeout: f64,
     pub close_timeout: f64,
     pub memory_warn_mb: f64,
@@ -58,16 +59,6 @@ pub struct SupervisorOptions {
     pub ping_interval: f64,
     pub ping_timeout: f64,
     pub high_ping_threshold: f64,
-    /// A process can be killed; a job thread cannot: its late initialization, ack or exit is
-    /// logged and waited for instead, and `kill` asks it to shut down.
-    pub killable: bool,
-}
-
-impl SupervisorOptions {
-    /// What the logs call the supervised runner.
-    pub(super) fn runner(&self) -> &'static str {
-        if self.killable { "process" } else { "job runner" }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -162,21 +153,6 @@ pub use lk_agents_abi::secs;
 /// `round(x, digits)`: Python rounds the exact binary value half to even, as formatting does.
 pub(super) fn round(x: f64, digits: usize) -> f64 {
     format!("{x:.digits$}").parse().unwrap_or(x)
-}
-
-/// A native termination request failed; exit/reaping ownership remains unchanged.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SignalFailure {
-    pub pid: u32,
-    pub cause: String,
-}
-
-/// Cleanup missed its deadline; ownership stays with the driver until a reaping receipt.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CleanupObservation {
-    pub pid: u32,
-    pub exited: bool,
-    pub reaped: bool,
 }
 
 /// Where a graceful close is.

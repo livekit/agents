@@ -221,7 +221,7 @@ def test_hung_job_process_is_killed_after_ping_timeout(worker) -> None:
     w = worker("hang", jobs=2, it_ping_timeout=3.0)
     hung = json.loads(w.marker("room-0.started"))
     assert _gone(hung["pid"], 20), "a job blocking its event loop was never killed"
-    assert w.logged("process is unresponsive, killing process"), w.tail()
+    assert w.logged("process is unresponsive, stopping it"), w.tail()
     w.marker("room-1.shutdown")
     assert w.wait() == 0, w.tail()
 
@@ -232,7 +232,7 @@ def test_job_process_over_memory_limit_is_killed(worker) -> None:
     w = worker("memory", jobs=2, job_memory_limit_mb=300)
     leaking = json.loads(w.marker("room-0.started"))
     assert _gone(leaking["pid"], 30), "a job above job_memory_limit_mb was never killed"
-    (line,) = w.logged("process exceeded memory limit, killing it")
+    (line,) = w.logged("process exceeded memory limit, stopping it")
     assert line["memory_usage_mb"] > 300, line
     w.marker("room-1.shutdown")
     assert w.wait() == 0, w.tail()

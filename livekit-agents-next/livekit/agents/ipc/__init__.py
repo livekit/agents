@@ -69,26 +69,17 @@ def _mask_ctrl_c() -> Generator[None, None, None]:
 
 
 class _JobThread:
-    """A job thread as the supervision drives a process: started, joined, never killed."""
+    """A job thread: it tells the core when it returned, it is never killed."""
 
-    pid = None
-    exitcode = 0
-
-    def __init__(self, args: child.JobArgs) -> None:
-        self._sentinel, done = socket.socketpair()
-
+    def __init__(self, args: child.JobArgs, exited: Callable[[], None]) -> None:
         def run() -> None:
             try:
                 child.thread_main(args)
             finally:
-                done.close()
+                exited()
 
         self._thread = threading.Thread(target=run, name="job_thread_runner")
         self.native_id: int | None = None
-
-    @property
-    def sentinel(self) -> int:
-        return self._sentinel.fileno()
 
     def start(self) -> None:
         self._thread.start()
@@ -144,7 +135,6 @@ class JobExecutor:
             logger.warning("the forkserver is used on Linux only, job processes are spawned")
             self._mp_ctx = mp.get_context("spawn")
         self._thread = thread
-        self._killable = not thread
         # the core's supervision of the process; a thread has no pong deadline (it cannot be
         # killed for being late) nor memory limit
         self._opts = {
@@ -225,60 +215,56 @@ class JobExecutor:
     async def _start(self) -> None:
         if self._closing:
             raise RuntimeError("process is closed")
-        pch, cch = _core.ipc_pair()
-        # the job's end: a socket on Unix, a named pipe on Windows
-        child_end = child.PipeEnd(cch) if os.name == "nt" else socket.socket(fileno=cch)
-        self._child_end = child_end
-        self._pch = _core.ProcSupervisor(pch, self, pid=0, killable=self._killable, **self._opts)
-        # The Rust owner exists before the host invokes multiprocessing and survives caller loss.
+        # The core launches through _core_launch; its supervision survives caller loss.
+        self._pch = _core.ProcSupervisor(self, thread=self._thread, **self._opts)
         self._supervise_atask = asyncio.ensure_future(self._pch.run())
-        await asyncio.shield(self._launched)
+        launched_or_over: set[asyncio.Future[Any]] = {self._launched, self._supervise_atask}
+        await asyncio.wait(launched_or_over, return_when=asyncio.FIRST_COMPLETED)
+        if not self._launched.done():
+            raise RuntimeError("the job runner could not be launched")
+        self._launched.result()
 
-    async def _core_launch(self) -> None:
-        child_end = self._child_end
-        self._proc = self._create_process(child_end)
+    async def _core_launch(self, endpoint: int) -> None:
+        # the job's end: a socket on Unix, a named pipe on Windows
+        child_end = child.PipeEnd(endpoint) if os.name == "nt" else socket.socket(fileno=endpoint)
+        method = self._mp_ctx.get_start_method()
 
-        def launch() -> None:
-            method = "thread" if self._thread else self._mp_ctx.get_start_method()
-
-            def register(receipt: ProcessReceipt) -> None:
-                self._pid = receipt.pid or None
-                self._pch._core_launched_process(
-                    receipt.pid, receipt.sentinel, method, receipt.owned_handles
-                )
-
-            if self._thread:
-                self._proc.start()
-                register(ProcessReceipt(0, self._proc._sentinel.detach(), []))
-            else:
-                start_process(self._proc, method, register)
+        def register(receipt: ProcessReceipt) -> None:
+            self._pid = receipt.pid or None
+            self._pch._core_launched_process(
+                receipt.pid, receipt.sentinel, method, receipt.owned_handles
+            )
 
         try:
-            with _mask_ctrl_c():
-                return await self._loop.run_in_executor(None, launch)
+            self._proc = self._create_process(child_end)
+            if self._thread:
+                self._proc.start()
+            else:
+                with _mask_ctrl_c():
+                    await self._loop.run_in_executor(
+                        None, start_process, self._proc, method, register
+                    )
+        except BaseException as error:
+            if self._thread:
+                child_end.close()
+            if not self._launched.done():
+                self._launched.set_exception(error)
+            raise
         finally:
-            child_end.close()
-
-    async def _core_launched(self) -> None:
+            # a process got its own copy of the end
+            if not self._thread:
+                child_end.close()
         if not self._launched.done():
             self._launched.set_result(None)
 
-    async def _core_launch_failed(self, cause: str) -> None:
-        if not self._launched.done():
-            self._launched.set_exception(RuntimeError(cause))
-
-    async def _core_completed(self, completion: ProcessCompletion, pid: int) -> None:
+    async def _core_completed(self, completion: ProcessCompletion) -> None:
         exitcode = completion.exit_code
-        self._pid = pid or None
         self._exitcode = exitcode
-        if self._thread:
-            self._proc._sentinel.close()
-        else:
+        if not self._thread:
             # Start-method bookkeeping only: the native owner has already reaped the child.
-            self._proc._popen.pid = pid
             self._proc._popen.returncode = exitcode
             self._proc._popen.finalizer()
-        if self._running_job and self._killable:
+        if self._running_job and not self._thread:
             metrics.job_ended()
         self._job_status = (
             JobStatus.SUCCESS if exitcode == 0 and completion.failure is None else JobStatus.FAILED
@@ -289,9 +275,10 @@ class JobExecutor:
 
         self._args.user_arguments = self.user_arguments
         if self._thread:
-            # the thread shares this process's logging, and keeps its own copy of the end the
-            # parent closes once started
-            return _JobThread(child.JobArgs(**{**vars(self._args), "mp_cch": cch.dup()}))
+            # the thread shares this process's logging and owns the job's end
+            return _JobThread(
+                child.JobArgs(**{**vars(self._args), "mp_cch": cch}), self._pch._core_thread_exited
+            )
         levels = {"root": logging.getLogger().level}
         for log in logging.Logger.manager.loggerDict.values():
             if isinstance(log, logging.Logger):
@@ -325,7 +312,7 @@ class JobExecutor:
         elapsed_time = await self._pch.initialize(
             asyncio_debug=self._loop.get_debug(), http_proxy=self._http_proxy
         )
-        if self._killable:
+        if not self._thread:
             metrics.proc_initialized(time_elapsed=elapsed_time)
 
     async def _core_launch_job(self, info: RunningJobInfo, launched_at: float) -> None:
@@ -355,7 +342,7 @@ class JobExecutor:
                 traceparent=capture_traceparent(),
             )
         )
-        if self._killable:
+        if not self._thread:
             metrics.job_started()
         self._job_status = JobStatus.RUNNING
         self._running_job = info

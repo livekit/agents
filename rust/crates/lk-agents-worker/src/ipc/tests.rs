@@ -1,20 +1,17 @@
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 use lk_agents_net::lock::Mutex;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::supervisor::{
-    CleanupObservation, Extra, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB,
-    SignalFailure, WarnGate,
-};
 use super::channel::{MAGIC, VERSION, memory};
 use super::child::watch_parent;
+use super::supervisor::{Extra, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB, WarnGate};
 use super::*;
-use lk_agents_abi::errors::HostError;
 use lk_agents_abi::unix_now_ms;
 
 mod supervision;
@@ -38,32 +35,39 @@ fn job() -> StartJob {
 }
 
 fn hello() -> Hello {
-    Hello {
-        asyncio_debug: false,
-        http_proxy: None,
-        health_timeout_ms: None,
-    }
+    Hello { asyncio_debug: false, http_proxy: None, health_timeout_ms: None }
 }
 
 // ------------------------------------------------------------------------------- supervision
 
-type Sample = Result<(f64, String), MemoryError>;
-
-#[derive(Default)]
+/// The supervisor's diagnostics and the runner it launched, as the test drives them.
 struct FakeHost {
     logs: Mutex<Vec<(Level, String, Extra)>>,
     logged: tokio::sync::Notify,
-    alive: AtomicBool,
+    /// `stop()` calls.
     kills: AtomicUsize,
-    samples: Mutex<VecDeque<Sample>>,
-
-    /// The child's end, dropped by a kill as the process's death would close it.
+    /// A process ends when stopped (its end of the channel drops); a thread does not.
+    forced: AtomicBool,
+    samples: Mutex<VecDeque<Option<f64>>>,
+    /// The child's end, dropped by a forced stop as the process's death would close it.
     child: Mutex<Option<Child>>,
     released: AtomicBool,
-    /// The kill fails with this cause.
-    kill_error: Mutex<Option<String>>,
-    incomplete: Mutex<Vec<CleanupObservation>>,
-    signal_failures: Mutex<Vec<SignalFailure>>,
+    exit: watch::Sender<Option<Exit>>,
+}
+
+impl Default for FakeHost {
+    fn default() -> Self {
+        Self {
+            logs: Mutex::default(),
+            logged: tokio::sync::Notify::new(),
+            kills: AtomicUsize::new(0),
+            forced: AtomicBool::new(true),
+            samples: Mutex::default(),
+            child: Mutex::default(),
+            released: AtomicBool::new(false),
+            exit: watch::channel(None).0,
+        }
+    }
 }
 
 impl ProcessCallbacks for Arc<FakeHost> {
@@ -72,38 +76,50 @@ impl ProcessCallbacks for Arc<FakeHost> {
         self.logged.notify_one();
     }
 
-    fn log_exception(&self, msg: &str, err: HostError) {
-        self.log(Level::Error, &format!("{msg}: {err}"), Vec::new());
-    }
-
-    fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::SeqCst)
-    }
-
-    fn kill(&self) -> Result<(), String> {
-        self.kills.fetch_add(1, Ordering::SeqCst);
-        if let Some(cause) = self.kill_error.lock().clone() {
-            return Err(cause);
-        }
-        self.alive.store(false, Ordering::SeqCst);
-        self.child.lock().take();
-        Ok(())
-    }
-
-    fn sample_memory(&self) -> Sample {
-        self.samples.lock().pop_front().unwrap_or(Ok((100.0, "uss".into())))
-    }
-
     fn release(&self) {
         self.released.store(true, Ordering::SeqCst);
     }
+}
 
-    fn incomplete_cleanup(&self, observation: CleanupObservation) {
-        self.incomplete.lock().push(observation);
+struct FakeRunner(Arc<FakeHost>);
+
+#[async_trait::async_trait]
+impl Runner for FakeRunner {
+    async fn finished(&self) -> Exit {
+        let exit = self.0.exit.subscribe().wait_for(Option::is_some).await.ok().and_then(|e| *e);
+        exit.unwrap()
     }
 
-    fn signal_failed(&self, failure: SignalFailure) {
-        self.signal_failures.lock().push(failure);
+    fn stop(&self) {
+        self.0.kills.fetch_add(1, Ordering::SeqCst);
+        if self.0.forced.load(Ordering::SeqCst) {
+            self.0.child.lock().take();
+        }
+    }
+
+    fn memory_mb(&self) -> Option<f64> {
+        self.0.samples.lock().pop_front().unwrap_or(Some(100.0))
+    }
+}
+
+/// Launches the fake runner on `channel` once `gate` opens, or refuses with `refusal`.
+struct FakeExecutor {
+    launch: Mutex<Option<(FakeRunner, Channel<ToChild, ToParent>)>>,
+    gate: Option<Arc<tokio::sync::Semaphore>>,
+    refusal: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl JobExecutor for FakeExecutor {
+    async fn launch(&self) -> Result<(Box<dyn Runner>, Channel<ToChild, ToParent>), String> {
+        if let Some(gate) = &self.gate {
+            let _ = gate.acquire().await;
+        }
+        if let Some(refusal) = &self.refusal {
+            return Err(refusal.clone());
+        }
+        let (runner, channel) = self.launch.lock().take().unwrap();
+        Ok((Box::new(runner), channel))
     }
 }
 
@@ -116,12 +132,23 @@ impl FakeHost {
         let logs = self.logs.lock();
         logs.iter().find(|(_, m, _)| m == msg).map(|(l, _, e)| (*l, e.clone()))
     }
+
+    /// The runner ends with `code`, killed when a forced stop came first.
+    fn finish(&self, code: i64) {
+        let killed = self.forced.load(Ordering::SeqCst) && self.kills.load(Ordering::SeqCst) > 0;
+        self.exit.send_replace(Some(Exit { code, killed }));
+    }
+}
+
+/// The runner ended and the supervisor saw it.
+async fn finish(sup: &ProcSupervisor, host: &FakeHost, code: i64) {
+    host.finish(code);
+    assert!(sup.wait_exit().await);
 }
 
 fn opts() -> SupervisorOptions {
     SupervisorOptions {
-        // no signal: the fake host stands for the process
-        pid: 0,
+        runner: "process",
         initialize_timeout: 10.0,
         close_timeout: 60.0,
         memory_warn_mb: 0.0,
@@ -129,18 +156,34 @@ fn opts() -> SupervisorOptions {
         ping_interval: 2.5,
         ping_timeout: 90.0,
         high_ping_threshold: 0.5,
-        killable: true,
     }
+}
+
+/// Never initialized by the test: the startup deadline stays out of the way.
+fn uninitialized() -> SupervisorOptions {
+    SupervisorOptions { initialize_timeout: 1000.0, ..opts() }
+}
+
+fn executor(parent: Channel<ToChild, ToParent>, host: &Arc<FakeHost>) -> FakeExecutor {
+    let launch = Mutex::new(Some((FakeRunner(host.clone()), parent)));
+    FakeExecutor { launch, gate: None, refusal: None }
+}
+
+fn start(executor: FakeExecutor, host: &Arc<FakeHost>, opts: SupervisorOptions) -> ProcSupervisor {
+    let blocking_io = crate::test_support::blocking_io();
+    ProcSupervisor::new(Arc::new(executor), host.clone(), opts, blocking_io)
+}
+
+fn supervise(
+    parent: Channel<ToChild, ToParent>,
+    opts: SupervisorOptions,
+) -> (ProcSupervisor, Arc<FakeHost>) {
+    let host = Arc::new(FakeHost::default());
+    (start(executor(parent, &host), &host, opts), host)
 }
 
 /// The job process's end of the supervised channel.
 type Child = Channel<ToParent, ToChild>;
-
-fn supervise(parent: Channel<ToChild, ToParent>, opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>) {
-    let host = Arc::new(FakeHost::default());
-    host.alive.store(true, Ordering::SeqCst);
-    (ProcSupervisor::new(parent, host.clone(), opts, crate::test_support::blocking_io()), host)
-}
 
 fn setup(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, Child) {
     let (parent, child) = memory();
@@ -259,8 +302,7 @@ async fn initialize_timeout_kills_the_process() {
     assert!(sup.initialize(hello()).await.unwrap().is_none());
     assert_eq!(start.elapsed(), Duration::from_secs(10));
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
-    assert!(sup.killed());
-    assert_eq!(host.messages(), ["initializing process", "killing process"]);
+    assert_eq!(host.messages(), ["initializing process", "stopping process"]);
 }
 
 // Catches: a ping cadence or pong bookkeeping that differs from the reference: the first ping at
@@ -268,7 +310,7 @@ async fn initialize_timeout_kills_the_process() {
 
 #[tokio::test(start_paused = true)]
 async fn pings_on_the_interval_and_warns_on_a_late_pong() {
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, mut child) = setup(uninitialized());
     let start = Instant::now();
     sup.supervise().await;
     let ToChild::Ping { sent_ms } = recv(&mut child).await else { panic!() };
@@ -297,7 +339,7 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
 // fails as a transport error instead of the pong deadline's diagnosis.
 #[tokio::test(start_paused = true)]
 async fn one_ping_is_in_flight_at_a_time() {
-    let (sup, _host, child) = setup(opts());
+    let (sup, _host, child) = setup(uninitialized());
     sup.supervise().await;
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert!(matches!(recv(&child).await, ToChild::Ping { .. }));
@@ -309,7 +351,7 @@ async fn one_ping_is_in_flight_at_a_time() {
 
 #[tokio::test(start_paused = true)]
 async fn missing_pongs_kill_the_process_after_ping_timeout() {
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, mut child) = setup(uninitialized());
     let start = Instant::now();
     sup.supervise().await;
     // one pong at 60 s moves the deadline to 150 s
@@ -324,7 +366,7 @@ async fn missing_pongs_kill_the_process_after_ping_timeout() {
         killed_at >= Duration::from_secs(150) && killed_at < Duration::from_secs(151),
         "{killed_at:?}"
     );
-    let (level, _) = host.find("process is unresponsive, killing process").unwrap();
+    let (level, _) = host.find("process is unresponsive, stopping it").unwrap();
     assert_eq!(level, Level::Error);
     drop(drain);
 }
@@ -346,17 +388,12 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
     child.close().await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(!close.is_finished(), "returns only once the process exited");
-    sup.exited(Some(0)).await;
-    sup.reaped(0).await;
+    finish(&sup, &host, 0).await;
     close.await.unwrap();
     assert_eq!(host.kills.load(Ordering::SeqCst), 0);
     let (level, extra) = host.find("process exiting").unwrap();
     assert_eq!((level, extra), (Level::Info, vec![("reason", ExtraValue::Str("shutdown".into()))]));
-    assert!(
-        host.logs.lock().iter().all(|(l, _, _)| *l != Level::Error),
-        "{:?}",
-        host.messages()
-    );
+    assert!(host.logs.lock().iter().all(|(l, _, _)| *l != Level::Error), "{:?}", host.messages());
     assert!(host.released.load(Ordering::SeqCst));
 }
 
@@ -364,7 +401,7 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_kills_a_process_that_does_not_ack() {
-    let (sup, host, child) = setup(opts());
+    let (sup, host, child) = setup(uninitialized());
     *host.child.lock() = Some(child);
     sup.supervise().await;
     let start = Instant::now();
@@ -376,35 +413,37 @@ async fn shutdown_kills_a_process_that_does_not_ack() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(start.elapsed() >= Duration::from_secs(60));
-    sup.exited(Some(-9)).await;
-    sup.reaped(-9).await;
+    finish(&sup, &host, -9).await;
     close.await.unwrap();
+    assert!(sup.killed());
     let messages = host.messages();
-    assert!(messages.contains(&"process did not ack shutdown in time, killing process".into()));
+    assert!(messages.contains(&"process did not ack shutdown in time, stopping it".into()));
     assert!(!messages.iter().any(|m| m.starts_with("process exited with non-zero")));
-    assert!(!messages.contains(&"process did not exit in time, killing process".into()));
+    assert!(!messages.contains(&"process did not exit in time, stopping it".into()));
 }
 
-// Catches: a job thread killed (it cannot be) or given up on when its ack and exit are late; it is
-// reported and waited for.
+// Catches: a runner that cannot be forced (a job thread) killed without being asked to shut down,
+// or given up on when its ack and exit are late; it is asked, reported and waited for.
 
 #[tokio::test(start_paused = true)]
-async fn a_job_thread_that_does_not_ack_is_waited_for_not_killed() {
-    let (sup, host, _child) =
-        setup(SupervisorOptions { killable: false, ping_timeout: 0.0, ..opts() });
+async fn a_runner_that_cannot_be_forced_is_asked_and_waited_for() {
+    let (sup, host, child) =
+        setup(SupervisorOptions { runner: "job thread", ping_timeout: 0.0, ..opts() });
+    host.forced.store(false, Ordering::SeqCst);
     sup.supervise().await;
     let close = tokio::spawn({
         let sup = sup.clone();
         async move { sup.kill().await }
     });
+    assert_eq!(recv_skipping_pings(&child).await, ToChild::Shutdown { reason: String::new() });
     tokio::time::sleep(Duration::from_secs(61)).await;
-    assert!(host.messages().contains(&"job did not ack shutdown in time".into()));
+    assert!(
+        host.messages().contains(&"job thread did not ack shutdown in time, stopping it".into())
+    );
     assert!(!close.is_finished(), "a thread that has not exited is waited for");
-    sup.exited(Some(0)).await;
-    sup.reaped(0).await;
+    finish(&sup, &host, 0).await;
     close.await.unwrap();
-    assert_eq!(host.kills.load(Ordering::SeqCst), 0);
-    assert!(!host.messages().iter().any(|m| m.contains("unresponsive, killing")));
+    assert!(!sup.killed());
 }
 
 // Catches: the reader's end leaving a close waiting for an ack that cannot arrive (#5929), or an
@@ -421,8 +460,7 @@ async fn the_socket_closing_resolves_the_shutdown_waits() {
     assert_eq!(recv_skipping_pings(&mut child).await, ToChild::Shutdown { reason: String::new() });
     drop(child);
     tokio::time::sleep(Duration::from_secs(1)).await;
-    sup.exited(Some(1)).await;
-    sup.reaped(1).await;
+    finish(&sup, &host, 1).await;
     tokio::time::timeout(Duration::from_secs(1), close).await.unwrap().unwrap();
     assert!(!host.messages().iter().any(|m| m.contains("did not ack")));
     assert_eq!(host.kills.load(Ordering::SeqCst), 1, "unexpected EOF starts native cleanup");
@@ -450,9 +488,9 @@ fn memory_warning_is_rate_limited() {
 #[tokio::test]
 async fn a_native_memory_sample_enforces_the_process_limit() {
     let (sup, host, _child) = setup(SupervisorOptions { memory_limit_mb: 500.0, ..opts() });
-    host.samples.lock().push_back(Ok((600.0, "pss".into())));
+    host.samples.lock().push_back(Some(600.0));
     sup.supervise().await;
-    let message = "job process exceeded memory limit, killing it";
+    let message = "process exceeded memory limit, stopping it";
     let (level, _) = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let notified = host.logged.notified();
@@ -556,15 +594,13 @@ async fn supervisor_blocked_writer() {
     })
     .await;
     assert!(killed.is_ok(), "a stalled peer must not suspend the health deadline");
-    assert!(!pending.is_finished(), "a blocked write cannot fabricate child acceptance");
-    sup.exited(Some(-9)).await;
-    sup.reaped(-9).await;
-    assert!(pending.await.unwrap().is_err());
+    finish(&sup, &host, -9).await;
+    assert!(pending.await.unwrap().is_err(), "a blocked write cannot fabricate child acceptance");
 }
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_ack_phase_deadline() {
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, mut child) = setup(uninitialized());
     // Poll shutdown through command admission without waiting for the process to exit.
     let _ = tokio::time::timeout(Duration::ZERO, sup.shutdown()).await;
     assert!(matches!(recv_skipping_pings(&mut child).await, ToChild::Shutdown { .. }));
@@ -586,18 +622,4 @@ async fn repeated_initialize_callers_are_refused_without_replacing_the_first_wai
     write(&mut child, &ToParent::Ready { error: None }).await.unwrap();
     assert!(first.await.unwrap().unwrap().is_some());
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
-    sup.exited(Some(0)).await;
-    sup.reaped(0).await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn native_exit_wakes_eligibility_before_the_reaping_receipt_releases_the_owner() {
-    let (sup, host, _child) = setup(opts());
-    sup.exited(Some(0)).await;
-    assert!(sup.wait_exit().await);
-    assert!(!host.released.load(Ordering::SeqCst));
-    assert!(tokio::time::timeout(Duration::ZERO, sup.wait_cleaned()).await.is_err());
-    sup.reaped(0).await;
-    assert!(sup.wait_cleaned().await);
-    assert!(host.released.load(Ordering::SeqCst));
 }
