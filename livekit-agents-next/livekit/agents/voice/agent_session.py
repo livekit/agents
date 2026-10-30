@@ -330,9 +330,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         self._core: _core.VoiceSession = None  # type: ignore[assignment]
         self._room: rtc.Room | None = None
         self._amd: AMD | None = None
-        # `override_options`: what `update_options` wrote under a layer, and the layers in order
-        self._base_options: dict[str, Any] = {}
-        self._option_layers: list[dict[str, Any]] = []
+        # `override_options`'s providers: what `update_options` wrote under a layer, and the
+        # layers in order
+        self._base_models: dict[str, Any] = {}
+        self._model_layers: list[dict[str, Any]] = []
         self._agent: Agent | None = None
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
@@ -925,12 +926,18 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             expressive=expressive,
             keyterms=keyterms,
         )
-        update = self._completed(
-            update,
-            lambda k: self._base_options[k] if k in self._base_options else self._current_option(k),
-        )
-        self._base_options.update(update)
-        self._send_options({k: v for k, v in update.items() if not self._layered(k)})
+        models, turn = self._split(update)
+        for leg, model in models.items():
+            if self._layered(leg):
+                self._base_models[leg] = model
+            else:
+                self._install_models({leg: model})
+        if not turn:
+            return
+        if self._core is None:
+            self._options.update(turn)
+        else:
+            self._core.update_turn_options(turn)
 
     @contextlib.asynccontextmanager
     async def override_options(
@@ -948,74 +955,58 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         """Layer settings over the session's for the block: each takes its value from the
         topmost layer that sets it, else from the base, and the layer is released when the
         block ends, however it ends."""
-        layer = _given(
-            stt=_stt_model(stt),
-            tts=_tts_model(tts),
-            vad=vad,
-            turn_detection=turn_detection,
-            endpointing_opts=endpointing_opts,
-            interruption=interruption,
-            min_consecutive_speech_delay=min_consecutive_speech_delay,
-            tts_text_transforms=tts_text_transforms,
+        models, turn = self._split(
+            _given(
+                stt=_stt_model(stt),
+                tts=_tts_model(tts),
+                vad=vad,
+                turn_detection=turn_detection,
+                endpointing_opts=endpointing_opts,
+                interruption=interruption,
+                min_consecutive_speech_delay=min_consecutive_speech_delay,
+                tts_text_transforms=tts_text_transforms,
+            )
         )
-        layer = self._completed(
-            layer,
-            lambda k: (
-                self._effective_option(k) if k in self._base_options else self._current_option(k)
-            ),
-        )
-        for key in layer:
-            if not self._layered(key):
-                self._base_options.setdefault(key, self._current_option(key))
-        self._option_layers.append(layer)
-        self._send_options(layer)
+        # the core layers the settings; the providers are host objects, layered here
+        layer = None
+        if turn:
+            layer = (self._options if self._core is None else self._core).override_options(turn)
+        for leg in models:
+            if not self._layered(leg):
+                self._base_models[leg] = getattr(self, f"_{leg}")
+        self._model_layers.append(models)
+        self._install_models(models)
         try:
             yield
         finally:
-            del self._option_layers[
-                next(i for i, held in enumerate(self._option_layers) if held is layer)
+            del self._model_layers[
+                next(i for i, held in enumerate(self._model_layers) if held is models)
             ]
-            self._send_options({k: self._effective_option(k) for k in layer})
+            self._install_models({leg: self._effective_model(leg) for leg in models})
+            if layer is not None:
+                (self._options if self._core is None else self._core).release_override(layer)
 
     @staticmethod
-    def _completed(options: dict[str, Any], under: Callable[[str], Any]) -> dict[str, Any]:
-        """``options`` with each group (endpointing, interruption) filled in from the value it
-        lands on, so restoring a base or a lower layer restores every key of the group."""
+    def _split(options: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """``options`` as its providers and its settings."""
         if "mode" in options.get("interruption", {}):
             raise ValueError(
                 "interruption takes no mode here: the interruption mode is set with "
                 "VoiceSession(turn_handling=)"
             )
-        return {k: {**under(k), **v} if k in _GROUPS else v for k, v in options.items()}
+        models = {k: v for k, v in options.items() if k in _MODELS}
+        return models, {k: v for k, v in options.items() if k not in _MODELS}
 
-    def _layered(self, key: str) -> bool:
-        return any(key in layer for layer in self._option_layers)
+    def _layered(self, leg: str) -> bool:
+        return any(leg in layer for layer in self._model_layers)
 
-    def _effective_option(self, key: str) -> Any:
-        for layer in reversed(self._option_layers):
-            if key in layer:
-                return layer[key]
-        return self._base_options[key]
+    def _effective_model(self, leg: str) -> Any:
+        for layer in reversed(self._model_layers):
+            if leg in layer:
+                return layer[leg]
+        return self._base_models[leg]
 
-    def _current_option(self, key: str) -> Any:
-        """The value ``key`` has in the core, as ``update_options`` takes it: current until this
-        session sends ``key``, which then keeps it in ``_base_options`` and the layers."""
-        if key in _MODELS:
-            return getattr(self, f"_{key}")
-        resolved = self.options
-        if key == "turn_detection":
-            return resolved["turn_detection_mode"]
-        if key == "endpointing_opts":
-            endpointing = resolved["endpointing"]
-            return {k: endpointing[k] for k in ("mode", "min_delay", "max_delay", "alpha")}
-        if key == "interruption":
-            # the mode is the construction's; update_options takes no mode
-            return {k: v for k, v in resolved["interruption"].items() if k != "mode"}
-        return resolved[key]
-
-    def _send_options(self, update: dict[str, Any]) -> None:
-        models = {k: v for k, v in update.items() if k in _MODELS}
-        turn = {k: v for k, v in update.items() if k not in _MODELS}
+    def _install_models(self, models: dict[str, Any]) -> None:
         for leg, model in models.items():
             setattr(self, f"_{leg}", model)
         if "vad" in models:
@@ -1027,12 +1018,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 **{leg: _bindings.core_leg(model) for leg, model in models.items()},
                 **{f"{leg}_node": nodes[f"{leg}_node"] for leg in models if f"{leg}_node" in nodes},
             )
-        if not turn:
-            return
-        if self._core is None:
-            self._options.update(turn)
-        else:
-            self._core.update_turn_options(turn)
 
     # --- frames --------------------------------------------------------------------------
 
@@ -1556,9 +1541,6 @@ _NODES = ("llm_node", "tts_node", "stt_node", "transcription_node", "realtime_au
 
 # the providers `update_options` replaces; each is the session's own, never an agent's
 _MODELS = ("stt", "tts", "vad")
-
-# the options given as a partial dict, merged key by key over the session's
-_GROUPS = ("endpointing_opts", "interruption")
 
 
 def _given(**options: Any) -> dict[str, Any]:

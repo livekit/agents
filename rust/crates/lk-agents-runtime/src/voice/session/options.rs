@@ -8,7 +8,7 @@ use lk_agents_abi::voice::session_options::{
     UpdateKwargs,
 };
 use lk_agents_voice::agent_activity::options::{
-    AgentSessionOptions, ConfigStack, LegSet, resolved_session_options, session_layer, update_layer,
+    ConfigStack, LegSet, OverrideLayer, resolved_session_options, session_layer, update_layer,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
@@ -22,7 +22,10 @@ struct State {
     conn: SessionConnOptions,
     /// `expressive=`, then each `update_options(expressive=)`.
     expressive: Expressive,
-    session: AgentSessionOptions,
+    /// The session layer and the `override_options` layers held before `start()`.
+    layers: ConfigStack,
+    /// The last `override_options` layer id minted, before or after `start()`.
+    last_layer: u64,
 }
 
 impl SessionOptions {
@@ -30,8 +33,9 @@ impl SessionOptions {
         self.0.lock()
     }
 
-    pub fn session(&self) -> AgentSessionOptions {
-        self.state().session
+    /// The session layer and the held override layers the session starts with.
+    pub fn layers(&self) -> ConfigStack {
+        self.state().layers.clone()
     }
 
     pub fn conn(&self) -> SessionConnOptions {
@@ -42,28 +46,50 @@ impl SessionOptions {
     pub fn expressive(&self) -> Expressive {
         self.state().expressive.clone()
     }
+
+    /// A fresh `override_options` layer id.
+    pub fn next_layer_id(&self) -> u64 {
+        let mut state = self.state();
+        state.last_layer += 1;
+        state.last_layer
+    }
 }
 
 impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
     fn new(kwargs: SessionKwargs) -> Self {
-        let session = session_layer(&kwargs);
-        let state =
-            State { conn: kwargs.conn_options, expressive: kwargs.expressive.clone(), session };
+        let layers = ConfigStack { session: session_layer(&kwargs), ..Default::default() };
+        let state = State {
+            conn: kwargs.conn_options,
+            expressive: kwargs.expressive.clone(),
+            layers,
+            last_layer: 0,
+        };
         SessionOptions(Arc::new(Mutex::new(state)))
     }
 
     fn update(&self, update: UpdateKwargs) {
         let patch = update_layer(&update);
         let mut state = self.state();
-        state.session.merge(&patch);
+        state.layers.session.merge(&patch);
         if let Maybe::Given(expressive) = update.expressive {
             state.expressive = expressive;
         }
     }
 
+    fn override_options(&self, update: UpdateKwargs) -> u64 {
+        let id = self.next_layer_id();
+        let options = update_layer(&update);
+        self.state().layers.overrides.push(OverrideLayer { id, options });
+        id
+    }
+
+    fn release_override(&self, layer: u64) {
+        self.state().layers.overrides.retain(|held| held.id != layer);
+    }
+
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
-        let stack = ConfigStack { session: self.session(), agent: None };
-        resolved_session_options(&stack.resolve(&LegSet::from(legs)), &stack.session)
+        let layers = self.layers();
+        resolved_session_options(&layers.resolve(&LegSet::from(legs)), &layers.session)
     }
 }
 

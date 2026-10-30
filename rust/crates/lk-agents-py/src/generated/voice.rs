@@ -1177,6 +1177,10 @@ impl RpcHandler {
 // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
 type SessionOptionsImpl = <crate::Selected as super::Implementations>::SessionOptions;
 
+fn _extract_session_options_release_override_layer(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "layer")
+}
+
 /// `AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
 /// and the session layer they became (plus every `update_options` so far).
 #[pyclass(frozen, name = "SessionOptions", module = "livekit.agents._core")]
@@ -1202,6 +1206,24 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// `override_options(..)` before the session runs: a layer over the base, named by the id
+    /// returned. The session started over these options holds it until its release.
+    #[pyo3(signature = (update))]
+    fn override_options(&self, py: Python<'_>, update: Bound<'_, PyAny>) -> PyResult<u64> {
+        crate::host::check_pid()?;
+        let update = crate::generated::records::session_options::update_kwargs_from_py(&update)?;
+        let out = py.detach(|| <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::override_options(&self.0, update));
+        Ok(out)
+    }
+
+    /// The `override_options` block ended before the session ran.
+    #[pyo3(signature = (layer))]
+    fn release_override(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_session_options_release_override_layer)] layer: u64) -> PyResult<()> {
+        crate::host::check_pid()?;
+        py.detach(|| <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::release_override(&self.0, layer));
+        Ok(())
+    }
+
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[pyo3(signature = (legs))]
@@ -1222,6 +1244,10 @@ fn _extract_voice_session_collect_dtmf_num_digits(obj: &Bound<'_, PyAny>) -> PyR
 
 fn _extract_voice_session_collect_dtmf_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+}
+
+fn _extract_voice_session_release_override_layer(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "layer")
 }
 
 fn _extract_voice_session_ivr_start_max_silence(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
@@ -1457,6 +1483,25 @@ impl VoiceSession {
         crate::host::check_pid()?;
         let update = crate::generated::records::session_options::update_kwargs_from_py(&update)?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_turn_options(&self.0, update)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// `override_options(..)` on a running session: a layer over the base until
+    /// `release_override` names the id returned. Refused as `update_turn_options` refuses.
+    #[pyo3(signature = (update))]
+    fn override_options(&self, py: Python<'_>, update: Bound<'_, PyAny>) -> PyResult<u64> {
+        crate::host::check_pid()?;
+        let update = crate::generated::records::session_options::update_kwargs_from_py(&update)?;
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::override_options(&self.0, update)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// The `override_options` block ended, however it ended. A closed session has nothing left
+    /// to restore.
+    #[pyo3(signature = (layer))]
+    fn release_override(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_voice_session_release_override_layer)] layer: u64) -> PyResult<()> {
+        crate::host::check_pid()?;
+        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::release_override(&self.0, layer));
         Ok(())
     }
 

@@ -304,6 +304,15 @@ pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
     #[host(call)]
     fn update(&self, update: UpdateKwargs);
 
+    /// `override_options(..)` before the session runs: a layer over the base, named by the id
+    /// returned. The session started over these options holds it until its release.
+    #[host(call)]
+    fn override_options(&self, update: UpdateKwargs) -> u64;
+
+    /// The `override_options` block ended before the session ran.
+    #[host(call)]
+    fn release_override(&self, layer: u64);
+
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[host(call)]
@@ -460,6 +469,16 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// detector object is refused: swapping the detector of a running session is not ported.
     #[host(call)]
     fn update_turn_options(&self, update: UpdateKwargs) -> Result<(), CommandRefused>;
+
+    /// `override_options(..)` on a running session: a layer over the base until
+    /// `release_override` names the id returned. Refused as `update_turn_options` refuses.
+    #[host(call)]
+    fn override_options(&self, update: UpdateKwargs) -> Result<u64, CommandRefused>;
+
+    /// The `override_options` block ended, however it ended. A closed session has nothing left
+    /// to restore.
+    #[host(call)]
+    fn release_override(&self, layer: u64);
 
     /// The core's accepted configuration; `None` for a session built without options.
     #[host(call)]

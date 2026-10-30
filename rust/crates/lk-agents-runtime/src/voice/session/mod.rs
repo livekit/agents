@@ -188,8 +188,9 @@ struct HostParts {
     handoffs: Arc<tokio::sync::Mutex<()>>,
     /// The turn-detector stream, closed once the loop is gone (the driver's legs never owned it).
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
-    /// `resolved_options()` answers `None` for a session built with no options object.
-    has_options: bool,
+    /// The options object the session was built over: it mints `override_options` layer ids.
+    /// `resolved_options()` answers `None` for a session built with none.
+    options: Option<SessionOptions>,
     /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
     call_room: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
     /// The remote session protocol this session serves, if it does.
@@ -223,7 +224,7 @@ impl VoiceSession {
     }
 
     pub fn stack(&self) -> ConfigStack {
-        self.view.borrow().config.stack
+        self.view.borrow().config.stack.clone()
     }
 
     /// Every provider and leg the session still holds.

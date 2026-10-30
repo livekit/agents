@@ -38,11 +38,13 @@ pub const INTERRUPTION_DETECTION_INCOMPATIBLE: &str = "interruption_detection is
 pub const ADAPTIVE_OFF_IN_PRODUCTION: &str =
     "adaptive interruption is disabled by default in production mode";
 
-/// The layer a `CoreStep::ConfigApplied` reports. `Session` is `__init__` ∪ `update_options`.
+/// The layer a `CoreStep::ConfigApplied` reports. `Session` is `__init__` ∪ `update_options`;
+/// `Override` is an `override_options` layer pushed or released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum ConfigLayer {
     Session,
     Agent,
+    Override,
 }
 
 /// One leaf of an option group: `None` / `NotGiven` is unsaid.
@@ -243,13 +245,24 @@ const fn by_audio_activity(detection: TurnDetection) -> bool {
     }
 }
 
-/// The layers, in the order they apply: `defaults(legs)` ⊕ `session` ⊕ `agent`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// The layers, in the order they apply: `defaults(legs)` ⊕ `session` ⊕ `agent` ⊕ `overrides`.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConfigStack {
-    /// `__init__`, each `update_options` merged in.
+    /// The base: `__init__`, each `update_options` merged in.
     pub session: AgentSessionOptions,
     /// The active `Agent`'s overrides; replaced whole by `update_agent`.
     pub agent: Option<AgentSessionOptions>,
+    /// The held `override_options` layers, oldest first: each leaf takes its value from the
+    /// topmost layer that says it.
+    pub overrides: Vec<OverrideLayer>,
+}
+
+/// One `override_options` block's settings, held until the block ends.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct OverrideLayer {
+    /// Minted by the session that holds the layer; its release names it.
+    pub id: u64,
+    pub options: AgentSessionOptions,
 }
 
 impl ConfigStack {
@@ -259,6 +272,9 @@ impl ConfigStack {
         cfg.merge(&self.session);
         if let Some(agent) = &self.agent {
             cfg.merge(agent);
+        }
+        for layer in &self.overrides {
+            cfg.merge(&layer.options);
         }
         // The derived leaves follow the layered `detection` and the legs, whatever a layer said.
         let detection = cfg.turn.detection();
@@ -306,7 +322,7 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     o
 }
 
-/// What `update_options(..)` says.
+/// What `update_options(..)` or `override_options(..)` says.
 pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
     let UpdateKwargs {
         endpointing_opts,

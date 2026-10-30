@@ -5,6 +5,7 @@ use crate::agent_activity::ConfigDiff;
 use crate::agent_activity::false_interruption::{
     AudioInterruptTrigger, InterruptOutcome, InterruptRefusal,
 };
+use crate::agent_activity::options::ConfigLayer;
 use crate::agent_activity::scheduling::{PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::{Out, Timer};
@@ -276,12 +277,15 @@ impl Driver {
             TurnCommand::SkipReplies(on) => self.session.amd_skips_replies = on,
             TurnCommand::Configure(patch) => {
                 let diff = self.session.config.configure(&patch);
-                self.apply_config(
-                    now,
-                    crate::agent_activity::options::ConfigLayer::Session,
-                    diff,
-                    out,
-                );
+                self.apply_config(now, ConfigLayer::Session, diff, out);
+            }
+            TurnCommand::Override(layer) => {
+                let diff = self.session.config.push_override(layer);
+                self.apply_config(now, ConfigLayer::Override, diff, out);
+            }
+            TurnCommand::ReleaseOverride(id) => {
+                let diff = self.session.config.release_override(id);
+                self.apply_config(now, ConfigLayer::Override, diff, out);
             }
         }
     }
@@ -291,7 +295,7 @@ impl Driver {
     pub(crate) fn apply_config(
         &mut self,
         now: Ts,
-        layer: crate::agent_activity::options::ConfigLayer,
+        layer: ConfigLayer,
         diff: ConfigDiff,
         out: &mut Out,
     ) {

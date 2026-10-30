@@ -20,7 +20,7 @@ pub mod voice_task;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::PausedSpeech;
-use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet};
+use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet, OverrideLayer};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
 use crate::agent_session::effects::{Effect, Out};
 use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
@@ -266,6 +266,18 @@ impl DriverConfig {
     /// Merged into the session layer, re-resolved.
     pub fn configure(&mut self, update: &AgentSessionOptions) -> ConfigDiff {
         self.stack.session.merge(update);
+        self.resolve()
+    }
+
+    /// An `override_options` layer laid on top, re-resolved.
+    pub fn push_override(&mut self, layer: OverrideLayer) -> ConfigDiff {
+        self.stack.overrides.push(layer);
+        self.resolve()
+    }
+
+    /// The layer `id` taken out wherever it sits, re-resolved; an unknown id changes nothing.
+    pub fn release_override(&mut self, id: u64) -> ConfigDiff {
+        self.stack.overrides.retain(|layer| layer.id != id);
         self.resolve()
     }
 

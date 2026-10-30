@@ -214,7 +214,8 @@ impl Command {
                 FillerStop, PauseAuthorization, ResumeAuthorization),
             Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
                 UpdateTools, UpdateExpressive, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
-            Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure, SkipReplies),
+            Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure, Override,
+                ReleaseOverride, SkipReplies),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
             Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Cancel),
             Command::VoiceTask(c) => {
@@ -304,6 +305,10 @@ pub enum TurnCommand {
     /// Unnamed leaves keep their answer; a changed endpointing replaces the model (a running
     /// countdown keeps its deadline); `turn_detection=None` arrives as `Some(Auto)`.
     Configure(crate::agent_activity::options::AgentSessionOptions),
+    /// `override_options(..)`: a layer over the base until its `ReleaseOverride`.
+    Override(crate::agent_activity::options::OverrideLayer),
+    /// The `override_options` block ended, however it ended.
+    ReleaseOverride(u64),
     /// `AMD._on_end_of_turn`, from `Origin::Amd`: while the detector holds a machine verdict under
     /// `interrupt_on_machine`, every turn is committed with no reply (the developer is leaving a
     /// voicemail over the greeting's tail). Cleared when the detector closes.

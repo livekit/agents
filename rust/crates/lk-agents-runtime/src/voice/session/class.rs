@@ -12,7 +12,7 @@ use lk_agents_abi::voice::session::{
 use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, UpdateKwargs};
 use lk_agents_abi::{ChatItem, ToolSpec};
 use lk_agents_voice::agent_activity::DriverConfig;
-use lk_agents_voice::agent_activity::options::{AgentSessionOptions, DetectorKind};
+use lk_agents_voice::agent_activity::options::{AgentSessionOptions, DetectorKind, OverrideLayer};
 use lk_agents_voice::agent_session::{
     ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, HostVideo, IoKind, IvrCommand,
     TurnCommand,
@@ -154,8 +154,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             audio_output: true,
             sink_can_pause: true,
         };
+        let held = options.as_ref().map(SessionOptions::layers).unwrap_or_default();
         let stack = ConfigStack {
-            session: options.as_ref().map(|o| o.session()).unwrap_or_default(),
+            session: held.session,
+            overrides: held.overrides,
             agent: Some(lk_agents_voice::turn::agent_layer(
                 args.agent_turn_handling.as_ref(),
                 args.agent_min_consecutive_speech_delay,
@@ -240,7 +242,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 closed: Arc::default(),
                 handoffs: Arc::default(),
                 eot: args.turn_detector,
-                has_options: options.is_some(),
+                options: options.clone(),
                 call_room: rtc_room,
                 remote,
                 job: args.job,
@@ -419,15 +421,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn update_turn_options(&self, update: UpdateKwargs) -> Result<(), CommandRefused> {
-        use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
-        if let Maybe::Given(TurnDetectionKwarg::Detector { .. }) = update.turn_detection {
-            return Err(CommandRefused::Invalid(
-                "update_options(turn_detection=) takes a mode on a running session; a turn \
-                 detector object is set with VoiceSession(turn_handling=)"
-                    .to_owned(),
-            ));
-        }
-        let patch = lk_agents_voice::agent_activity::options::update_layer(&update);
+        let patch = running_layer(&update)?;
         if let Maybe::Given(expressive) = update.expressive {
             self.send(ActivityCommand::UpdateExpressive(expressive))?;
         }
@@ -440,10 +434,25 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(self.send(TurnCommand::Configure(patch))?)
     }
 
+    fn override_options(&self, update: UpdateKwargs) -> Result<u64, CommandRefused> {
+        let options = running_layer(&update)?;
+        let Some(session_options) = &self.host.options else {
+            return Err(CommandRefused::Invalid(
+                "override_options needs a session built with options".to_owned(),
+            ));
+        };
+        let id = session_options.next_layer_id();
+        self.send(TurnCommand::Override(OverrideLayer { id, options }))?;
+        Ok(id)
+    }
+
+    fn release_override(&self, layer: u64) {
+        // Refused only once the session closed, when nothing is left to restore.
+        let _ = self.send(TurnCommand::ReleaseOverride(layer));
+    }
+
     fn resolved_options(&self) -> Option<ResolvedSessionOptions> {
-        if !self.host.has_options {
-            return None;
-        }
+        self.host.options.as_ref()?;
         let view = Arc::clone(&self.view.borrow());
         Some(lk_agents_voice::agent_activity::options::resolved_session_options(
             &view.config.effective,
@@ -849,4 +858,18 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         })?;
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }
+}
+
+/// What `update_options` / `override_options` say to a running session; a turn detector object
+/// is refused: swapping the detector of a running session is not ported.
+fn running_layer(update: &UpdateKwargs) -> Result<AgentSessionOptions, CommandRefused> {
+    use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
+    if let Maybe::Given(TurnDetectionKwarg::Detector { .. }) = update.turn_detection {
+        return Err(CommandRefused::Invalid(
+            "update_options(turn_detection=) takes a mode on a running session; a turn \
+             detector object is set with VoiceSession(turn_handling=)"
+                .to_owned(),
+        ));
+    }
+    Ok(lk_agents_voice::agent_activity::options::update_layer(update))
 }

@@ -409,6 +409,12 @@ class SessionOptions:
     def __new__(cls, kwargs: SessionKwargs) -> Self: ...
     def update(self, update: UpdateKwargs) -> None:
         """`update_options(..)` before the session runs, on the same `merge` the driver uses."""
+    def override_options(self, update: UpdateKwargs) -> int:
+        """`override_options(..)` before the session runs: a layer over the base, named by the id
+        returned. The session started over these options holds it until its release.
+        """
+    def release_override(self, layer: int) -> None:
+        """The `override_options` block ended before the session ran."""
     def resolved(self, legs: SessionLegs) -> ResolvedSessionOptions:
         """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
         before `start()`.
@@ -524,6 +530,14 @@ class VoiceSession:
         """`AgentSession.update_options(..)` on a running session: merged into its session layer and
         re-resolved; `expressive` reaches the next reply, `keyterms` replace the user's list. A turn
         detector object is refused: swapping the detector of a running session is not ported.
+        """
+    def override_options(self, update: UpdateKwargs) -> int:
+        """`override_options(..)` on a running session: a layer over the base until
+        `release_override` names the id returned. Refused as `update_turn_options` refuses.
+        """
+    def release_override(self, layer: int) -> None:
+        """The `override_options` block ended, however it ended. A closed session has nothing left
+        to restore.
         """
     def resolved_options(self) -> ResolvedSessionOptions | None:
         """The core's accepted configuration; `None` for a session built without options."""
