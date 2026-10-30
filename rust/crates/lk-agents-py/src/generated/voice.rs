@@ -427,8 +427,7 @@ impl BackgroundAudioPlayer {
 type PlaybackTrackerImpl = <crate::Selected as super::Implementations>::Playback;
 
 /// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
-/// shared with the session that reads it. Its state machine stays here until the audio-output
-/// legs are redesigned (MORNING Q85).
+/// shared with the session that reads it.
 #[pyclass(frozen, name = "PlaybackTracker", module = "livekit.agents._core")]
 pub struct PlaybackTracker(pub(crate) ::std::sync::Arc<PlaybackTrackerImpl>);
 
@@ -467,6 +466,18 @@ impl PlaybackTracker {
     }
 }
 
+// Wherever the host passes a `::lk_agents_abi::voice::io::PlaybackTracker`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(),
+        read: |obj| {
+            let this = obj.cast::<PlaybackTracker>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackTracker> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
 type PlaybackReportsImpl = <crate::Selected as super::Implementations>::PlaybackReports;
 
@@ -494,7 +505,7 @@ fn _extract_playback_reports_finished_playback_position(obj: &Bound<'_, PyAny>) 
 #[pyo3(signature = (tracker, segment))]
 pub fn _core_playback_begin(py: Python<'_>, tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>) -> PyResult<bool> {
     crate::host::check_pid()?;
-    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
+    let tracker = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&tracker).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tracker", ": expected a `_core.PlaybackTracker`")))?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::begin(tracker, segment));
     Ok(out)
@@ -504,7 +515,7 @@ pub fn _core_playback_begin(py: Python<'_>, tracker: Bound<'_, PyAny>, segment: 
 #[pyo3(signature = (tracker))]
 pub fn _core_playback_current_segment<'py>(py: Python<'py>, tracker: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     crate::host::check_pid()?;
-    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
+    let tracker = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&tracker).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tracker", ": expected a `_core.PlaybackTracker`")))?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::current_segment(tracker));
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::io_events::playback_segment_to_py(py, value)?)).transpose()?)
 }
@@ -513,7 +524,7 @@ pub fn _core_playback_current_segment<'py>(py: Python<'py>, tracker: Bound<'_, P
 #[pyo3(signature = (tracker))]
 pub fn _core_playback_note_capture<'py>(py: Python<'py>, tracker: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
+    let tracker = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&tracker).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tracker", ": expected a `_core.PlaybackTracker`")))?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::note_capture(tracker));
     Ok(crate::generated::records::io_events::playback_segment_to_py(py, out)?)
 }
@@ -522,17 +533,18 @@ pub fn _core_playback_note_capture<'py>(py: Python<'py>, tracker: Bound<'_, PyAn
 #[pyo3(signature = (tracker, segment, created_at))]
 pub fn _core_playback_started(py: Python<'_>, tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_playback_reports_started_created_at)] created_at: f64) -> PyResult<bool> {
     crate::host::check_pid()?;
-    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
+    let tracker = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&tracker).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tracker", ": expected a `_core.PlaybackTracker`")))?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::started(tracker, segment, created_at));
     Ok(out)
 }
 
+/// Invalid durations are refused before updating playback or notifying observers.
 #[pyfunction]
 #[pyo3(signature = (tracker, segment, started_at, offset, duration))]
 pub fn _core_playback_progressed(py: Python<'_>, tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_playback_reports_progressed_started_at)] started_at: f64, #[pyo3(from_py_with = _extract_playback_reports_progressed_offset)] offset: f64, #[pyo3(from_py_with = _extract_playback_reports_progressed_duration)] duration: f64) -> PyResult<bool> {
     crate::host::check_pid()?;
-    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
+    let tracker = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&tracker).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tracker", ": expected a `_core.PlaybackTracker`")))?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::progressed(tracker, segment, started_at, offset, duration)).map_err(|e: ::lk_agents_abi::voice::io::InvalidPlaybackTime| <::lk_agents_abi::voice::io::InvalidPlaybackTime as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
@@ -542,7 +554,7 @@ pub fn _core_playback_progressed(py: Python<'_>, tracker: Bound<'_, PyAny>, segm
 #[pyo3(signature = (tracker, segment, playback_position, interrupted, synchronized_transcript))]
 pub fn _core_playback_finished(py: Python<'_>, tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_playback_reports_finished_playback_position)] playback_position: f64, interrupted: bool, synchronized_transcript: ::std::option::Option<::std::string::String>) -> PyResult<bool> {
     crate::host::check_pid()?;
-    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
+    let tracker = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&tracker).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tracker", ": expected a `_core.PlaybackTracker`")))?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::finished(tracker, segment, playback_position, interrupted, synchronized_transcript)).map_err(|e: ::lk_agents_abi::voice::io::InvalidPlaybackTime| <::lk_agents_abi::voice::io::InvalidPlaybackTime as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
@@ -3079,7 +3091,7 @@ pub struct AudioOutputProxy {
     /// The `notify` calls, delivered in order.
     notifier: crate::host::Notifier,
     label: ::std::string::String,
-    tracker: ::std::sync::Arc<::lk_agents_abi::voice::io::PlaybackTracker>,
+    tracker: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackTracker>,
     capabilities: ::lk_agents_abi::voice::io::AudioOutputCapabilities,
     sample_rate: ::std::option::Option<u32>,
 }
@@ -3119,7 +3131,7 @@ impl AudioOutputProxy {
         };
         let tracker = {
             let v = crate::host::read(obj, "_core_tracker")?;
-            v.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?
+            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("AudioOutput._core_tracker", ": expected a `_core.PlaybackTracker`")))?
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
@@ -3138,7 +3150,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         &self.label
     }
 
-    fn tracker(&self) -> &::std::sync::Arc<::lk_agents_abi::voice::io::PlaybackTracker> {
+    fn tracker(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackTracker> {
         &self.tracker
     }
 

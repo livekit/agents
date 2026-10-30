@@ -573,7 +573,7 @@ impl AudioOutput for NodeOutput<'_> {
         "RealtimeAudioNode"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         self.out.tracker()
     }
 

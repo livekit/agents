@@ -67,7 +67,7 @@ impl AudioOutput for DataStreamAudioOutput {
     fn label(&self) -> &str {
         self.0.label()
     }
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         self.0.tracker()
     }
     fn capabilities(&self) -> AudioOutputCapabilities {

@@ -157,7 +157,7 @@ pub(super) fn feed_video(
 /// the harness keeps only the routing table. The lock holds plain numbers and is always released
 /// before the tracker is called, so a tracker that notifies a recorder cannot re-enter it.
 pub struct Playout {
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
     state: Mutex<PlayoutState>,
     /// A host source: a cut is reported a few scheduler hops after the clear, as the report of
     /// one crosses back from the host's own loop, on the run's spawner.
@@ -435,7 +435,7 @@ pub struct FakeAudioOutput {
 impl FakeAudioOutput {
     pub fn new(registry: Arc<Registry>, pausable: bool, lagging: bool) -> Arc<Self> {
         let playout = Arc::new(Playout {
-            tracker: Arc::default(),
+            tracker: Arc::new(lk_agents_runtime::voice::playback::Tracker::new()),
             state: Mutex::default(),
             lagging: lagging.then(|| registry.world.clone()),
             registry: Some(registry.clone()),
@@ -456,7 +456,7 @@ impl AudioOutput for FakeAudioOutput {
         "fake::audio_output"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.playout.tracker
     }
 

@@ -1,13 +1,11 @@
 //! A host `io.AudioInput` / `VideoInput` / `AudioOutput` / `TextOutput` is its trait through the
-//! generated proxy, which calls the host object's `_core_view` view. A host sink reports its playback into the [`PlaybackTracker`] its
-//! `_core_tracker()` hands over, stamped on the session's clock by [`PlaybackTracker::anchor_to`].
+//! generated proxy, which calls the host object's `_core_view` view. A host sink reports its
+//! playback into the [`PlaybackTracker`] its `_core_tracker()` hands over, stamped on the
+//! session's clock by [`PlaybackTracker::anchor_to`].
 
 use crate::voice::rtc::TrackSid;
 use crate::{AudioFrame, TimedString, Ts, WallAnchor};
-use std::collections::{BTreeMap, VecDeque};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Arc, Mutex, OnceLock};
-use std::task::{Poll, Waker};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub use crate::voice::rtc::AudioOutputCapabilities;
@@ -84,104 +82,134 @@ pub trait PlaybackObserver: Send + Sync {
     }
 }
 
-#[derive(Debug)]
-struct TrackerState {
-    /// Between the first `capture_frame` of a segment and its `flush`.
-    capturing: bool,
-    selected: Option<PlaybackSegment>,
-    pending: VecDeque<PlaybackSegment>,
-    /// The highest key begun: a begun key is never reused.
-    highest_segment: u64,
-    /// The tracker's own keys (attachment 0) for audio captured with none begun, apart from the
-    /// begun ones so they never take a key the session will hand out.
-    unkeyed_segments: u64,
-    /// Counts for waits latched at entry; keyed reports additionally enforce FIFO completion.
-    segments: u64,
-    finished: u64,
-    last: PlaybackFinished,
-    /// Bumped by [`PlaybackTracker::reset`]; a waiter latches it so a reset releases it.
-    epoch: u64,
-    progressed: Duration,
-    /// Audio captured into the open segment that no clear has dropped yet.
-    uncleared: Duration,
-    next_waiter: u64,
-    waiters: BTreeMap<u64, Waker>,
-}
-
-impl TrackerState {
-    fn open_progress(&self) -> Duration {
-        if self.finished < self.segments { self.progressed } else { Duration::ZERO }
-    }
-}
-
-/// The segment bookkeeping every [`AudioOutput`] shares, plus the fan-out to observers. Also the
-/// observer a child registers with, so a terminal's event counts at every level.
-pub struct PlaybackTracker {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    state: Mutex<TrackerState>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    observers: Mutex<Vec<Arc<dyn PlaybackObserver>>>,
-    /// The session's clock as wall seconds, for a host sink's `time.time()` stamps. Set once.
-    anchor: OnceLock<WallAnchor>,
-}
-
-impl std::fmt::Debug for PlaybackTracker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PlaybackTracker").field("state", &*self.state.lock().unwrap()).finish()
-    }
-}
-
-impl Default for PlaybackTracker {
-    fn default() -> Self {
-        PlaybackTracker::new()
-    }
-}
-
-/// A host sink's side (`io.AudioOutput._core_tracker()`): it reports its playback events here, in
-/// its own `time.time()` stamps and float seconds.
-impl PlaybackTracker {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn new() -> Self {
-        PlaybackTracker {
-            state: Mutex::new(TrackerState {
-                capturing: false,
-                selected: None,
-                pending: VecDeque::new(),
-                highest_segment: 0,
-                unkeyed_segments: 0,
-                segments: 0,
-                finished: 0,
-                last: PlaybackFinished::default(),
-                epoch: 0,
-                progressed: Duration::ZERO,
-                uncleared: Duration::ZERO,
-                next_waiter: 0,
-                waiters: BTreeMap::new(),
-            }),
-            observers: Mutex::new(Vec::new()),
-            anchor: OnceLock::new(),
-        }
-    }
-
+/// `_core.PlaybackTracker` as the core uses it: one output node's segment bookkeeping and the
+/// fan-out of its playback events. One implementation, the runtime's; ABI code reaches it only
+/// through this trait.
+#[crate::host(native(refused = "expected a `_core.PlaybackTracker`"))]
+pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
     /// Stamp a host sink's reports on the session's clock. The first anchor wins: one host sink
     /// reports to one session. Unanchored, reports are stamped on a fresh wall clock.
-    pub fn anchor_to(&self, anchor: WallAnchor) {
-        let _ = self.anchor.set(anchor);
-    }
+    fn anchor_to(&self, anchor: WallAnchor);
 
-    fn anchor(&self) -> WallAnchor {
-        *self.anchor.get_or_init(|| WallAnchor { wall: crate::unix_now(), at: Ts::ZERO })
-    }
+    /// The anchor a host sink's `time.time()` stamps are read against.
+    fn anchor(&self) -> WallAnchor;
 
-    /// `on_playback_started(created_at=)`.
-    pub fn report_started(&self, segment: PlaybackSegment, created_at: f64) -> bool {
+    /// Select the supplied correlation for the next captured segment. Already admitted or
+    /// still-capturing work cannot be replaced by a second begin.
+    fn begin_segment(&self, segment: PlaybackSegment) -> bool;
+
+    fn has_pending_segment(&self, segment: PlaybackSegment) -> bool;
+
+    /// Only the oldest segment owing a report may report.
+    fn accepts_report(&self, segment: PlaybackSegment) -> bool;
+
+    /// The key to latch before starting an external operation; never look it up on completion.
+    fn current_segment(&self) -> Option<PlaybackSegment>;
+
+    /// `AudioOutput.capture_frame`'s `super()` half for `duration` of audio: the first frame after
+    /// a flush opens a segment.
+    fn note_captured(&self, duration: Duration) -> PlaybackSegment;
+
+    /// The audio captured into the current segment since it opened or since the last take: what
+    /// a sink's clear still drops.
+    fn take_uncleared(&self) -> Duration;
+
+    /// `AudioOutput.flush`'s `super()` half: the segment is closed; its playout is still owed.
+    fn note_flush(&self);
+
+    /// `_reset_playback_count`: a parked `wait_for_playout` is released as interrupted at what
+    /// the open segment played.
+    fn reset(&self);
+
+    /// How many segments were opened so far.
+    fn segments(&self) -> u64;
+
+    /// What the sink reported played of the open segment, zero when none is open.
+    fn position(&self) -> Duration;
+
+    fn playback_started(&self, segment: PlaybackSegment, created_at: Ts) -> bool;
+
+    fn playback_progressed(
+        &self,
+        segment: PlaybackSegment,
+        started_at: Ts,
+        offset: Duration,
+        duration: Duration,
+    ) -> bool;
+
+    /// False for a stale or out-of-order key; nothing changes and nothing is emitted.
+    fn playback_finished(&self, segment: PlaybackSegment, ev: PlaybackFinished) -> bool;
+
+    /// A synchroniser's release of `word` by `segment`'s playback, fanned out like a playback
+    /// event.
+    fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString);
+
+    /// Forward this node's events to `observer` (`next.on("playback_finished", ...)`). Pass the
+    /// parent's tracker, not the node, so the chain isn't a reference cycle.
+    fn observe(&self, observer: Arc<dyn PlaybackObserver>);
+
+    /// Stop forwarding to `observer` (`next.off(...)`), by pointer.
+    fn unobserve(&self, observer: &Arc<dyn PlaybackObserver>);
+
+    /// Wait for every segment captured so far; returns the last event. Cancellation releases it.
+    fn wait_for_playout(&self) -> crate::BoxFuture<'_, PlaybackFinished>;
+
+    /// `on_playback_started(created_at=)`, in the host sink's `time.time()`.
+    fn report_started(&self, segment: PlaybackSegment, created_at: f64) -> bool {
         self.playback_started(segment, self.anchor().ts(created_at))
     }
+}
 
-    /// `on_playback_progressed(started_at=, offset=, duration=)`. Invalid durations are refused
-    /// before updating playback or notifying observers.
-    pub fn report_progressed(
-        &self,
+/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+/// shared with the session that reads it.
+#[crate::host(class(name = "PlaybackTracker", native = PlaybackTracker))]
+pub trait Playback: PlaybackTracker + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
+    #[host(call)]
+    fn note_flush(&self) {
+        PlaybackTracker::note_flush(self)
+    }
+    #[host(call)]
+    fn reset(&self) {
+        PlaybackTracker::reset(self)
+    }
+    /// `AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
+    /// synchronized_transcript)`.
+    #[host(await, name = "wait_for_playout")]
+    async fn wait_for_played(&self) -> (f64, bool, Option<String>) {
+        let ev = PlaybackTracker::wait_for_playout(self).await;
+        (ev.playback_position.as_secs_f64(), ev.interrupted, ev.synchronized_transcript)
+    }
+}
+
+/// The keyed report boundary, in the host sink's `time.time()` stamps and float seconds.
+#[crate::host(functions)]
+pub trait PlaybackReports {
+    #[host(function, name = "_core_playback_begin")]
+    fn begin(tracker: Arc<dyn PlaybackTracker>, segment: PlaybackSegment) -> bool {
+        tracker.begin_segment(segment)
+    }
+    #[host(function, name = "_core_playback_current_segment")]
+    fn current_segment(tracker: Arc<dyn PlaybackTracker>) -> Option<PlaybackSegment> {
+        tracker.current_segment()
+    }
+    #[host(function, name = "_core_playback_note_capture")]
+    fn note_capture(tracker: Arc<dyn PlaybackTracker>) -> PlaybackSegment {
+        tracker.note_captured(Duration::ZERO)
+    }
+    #[host(function, name = "_core_playback_started")]
+    fn started(
+        tracker: Arc<dyn PlaybackTracker>,
+        segment: PlaybackSegment,
+        created_at: f64,
+    ) -> bool {
+        tracker.report_started(segment, created_at)
+    }
+    /// Invalid durations are refused before updating playback or notifying observers.
+    #[host(function, name = "_core_playback_progressed")]
+    fn progressed(
+        tracker: Arc<dyn PlaybackTracker>,
         segment: PlaybackSegment,
         started_at: f64,
         offset: f64,
@@ -189,378 +217,22 @@ impl PlaybackTracker {
     ) -> std::result::Result<bool, InvalidPlaybackTime> {
         let offset = seconds(offset, "offset")?;
         let duration = seconds(duration, "duration")?;
-        Ok(self.playback_progressed(segment, self.anchor().ts(started_at), offset, duration))
+        let started_at = tracker.anchor().ts(started_at);
+        Ok(tracker.playback_progressed(segment, started_at, offset, duration))
     }
-
-    /// `on_playback_finished(..)`. False for a stale or out-of-order key; nothing is emitted.
-    pub fn report_finished(
-        &self,
+    #[host(function, name = "_core_playback_finished")]
+    fn finished(
+        tracker: Arc<dyn PlaybackTracker>,
         segment: PlaybackSegment,
         playback_position: f64,
         interrupted: bool,
         synchronized_transcript: Option<String>,
     ) -> std::result::Result<bool, InvalidPlaybackTime> {
         let playback_position = seconds(playback_position, "playback_position")?;
-        Ok(self.playback_finished(
+        Ok(tracker.playback_finished(
             segment,
             PlaybackFinished { playback_position, interrupted, synchronized_transcript },
         ))
-    }
-
-    /// Forward this node's events to `observer` (`next.on("playback_finished", ...)`). Pass the
-    /// parent's tracker, not the node, so the chain isn't a reference cycle.
-    pub fn observe(&self, observer: Arc<dyn PlaybackObserver>) {
-        self.observers.lock().unwrap().push(observer);
-    }
-
-    /// Stop forwarding to `observer` (`next.off(...)`), by pointer.
-    pub fn unobserve(&self, observer: &Arc<dyn PlaybackObserver>) {
-        self.observers.lock().unwrap().retain(|o| !Arc::ptr_eq(o, observer));
-    }
-
-    /// Cloned out: an observer is often a parent tracker that re-enters, and `Mutex` isn't reentrant.
-    fn observers(&self) -> Vec<Arc<dyn PlaybackObserver>> {
-        self.observers.lock().unwrap().clone()
-    }
-
-    fn emit(&self, notify: impl Fn(&dyn PlaybackObserver)) {
-        for o in self.observers() {
-            notify(&*o);
-        }
-        // Whoever stopped listening is forgotten here, not at `aclose`.
-        self.observers.lock().unwrap().retain(|o| !o.is_closed());
-    }
-
-    /// A synchroniser's release of `word` by `segment`'s playback, fanned out like a playback
-    /// event.
-    pub fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString) {
-        for o in self.observers() {
-            o.on_transcript_shown(segment, word);
-        }
-    }
-
-    /// Select the supplied correlation for the next captured segment. Already admitted or
-    /// still-capturing work cannot be replaced by a second begin.
-    pub fn begin_segment(&self, segment: PlaybackSegment) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if state.selected == Some(segment) {
-            return true;
-        }
-        if state.capturing || segment.segment <= state.highest_segment {
-            return false;
-        }
-        state.highest_segment = segment.segment;
-        state.selected = Some(segment);
-        true
-    }
-
-    pub fn has_pending_segment(&self, segment: PlaybackSegment) -> bool {
-        self.state.lock().unwrap().pending.contains(&segment)
-    }
-
-    pub fn accepts_report(&self, segment: PlaybackSegment) -> bool {
-        self.state.lock().unwrap().pending.front() == Some(&segment)
-    }
-
-    /// The key to latch before starting an external operation; never look it up on completion.
-    pub fn current_segment(&self) -> Option<PlaybackSegment> {
-        self.state.lock().unwrap().selected
-    }
-
-    /// `AudioOutput.capture_frame`'s `super()` half: the first frame after a flush opens a segment.
-    pub fn note_capture(&self) -> PlaybackSegment {
-        self.note_captured(Duration::ZERO)
-    }
-
-    /// [`note_capture`](Self::note_capture) of `duration` of audio.
-    pub fn note_captured(&self, duration: Duration) -> PlaybackSegment {
-        let mut s = self.state.lock().unwrap();
-        if !s.capturing {
-            s.capturing = true;
-            s.segments += 1;
-            let segment = match s.selected {
-                Some(segment) => segment,
-                None => {
-                    s.unkeyed_segments += 1;
-                    PlaybackSegment { attachment: 0, segment: s.unkeyed_segments }
-                }
-            };
-            s.selected = Some(segment);
-            s.pending.push_back(segment);
-            // A new segment: what was heard of the previous one is not this one's position.
-            s.progressed = Duration::ZERO;
-            s.uncleared = Duration::ZERO;
-        }
-        s.uncleared += duration;
-        s.selected.expect("capture opens a segment")
-    }
-
-    /// The audio captured into the current segment since it opened or since the last take: what
-    /// a sink's clear still drops. Zero when a clear already dropped everything captured.
-    pub fn take_uncleared(&self) -> Duration {
-        std::mem::take(&mut self.state.lock().unwrap().uncleared)
-    }
-
-    /// `AudioOutput.flush`'s `super()` half: the segment is closed; its playout is still owed.
-    pub fn note_flush(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.capturing = false;
-        state.selected = None;
-    }
-
-    /// `_reset_playback_count`, plus: a parked `wait_for_playout` is released with
-    /// `Finished { interrupted: true }` at what the open segment played (never the previous
-    /// segment's finish), rather than left waiting forever.
-    pub fn reset(&self) {
-        let mut s = self.state.lock().unwrap();
-        let played = s.open_progress();
-        s.last = PlaybackFinished {
-            playback_position: played,
-            interrupted: true,
-            synchronized_transcript: None,
-        };
-        s.finished = s.segments;
-        s.capturing = false;
-        s.selected = None;
-        s.pending.clear();
-        s.epoch += 1;
-        s.progressed = Duration::ZERO;
-        let waiters = std::mem::take(&mut s.waiters);
-        drop(s);
-        for waiter in waiters.into_values() {
-            waiter.wake();
-        }
-        self.on_playback_reset();
-    }
-
-    /// How many segments were opened so far: the number of the one open or last closed.
-    pub fn segments(&self) -> u64 {
-        self.state.lock().unwrap().segments
-    }
-
-    /// The playhead per segment: what the sink reported played of the open segment, zero when
-    /// none is open. Never the previous segment's finish (a cut speech would truncate at it).
-    pub fn position(&self) -> Duration {
-        self.state.lock().unwrap().open_progress()
-    }
-
-    pub fn playback_started(&self, segment: PlaybackSegment, created_at: Ts) -> bool {
-        if self.state.lock().unwrap().pending.front() != Some(&segment) {
-            return false;
-        }
-        let ev = PlaybackEvent::Started(PlaybackStarted { segment, created_at });
-        self.emit(|o| o.on_playback_event(&ev));
-        true
-    }
-
-    pub fn playback_progressed(
-        &self,
-        segment: PlaybackSegment,
-        started_at: Ts,
-        offset: Duration,
-        duration: Duration,
-    ) -> bool {
-        {
-            let mut state = self.state.lock().unwrap();
-            if state.pending.front() != Some(&segment) {
-                return false;
-            }
-            state.progressed += duration;
-        }
-        let ev =
-            PlaybackEvent::Progressed(PlaybackProgressed { segment, started_at, offset, duration });
-        self.emit(|o| o.on_playback_event(&ev));
-        true
-    }
-
-    /// Only the admitted oldest segment can finish; duplicate, reset and replaced attachment
-    /// reports are refused before counters, waiters or observers change.
-    pub fn playback_finished(&self, segment: PlaybackSegment, ev: PlaybackFinished) -> bool {
-        let waiters = {
-            let mut state = self.state.lock().unwrap();
-            if state.pending.front() != Some(&segment) {
-                return false;
-            }
-            state.pending.pop_front();
-            state.finished += 1;
-            state.last = ev.clone();
-            state.progressed = Duration::ZERO;
-            std::mem::take(&mut state.waiters)
-        };
-        for waiter in waiters.into_values() {
-            waiter.wake();
-        }
-        self.emit(|o| o.on_segment_finished(segment, &ev));
-        true
-    }
-
-    /// Wait for every segment captured so far; returns the last event. The target is latched at
-    /// entry, as the reference does, or this never returns while the agent talks.
-    pub async fn wait_for_playout(&self) -> PlaybackFinished {
-        let (target, epoch) = {
-            let s = self.state.lock().unwrap();
-            (s.segments, s.epoch)
-        };
-        let mut waiting = PlaybackWait { tracker: self, id: None };
-        std::future::poll_fn(|cx| {
-            let mut s = self.state.lock().unwrap();
-            if s.epoch != epoch || s.finished >= target {
-                return Poll::Ready(s.last.clone());
-            }
-            let id = *waiting.id.get_or_insert_with(|| {
-                s.next_waiter += 1;
-                s.next_waiter
-            });
-            s.waiters.insert(id, cx.waker().clone());
-            Poll::Pending
-        })
-        .await
-    }
-}
-
-/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
-/// shared with the session that reads it. Its state machine stays here until the audio-output
-/// legs are redesigned (MORNING Q85).
-#[crate::host(class(name = "PlaybackTracker"))]
-pub trait Playback: Send + Sync + Sized + 'static {
-    #[host(new)]
-    fn new() -> Self;
-    #[host(call)]
-    fn note_flush(&self);
-    #[host(call)]
-    fn reset(&self);
-    /// `AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
-    /// synchronized_transcript)`.
-    #[host(await, name = "wait_for_playout")]
-    async fn wait_for_played(&self) -> (f64, bool, Option<String>);
-}
-
-impl Playback for PlaybackTracker {
-    fn new() -> Self {
-        PlaybackTracker::new()
-    }
-    fn note_flush(&self) {
-        PlaybackTracker::note_flush(self)
-    }
-    fn reset(&self) {
-        PlaybackTracker::reset(self)
-    }
-    async fn wait_for_played(&self) -> (f64, bool, Option<String>) {
-        let ev = self.wait_for_playout().await;
-        (ev.playback_position.as_secs_f64(), ev.interrupted, ev.synchronized_transcript)
-    }
-}
-
-/// The keyed report boundary. Its generated functions share the tracker used by every output.
-#[crate::host(functions)]
-pub trait PlaybackReports: Send + Sync + Sized + 'static {
-    #[host(function, name = "_core_playback_begin")]
-    fn begin(tracker: Arc<PlaybackTracker>, segment: PlaybackSegment) -> bool;
-    #[host(function, name = "_core_playback_current_segment")]
-    fn current_segment(tracker: Arc<PlaybackTracker>) -> Option<PlaybackSegment>;
-    #[host(function, name = "_core_playback_note_capture")]
-    fn note_capture(tracker: Arc<PlaybackTracker>) -> PlaybackSegment;
-    #[host(function, name = "_core_playback_started")]
-    fn started(tracker: Arc<PlaybackTracker>, segment: PlaybackSegment, created_at: f64) -> bool;
-    #[host(function, name = "_core_playback_progressed")]
-    fn progressed(
-        tracker: Arc<PlaybackTracker>,
-        segment: PlaybackSegment,
-        started_at: f64,
-        offset: f64,
-        duration: f64,
-    ) -> std::result::Result<bool, InvalidPlaybackTime>;
-    #[host(function, name = "_core_playback_finished")]
-    fn finished(
-        tracker: Arc<PlaybackTracker>,
-        segment: PlaybackSegment,
-        playback_position: f64,
-        interrupted: bool,
-        synchronized_transcript: Option<String>,
-    ) -> std::result::Result<bool, InvalidPlaybackTime>;
-}
-
-impl PlaybackReports for PlaybackTracker {
-    fn begin(tracker: Arc<PlaybackTracker>, segment: PlaybackSegment) -> bool {
-        tracker.begin_segment(segment)
-    }
-    fn current_segment(tracker: Arc<PlaybackTracker>) -> Option<PlaybackSegment> {
-        tracker.current_segment()
-    }
-    fn note_capture(tracker: Arc<PlaybackTracker>) -> PlaybackSegment {
-        tracker.note_capture()
-    }
-    fn started(tracker: Arc<PlaybackTracker>, segment: PlaybackSegment, created_at: f64) -> bool {
-        tracker.report_started(segment, created_at)
-    }
-    fn progressed(
-        tracker: Arc<PlaybackTracker>,
-        segment: PlaybackSegment,
-        started_at: f64,
-        offset: f64,
-        duration: f64,
-    ) -> std::result::Result<bool, InvalidPlaybackTime> {
-        tracker.report_progressed(segment, started_at, offset, duration)
-    }
-    fn finished(
-        tracker: Arc<PlaybackTracker>,
-        segment: PlaybackSegment,
-        playback_position: f64,
-        interrupted: bool,
-        synchronized_transcript: Option<String>,
-    ) -> std::result::Result<bool, InvalidPlaybackTime> {
-        tracker.report_finished(segment, playback_position, interrupted, synchronized_transcript)
-    }
-}
-
-// Cancellation releases the captured task even if playback never completes.
-struct PlaybackWait<'a> {
-    tracker: &'a PlaybackTracker,
-    id: Option<u64>,
-}
-
-impl Drop for PlaybackWait<'_> {
-    fn drop(&mut self) {
-        if let Some(id) = self.id {
-            self.tracker.state.lock().unwrap().waiters.remove(&id);
-        }
-    }
-}
-
-impl PlaybackObserver for PlaybackTracker {
-    /// Forward a child's event as this node's own (`_forward_next_playback_finished`).
-    fn on_playback_event(&self, ev: &PlaybackEvent) {
-        match ev {
-            PlaybackEvent::Started(e) => {
-                self.playback_started(e.segment, e.created_at);
-            }
-            PlaybackEvent::Progressed(e) => {
-                self.playback_progressed(e.segment, e.started_at, e.offset, e.duration);
-            }
-            PlaybackEvent::Finished { segment, event } => {
-                self.playback_finished(*segment, event.clone());
-            }
-        }
-    }
-
-    fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString) {
-        self.transcript_shown(segment, word);
-    }
-
-    /// A reset below is told above, not repeated: each node's count is its own. The segment this
-    /// node had open is over, though, once the sink reported it cut: the next frame opens a
-    /// segment of its own, and its wait waits for it.
-    fn on_playback_reset(&self) {
-        {
-            let mut s = self.state.lock().unwrap();
-            if s.finished == s.segments {
-                s.capturing = false;
-                s.selected = None;
-            }
-        }
-        for o in self.observers() {
-            o.on_playback_reset();
-        }
     }
 }
 
@@ -685,7 +357,7 @@ pub trait AudioOutput: Send + Sync {
 
     /// This node's own bookkeeping and event fan-out. One per node, never shared.
     #[host(read_once, name = "_core_tracker")]
-    fn tracker(&self) -> &Arc<PlaybackTracker>;
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker>;
 
     #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> AudioOutputCapabilities;
@@ -902,146 +574,5 @@ impl From<crate::errors::ProviderError> for IoError {
 impl From<crate::ResampleError> for IoError {
     fn from(e: crate::ResampleError) -> Self {
         IoError::Resample(e.to_string())
-    }
-}
-
-#[cfg(test)]
-mod playback_wait_tests {
-    use super::*;
-    use std::future::Future;
-    use std::task::{Context, Wake, Waker};
-
-    struct Observer(Arc<OnceLock<()>>);
-
-    impl Wake for Observer {
-        fn wake(self: Arc<Self>) {
-            let _ = self.0.set(());
-        }
-    }
-
-    #[test]
-    fn cancellation_releases_a_playback_waiter_and_finish_releases_every_remaining_waiter() {
-        let tracker = PlaybackTracker::new();
-        let segment = tracker.note_capture();
-        let task = Arc::new(OnceLock::new());
-        let waker = Waker::from(Arc::new(Observer(task.clone())));
-        let mut cx = Context::from_waker(&waker);
-        let mut cancelled = Box::pin(tracker.wait_for_playout());
-        assert!(cancelled.as_mut().poll(&mut cx).is_pending());
-        drop(cancelled);
-        drop(waker);
-        assert_eq!(Arc::strong_count(&task), 1, "a cancelled wait must release its task");
-
-        let mut first = Box::pin(tracker.wait_for_playout());
-        let mut second = Box::pin(tracker.wait_for_playout());
-        let first_woken = Arc::new(OnceLock::new());
-        let second_woken = Arc::new(OnceLock::new());
-        let first_waker = Waker::from(Arc::new(Observer(first_woken.clone())));
-        let second_waker = Waker::from(Arc::new(Observer(second_woken.clone())));
-        assert!(first.as_mut().poll(&mut Context::from_waker(&first_waker)).is_pending());
-        assert!(second.as_mut().poll(&mut Context::from_waker(&second_waker)).is_pending());
-        let finished =
-            PlaybackFinished { playback_position: Duration::from_millis(20), ..Default::default() };
-        assert!(tracker.playback_finished(segment, finished.clone()));
-        assert!(first_woken.get().is_some());
-        assert!(second_woken.get().is_some());
-        let mut cx = Context::from_waker(Waker::noop());
-        assert_eq!(first.as_mut().poll(&mut cx), Poll::Ready(finished.clone()));
-        assert_eq!(second.as_mut().poll(&mut cx), Poll::Ready(finished));
-    }
-
-    #[test]
-    fn reset_releases_a_waiter_with_the_open_segments_played_position() {
-        let tracker = PlaybackTracker::new();
-        let segment = tracker.note_capture();
-        tracker.playback_progressed(segment, Ts::ZERO, Duration::ZERO, Duration::from_millis(20));
-        let mut waiting = Box::pin(tracker.wait_for_playout());
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(waiting.as_mut().poll(&mut cx).is_pending());
-        tracker.reset();
-        let Poll::Ready(finished) = waiting.as_mut().poll(&mut cx) else {
-            panic!("reset must release a parked waiter");
-        };
-        assert!(finished.interrupted);
-        assert_eq!(finished.playback_position, Duration::from_millis(20));
-    }
-}
-
-#[cfg(test)]
-mod playback_identity_regression {
-    use super::{
-        PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment, PlaybackTracker,
-    };
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    /// Fails on any event the tracker fans out for a segment that already finished.
-    struct NothingFor(PlaybackSegment);
-
-    impl PlaybackObserver for NothingFor {
-        fn on_playback_event(&self, ev: &PlaybackEvent) {
-            let segment = match ev {
-                PlaybackEvent::Started(e) => e.segment,
-                PlaybackEvent::Progressed(e) => e.segment,
-                PlaybackEvent::Finished { segment, .. } => *segment,
-            };
-            assert_ne!(segment, self.0, "a stale report reached the observers");
-        }
-    }
-
-    #[test]
-    fn a_delayed_old_finish_cannot_complete_a_new_segment_on_the_same_output() {
-        let tracker = PlaybackTracker::new();
-        let old = PlaybackSegment { attachment: 4, segment: 1 };
-        let new = PlaybackSegment { attachment: 5, segment: 2 };
-        let finished =
-            PlaybackFinished { playback_position: Duration::from_millis(20), ..Default::default() };
-        assert!(tracker.begin_segment(old));
-        tracker.note_captured(Duration::from_millis(20));
-        tracker.note_flush();
-        assert!(tracker.playback_finished(old, finished.clone()));
-        assert!(!tracker.begin_segment(old), "a completed key cannot be reused");
-        tracker.observe(Arc::new(NothingFor(old)));
-        assert!(tracker.begin_segment(new));
-        tracker.note_captured(Duration::from_millis(20));
-        tracker.note_flush();
-        assert!(!tracker.playback_finished(old, finished.clone()));
-        assert!(!tracker.playback_started(old, crate::Ts::ZERO));
-        assert!(!tracker.playback_progressed(
-            old,
-            crate::Ts::ZERO,
-            Duration::ZERO,
-            Duration::from_millis(20)
-        ));
-        assert!(tracker.playback_finished(new, finished));
-    }
-
-    #[test]
-    fn reset_rejects_reports_from_the_previous_attachment_without_advancing_new_work() {
-        let tracker = PlaybackTracker::new();
-        let old = PlaybackSegment { attachment: 4, segment: 1 };
-        let new = PlaybackSegment { attachment: 5, segment: 2 };
-        tracker.begin_segment(old);
-        tracker.note_capture();
-        tracker.reset();
-        tracker.begin_segment(new);
-        tracker.note_capture();
-        let finished = PlaybackFinished::default();
-        assert!(!tracker.playback_finished(old, finished.clone()));
-        assert!(tracker.playback_finished(new, finished));
-    }
-
-    /// A reset mid-capture leaves the rest of the audio a segment the session never keyed; its
-    /// number must not take the key the session hands the next speech (seed 477 refused that
-    /// speech's output after its words were forwarded).
-    #[test]
-    fn audio_captured_after_a_reset_does_not_take_the_next_speechs_key() {
-        let tracker = PlaybackTracker::new();
-        assert!(tracker.begin_segment(PlaybackSegment { attachment: 4, segment: 1 }));
-        tracker.note_capture();
-        tracker.reset();
-        tracker.note_capture();
-        tracker.note_flush();
-        assert!(tracker.begin_segment(PlaybackSegment { attachment: 4, segment: 2 }));
     }
 }

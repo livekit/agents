@@ -7,16 +7,16 @@
 //! [`ConsolePlayback`]'s; only the socket is here.
 
 use lk_agents_net::task::TaskSet;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
+use crate::tcp::Connector;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::console::ConsolePort;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackTracker,
 };
 use lk_agents_abi::{AudioFrame, Clock, Spawner};
-use crate::tcp::Connector;
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
@@ -40,7 +40,7 @@ pub struct ConsoleIo {
     reader: AsyncMutex<Option<(Box<dyn AsyncRead + Unpin + Send>, FrameDecoder)>>,
     mic: Mutex<Option<mpsc::UnboundedSender<AudioFrame>>>,
     mic_rx: AsyncMutex<mpsc::UnboundedReceiver<AudioFrame>>,
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
     playback: Mutex<ConsolePlayback>,
 }
 
@@ -56,11 +56,7 @@ impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, addr: String) -> Self {
-        Self::with_ports(
-            addr,
-            Arc::new(crate::tcp::Tcp::new(env.runtime)),
-            env.clock.clone(),
-        )
+        Self::with_ports(addr, Arc::new(crate::tcp::Tcp::new(env.runtime)), env.clock.clone())
     }
 }
 
@@ -78,7 +74,7 @@ impl ConsoleIo {
             reader: AsyncMutex::new(None),
             mic: Mutex::new(Some(mic)),
             mic_rx: AsyncMutex::new(mic_rx),
-            tracker: Arc::new(PlaybackTracker::new()),
+            tracker: Arc::new(crate::voice::playback::Tracker::new()),
             playback: Mutex::new(ConsolePlayback::default()),
         }
     }
@@ -224,7 +220,7 @@ impl AudioOutput for ConsoleIo {
         "Console"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.tracker
     }
 

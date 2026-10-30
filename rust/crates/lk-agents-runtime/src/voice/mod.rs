@@ -13,6 +13,7 @@ mod ivr;
 mod keyterm_detection;
 mod legs;
 pub mod nodes;
+pub mod playback;
 mod recorder;
 pub mod remote_session;
 pub mod resources;
@@ -41,10 +42,10 @@ pub use lk_agents_voice::agent_activity::options::InterruptionGateRules;
 pub use lk_agents_voice::agent_session::lifecycle::SessionStartPlans;
 pub use lk_agents_voice::amd::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
-pub use speech_handle::SpeechHandle;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 pub use lk_agents_voice::workflows::WorkflowRules;
 pub use session::{SessionOptions, VoiceSession};
+pub use speech_handle::SpeechHandle;
 
 pub struct Runtime {
     driver: Driver,
@@ -123,8 +124,7 @@ impl SpeechTasks {
     }
 
     fn cancel(&self, speech: SpeechId) {
-        let owned =
-            self.owned.lock().remove(&speech);
+        let owned = self.owned.lock().remove(&speech);
         owned.into_iter().flatten().for_each(|task| self.tasks.cancel(task));
     }
 }

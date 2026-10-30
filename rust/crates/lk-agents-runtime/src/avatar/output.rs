@@ -44,7 +44,7 @@ struct Inner {
     wait_playback_start: bool,
     clear_buffer_timeout: Option<Duration>,
     sample_rate: Option<u32>,
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
     /// `None` while starting, then whether the avatar became ready.
@@ -417,7 +417,7 @@ impl DataStreamAudioOutput {
             wait_playback_start,
             clear_buffer_timeout,
             sample_rate,
-            tracker: Arc::new(PlaybackTracker::new()),
+            tracker: Arc::new(crate::voice::playback::Tracker::new()),
             clock,
             spawner: Arc::clone(&spawner),
             started: watch::channel(None).0,
@@ -446,7 +446,7 @@ impl AudioOutput for DataStreamAudioOutput {
         "DataStreamIO"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.inner.tracker
     }
 

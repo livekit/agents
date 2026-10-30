@@ -7,14 +7,19 @@ use tokio::sync::watch;
 // ----------------------------------------------------------------------------- the chain
 
 /// A physical output that latches each frame's segment key; the test reports its playback.
-#[derive(Default)]
-struct KeyedPlayback(Arc<PlaybackTracker>, parking_lot::Mutex<Option<PlaybackSegment>>);
+struct KeyedPlayback(Arc<dyn PlaybackTracker>, parking_lot::Mutex<Option<PlaybackSegment>>);
+
+impl Default for KeyedPlayback {
+    fn default() -> Self {
+        Self(Arc::new(crate::voice::playback::Tracker::new()), Default::default())
+    }
+}
 
 impl AudioOutput for KeyedPlayback {
     fn label(&self) -> &str {
         "keyed playback"
     }
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.0
     }
     fn capabilities(&self) -> lk_agents_abi::voice::io::AudioOutputCapabilities {
@@ -51,7 +56,7 @@ impl PlaybackObserver for Shown {
 
 struct Chain {
     sync: Arc<TranscriptSynchronizer>,
-    leaf: Arc<PlaybackTracker>,
+    leaf: Arc<dyn PlaybackTracker>,
     shown: watch::Sender<Vec<(String, f64)>>,
     output: Arc<KeyedPlayback>,
 }

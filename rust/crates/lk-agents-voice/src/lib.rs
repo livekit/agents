@@ -22,6 +22,7 @@ pub mod filler_scheduler;
 pub mod generation;
 pub mod ivr;
 pub mod keyterm_detection;
+pub mod playback;
 pub mod recorder_io;
 pub mod remote_session;
 pub mod room_io;

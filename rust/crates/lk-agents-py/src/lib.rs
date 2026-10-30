@@ -79,8 +79,8 @@ impl generated::Implementations for Selected {
     type DataStreamAudioReceiver = lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
     type AvatarRunner = lk_agents_runtime::avatar::runner::AvatarRunner;
     type ChatRequestView = lk_agents_abi::ChatRequest;
-    type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;
-    type Playback = lk_agents_abi::voice::io::PlaybackTracker;
+    type PlaybackReports = lk_agents_runtime::voice::playback::Tracker;
+    type Playback = lk_agents_runtime::voice::playback::Tracker;
     type PlayoutLedger = lk_agents_runtime::rtc::playout::PlayoutLedger;
     type RoomRuntime = lk_agents_runtime::room_io::RoomFactory;
     type RoomEventBus = lk_agents_runtime::rtc::events::RoomEventBus;

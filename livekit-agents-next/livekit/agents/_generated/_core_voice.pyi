@@ -178,8 +178,7 @@ class BackgroundAudioPlayer:
 
 class PlaybackTracker:
     """`_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
-    shared with the session that reads it. Its state machine stays here until the audio-output
-    legs are redesigned (MORNING Q85).
+    shared with the session that reads it.
     """
     def __new__(cls) -> Self: ...
     def note_flush(self) -> None: ...
@@ -207,7 +206,8 @@ def _core_playback_progressed(
     started_at: float,
     offset: float,
     duration: float,
-) -> bool: ...
+) -> bool:
+    """Invalid durations are refused before updating playback or notifying observers."""
 
 def _core_playback_finished(
     tracker: PlaybackTracker,

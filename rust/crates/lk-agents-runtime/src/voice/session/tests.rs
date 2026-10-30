@@ -22,8 +22,8 @@ use lk_agents_voice::agent_session::*;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
 use lk_agents_voice::trace::Step;
-use std::future::Future as _;
 use parking_lot::Mutex;
+use std::future::Future as _;
 use std::time::Duration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,17 +53,22 @@ fn no_room() -> FixedRoom {
 }
 
 /// An output that never reports playback; it latches the segment its first capture was keyed to.
-#[derive(Default)]
 struct MissingPlaybackReports(
-    Arc<lk_agents_abi::voice::io::PlaybackTracker>,
+    Arc<dyn lk_agents_abi::voice::io::PlaybackTracker>,
     std::sync::OnceLock<lk_agents_abi::voice::io::PlaybackSegment>,
 );
+
+impl Default for MissingPlaybackReports {
+    fn default() -> Self {
+        Self(Arc::new(crate::voice::playback::Tracker::new()), Default::default())
+    }
+}
 
 impl lk_agents_abi::voice::io::AudioOutput for MissingPlaybackReports {
     fn label(&self) -> &str {
         "missing playback reports"
     }
-    fn tracker(&self) -> &Arc<lk_agents_abi::voice::io::PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn lk_agents_abi::voice::io::PlaybackTracker> {
         &self.0
     }
     fn capabilities(&self) -> lk_agents_abi::voice::io::AudioOutputCapabilities {
@@ -683,10 +688,14 @@ async fn an_outbound_sip_call_has_no_aec_warmup_unless_the_application_set_one()
     use lk_agents_abi::voice::room_owner::RoomIoEvent;
     async fn linked(explicit: Maybe<Option<f64>>) -> Option<f64> {
         let kwargs = SessionKwargs { aec_warmup_duration: explicit, ..option_kwargs() };
-        let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(kwargs);
+        let options =
+            <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(kwargs);
         let api = running(assembled(no_room(), None, Some(options))).await;
         let participant = ParticipantLinked { identity: "callee".into() };
-        api.api().unwrap().send(RoomIoEvent::ParticipantLinked { participant, outbound_sip: true }).unwrap();
+        api.api()
+            .unwrap()
+            .send(RoomIoEvent::ParticipantLinked { participant, outbound_sip: true })
+            .unwrap();
         let (call, answer) = api.call(Answer::idle).unwrap();
         let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
         api.send_awaited(Origin::Host, wait, call).unwrap();

@@ -7,13 +7,13 @@ use lk_agents_abi::voice::io::{
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString};
-use parking_lot::Mutex;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::lifecycle::{
     TranscriptOutput as Out, TranscriptSync, TranscriptSyncEffect, TranscriptSyncEvent,
 };
 use lk_agents_voice::transcription::pacer::{PaceEffect, PacerOptions};
 use lk_agents_voice::transcription::synchronizer::{Hyphenator, TranscriptSyncInput};
+use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 
@@ -29,7 +29,7 @@ struct Synchronizer {
     /// ends).
     forwarder_done: Arc<Monotone<bool>>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
 }
 
 impl Synchronizer {
@@ -127,7 +127,7 @@ impl Synchronizer {
 /// `_SyncedAudioOutput`.
 pub struct SyncedAudioOutput {
     sync: Arc<Synchronizer>,
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
     next: Arc<dyn AudioOutput>,
     observer: Mutex<Option<Arc<dyn PlaybackObserver>>>,
 }
@@ -205,7 +205,7 @@ impl AudioOutput for SyncedAudioOutput {
         "TranscriptSynchronizer"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.tracker
     }
 
@@ -390,7 +390,7 @@ impl TranscriptSynchronizer {
             clock,
             tx: Mutex::new(Some(tx)),
             forwarder_done: Arc::new(Monotone::new(false)),
-            tracker: Arc::new(PlaybackTracker::new()),
+            tracker: Arc::new(crate::voice::playback::Tracker::new()),
         });
         // The task holds only the done flag, so it never keeps the synchronizer alive.
         let forwarder_done = Arc::clone(&sync.forwarder_done);
@@ -463,13 +463,13 @@ impl TranscriptSynchronizer {
 
 /// A stable node beneath an audio wrapper chain, with its own segment tracker.
 pub struct AudioSinkProxy {
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
     next: Arc<dyn AudioOutput>,
 }
 
 impl AudioSinkProxy {
     pub fn new(next: Arc<dyn AudioOutput>) -> Arc<Self> {
-        let tracker = Arc::new(PlaybackTracker::new());
+        let tracker = Arc::new(crate::voice::playback::Tracker::new());
         next.tracker().observe(tracker.clone());
         Arc::new(AudioSinkProxy { tracker, next })
     }
@@ -480,7 +480,7 @@ impl AudioOutput for AudioSinkProxy {
         "AudioSinkProxy"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.tracker
     }
 

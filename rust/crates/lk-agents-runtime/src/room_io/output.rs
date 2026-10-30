@@ -13,8 +13,8 @@ use lk_agents_voice::room_io::output::{
     CaptureAdmission, Playback, PlaybackReport, capture_chunks,
 };
 use lk_agents_voice::room_io::publication::Publication;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 
@@ -33,7 +33,7 @@ struct State {
 
 struct Shared {
     clock: Arc<dyn Clock>,
-    tracker: Arc<PlaybackTracker>,
+    tracker: Arc<dyn PlaybackTracker>,
     state: Mutex<State>,
     /// One wake for every waiter; each re-checks its own condition.
     wake: Notify,
@@ -368,7 +368,7 @@ impl ParticipantAudioOutput {
             spawner,
             shared: Arc::new(Shared {
                 clock,
-                tracker: Arc::new(PlaybackTracker::new()),
+                tracker: Arc::new(crate::voice::playback::Tracker::new()),
                 state: Mutex::new(state),
                 wake: Notify::new(),
                 sample_rate,
@@ -606,7 +606,7 @@ impl AudioOutput for ParticipantAudioOutput {
         "RoomIO"
     }
 
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
         &self.shared.tracker
     }
 

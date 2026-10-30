@@ -4,7 +4,7 @@ use super::*;
 #[tokio::test(start_paused = true)]
 async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_heard_audio() {
     let api = running(unobserved(no_room(), None)).await;
-    let output = Arc::new(MissingPlaybackReports(Arc::default(), std::sync::OnceLock::new()));
+    let output = Arc::new(MissingPlaybackReports::default());
     api.set_audio_output(Some(output.clone())).unwrap();
     let frames = Items([lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160)].into());
     let speech =

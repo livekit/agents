@@ -3,8 +3,8 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{PlaybackFinished, PlaybackSegment, PlaybackTracker};
-use parking_lot::Mutex;
 use lk_agents_voice::recorder_io::{RecorderPlaybackObserver, RecorderTap};
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ impl AudioRecorder for RecorderProbe {
 
 #[test]
 fn reattaching_one_physical_output_does_not_duplicate_recorder_playback() {
-    let output = PlaybackTracker::new();
+    let output = crate::voice::playback::Tracker::new();
     let (original, replacement) = (ResourceId(1), ResourceId(2));
     let recorder = Arc::new(RecorderProbe::default());
     let counts = || *recorder.0.lock();
