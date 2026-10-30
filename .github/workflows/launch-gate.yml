@@ -49,7 +49,7 @@ jobs:
           fi
 
       - name: Prepare architecture checks
-        run: rustup component add clippy
+        run: rustup component add clippy rustfmt
 
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
