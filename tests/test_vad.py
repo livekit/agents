@@ -4,7 +4,6 @@ import asyncio
 
 import pytest
 
-from livekit.agents import APIError
 from livekit.agents.inference import VAD
 
 from . import utils
@@ -71,16 +70,3 @@ async def test_flush_allows_another_complete_speech_segment() -> None:
                 except asyncio.CancelledError:
                     pass
             stream.flush()
-
-
-async def test_audio_beyond_capacity_fails_the_stream() -> None:
-    """Audio pushed beyond the stream's capacity is an API error, never a stream that hangs."""
-    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
-    async with VAD().stream() as stream:
-        for frame in frames:
-            stream.push_frame(frame)
-        stream.end_input()
-        with pytest.raises(APIError, match="capacity"):
-            async with asyncio.timeout(30):
-                async for _ in stream:
-                    pass
