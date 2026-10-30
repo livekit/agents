@@ -169,9 +169,18 @@ fn a_refused_save_in_the_handler_fails_the_receipt() {
         step(&mut m, Completion::Done);
         let raised = StorageError::Invalid(format!("{kind}: save_context refused"));
         let abandon = operation(at(&mut m, Duration::ZERO, Err(raised)));
-        assert!(matches!(abandon, Operation::Abandon { outcome: RunOutcome::Failed, .. }));
+        assert!(
+            matches!(&abandon, Operation::Abandon { outcome: RunOutcome::Failed, reason }
+                if *reason == format!("{kind}: save_context refused")),
+            "{abandon:?}"
+        );
         let pickup = step(&mut m, Completion::Done);
         assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{kind}: {pickup:?}");
+        assert!(matches!(
+            step(&mut m, Completion::Picked(Some(TaskState::Working))),
+            Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+                if failed.len() == 1 && failed[0].0 == "receipt"
+        ));
     }
 }
 

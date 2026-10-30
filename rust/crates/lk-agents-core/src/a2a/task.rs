@@ -1031,7 +1031,10 @@ impl TaskMachine {
             }
             (Phase::Turn(_), _) => {
                 // the turn's save cannot be written: the database is lost, or the handler's own
-                // save was refused (a stale save, a field that is not JSON, a state too large)
+                // save was refused (a stale save, a field that is not JSON, a state too large).
+                // The host passes only storage errors and cancellation through (its handler's
+                // other exceptions are the output's `error`): a cancellation ends the run
+                // `canceled`, and a thread that is gone has no task to fail.
                 let fail_task =
                     !matches!(error, StorageError::Cancelled(_) | StorageError::NotFound(_));
                 let outcome = match error {

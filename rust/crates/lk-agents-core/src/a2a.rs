@@ -179,6 +179,10 @@ pub fn caller_history_of(message: &a2a::Message) -> Result<Option<Value>, Storag
         .transpose()
 }
 
+/// The storage errors a handler's own save raises, which [`host_error`] carries as `Invalid`
+/// named by their kind: a stale save, a field that is not JSON, a state too large.
+pub(crate) const SAVE_REFUSALS: [&str; 3] = ["VersionConflict", "NotSerializable", "TooLarge"];
+
 /// A failure the host's stream raised: a cancellation ends the run `canceled`, a storage error
 /// the handler met fails it as that error.
 pub fn host_error(e: ProviderError) -> StorageError {
