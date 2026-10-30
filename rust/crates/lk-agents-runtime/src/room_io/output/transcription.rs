@@ -204,11 +204,41 @@ impl ParticipantTranscriptionOutput {
         self.latched(error);
     }
 
-    fn submit(&self, writer: &mut WriterState) {
+    /// A refusal comes back, to be latched once the guard is released: latching logs.
+    fn submit(&self, writer: &mut WriterState) -> Option<IoError> {
         let WriterState { core, admission, subject, .. } = writer;
-        match admission.submit(core, subject) {
-            Ok(()) => self.changed.notify_waiters(),
-            Err(error) => self.latched(error),
+        let refused = admission.submit(core, subject).err();
+        if refused.is_none() {
+            self.changed.notify_waiters();
+        }
+        refused
+    }
+
+    /// Ends the open segment and submits; a refusal is latched after the guard.
+    fn end_segment(&self, subject: Option<Subject>) {
+        let refused = {
+            let mut writer = self.writer.lock().unwrap();
+            let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
+            writer.core.end_segment(segment);
+            let refused = self.submit(&mut writer);
+            if let Some(subject) = subject {
+                writer.subject = subject;
+            }
+            refused
+        };
+        if let Some(error) = refused {
+            self.latched(error);
+        }
+    }
+
+    fn disconnected(&self) {
+        let refused = {
+            let mut writer = self.writer.lock().unwrap();
+            writer.core.disconnected();
+            self.submit(&mut writer)
+        };
+        if let Some(error) = refused {
+            self.latched(error);
         }
     }
 
@@ -302,11 +332,7 @@ impl ParticipantTranscriptionOutput {
 
     pub async fn set_participant(&self, participant: Option<ParticipantIdentity>) -> Result<()> {
         let subject = subject_for_participant(self.room.as_ref(), participant)?;
-        let mut writer = self.writer.lock().unwrap();
-        let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
-        writer.core.end_segment(segment);
-        self.submit(&mut writer);
-        writer.subject = subject;
+        self.end_segment(Some(subject));
         Ok(())
     }
 
@@ -330,15 +356,9 @@ impl ParticipantTranscriptionOutput {
                 );
             }
             RoomEvent::ConnectionStateChanged { state } if !state.is_connected() => {
-                let mut writer = self.writer.lock().unwrap();
-                writer.core.disconnected();
-                self.submit(&mut writer);
+                self.disconnected()
             }
-            RoomEvent::Close { .. } => {
-                let mut writer = self.writer.lock().unwrap();
-                writer.core.disconnected();
-                self.submit(&mut writer);
-            }
+            RoomEvent::Close { .. } => self.disconnected(),
             _ => {}
         }
         Ok(())
@@ -346,14 +366,15 @@ impl ParticipantTranscriptionOutput {
 
     pub async fn aclose(&self) -> Result<()> {
         let requested_deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-        let deadline = {
+        let (deadline, refused) = {
             let mut writer = self.writer.lock().unwrap();
             let WriterState { core, admission, subject, .. } = &mut *writer;
-            if let Err(error) = admission.finish(core, subject) {
-                self.latched(error);
-            }
-            *writer.deadline.get_or_insert(requested_deadline)
+            let refused = admission.finish(core, subject).err();
+            (*writer.deadline.get_or_insert(requested_deadline), refused)
         };
+        if let Some(error) = refused {
+            self.latched(error);
+        }
         self.changed.notify_waiters();
         let completed = lk_agents_abi::before(
             self.clock.as_ref(),
@@ -387,7 +408,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
         text: &'a TimedString,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let shown = {
+            let (shown, refused) = {
                 let mut writer = self.writer.lock().unwrap();
                 let WriterState { core, admission, .. } = &mut *writer;
                 match core.admit_text(&text.text) {
@@ -396,16 +417,17 @@ impl TextOutput for ParticipantTranscriptionOutput {
                         let shown = visible.text.clone();
                         let segment = core.needs_segment().then(|| self.ids.next_segment_id());
                         core.capture(visible, Some(text), segment);
-                        self.submit(&mut writer);
-                        shown
+                        (shown, self.submit(&mut writer))
                     }
                     Err(error) => {
                         admission.fail(core, error.clone());
-                        self.latched(error);
-                        String::new()
+                        (String::new(), Some(error))
                     }
                 }
             };
+            if let Some(error) = refused {
+                self.latched(error);
+            }
             if let Some(next) = &self.next_in_chain
                 && !shown.is_empty()
             {
@@ -416,12 +438,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
     }
 
     fn flush(&self) {
-        {
-            let mut writer = self.writer.lock().unwrap();
-            let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
-            writer.core.end_segment(segment);
-            self.submit(&mut writer);
-        }
+        self.end_segment(None);
         if let Some(next) = &self.next_in_chain {
             next.flush();
         }
