@@ -4622,7 +4622,7 @@ pub mod stt {
             }
             Ok(::lk_agents_abi::RecognitionUsage {
                 audio_duration: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "audio_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RecognitionUsage.audio_duration"))?,
-                tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "tokens", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::usage::token_usage_from_py(v)).map(Some) })?,
+                tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "tokens", |v| crate::generated::records::usage::token_usage_from_py(v))?,
             })
     }
 
@@ -4630,7 +4630,7 @@ pub mod stt {
             let ::lk_agents_abi::RecognitionUsage { audio_duration, tokens } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("audio_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_duration, py)?)?;
-            kwargs.set_item("tokens", match tokens { None => py.None().into_bound(py), Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)? })?;
+            kwargs.set_item("tokens", crate::generated::records::usage::token_usage_to_py(py, tokens)?)?;
             crate::host::construct(RECOGNITION_USAGE.import(py, "livekit.agents._generated.stt", "RecognitionUsage")?.as_any(), (), Some(&kwargs))
     }
 

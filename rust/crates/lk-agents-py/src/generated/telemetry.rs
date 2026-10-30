@@ -249,10 +249,6 @@ fn _extract_tts_metric_state_finish_start(obj: &Bound<'_, PyAny>) -> PyResult<f6
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
 }
 
-fn _extract_tts_metric_state_finish_acquire_time(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "acquire_time")
-}
-
 fn _extract_tts_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
     (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
 }
@@ -285,9 +281,9 @@ impl TtsMetricState {
     }
 
     /// The record of a finished request or segment, then the figures reset.
-    #[pyo3(signature = (now, start, failed, batch_text, acquire_time, connection_reused, host))]
-    fn finish<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_acquire_time)] acquire_time: f64, connection_reused: bool, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, acquire_time, connection_reused, host);
+    #[pyo3(signature = (now, start, failed, batch_text, host))]
+    fn finish<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, host);
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::tts_metrics_to_py(py, value)?)).transpose()?)
     }
 }

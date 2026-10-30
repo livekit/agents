@@ -121,9 +121,9 @@ impl SpeechData {
 pub struct RecognitionUsage {
     /// Incremental audio duration/usage in seconds
     pub audio_duration: f64,
-    /// Token-based billing, when the provider reports tokens.
-    #[host(default = None)]
-    pub tokens: Option<crate::usage::TokenUsage>,
+    /// Token-based billing; zero when the provider reports no tokens.
+    #[host(default_factory = ".usage.TokenUsage")]
+    pub tokens: crate::usage::TokenUsage,
 }
 
 // `stt/stt.py:114`: one struct for all six kinds, as in the reference.

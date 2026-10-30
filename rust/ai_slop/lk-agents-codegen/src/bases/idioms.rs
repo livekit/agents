@@ -273,8 +273,6 @@ pub(super) const CHUNKED: &str = r#"
                     self._started_time,
                     False,
                     self._input_text,
-                    0.0,
-                    False,
                     _bindings.metrics_context(self._tts),
                 )
                 self._metrics = None
@@ -389,8 +387,6 @@ pub(super) const SYNTHESIZE: &str = r#"
                 self._started_time,
                 False,
                 "",
-                0.0,
-                False,
                 _bindings.metrics_context(self._tts),
             )
             _bindings.emit_metrics(self._tts, record)

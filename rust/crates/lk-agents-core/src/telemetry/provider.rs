@@ -64,7 +64,7 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
                 duration: 0.0,
                 audio_duration: Some(usage.audio_duration),
                 streamed: true,
-                tokens: usage.tokens.clone().unwrap_or_default(),
+                tokens: usage.tokens.clone(),
                 acquire_time: 0.0,
                 connection_reused: false,
                 metadata: context.metadata,
@@ -191,8 +191,6 @@ impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
         start: f64,
         failed: bool,
         batch_text: String,
-        acquire_time: f64,
-        connection_reused: bool,
         host: HostContext,
     ) -> Option<TtsMetrics> {
         if failed || (self.streamed && start == 0.0) {
@@ -200,7 +198,7 @@ impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
         }
         let text = if self.streamed { self.texts.pop_front()? } else { batch_text };
         let context = Context::from_host(host);
-        TtsMetricState::finish(self, now, start, &text, acquire_time, connection_reused, context)
+        TtsMetricState::finish(self, now, start, &text, context)
     }
 }
 
@@ -240,8 +238,6 @@ impl TtsMetricState {
         now: f64,
         start: f64,
         text: &str,
-        acquire_time: f64,
-        connection_reused: bool,
         context: Context,
     ) -> Option<TtsMetrics> {
         if self.streamed && text.is_empty() {
@@ -258,8 +254,9 @@ impl TtsMetricState {
             characters_count: text.chars().count() as u32,
             tokens: TokenUsage::default(),
             streamed: self.streamed,
-            acquire_time,
-            connection_reused,
+            // A stream's connection is reported apart (`_report_connection_acquired`).
+            acquire_time: 0.0,
+            connection_reused: false,
             segment_id: self.streamed.then(|| self.segment_id.clone()),
             speech_id: None,
             metadata: context.metadata,
@@ -336,9 +333,9 @@ mod tests {
         };
         fold.observe(&first, || 0.25);
         fold.observe(&SynthesizedAudio::new(frame(), ""), || unreachable!("read once"));
-        let record = fold.finish(2.0, 1.0, "hello", 0.0, false, context()).expect("text fed");
+        let record = fold.finish(2.0, 1.0, "hello", context()).expect("text fed");
         assert_eq!((record.request_id.as_str(), record.segment_id.as_deref()), ("", Some("")));
         assert_eq!((record.ttfb, record.characters_count), (Some(0.25), 5));
-        assert!(fold.finish(2.0, 1.0, "", 0.0, false, context()).is_none(), "no text");
+        assert!(fold.finish(2.0, 1.0, "", context()).is_none(), "no text");
     }
 }

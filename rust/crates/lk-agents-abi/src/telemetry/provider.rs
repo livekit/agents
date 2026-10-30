@@ -63,15 +63,12 @@ pub trait TtsMetricState: Send + Sized + 'static {
 
     /// The record of a finished request or segment, then the figures reset.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
     fn finish(
         &mut self,
         now: f64,
         start: f64,
         failed: bool,
         batch_text: String,
-        acquire_time: f64,
-        connection_reused: bool,
         host: HostContext,
     ) -> Option<TtsMetrics>;
 }

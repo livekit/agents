@@ -368,8 +368,6 @@ class ChunkedStream(ABC):
                     self._started_time,
                     False,
                     self._input_text,
-                    0.0,
-                    False,
                     _bindings.metrics_context(self._tts),
                 )
                 self._metrics = None
@@ -523,8 +521,6 @@ class SynthesizeStream(ABC):
                 self._started_time,
                 False,
                 "",
-                0.0,
-                False,
                 _bindings.metrics_context(self._tts),
             )
             _bindings.emit_metrics(self._tts, record)

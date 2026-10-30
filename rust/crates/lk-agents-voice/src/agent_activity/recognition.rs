@@ -63,7 +63,7 @@ impl Driver {
                 duration: 0.0,
                 audio_duration: Some(usage.audio_duration),
                 streamed: true,
-                tokens: usage.tokens.unwrap_or_default(),
+                tokens: usage.tokens,
                 acquire_time: 0.0,
                 connection_reused: false,
                 metadata: Some(id.metadata()),

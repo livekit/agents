@@ -108,8 +108,6 @@ class TtsMetricState:
         start: float,
         failed: bool,
         batch_text: str,
-        acquire_time: float,
-        connection_reused: bool,
         host: tuple[float, str, bool, str, str],
     ) -> TTSMetrics | None:
         """The record of a finished request or segment, then the figures reset."""

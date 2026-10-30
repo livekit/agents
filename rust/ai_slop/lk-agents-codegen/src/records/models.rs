@@ -380,13 +380,19 @@ fn model(
         match callable.rsplit_once('.') {
             // A module of the package (`..utils.shortuuid`): `from .. import utils`.
             Some((m, _)) if m.starts_with("..") => runtime.add("..", &m[2..]),
+            // A record of another generated module (`.usage.TokenUsage`): its class, imported.
+            Some((m, name)) if m.starts_with('.') => runtime.add(m, name),
             Some((m, _)) => runtime.add_module(m),
             None => {}
         }
     }
     // `..utils.shortuuid("item_")`: a call is a lambda; the package prefix is imported above.
     let factory = |f: &str| {
-        let f = f.strip_prefix("..").unwrap_or(f);
+        let f = match f.strip_prefix("..") {
+            Some(f) => f,
+            None if f.starts_with('.') => f.rsplit('.').next().unwrap_or(f),
+            None => f,
+        };
         if f.contains('(') { format!("lambda: {f}") } else { f.to_owned() }
     };
     // A pydantic model's discriminator constants lead its fields, as pydantic declares them.
