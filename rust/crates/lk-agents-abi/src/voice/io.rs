@@ -969,8 +969,25 @@ mod playback_wait_tests {
 
 #[cfg(test)]
 mod playback_identity_regression {
-    use super::{PlaybackFinished, PlaybackSegment, PlaybackTracker};
+    use super::{
+        PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment, PlaybackTracker,
+    };
+    use std::sync::Arc;
     use std::time::Duration;
+
+    /// Fails on any event the tracker fans out for a segment that already finished.
+    struct NothingFor(PlaybackSegment);
+
+    impl PlaybackObserver for NothingFor {
+        fn on_playback_event(&self, ev: &PlaybackEvent) {
+            let segment = match ev {
+                PlaybackEvent::Started(e) => e.segment,
+                PlaybackEvent::Progressed(e) => e.segment,
+                PlaybackEvent::Finished { segment, .. } => *segment,
+            };
+            assert_ne!(segment, self.0, "a stale report reached the observers");
+        }
+    }
 
     #[test]
     fn a_delayed_old_finish_cannot_complete_a_new_segment_on_the_same_output() {
@@ -984,6 +1001,7 @@ mod playback_identity_regression {
         tracker.note_flush();
         assert!(tracker.playback_finished(old, finished.clone()));
         assert!(!tracker.begin_segment(old), "a completed key cannot be reused");
+        tracker.observe(Arc::new(NothingFor(old)));
         assert!(tracker.begin_segment(new));
         tracker.note_captured(Duration::from_millis(20));
         tracker.note_flush();
