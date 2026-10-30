@@ -39,6 +39,9 @@ class SpeechHandle:
     def __init__(self, core: _core.SpeechHandle) -> None:
         self._core = core
         self._done_callbacks: list[Callable[[SpeechHandle], None]] = []
+        # The session's `speech_done` reached this handle; a handle made for a speech already
+        # over (its earlier handle gone, so nothing will report it again) starts done.
+        self._host_done = core.done()
         core.host = weakref.ref(self)
 
     @staticmethod
@@ -118,10 +121,9 @@ class SpeechHandle:
         return _await().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
-        """``callback(handle)`` once the speech is done; soon, if it is already. Callbacks run
-        in the order they were added: one added while earlier ones still wait for the session's
-        ``speech_done`` waits with them."""
-        if self.done() and not self._done_callbacks:
+        """``callback(handle)`` once the session reported the speech done (``speech_done``); soon,
+        if it already did. Every callback runs on that one event, in the order added."""
+        if self._host_done:
             asyncio.get_running_loop().call_soon(callback, self)
             return
         self._done_callbacks.append(callback)
@@ -132,6 +134,7 @@ class SpeechHandle:
 
     def _mark_done(self) -> None:
         """The core reported the speech done (``speech_done``): its callbacks run, in order."""
+        self._host_done = True
         callbacks, self._done_callbacks = self._done_callbacks, []
         for callback in callbacks:
             try:

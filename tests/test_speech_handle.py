@@ -21,7 +21,7 @@ class _Core:
         return self.is_done
 
 
-async def test_done_callbacks_run_in_registration_order_when_speech_done_lags() -> None:
+async def test_done_callbacks_run_on_speech_done_in_registration_order() -> None:
     core = _Core()
     handle = SpeechHandle(core)  # type: ignore[arg-type]
     calls: list[str] = []
@@ -30,6 +30,38 @@ async def test_done_callbacks_run_in_registration_order_when_speech_done_lags() 
     # added after the core ended the speech but before the session reported it done
     handle.add_done_callback(lambda _: calls.append("second"))
     await asyncio.sleep(0)
+    assert calls == [], "nothing runs before the session reports the speech done"
     handle._mark_done()
     await asyncio.sleep(0)
     assert calls == ["first", "second"]
+
+
+async def test_a_callback_added_after_the_core_ended_waits_for_speech_done() -> None:
+    core = _Core()
+    handle = SpeechHandle(core)  # type: ignore[arg-type]
+    calls: list[str] = []
+    core.is_done = True
+    handle.add_done_callback(lambda _: calls.append("late"))
+    await asyncio.sleep(0)
+    assert calls == [], "ran before the session reported the speech done"
+    handle._mark_done()
+    assert calls == ["late"]
+
+
+async def test_a_speech_cut_by_the_session_close_runs_its_done_callbacks() -> None:
+    from livekit.agents import Agent, VoiceSession
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    llm = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="hello", content="hi there", ttft=30, duration=30)]
+    )
+    calls: list[bool] = []
+    async with VoiceSession(llm=llm) as session:
+        await session.start(Agent(instructions="desk", name="desk"))
+        speech = session.generate_reply(user_input="hello")
+        speech.add_done_callback(lambda handle: calls.append(handle.done()))
+        await asyncio.sleep(0.1)
+        assert calls == []
+    await asyncio.sleep(0)
+    assert calls == [True], "the close ended the speech without telling the host"
