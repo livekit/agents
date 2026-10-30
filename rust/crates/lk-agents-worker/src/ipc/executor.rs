@@ -29,8 +29,8 @@ pub trait Runner: Send + Sync {
     /// Cancel safe.
     async fn finished(&self) -> Exit;
     /// Ends it where it can be forced: a process is killed; a thread cannot be, it ends once it
-    /// did what it was asked. Idempotent.
-    fn stop(&self);
+    /// did what it was asked. Returns whether it forced the end. Idempotent.
+    fn stop(&self) -> bool;
     /// Its own memory footprint in MB, `None` when it has none or it cannot be read. Blocking.
     fn memory_mb(&self) -> Option<f64>;
 }
@@ -85,7 +85,9 @@ impl Runner for JobThread {
         Exit { code: 0, killed: false }
     }
 
-    fn stop(&self) {}
+    fn stop(&self) -> bool {
+        false
+    }
 
     fn memory_mb(&self) -> Option<f64> {
         None

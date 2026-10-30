@@ -90,11 +90,13 @@ impl Runner for FakeRunner {
         exit.unwrap()
     }
 
-    fn stop(&self) {
+    fn stop(&self) -> bool {
         self.0.kills.fetch_add(1, Ordering::SeqCst);
-        if self.0.forced.load(Ordering::SeqCst) {
+        let forced = self.0.forced.load(Ordering::SeqCst);
+        if forced {
             self.0.child.lock().take();
         }
+        forced
     }
 
     fn memory_mb(&self) -> Option<f64> {
@@ -438,7 +440,7 @@ async fn a_runner_that_cannot_be_forced_is_asked_and_waited_for() {
     assert_eq!(recv_skipping_pings(&child).await, ToChild::Shutdown { reason: String::new() });
     tokio::time::sleep(Duration::from_secs(61)).await;
     assert!(
-        host.messages().contains(&"job thread did not ack shutdown in time, stopping it".into())
+        host.messages().contains(&"job thread did not ack shutdown in time, waiting for it".into())
     );
     assert!(!close.is_finished(), "a thread that has not exited is waited for");
     finish(&sup, &host, 0).await;

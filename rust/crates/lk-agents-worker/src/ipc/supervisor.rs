@@ -631,19 +631,17 @@ impl Driver {
         }
         match self.close {
             Close::Ack(at) if at <= now => {
+                let action = if self.stop() { "stopping it" } else { "waiting for it" };
                 let message =
-                    format!("{} did not ack shutdown in time, stopping it", self.opts.runner);
+                    format!("{} did not ack shutdown in time, {action}", self.opts.runner);
                 self.log(Level::Error, &message);
-                self.stop();
                 self.close = Close::ShuttingDown(now + secs(self.opts.close_timeout));
                 self.advance_close();
             }
             Close::ShuttingDown(at) | Close::Exit(at) if at <= now => {
-                self.log(
-                    Level::Error,
-                    &format!("{} did not exit in time, stopping it", self.opts.runner),
-                );
-                self.stop();
+                let action = if self.stop() { "stopping it" } else { "waiting for it" };
+                let message = format!("{} did not exit in time, {action}", self.opts.runner);
+                self.log(Level::Error, &message);
                 self.close = Close::Waiting;
             }
             _ => {}
@@ -812,17 +810,19 @@ impl Driver {
         self.stop();
     }
 
-    fn stop(&mut self) {
+    /// Whether the runner's end was forced (or it already ended); false while it is waited for.
+    fn stop(&mut self) -> bool {
         if self.exited() {
-            return;
+            return true;
         }
         self.startup_at = None;
         if !std::mem::replace(&mut self.stopped, true) {
             self.log(Level::Info, &format!("stopping {}", self.opts.runner));
         }
         self.closing = true;
-        self.runner.stop();
+        let forced = self.runner.stop();
         self.cleanup_at.get_or_insert(self.now() + secs(self.opts.close_timeout));
+        forced
     }
 
     fn send(&mut self, message: ToChild) {
