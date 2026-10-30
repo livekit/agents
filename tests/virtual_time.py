@@ -12,6 +12,10 @@ real time passes, so a 30-second scripted conversation completes in microseconds
 *deterministically* -- the order of timer firings is fixed by their scheduled times, not by who
 won a CPU slice.
 
+Actual executor work temporarily keeps the clock at wall-clock speed. Physical completion,
+not cancellation of its asyncio wrapper, releases that observation; real offload deadlines
+still expire, and pure virtual work keeps jumping without a real wait.
+
 The loop only virtualizes `loop.time()` (what `asyncio.sleep`/`call_later` read). The
 agent and fakes also read wall time directly, so :func:`_virtual_wall_clock` additionally points
 `time.time()` / `time.perf_counter()` at the running loop's virtual clock *for the duration of
@@ -33,11 +37,18 @@ import asyncio
 import contextlib
 import selectors
 import time
+import warnings
 from collections.abc import Callable, Iterator, Mapping
-from typing import Any
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
+from typing import Any, ParamSpec, TypeVar
 from unittest import mock
 
 import pytest
+from typing_extensions import TypeVarTuple, Unpack
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+_Args = TypeVarTuple("_Args")
 
 # A fixed, realistic wall-clock base so patched `time.time()` still looks like a real epoch.
 # Only differences are ever asserted under virtual time, so the exact value is irrelevant.
@@ -218,13 +229,35 @@ class _VirtualClock:
     fresh loop -- no global state.
     """
 
-    __slots__ = ("_time", "_read")
+    __slots__ = ("_time", "_read", "_real_work", "_real_anchor")
 
     def __init__(self) -> None:
         self._time = 0.0
         self._read = 0.0
+        self._real_work = 0
+        self._real_anchor: float | None = None
+
+    def start_real_work(self) -> None:
+        if self._real_work == 0:
+            self._real_anchor = _REAL_PERF()
+        self._real_work += 1
+
+    def finish_real_work(self) -> None:
+        assert self._real_work > 0
+        self._sync_real_time()
+        self._real_work -= 1
+        if self._real_work == 0:
+            self._real_anchor = None
+
+    def _sync_real_time(self) -> None:
+        anchor = self._real_anchor
+        if anchor is not None:
+            now = _REAL_PERF()
+            self._time += now - anchor
+            self._real_anchor = now
 
     def time(self) -> float:
+        self._sync_real_time()
         return self._time
 
     def advance(self, seconds: float) -> None:
@@ -232,13 +265,13 @@ class _VirtualClock:
             self._time += seconds
 
     def read(self) -> float:
+        self._sync_real_time()
         self._read = self._time if self._time > self._read else self._read + _TICK_EPSILON
         return self._read
 
 
 class _AutojumpSelector(selectors.BaseSelector):
-    """A selector that never really blocks: instead of waiting `timeout` seconds for the next
-    timer, it jumps the virtual clock there and returns immediately.
+    """Jump to the next timer when no physical executor work is outstanding.
 
     It delegates fd registration to a real selector and still polls it non-blockingly, so the
     loop's own self-pipe (and thus `call_soon_threadsafe` wakeups from executor threads) keep
@@ -260,6 +293,10 @@ class _AutojumpSelector(selectors.BaseSelector):
         return self._real.modify(fileobj, events, data)
 
     def select(self, timeout: float | None = None) -> list[tuple[selectors.SelectorKey, int]]:
+        if self._clock._real_work:
+            # A real worker cannot complete in virtual time. Keep deadlines moving
+            # across the entire pending interval, including CPU/ready callback time.
+            return self._real.select(timeout)
         # Hot path: only the loop's self-pipe is registered (no real I/O). A real poll could only
         # ever report that self-pipe, and a `call_soon_threadsafe` wakeup's callback is already
         # queued in the loop's `_ready` (so the next iteration runs it regardless) -- skipping the
@@ -287,6 +324,57 @@ class _AutojumpSelector(selectors.BaseSelector):
         self._real.close()
 
 
+class _ObservedExecutor(Executor):
+    """Observe one physical call through its result delivery without owning its executor."""
+
+    def __init__(
+        self, executor: Executor, loop: asyncio.AbstractEventLoop, clock: _VirtualClock
+    ) -> None:
+        self._executor = executor
+        self._loop = loop
+        self._clock = clock
+        self._physical_done = False
+        self._delivered = False
+        self._finished = False
+        self._submitted = False
+
+    def submit(self, fn: Callable[_P, _R], /, *args: _P.args, **kwargs: _P.kwargs) -> Future[_R]:
+        if self._submitted:
+            raise RuntimeError("An executor observation owns one submission")
+        self._submitted = True
+        self._clock.start_real_work()
+        try:
+            future = self._executor.submit(fn, *args, **kwargs)
+        except BaseException:
+            self._finished = True
+            self._clock.finish_real_work()
+            raise
+
+        def done(_: Future[_R]) -> None:
+            # Completion can run on a worker thread. Mutate clock state only on
+            # its loop, using the selector self-pipe to wake a real wait.
+            try:
+                self._loop.call_soon_threadsafe(self._settle, True)
+            except RuntimeError:
+                if not self._loop.is_closed():
+                    raise
+
+        future.add_done_callback(done)
+        return future
+
+    def observe(self, future: asyncio.Future[_R]) -> None:
+        future.add_done_callback(lambda _: self._settle(False))
+
+    def _settle(self, physical: bool) -> None:
+        if physical:
+            self._physical_done = True
+        else:
+            self._delivered = True
+        if self._physical_done and self._delivered and not self._finished:
+            self._finished = True
+            self._clock.finish_real_work()
+
+
 class _VirtualTimeLoop(asyncio.SelectorEventLoop):
     """A `SelectorEventLoop` whose clock only advances when the loop would otherwise sleep.
 
@@ -298,11 +386,76 @@ class _VirtualTimeLoop(asyncio.SelectorEventLoop):
 
     def __init__(self) -> None:
         self._virtual_clock = _VirtualClock()
+        self._observed_default_executor: ThreadPoolExecutor | None = None
+        self._default_executor_shutdown = False
         super().__init__(selector=_AutojumpSelector(self._virtual_clock))
         # Resolve finely enough that the sub-nanosecond tie-break is representable and only the
         # exact-same-instant timer fires per jump.
         self._clock_resolution = _FINE_RESOLUTION
         self._tie_seq = 0
+
+    def set_default_executor(self, executor: Executor) -> None:
+        if not isinstance(executor, ThreadPoolExecutor):
+            raise TypeError("executor must be a ThreadPoolExecutor")
+        super().set_default_executor(executor)
+        self._observed_default_executor = executor
+
+    def run_in_executor(
+        self,
+        executor: Executor | None,
+        func: Callable[[Unpack[_Args]], _R],
+        *args: Unpack[_Args],
+    ) -> asyncio.Future[_R]:
+        if self.is_closed():
+            raise RuntimeError("Event loop is closed")
+        if executor is None:
+            if self._default_executor_shutdown:
+                raise RuntimeError("Executor shutdown has been called")
+            selected = self._observed_default_executor
+            if selected is None:
+                selected = ThreadPoolExecutor(thread_name_prefix="asyncio")
+                self.set_default_executor(selected)
+            executor = selected
+        observed = _ObservedExecutor(executor, self, self._virtual_clock)
+        future = super().run_in_executor(observed, func, *args)
+        observed.observe(future)
+        return future
+
+    async def shutdown_default_executor(self, timeout: float | None = None) -> None:
+        self._default_executor_shutdown = True
+        executor = self._observed_default_executor
+        if executor is None:
+            return
+        # Keep the physical join observable even if this coroutine times out or
+        # is cancelled. Running that join on the executor being shut down deadlocks.
+        joiner = ThreadPoolExecutor(max_workers=1, thread_name_prefix="virtual-shutdown")
+        observed = _ObservedExecutor(joiner, self, self._virtual_clock)
+        try:
+            future = super().run_in_executor(observed, executor.shutdown, True)
+            observed.observe(future)
+
+            # An abandoned observer must not leave an un-retrieved shutdown error;
+            # awaiting the same Future still propagates its original exception.
+            def joined(done: asyncio.Future[None]) -> None:
+                try:
+                    if not done.cancelled():
+                        done.exception()
+                finally:
+                    # Only bookkeeping remains once the physical Future completes.
+                    joiner.shutdown(wait=True)
+
+            future.add_done_callback(joined)
+            try:
+                await asyncio.wait_for(asyncio.shield(future), timeout)
+            except asyncio.TimeoutError:
+                warnings.warn(
+                    f"The executor did not finish joining its threads within {timeout} seconds.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                executor.shutdown(wait=False)
+        finally:
+            joiner.shutdown(wait=False)
 
     def time(self) -> float:
         return self._virtual_clock.time()

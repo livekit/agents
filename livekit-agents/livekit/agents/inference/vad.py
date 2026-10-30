@@ -24,7 +24,6 @@ from typing import Literal
 import numpy as np
 
 from livekit import rtc
-from livekit.local_inference import VAD as _NativeVAD, VAD_WINDOW_SAMPLES
 
 from .. import utils, vad
 from ..log import logger
@@ -50,9 +49,9 @@ class _VADOptions:
 class VAD(vad.VAD):
     """Voice Activity Detection backed by ``livekit-local-inference``.
 
-    The native model singleton is loaded once at module import (via the
-    pybind11 ``.so`` constructor); each stream allocates its own per-instance
-    LSTM/context state. Each stream uses a dedicated one-worker executor by default.
+    Each stream owns its native LSTM/context state and a dedicated one-worker
+    executor by default. Failed native initialization retires the stream's fresh
+    tasks and owned executor before returning the error.
     When an executor is provided, the caller remains responsible for shutting it down.
     """
 
@@ -145,26 +144,59 @@ class VAD(vad.VAD):
 
 class _VADStream(vad.VADStream):
     def __init__(self, parent: VAD, opts: _VADOptions, *, executor: Executor | None) -> None:
-        super().__init__(parent)
-        self._opts = opts
-        self._owns_executor = executor is None
-        if executor is None:
-            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference.vad")
-        self._executor = executor
-        self._native_vad = _NativeVAD()
+        from livekit.local_inference import VAD as _NativeVAD
 
-        self._input_sample_rate = 0
-        self._speech_buffer: np.ndarray | None = None
-        self._speech_buffer_index = 0
-        self._speech_buffer_max_reached = False
-        self._prefix_padding_samples = 0  # (input_sample_rate)
+        asyncio.get_running_loop()  # Reject invalid stream ownership before allocating resources.
+        super().__init__(parent)
+        owned_executor: ThreadPoolExecutor | None = None
+        try:
+            self._opts = opts
+            self._owns_executor = executor is None
+            if executor is None:
+                owned_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="inference.vad"
+                )
+                executor = owned_executor
+            self._executor = executor
+            self._close_task: asyncio.Task[None] | None = None
+
+            self._input_sample_rate = 0
+            self._speech_buffer: np.ndarray | None = None
+            self._speech_buffer_index = 0
+            self._speech_buffer_max_reached = False
+            self._prefix_padding_samples = 0  # (input_sample_rate)
+            self._native_vad = _NativeVAD()
+        except BaseException:
+            # These tasks cannot run until this synchronous constructor returns.
+            self._task.cancel()
+            self._metrics_task.cancel()
+            self._input_ch.close()
+            self._event_ch.close()
+            if owned_executor is not None:
+                owned_executor.shutdown(wait=True, cancel_futures=True)
+            raise
 
     async def aclose(self) -> None:
+        task = self._close_task
+        if task is not None and task.done():
+            if task.cancelled() or task.exception() is not None:
+                task = None
+        if task is None:
+            self._close_task = task = asyncio.create_task(self._close())
+        await utils.aio.join_task(task)
+
+    async def _close(self) -> None:
         try:
             await super().aclose()
         finally:
+            await utils.aio.join_task(asyncio.create_task(asyncio.to_thread(self._close_native)))
+
+    def _close_native(self) -> None:
+        try:
+            self._native_vad.close()
+        finally:
             if self._owns_executor:
-                self._executor.shutdown(wait=False, cancel_futures=True)
+                self._executor.shutdown(wait=True, cancel_futures=True)
 
     def update_options(
         self,
@@ -198,9 +230,11 @@ class _VADStream(vad.VADStream):
                 self._opts.prefix_padding_duration * self._input_sample_rate
             )
 
+            # The loop mutates this private buffer; event frames own copied bytes.
             self._speech_buffer.resize(
                 int(self._opts.max_buffered_speech * self._input_sample_rate)
-                + self._prefix_padding_samples
+                + self._prefix_padding_samples,
+                refcheck=False,
             )
 
             # Resizing may discard samples that the write cursor still counted.
@@ -211,6 +245,7 @@ class _VADStream(vad.VADStream):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        from livekit.local_inference import VAD_WINDOW_SAMPLES
 
         # "pub_" means public, these values are exposed to the users through events
         pub_speaking = False
@@ -231,14 +266,14 @@ class _VADStream(vad.VADStream):
 
         extra_inference_time = 0.0
 
-        def _reset_state() -> None:
+        async def _reset_state() -> None:
             nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
             nonlocal pub_current_sample, pub_timestamp
             nonlocal speech_threshold_duration, silence_threshold_duration
             nonlocal input_frames, inference_frames, resampler
             nonlocal input_copy_remaining_fract, extra_inference_time
 
-            self._native_vad.reset()
+            await asyncio.get_running_loop().run_in_executor(self._executor, self._native_vad.reset)
 
             self._speech_buffer_index = 0
             self._speech_buffer_max_reached = False
@@ -269,7 +304,7 @@ class _VADStream(vad.VADStream):
 
         async for input_frame in self._input_ch:
             if isinstance(input_frame, self._FlushSentinel):
-                _reset_state()
+                await _reset_state()
                 continue
 
             if not isinstance(input_frame, rtc.AudioFrame):

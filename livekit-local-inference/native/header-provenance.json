@@ -1,0 +1,44 @@
+{
+  "provider": "Official Node.js 26.12.1 public declaration headers",
+  "node_header_version": "26.12.1",
+  "napi_version": 8,
+  "source_tag": "https://github.com/nodejs/node/tree/v26.12.1/src",
+  "public_api_documentation": "https://nodejs.org/api/n-api.html",
+  "files": [
+    {
+      "name": "node_api.h",
+      "source": "https://github.com/nodejs/node/blob/v26.12.1/src/node_api.h",
+      "sha256": "2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a",
+      "bytes": 10370
+    },
+    {
+      "name": "node_api_types.h",
+      "source": "https://github.com/nodejs/node/blob/v26.12.1/src/node_api_types.h",
+      "sha256": "a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00",
+      "bytes": 1930
+    },
+    {
+      "name": "js_native_api.h",
+      "source": "https://github.com/nodejs/node/blob/v26.12.1/src/js_native_api.h",
+      "sha256": "82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840",
+      "bytes": 33170
+    },
+    {
+      "name": "js_native_api_types.h",
+      "source": "https://github.com/nodejs/node/blob/v26.12.1/src/js_native_api_types.h",
+      "sha256": "c12406a8c0036aefdb66b98065fc88e2e7a053c1f274deef33af6c26c099b933",
+      "bytes": 8335
+    },
+    {
+      "name": "node_version.h",
+      "source": "https://github.com/nodejs/node/blob/v26.12.1/src/node_version.h",
+      "sha256": "971263ecd7bf9534c80ab1c69bf4df1643d5c9af1a913bcdea85d6b39589c92c",
+      "bytes": 4630
+    }
+  ],
+  "license": {
+    "source": "https://github.com/nodejs/node/blob/v26.12.1/LICENSE",
+    "sha256": "8e603aa87c70d36e497004f0dec63111511cb61b7d65ace12e10ea791599286c",
+    "notice": "Node.js MIT notice retained in full with bundled third-party notices"
+  }
+}

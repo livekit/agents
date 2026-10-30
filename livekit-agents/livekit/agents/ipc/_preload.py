@@ -62,6 +62,13 @@ def _local_inference_models() -> bool:
     # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise)
     import livekit.local_inference as li
 
+    # Process-owned workers need a job lifetime; they cannot be inherited from preload.
+    fork_safe: object = getattr(li, "FORK_SAFE_PREWARM", True)
+    if not isinstance(fork_safe, bool):
+        raise TypeError("FORK_SAFE_PREWARM must be a boolean")
+    if not fork_safe:
+        return False
+
     li.init_vad()
 
     # the EOT weights cost ~244 MB: a process without a multiprocessing parent (the forkserver,

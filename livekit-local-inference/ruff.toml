@@ -1,0 +1,7 @@
+extend = "../pyproject.toml"
+target-version = "py315"
+
+[lint.isort]
+force-sort-within-sections = true
+lines-after-imports = 2
+known-first-party = ["livekit", "_environment", "_fake_worker"]

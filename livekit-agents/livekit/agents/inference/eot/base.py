@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -114,6 +115,7 @@ class _BaseStreamingTurnDetectorStream:
         self._warned_cloud_failure = False
         self._warned_local_failure = False
         self._transport_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
         self._fallback_requested = False
 
         self._audio_input_sample_rate: int | None = None
@@ -311,11 +313,27 @@ class _BaseStreamingTurnDetectorStream:
     # region: teardown
 
     async def aclose(self) -> None:
-        self._transport.detach()
-        self.end_input()  # the flush inside closes the in-flight request
-        await aio.cancel_and_wait(self._task)
-        await aio.cancel_and_wait(*self._tasks)
-        self.cancel_inference()  # defensive, normally a no-op
+        task = self._close_task
+        if task is not None and task.done():
+            if task.cancelled() or task.exception() is not None:
+                task = None
+        if task is None:
+            self._close_task = task = asyncio.create_task(self._close())
+        await aio.join_task(task)
+
+    async def _close(self) -> None:
+        # Keep local ownership separate from the cloud/third-party protocol.
+        from .transports import _LocalTransport
+
+        async with AsyncExitStack() as cleanup:
+            if isinstance(self._transport, _LocalTransport):
+                cleanup.push_async_callback(self._transport.aclose)
+            cleanup.callback(self.cancel_inference)
+            cleanup.push_async_callback(aio.cancel_and_wait, *tuple(self._tasks))
+            cleanup.push_async_callback(aio.cancel_and_wait, self._task)
+            cleanup.callback(self._audio_ch.close)
+            self._transport.detach()
+            self.end_input()  # the flush inside closes the in-flight request
 
     # endregion
 

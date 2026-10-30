@@ -1,0 +1,100 @@
+name: Native inference source checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - livekit-local-inference/**
+      - .github/workflows/native-inference.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-inference-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: darwin-arm64
+          - os: ubuntu-24.04
+            platform: linux-x64-gnu
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64-gnu
+    env:
+      ENGINE_PLATFORM: ${{ matrix.platform }}
+      PYTHON_CPU_COUNT: "1"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      MAKEFLAGS: "-j1"
+      SOURCE_DATE_EPOCH: "1793232000"
+      ZERO_AR_DATE: "1"
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.15.2"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.13.6"
+      - name: Install hash-locked build tools
+        run: |
+          uv --no-config venv --python 3.15.2 .host-venv
+          .host-venv/bin/python -I -c 'import os, platform, sys, sysconfig; expected = {"darwin-arm64": ("darwin", "arm64"), "linux-x64-gnu": ("linux", "x86_64"), "linux-arm64-gnu": ("linux", "aarch64")}; assert sys.version_info[:3] == (3, 15, 2), sys.version; assert not sysconfig.get_config_var("Py_GIL_DISABLED"); assert (sys.platform, platform.machine()) == expected[os.environ["ENGINE_PLATFORM"]]'
+          uv --no-config pip install --python .host-venv/bin/python --require-hashes \
+            -r livekit-local-inference/build-requirements.txt
+      - name: Fetch the pinned engine archive without executing it
+        run: |
+          mkdir archives
+          curl --fail --location --proto '=https' --tlsv1.2 --max-filesize 134217728 \
+            --connect-timeout 15 --max-time 120 \
+            --output "archives/local-inference-${ENGINE_PLATFORM}-0.2.7.tgz" \
+            "https://registry.npmjs.org/@livekit/local-inference-${ENGINE_PLATFORM}/-/local-inference-${ENGINE_PLATFORM}-0.2.7.tgz"
+      - name: Reproduce the host from two fresh source projections
+        run: |
+          for iteration in 1 2; do
+            source="$PWD/native-source-${iteration}"
+            .host-venv/bin/python -I -B livekit-local-inference/prepare.py \
+              --archives archives --platform "$ENGINE_PLATFORM" "$source"
+            export CFLAGS="-O2 -g0 -DNDEBUG -ffile-prefix-map=$source=. -fdebug-prefix-map=$source=. -fmacro-prefix-map=$source=."
+            export CXXFLAGS="$CFLAGS"
+            uv --no-config build --wheel --python .host-venv/bin/python \
+              --no-build-isolation --out-dir "wheels-${iteration}" "$source"
+          done
+          .host-venv/bin/python -I -c 'from pathlib import Path; first, = Path("wheels-1").glob("*.whl"); second, = Path("wheels-2").glob("*.whl"); assert first.read_bytes() == second.read_bytes(), "fresh source builds differ"'
+      - name: Exercise the installed facade and source-owned fake
+        run: |
+          uv --no-config pip install --python .host-venv/bin/python --require-hashes \
+            -r livekit-local-inference/test-requirements.txt
+          uv --no-config pip install --python .host-venv/bin/python --no-deps --no-index wheels-1/*.whl
+          mkdir .fake-native
+          if [ "$RUNNER_OS" = macOS ]; then
+            c++ -std=c++20 -O2 -g0 -Wall -Wextra -Werror -Wconversion -Wshadow \
+              -pthread -bundle -undefined dynamic_lookup \
+              -I livekit-local-inference/native/include livekit-local-inference/native/fake.cpp \
+              -o .fake-native/source-owned-fake.node
+          else
+            c++ -std=c++20 -O2 -g0 -Wall -Wextra -Werror -Wconversion -Wshadow \
+              -pthread -shared -fPIC -I livekit-local-inference/native/include \
+              livekit-local-inference/native/fake.cpp -o .fake-native/source-owned-fake.node
+          fi
+          LIVEKIT_BOUNDARY_PACKAGE_ROOT=$( .host-venv/bin/python -I -c 'import sysconfig; print(sysconfig.get_path("purelib"))' )
+          export LIVEKIT_BOUNDARY_PACKAGE_ROOT
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_boundary.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_transport.py
+          LIVEKIT_BOUNDARY_NATIVE_DIR="$PWD/.fake-native" \
+            .host-venv/bin/python -I -B livekit-local-inference/tests/probe_lifecycle.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_restart.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_fork.py
+          .host-venv/bin/python -I -B livekit-local-inference/tests/probe_cold_retirement.py

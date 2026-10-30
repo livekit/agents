@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools==84.2.1", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livekit-local-inference"
+version = "0.2.7"
+description = "LiveKit local inference through a source-owned CPython N-API host"
+requires-python = "==3.15.2"
+dependencies = ["numpy>=2.5.4,<3"]
+license = "Apache-2.0 AND MIT AND LicenseRef-LiveKit-Model"
+license-files = ["LICENSE", "MODEL_LICENSE", "native/NODE-LICENSE"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["livekit.local_inference*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"livekit.local_inference" = ["py.typed", "*.pyi", "_vendor/*"]
+
+[[tool.setuptools.ext-modules]]
+name = "livekit.local_inference._napi_host315"
+sources = ["native/host.cpp"]
+include-dirs = ["native/include"]
+language = "c++"
+extra-compile-args = ["-std=c++20", "-Wall", "-Wextra", "-Werror", "-Wconversion", "-Wshadow", "-fvisibility=hidden", "-fno-omit-frame-pointer", "-pthread"]
+extra-link-args = ["-pthread"]
