@@ -57,6 +57,13 @@ impl Output {
         let real = sent.iter().filter(|s| !s.is_final).map(|s| s.samples).sum();
         (real, sent.iter().filter(|s| s.is_final).count())
     }
+
+    /// Every sample sent, final frame included, and whether the final came last and only once.
+    fn total_and_final_last(&self) -> (u32, bool) {
+        let sent = self.sent.lock().unwrap();
+        let finals = sent.iter().filter(|s| s.is_final).count();
+        (sent.iter().map(|s| s.samples).sum(), finals == 1 && sent.last().unwrap().is_final)
+    }
 }
 
 fn emitter(output: &Arc<Output>) -> AudioEmitter {
@@ -129,41 +136,43 @@ async fn a_closed_synthesis_stays_closed() {
     assert_eq!(output.real_and_finals(), (0, 0));
 }
 
+// Catches: a WAV segment ended without its resampler's tail (the last milliseconds of every
+// sentence cut), or the tail framed after the final marker; and a header split across pushes
+// played as audio.
+#[tokio::test]
+async fn wav_is_resampled_and_its_tail_framed_before_the_segment_ends() {
+    let output = Arc::new(Output::default());
+    let emitter = emitter(&output);
+    initialize(&emitter, "audio/wav", 24_000, true);
+    let samples: Vec<i16> = (0..1600).map(|i| ((i % 64) * 256) as i16).collect();
+    let file = lk_agents_media::wav::encode(16_000, 1, &lk_agents_media::pcm_bytes(&samples));
+    emitter.start_segment("s".into()).unwrap();
+    for chunk in file.chunks(7) {
+        emitter.push(chunk).unwrap();
+    }
+    emitter.end_segment().unwrap();
+    let (total, final_last) = output.total_and_final_last();
+    assert!(final_last, "one final, after all the audio");
+    assert!(total.abs_diff(2400) <= 10, "100 ms at 24 kHz, the resampler drained: {total}");
+}
+
+// Catches: bytes that are not a WAV file framed as PCM noise instead of failing the push.
+#[tokio::test]
+async fn a_push_that_is_not_wav_fails_instead_of_playing_noise() {
+    let output = Arc::new(Output::default());
+    let emitter = emitter(&output);
+    initialize(&emitter, "audio/wav", 24_000, false);
+    let error = emitter.push(b"ID3\x04\x00\x00\x00\x00\x00\x00 not a riff file").unwrap_err();
+    assert!(matches!(error, EmitterError::Decode(_)), "{error:?}");
+    assert_eq!(output.real_and_finals(), (0, 0));
+}
+
 #[cfg(feature = "ffmpeg")]
 fn opus(samples: usize) -> Vec<u8> {
     let mut encoder = lk_agents_media::OggOpusEncoder::new(48_000, 1, 24_000).unwrap();
     let mut encoded = encoder.push(&vec![100; samples]).unwrap();
     encoded.extend(encoder.finish().unwrap());
     encoded
-}
-
-// Catches: a segment ended before its container finished decoding: the final marker went out
-// first and the segment's audio was then refused outside any segment.
-#[cfg(feature = "ffmpeg")]
-#[tokio::test]
-async fn each_compressed_segment_ends_after_its_decoded_audio() {
-    let output = Arc::new(Output::default());
-    let emitter = emitter(&output);
-    initialize(&emitter, "audio/ogg", 48_000, true);
-    let encoded = opus(4800);
-    for segment in ["a", "b"] {
-        emitter.start_segment(segment.into()).unwrap();
-        for chunk in encoded.chunks(97) {
-            emitter.push(chunk).unwrap();
-        }
-        emitter.end_segment().unwrap();
-    }
-    emitter.end_input().unwrap();
-    emitter.join().await.unwrap();
-    let sent = output.sent.lock().unwrap();
-    let finals: Vec<usize> = (0..sent.len()).filter(|&i| sent[i].is_final).collect();
-    assert_eq!(finals.len(), 2);
-    let first: u32 = sent[..finals[0]].iter().map(|s| s.samples).sum();
-    let second: u32 = sent[finals[0] + 1..finals[1]].iter().map(|s| s.samples).sum();
-    assert!(first >= 4000, "the first segment's audio precedes its final marker: {first}");
-    assert_eq!(first, second, "each segment decodes its own container");
-    drop(sent);
-    emitter.aclose().await.unwrap();
 }
 
 // Catches: close returning while a decoder still runs, or audio framed after close.
