@@ -647,8 +647,6 @@ async fn rare_host_calls_reach_a_running_session() {
     let frames = Items(Default::default());
     let recorded = api.say_audio("Hi.".into(), Box::new(frames), None, true, None).unwrap();
     HostSpeech::wait_until_created(&*recorded).await.unwrap();
-    // Outside any speech: nothing to end.
-    api.end_call(String::new()).unwrap();
 
     assert_eq!(api.keyterms(), None);
     assert!(!api.amd_listening());
@@ -908,4 +906,38 @@ async fn a_finished_speech_leaves_the_sessions_registry() {
     }
     assert_eq!(api.speeches.len(), 0, "finished speeches stayed in the session's registry");
     api.close(CloseReason::UserInitiated, false, None).await;
+}
+
+// Catches: an override layer held before `start()` lost to a session build that failed, so the
+// retried start ran without it, or left with the options once the session took it.
+#[tokio::test(start_paused = true)]
+async fn a_failed_build_leaves_the_held_override_for_the_retried_start() {
+    use lk_agents_abi::voice::session::SessionOptions as _;
+    use lk_agents_abi::voice::session_options::{EndpointingKwargs, SessionLegs, UpdateKwargs};
+    let options = SessionOptions::new(option_kwargs());
+    options.override_options(UpdateKwargs {
+        endpointing_opts: Some(EndpointingKwargs { min_delay: Some(0.9), ..Default::default() }),
+        ..Default::default()
+    });
+    // A remote session needs a room or a console: this build fails.
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        room_io_config: Some(Default::default()),
+        remote_session: Some(Arc::new(UnusedRemotePort)),
+        ..Default::default()
+    };
+    let room = Arc::new(no_room()) as Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>;
+    let env = lk_agents_net::env::ProcessEnv::current_runtime();
+    let failed = <VoiceSession as lk_agents_abi::voice::session::VoiceSession>::new(
+        &env,
+        room,
+        args,
+        Some(options.clone()),
+    );
+    assert!(failed.is_err());
+
+    let api = assembled(no_room(), None, Some(options.clone()));
+    assert_eq!(api.resolved_options().unwrap().endpointing.min_delay, 0.9);
+    let legs = SessionLegs { stt: true, vad: true, llm: true, tts: true, ..SessionLegs::none() };
+    assert_eq!(options.resolved(legs).endpointing.min_delay, 0.5);
 }

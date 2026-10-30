@@ -33,15 +33,13 @@ impl SessionOptions {
         self.0.lock()
     }
 
-    /// The session layer and the held override layers the session starts with.
-    pub fn layers(&self) -> ConfigStack {
-        self.state().layers.clone()
-    }
-
-    /// The session built over these options holds the override layers it read from now on,
-    /// released through it. A layer pushed since stays here.
-    pub fn hand_over_layers(&self, ids: &[u64]) {
-        self.state().layers.overrides.retain(|layer| !ids.contains(&layer.id));
+    /// The session layer and the held override layers the session starts with; the session
+    /// holds those layers from now on, released through it.
+    pub fn take_layers(&self) -> ConfigStack {
+        let mut state = self.state();
+        let layers = state.layers.clone();
+        state.layers.overrides.clear();
+        layers
     }
 
     pub fn conn(&self) -> SessionConnOptions {
