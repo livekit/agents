@@ -1282,7 +1282,15 @@ async def main() -> int:
     await session.start(front_desk(), room=None)
 
     print("== say")
-    handle = session.say("Let me say something.")
+    registered = asyncio.Event()
+
+    async def gated() -> AsyncIterator[str]:
+        # With no audio output a say can end before the next line runs; its words end only
+        # once the callbacks below are registered, so the removal reaches a pending callback.
+        await registered.wait()
+        yield "Let me say something."
+
+    handle = session.say(gated())
     # set before the core created the speech: the speech is created with it
     handle.allow_interruptions = False
     calls: list[str] = []
@@ -1290,9 +1298,10 @@ async def main() -> int:
     handle.add_done_callback(dropped := lambda h: calls.append("dropped"))
     handle.add_done_callback(lambda h: calls.append("second"))
     handle.remove_done_callback(dropped)
-    await until(handle.done, "say() did not finish")
-    await asyncio.sleep(0)
-    assert not handle.allow_interruptions, "the setter before creation was lost"
+    registered.set()
+    # the callbacks run when the session reports the speech done, after `done()` turns true
+    await until(lambda: len(calls) >= 2, "say()'s done callbacks did not run")
+    assert handle.done() and not handle.allow_interruptions, "the setter before creation was lost"
     assert calls == [f"first {handle.id}", "second"], calls
     assert handle.exception() is None
     late: list[str] = []
