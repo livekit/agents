@@ -68,6 +68,7 @@ EmbeddingModels = Literal[
 ]
 
 AssistantTools = Literal["code_interpreter", "file_search", "function"]
+DecisionModels = Literal["gpt-6-luna-decisions"]
 
 # adapters for OpenAI-compatible LLMs
 
@@ -108,6 +109,7 @@ NebiusChatModels = Literal[
 
 CerebrasChatModels = Literal[
     "gpt-oss-120b",
+    "qwen-3.8-27b",
     "zai-glm-4.7",
     "gemma-4-31b",
 ]

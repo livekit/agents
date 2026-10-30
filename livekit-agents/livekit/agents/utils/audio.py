@@ -117,7 +117,7 @@ class AudioByteStream:
         self._buf = bytearray()
 
         if progressive:
-            min_samples = sample_rate * self._MIN_PROGRESSIVE_MS // 1000
+            min_samples = max(1, sample_rate * self._MIN_PROGRESSIVE_MS // 1000)
             self._initial_bytes_per_frame = min(
                 min_samples * self._bytes_per_sample, self._target_bytes_per_frame
             )
@@ -372,6 +372,7 @@ class AudioArrayBuffer:
     def reset(self) -> None:
         self._start_idx = 0
         self._buffer.fill(0)
+        self._resampler = None
 
     def __len__(self) -> int:
         return self._start_idx

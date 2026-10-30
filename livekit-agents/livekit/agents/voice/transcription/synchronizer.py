@@ -170,6 +170,8 @@ class _SegmentSynchronizerImpl:
 
         self._playback_completed = False
         self._interrupted = False
+        # the audio source failed before covering the text, e.g. a TTS error
+        self.audio_truncated = False
 
     @property
     def id(self) -> str:
@@ -297,7 +299,8 @@ class _SegmentSynchronizerImpl:
         self._output_enabled_ev.set()
 
     def _reestimate_speed(self) -> None:
-        if not self._text_data.done or not self._audio_data.done:
+        # truncated audio covers only part of the text, so it would inflate the speed
+        if not self._text_data.done or not self._audio_data.done or self.audio_truncated:
             return
 
         # pushed_text carries the raw LLM markup (the room output strips it downstream);
@@ -328,6 +331,8 @@ class _SegmentSynchronizerImpl:
             )
             return
 
+        # a truncated input keeps the transcript to what played, as an interruption does
+        interrupted = interrupted or self.audio_truncated
         self._interrupted = interrupted
         if not self._text_data.done or not self._audio_data.done:
             logger.warning(
@@ -687,6 +692,10 @@ class _SyncedAudioOutput(io.AudioOutput):
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
 
+    def _mark_input_truncated(self) -> None:
+        self._synchronizer._impl.audio_truncated = True
+        super()._mark_input_truncated()
+
     # this is going to be automatically called by the next_in_chain
     def on_playback_started(self, *, created_at: float) -> None:
         super().on_playback_started(created_at=created_at)
@@ -700,6 +709,10 @@ class _SyncedAudioOutput(io.AudioOutput):
         interrupted: bool,
         synchronized_transcript: str | None = None,
     ) -> None:
+        # A downstream capture can be canceled before this wrapper counts its segment.
+        if not self._pending_playback_count:
+            return
+
         if not self._synchronizer.enabled:
             super().on_playback_finished(
                 playback_position=playback_position,

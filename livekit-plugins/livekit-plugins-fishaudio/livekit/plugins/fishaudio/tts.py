@@ -106,7 +106,8 @@ class TTS(tts.TTS):
 
         Args:
             api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
-            model (TTSModels | str): TTS model to use. Defaults to ``"s2.1-pro"``.
+            model (TTSModels | str): TTS model to use: ``"s1"``, ``"s2-pro"``, ``"s2.1-pro"``,
+                or ``"drama-3"``. Defaults to ``"s2.1-pro"``.
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
             output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.

@@ -22,7 +22,7 @@ import json
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import aiohttp
 import numpy as np
@@ -38,7 +38,7 @@ from livekit.agents import (
     tts,
 )
 
-from .models import is_mist_model
+from .models import CustomLexiconEntry, is_mist_model
 
 WebSocketProtocol = Literal["binary", "json"]
 RimeAudioFormat = Literal[
@@ -77,6 +77,7 @@ class SynthesisOptions:
     time_scale_factor: float | None = None
     pause_between_brackets: bool | None = None
     phonemize_between_brackets: bool | None = None
+    custom_lexicon: tuple[CustomLexiconEntry, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -291,19 +292,6 @@ def _model_endpoint_identity(websocket_url: str) -> tuple[str, str, int, str]:
         parts.port or default_port,
         parts.path.rstrip("/"),
     )
-
-
-def model_from_websocket_url(
-    websocket_url: str, *, allow_custom_endpoint: bool = False
-) -> str | None:
-    """Return the model from /{model}/ws, or None for a dedicated /ws endpoint."""
-    validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
-    path_segments = urlsplit(websocket_url).path.rstrip("/").split("/")
-    if not path_segments or path_segments[-1] != "ws":
-        raise ValueError("Rime v1 websocket_url path must end with /ws")
-    if len(path_segments) < 2 or not path_segments[-2]:
-        return None
-    return unquote(path_segments[-2])
 
 
 async def connect(
@@ -567,6 +555,8 @@ def _start_payload(options: SynthesisOptions) -> proto.SynthesisRequest:
             request.mist_parameters.pause_between_brackets = options.pause_between_brackets
         if options.phonemize_between_brackets is not None:
             request.mist_parameters.phonemize_between_brackets = options.phonemize_between_brackets
+    for entry in options.custom_lexicon:
+        request.custom_lexicon.add(spelling=entry["spelling"], pronunciation=entry["pronunciation"])
     return request
 
 

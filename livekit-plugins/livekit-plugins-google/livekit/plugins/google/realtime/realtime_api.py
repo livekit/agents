@@ -18,6 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents.llm._provider_format.utils import _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -26,7 +27,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import audio as audio_utils, images, is_given
+from livekit.agents.utils import audio as audio_utils, images, is_given, resolve_env_int
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
@@ -44,7 +45,7 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
 )
 
-lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+lk_google_debug = resolve_env_int("LK_GOOGLE_DEBUG")
 
 
 class _ChatCtxContent(types.LiveClientContent):
@@ -84,7 +85,8 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
 
 
 # generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
-# answer that placeholder with an empty turn instead, so they must not get it.
+# answer that placeholder with an empty turn instead, so they must not get it, and take
+# reply instructions as a user turn instead.
 MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
 
 
@@ -209,8 +211,6 @@ class _ResponseGeneration:
 
     _created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
-    _first_token_timestamp: float | None = None
-    """The timestamp when the first audio token is received"""
     _completed_timestamp: float | None = None
     """The timestamp when the generation is completed"""
     _done: bool = False
@@ -671,11 +671,13 @@ class RealtimeSession(llm.RealtimeSession):
                     turns=[
                         types.Content(
                             parts=[types.Part(text=instructions)],
-                            # Both APIs error on role="system". This was role=None on the
-                            # Gemini API, which 2.5 accepted as the system role but 3.1 and
-                            # 3.8 reject with a 1007 close that kills the session. "model"
-                            # is accepted by all three and by Vertex.
-                            role="model",
+                            # On Vertex AI, role="system" replaces the session's system
+                            # instruction (see "Update system instructions during a session"
+                            # in the Vertex AI Live API docs). role="model" is only appended
+                            # as a model turn, so the previous instructions stay in effect.
+                            # The Gemini API errors on role="system" (and 3.1/3.8 close with
+                            # 1007 on role=None), so it keeps role="model".
+                            role="system" if self._opts.vertexai else "model",
                         )
                     ],
                     turn_complete=False,
@@ -843,13 +845,12 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if not self._realtime_model.capabilities.mutable_chat_context:
-            logger.warning(
-                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
-            )
+        if not self._realtime_model.capabilities.mutable_chat_context and is_given(instructions):
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
+                llm.RealtimeError(
+                    f"generate_reply with 'instructions' is not compatible with '{self._opts.model}'"
+                )
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -874,9 +875,16 @@ class RealtimeSession(llm.RealtimeSession):
             self._in_user_activity = False
 
         turns = []
+        placeholder = _needs_reply_placeholder(self._opts.model)
         if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        if _needs_reply_placeholder(self._opts.model):
+            if placeholder:
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            else:
+                # a trailing model turn is continued: these models speak their reasoning
+                # or stay silent. Unwrapped, they later quote it back as the user's words.
+                text = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE.format(content=instructions)
+                turns.append(types.Content(parts=[types.Part(text=text)], role="user"))
+        if placeholder:
             turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
@@ -1418,8 +1426,6 @@ class RealtimeSession(llm.RealtimeSession):
                                 "Gemini sent audio after generation completed; dropping it"
                             )
                         continue
-                    if not current_gen._first_token_timestamp:
-                        current_gen._first_token_timestamp = time.time()
                     frame_data = part.inline_data.data
                     try:
                         if not isinstance(frame_data, bytes):
@@ -1609,11 +1615,6 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("no active generation to report metrics for")
             return
 
-        ttft = (
-            current_gen._first_token_timestamp - current_gen._created_timestamp
-            if current_gen._first_token_timestamp
-            else -1
-        )
         duration = (
             current_gen._completed_timestamp or time.time()
         ) - current_gen._created_timestamp
@@ -1642,7 +1643,9 @@ class RealtimeSession(llm.RealtimeSession):
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,
-            ttft=ttft,
+            # Gemini has no response-start event; generation creation can be triggered
+            # by an input transcript or by the first output packet.
+            ttft=-1,
             cancelled=False,
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,

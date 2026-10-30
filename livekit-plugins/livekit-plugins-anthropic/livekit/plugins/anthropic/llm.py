@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-import httpx
+import httpx2 as httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
@@ -34,6 +34,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
 
@@ -44,6 +45,14 @@ _NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
 def _model_disables_prefill(model: str) -> bool:
     """Return True if the model does not support assistant message prefilling."""
     return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
+
+
+_NO_FORCED_TOOL_CHOICE_PATTERNS = (
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+)
 
 
 @dataclass
@@ -92,11 +101,11 @@ class LLM(llm.LLM):
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
         max_retries (int, optional): Vendor client retries. Defaults to 0 because the framework
             owns retries via ``conn_options``.
-        timeout (httpx.Timeout | None): HTTP timeout configuration for the underlying httpx client.
-            Defaults to ``httpx.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
+        timeout (httpx2.Timeout | None): HTTP timeout configuration for the underlying httpx2 client.
+            Defaults to ``httpx2.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
             while allowing up to 30 s between streamed chunks — long enough for Claude's
             adaptive-thinking phases without masking genuine network stalls.
-            Pass a custom ``httpx.Timeout`` to override (e.g. ``httpx.Timeout(5.0, read=60.0)``
+            Pass a custom ``httpx2.Timeout`` to override (e.g. ``httpx2.Timeout(5.0, read=60.0)``
             for very large contexts or extended thinking budgets).
         temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
@@ -106,6 +115,7 @@ class LLM(llm.LLM):
 
         super().__init__()
 
+        self._forced_tool_choice_warned = False
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -166,13 +176,19 @@ class LLM(llm.LLM):
             extra.update(extra_kwargs)
 
         if is_given(self._opts.user):
-            extra["user"] = self._opts.user
+            extra["metadata"] = {**(extra.get("metadata") or {}), "user_id": self._opts.user}
 
+        # SDK 1.x dropped temperature/top_k from messages.create(). Older models
+        # still honor them when they are merged into the request JSON.
+        sampling: dict[str, Any] = {}
         if is_given(self._opts.temperature):
-            extra["temperature"] = self._opts.temperature
-
+            sampling["temperature"] = self._opts.temperature
         if is_given(self._opts.top_k):
-            extra["top_k"] = self._opts.top_k
+            sampling["top_k"] = self._opts.top_k
+        if sampling:
+            extra_body = dict(extra.get("extra_body") or {})
+            extra_body.update(sampling)
+            extra["extra_body"] = extra_body
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
@@ -194,8 +210,14 @@ class LLM(llm.LLM):
             extra["tools"] = tool_schemas
 
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+            parallel_tool_calls = (
+                parallel_tool_calls
+                if is_given(parallel_tool_calls)
+                else self._opts.parallel_tool_calls
+            )
+            anthropic_tool_choice: dict[str, Any] | None = None
             if is_given(tool_choice):
-                anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
+                anthropic_tool_choice = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                     anthropic_tool_choice = {
                         "type": "tool",
@@ -207,15 +229,25 @@ class LLM(llm.LLM):
                     elif tool_choice == "none":
                         extra["tools"] = []
                         anthropic_tool_choice = None
-                if anthropic_tool_choice is not None:
-                    parallel_tool_calls = (
-                        parallel_tool_calls
-                        if is_given(parallel_tool_calls)
-                        else self._opts.parallel_tool_calls
-                    )
-                    if is_given(parallel_tool_calls):
-                        anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
-                    extra["tool_choice"] = anthropic_tool_choice
+            elif is_given(parallel_tool_calls):
+                # Anthropic carries disable_parallel_tool_use on the tool_choice
+                # object, so send the default "auto" choice to pass it along.
+                anthropic_tool_choice = {"type": "auto"}
+
+            if anthropic_tool_choice is not None:
+                forced = anthropic_tool_choice["type"] in ("any", "tool")
+                if forced and self._opts.model.startswith(_NO_FORCED_TOOL_CHOICE_PATTERNS):
+                    if not self._forced_tool_choice_warned:
+                        logger.warning(
+                            "anthropic llm: this model does not support a forced "
+                            "tool_choice; sending 'auto' instead",
+                            extra={"lk.pii.model": self._opts.model},
+                        )
+                        self._forced_tool_choice_warned = True
+                    anthropic_tool_choice = {"type": "auto"}
+                if is_given(parallel_tool_calls):
+                    anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
+                extra["tool_choice"] = anthropic_tool_choice
 
         # Claude 4.6+ does not support prefilling (trailing assistant messages).
         inject_trailing = _model_disables_prefill(self._opts.model)
