@@ -32,6 +32,7 @@ fn a_tool_waiting_for_idle_lets_a_drain_holding_a_turn_finish() {
                 agent: "next".into(),
                 instructions: AgentText("You are next.".into()),
                 tools: vec![],
+                turn: None,
             },
             Input::Advance { ms: Millis(20) },
             Input::SttStart { stt: Ref::new(0) },

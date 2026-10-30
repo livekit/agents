@@ -27,6 +27,7 @@ fn a_handoff_refused_after_the_end_releases_its_providers() {
             agent: "late".into(),
             instructions: AgentText("Hi.".into()),
             tools: Vec::new(),
+            turn: None,
         },
     ];
     let outcome = run(Case { setup, inputs, ..Case::default() });

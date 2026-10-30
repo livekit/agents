@@ -154,6 +154,7 @@ fn the_next_speech_words_wait_for_their_audio() {
                 agent: "lookup_order".into(),
                 instructions: AgentText("".into()),
                 tools: vec!["caller".into(), "agent-2".into()],
+                turn: None,
             },
             Input::Handoff {
                 agent: "sip_1".into(),
@@ -161,6 +162,7 @@ fn the_next_speech_words_wait_for_their_audio() {
                     "Yes... no, wait -- actually, let me check that again.".into(),
                 ),
                 tools: vec!["caller".into(), "transfer".into(), "transfer".into()],
+                turn: None,
             },
             Input::TtsOutage { down: false },
             Input::Advance { ms: Millis(100) },
@@ -182,6 +184,7 @@ fn the_next_speech_words_wait_for_their_audio() {
                 agent: "billing_agent".into(),
                 instructions: AgentText("Let me pull up your account -- one moment.".into()),
                 tools: vec!["billing_agent".into(), "agent-2".into(), "caller".into()],
+                turn: None,
             },
             Input::GenerateReply {
                 user_input: None,

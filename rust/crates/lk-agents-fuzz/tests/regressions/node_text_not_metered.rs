@@ -72,6 +72,7 @@ fn a_synthesized_segment_settles_its_transcription_node_before_close() {
                 agent: "lookup_order".into(),
                 instructions: AgentText("Report the shipment.".into()),
                 tools: vec![],
+                turn: None,
             })
             .await;
             run.apply(&Input::Advance { ms: Millis(100) }).await;

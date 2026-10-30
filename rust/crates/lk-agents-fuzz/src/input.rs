@@ -313,6 +313,21 @@ impl Make for Count {
     }
 }
 
+/// `Agent(turn_handling=)`: the one option of an agent's own layer, among those the host layers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AgentTurn {
+    pub knob: Knob,
+    pub mode: TurnMode,
+    pub ms: Millis,
+}
+
+impl Make for AgentTurn {
+    fn make(s: &mut Sampler<'_>) -> Option<Self> {
+        let knob = *s.pick(&[Knob::Detection, Knob::MinEndpointing, Knob::MaxEndpointing]);
+        Some(AgentTurn { knob, mode: TurnMode::make(s)?, ms: Millis::make(s)? })
+    }
+}
+
 /// A detector's confidence, in percent. Sampled from a spread that straddles the thresholds a
 /// driver decides on, so hysteresis and flicker are reached rather than hoped for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,7 +513,7 @@ macro_rules! unreferenced {
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
     Knob, TurnMode, IvrInput, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker,
-    RtEvent, DtmfInput, DtmfKey, AmdInput
+    RtEvent, DtmfInput, DtmfKey, AmdInput, AgentTurn
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -642,8 +657,8 @@ inputs! {
     Override { knob: Knob, mode: TurnMode, ms: Millis } leaf turn::Override;
     /// An `override_options()` block ends: the `nth` held layer, oldest first, in any order.
     ReleaseOverride { nth: Count } leaf turn::ReleaseOverride;
-    /// A handoff to another agent, with the same fakes behind it.
-    Handoff { agent: String, instructions: AgentText, tools: Vec<String> }
+    /// A handoff to another agent, with the same fakes behind it and its own turn handling.
+    Handoff { agent: String, instructions: AgentText, tools: Vec<String>, turn: Option<AgentTurn> }
         opens [Answer] leaf activity::Update;
     UpdateInstructions { text: AgentText } leaf activity::UpdateInstructions;
     UpdateTools { tools: Vec<String> } leaf activity::UpdateTools;

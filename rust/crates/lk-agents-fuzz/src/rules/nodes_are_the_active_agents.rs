@@ -115,6 +115,7 @@ fn handoff(agent: &str) -> Input {
         agent: agent.into(),
         instructions: AgentText("You are next.".into()),
         tools: Vec::new(),
+        turn: None,
     }
 }
 

@@ -10,7 +10,7 @@ use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_abi::voice::session::{VoiceSession as _, VoiceTaskEnded};
-use lk_agents_abi::voice::session_options::UpdateKwargs;
+use lk_agents_abi::voice::session_options::{TurnHandlingKwargs, UpdateKwargs};
 use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused, IvrCommand};
 
 use lk_agents_voice::agent_activity::scheduling::SpeechKind;
@@ -149,7 +149,7 @@ fn io_leg(leg: IoKind) -> &'static str {
 
 /// What `update_options` / `override_options` say for `knob`; `None` for the options they do not
 /// take (endpointing and detection only).
-fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
+pub fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
     let endpointing = |patch: fn(&mut EndpointingKwargs, f64)| {
         let mut kwargs = EndpointingKwargs::default();
         patch(&mut kwargs, secs(ms));
@@ -172,6 +172,16 @@ fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
         }),
         _ => None,
     }
+}
+
+/// `Agent(turn_handling=)` saying `turn`'s one option.
+pub fn agent_turn_handling(turn: AgentTurn) -> Option<TurnHandlingKwargs> {
+    let update = turn_update(turn.knob, turn.mode, turn.ms)?;
+    Some(TurnHandlingKwargs {
+        turn_detection: update.turn_detection,
+        endpointing: update.endpointing_opts,
+        ..TurnHandlingKwargs::default()
+    })
 }
 
 fn secs(ms: Millis) -> f64 {
@@ -500,21 +510,18 @@ impl Run {
                 api.release_override(layer);
                 self.loop_runs()
             }
-            Input::Handoff { agent, instructions, tools } => api
-                .update_agent(frame(
-                    &self.setup,
-                    &self.legs,
-                    &registry,
-                    agent,
-                    &instructions.0,
-                    tools,
-                ))
-                .map(|reply| {
-                    wait(Pending::reply(reply, |ok| {
-                        if ok { Answer::HandoffOk } else { Answer::HandoffRefused }
-                    }))
-                })
-                .is_ok(),
+            Input::Handoff { agent, instructions, tools, turn } => {
+                let mut args =
+                    frame(&self.setup, &self.legs, &registry, agent, &instructions.0, tools);
+                args.turn_handling = turn.and_then(agent_turn_handling);
+                api.update_agent(args)
+                    .map(|reply| {
+                        wait(Pending::reply(reply, |ok| {
+                            if ok { Answer::HandoffOk } else { Answer::HandoffRefused }
+                        }))
+                    })
+                    .is_ok()
+            }
             Input::UpdateInstructions { text: AgentText(text) } => {
                 api.update_instructions(text.clone()).is_ok()
             }

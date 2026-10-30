@@ -66,6 +66,7 @@ fn the_turn_hook_gets_the_agents_own_context() {
             agent: "next".into(),
             instructions: AgentText("You are next.".into()),
             tools: vec![],
+            turn: None,
         };
         run.apply(&handoff).await;
         run.apply(&Input::Advance { ms: Millis(100) }).await;
