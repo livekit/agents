@@ -504,9 +504,7 @@ impl Driver {
         let approval_answers = lk_agents_core::request::answer_pending_input(&mut waiting, text);
         self.replies_answered(&approval_answers, out);
         self.activity.tools.approval_answers = approval_answers;
-        for item in waiting {
-            self.replace_item(item, out);
-        }
+        self.replace_items(waiting, out);
     }
 
     /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the

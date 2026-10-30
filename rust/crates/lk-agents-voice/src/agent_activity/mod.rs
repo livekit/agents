@@ -578,23 +578,34 @@ impl Driver {
         self.perform_commit(commit, out);
     }
 
-    /// An item on the record changed in place (an answered `InputRequired`'s output, an expert's
-    /// outcome): the host is told again, under the item's own id, source and agent, and a
-    /// realtime server's copy follows.
-    pub(crate) fn replace_item(&mut self, item: ChatItem, out: &mut Out) {
-        let Some(entry) = self.session.chat_ctx.entry(item.id()) else { return };
-        let (source, visibility, agent) =
-            (entry.source.clone(), entry.visibility, entry.agent.clone());
-        let (entry, _) = self.session.chat_ctx.commit(item, source, visibility, &agent);
-        if entry.visibility.history() {
-            let run = self.run_of_item(&entry.source);
-            out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
-                item: Box::new(entry.item),
-                agent: entry.agent,
-                source: entry.source,
-                visibility: entry.visibility,
-                run,
-            });
+    /// Items on the record changed in place (answered `InputRequired` outputs, an expert's
+    /// outcome): the host is told again of each, under the item's own id, source and agent, and a
+    /// realtime server's copy follows once.
+    pub(crate) fn replace_items(
+        &mut self,
+        items: impl IntoIterator<Item = ChatItem>,
+        out: &mut Out,
+    ) {
+        let mut replaced = false;
+        for item in items {
+            let Some(entry) = self.session.chat_ctx.entry(item.id()) else { continue };
+            let (source, visibility, agent) =
+                (entry.source.clone(), entry.visibility, entry.agent.clone());
+            let (entry, _) = self.session.chat_ctx.commit(item, source, visibility, &agent);
+            replaced = true;
+            if entry.visibility.history() {
+                let run = self.run_of_item(&entry.source);
+                out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
+                    item: Box::new(entry.item),
+                    agent: entry.agent,
+                    source: entry.source,
+                    visibility: entry.visibility,
+                    run,
+                });
+            }
+        }
+        if !replaced {
+            return;
         }
         if self.activity.rt_session.is_some() {
             let chat_ctx = self.session.chat_ctx.for_realtime();
@@ -609,7 +620,8 @@ impl Driver {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));
-        if let Some(state) = tell_speech.and_then(|id| self.activity.speech_scheduler.speech_mut(id))
+        if let Some(state) =
+            tell_speech.and_then(|id| self.activity.speech_scheduler.speech_mut(id))
         {
             state.item_added(&entry.item);
         }
