@@ -823,6 +823,7 @@ async def test_a_segment_is_finalized_on_the_track_that_carried_it() -> None:
         pending_text: str = "",
         track_id: str | None = None,
         sender_identity: str | None = None,
+        **_segment_snapshot: object,
     ) -> None:
         flushed.append((track_id, sender_identity))
 
