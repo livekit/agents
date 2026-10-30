@@ -379,6 +379,10 @@ JSON-RPC errors are for malformed requests. Everything else ends the task
 | `lease-timeout`       | on an `interrupt` or `queue` endpoint, the thread's lane was not free within 60 seconds |
 | `storage-unavailable` | the turn's save could not be written; resend the message |
 
+A failure no task row can carry (a message on a `reject` endpoint whose row
+was never written) is answered with the database's error instead of a
+failed task; resending the message runs it.
+
 A save whose acknowledgment was lost is not a failure: the task stays
 `working` while the runtime checks the database for that run, the request
 returns the current task after a bounded wait, and `tasks/get` or a

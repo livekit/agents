@@ -875,8 +875,9 @@ impl TaskMachine {
             (Phase::Resolve, Completion::Done) => self.answer_task(None),
             (Phase::Answer { reason }, Completion::Done) => self.answer_task(reason),
             (Phase::Answer { .. }, Completion::Task(None)) if self.error.is_some() => {
-                // the failed run's message has no row (a `reject` lane writes it in the commit):
-                // a failure would name a task no row holds, so the client hears the error
+                // the failed run's message has no row (a `reject` lane writes it with `Submit`
+                // under the lease, before the turn): a failure would name a task no row holds,
+                // so the client hears the error
                 return Err(Finish::Error(self.error.take().expect("the run's error")));
             }
             (Phase::Answer { reason }, Completion::Task(task)) => {

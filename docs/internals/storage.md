@@ -353,7 +353,9 @@ effects have their own commit boundaries.
 - **Fail.** A run that raises writes only its `run_ended` event and
   releases the lease. When it raised a storage error (the database lost, or
   the handler's own save refused: a stale save, a field that is not JSON, a
-  state too large), its task then ends `failed` `storage-unavailable`.
+  state too large), its task then ends `failed` `storage-unavailable`. A
+  failure no task row can carry (a `reject` message whose row was never
+  written) is answered with the database's error instead.
 - **A rejected save** ends the task `failed` with `livekit/reason`
   `storage-unavailable`; its staged turn changes were not committed.
 - **A lost acknowledgment** is not a failure. The task stays `working` while

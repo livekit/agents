@@ -521,8 +521,9 @@ fn a_refused_close_fails_the_task_storage_unavailable() {
 }
 
 /// A2A_SEED=14313 (one_task_per_message, Refusable): on a `reject` lane the message's row is
-/// written by its commit; a refused commit was answered `failed storage-unavailable` with a task no
-/// row holds, and the resend created another. A failure that writes no row answers the database's
+/// written with `Submit` under the lease, before the turn; a run closed before it whose commit was
+/// refused was answered `failed storage-unavailable` with a task no row holds, and the resend
+/// created another. A failure that writes no row answers the database's
 /// error, so the resend runs the message as the first send.
 #[test]
 fn a_refused_commit_of_an_unwritten_receipt_answers_the_error() {
