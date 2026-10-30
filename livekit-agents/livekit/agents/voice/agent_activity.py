@@ -6,7 +6,8 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
+import types
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -125,6 +126,107 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
+# ``(activity, task)`` for the drain-graph task whose code is running; child tasks inherit
+# it. Lets ``_is_draining_caller`` recognize a wait parked behind a wrapper task (e.g.
+# ``asyncio.wait_for`` before Python 3.12 creates one, ``asyncio.create_task`` always)
+# that the identity check alone would miss. Inheritance alone does not make a task part
+# of the drain: the marked task must be awaiting it, see ``_is_awaited_by``.
+_DrainGraphContextVar = contextvars.ContextVar["tuple[AgentActivity, asyncio.Task[Any]] | None"](
+    "agents_drain_graph", default=None
+)
+
+
+def _mark_drain_graph(
+    activity: AgentActivity | None, coro_factory: Callable[[], Coroutine[Any, Any, Any]]
+) -> Coroutine[Any, Any, Any]:
+    """Run the coroutine built by ``coro_factory`` in a task marked as part of a drain.
+
+    The task the drain awaits, and every task spawned from within it, is marked so a
+    wrapped ``wait_for_idle`` still recognizes that the drain is waiting for its ancestor.
+    ``activity=None`` clears the marker instead: a session-scoped tool survives a handoff,
+    so neither it nor its child tasks are in any activity's drain.
+
+    The marker records the marked task itself: ``_is_draining_caller`` only counts it while
+    that task is still running and awaits the caller, since afterwards the drain no longer
+    waits on its subtree. The coroutine is built inside the marked task, so a task
+    cancelled before its first step does not leave an unawaited coroutine behind.
+    """
+
+    async def _run() -> Any:
+        task = asyncio.current_task()
+        assert task is not None
+        marked: tuple[AgentActivity, asyncio.Task[Any]] | None = (
+            (activity, task) if activity is not None else None
+        )
+        token = _DrainGraphContextVar.set(marked)
+        try:
+            return await coro_factory()
+        finally:
+            _DrainGraphContextVar.reset(token)
+
+    return _run()
+
+
+_ASYNCIO_TASKS_FILE = getattr(asyncio.tasks, "__file__", None)
+
+
+def _wait_for_child_task(task: asyncio.Task[Any]) -> asyncio.Task[Any] | None:
+    """The child task ``asyncio.wait_for`` runs for ``task``, if it awaits one.
+
+    Before Python 3.12, ``wait_for`` schedules the coroutine in a child task
+    (``ensure_future``) but suspends the caller on an internal future, so the task's
+    current waiter only sees that future. The wrapper coroutine still on the task's own
+    await chain holds the child task. From Python 3.12 on the coroutine runs inline in
+    the caller's task, which ``_is_draining_task`` covers by identity.
+    """
+    awaitable: object | None = task.get_coro()
+    seen: set[int] = set()
+    while isinstance(awaitable, types.CoroutineType) and id(awaitable) not in seen:
+        seen.add(id(awaitable))
+        code = awaitable.cr_code
+        if code.co_name == "wait_for" and code.co_filename == _ASYNCIO_TASKS_FILE:
+            frame = awaitable.cr_frame
+            child: object | None = frame.f_locals.get("fut") if frame is not None else None
+            return child if isinstance(child, asyncio.Task) else None
+        awaitable = awaitable.cr_await
+    return None
+
+
+def _awaited_task(task: asyncio.Task[Any]) -> asyncio.Task[Any] | None:
+    """The task ``task`` is currently waiting for, when it waits for one.
+
+    ``Task._fut_waiter`` is the future the task's coroutine last yielded: ``await`` on
+    another task yields that task itself, while a coroutine chain yields the innermost
+    awaited future, so every awaited task on the chain is reachable by following it. It
+    is private, but stable across the CPython versions this project supports and tests
+    (3.10-3.13); the public coroutine attributes cannot see an awaited task, they only
+    expose its ``FutureIter``.
+    """
+    waiter: object | None = getattr(task, "_fut_waiter", None)
+    if isinstance(waiter, asyncio.Task):
+        return waiter
+    return _wait_for_child_task(task)
+
+
+def _is_awaited_by(ancestor: asyncio.Task[Any], task: asyncio.Task[Any]) -> bool:
+    """Whether ``ancestor`` is currently awaiting ``task``, directly or transitively.
+
+    Mirrors the awaits that keep the drain waiting: an awaited coroutine, an awaited
+    task, and tasks nested in either. Awaiting through a future that hides its target
+    behind callbacks (``asyncio.shield``, ``asyncio.gather``) is not followed: such a
+    task counts as detached, the way it behaved before the marker existed.
+    """
+    current = ancestor
+    seen: set[int] = set()
+    while current is not task:
+        if id(current) in seen:
+            return False
+        seen.add(id(current))
+        nxt = _awaited_task(current)
+        if nxt is None:
+            return False
+        current = nxt
+    return True
 
 
 async def _aligned_transcript_or_text(
@@ -996,7 +1098,7 @@ class AgentActivity(RecognitionHooks):
             finally:
                 otel_context.detach(token)
 
-        task = asyncio.create_task(_context_aware_coro(), name=name)
+        task = asyncio.create_task(_mark_drain_graph(self, _context_aware_coro), name=name)
         self._speech_tasks.append(task)
         task.add_done_callback(lambda _: self._speech_tasks.remove(task))
 
@@ -1448,6 +1550,43 @@ class AgentActivity(RecognitionHooks):
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
 
+    def _is_draining_task(self, task: asyncio.Task[Any]) -> bool:
+        """Whether ``task`` is awaited by this activity's drain/close path.
+
+        Waiting for this activity's own handoff from such a task would deadlock:
+        the drain is waiting for the caller.
+        """
+        if task is self._scheduling_atask or task in self._speech_tasks:
+            return True
+
+        executor = self._tool_executor
+        if task is executor._reply_task:
+            return True
+        return any(task is running.exe_task for running in executor._running_tasks.values())
+
+    def _is_draining_caller(self, task: asyncio.Task[Any]) -> bool:
+        """Whether ``task`` is awaited by a task this activity's drain awaits.
+
+        A wrapped ``wait_for_idle`` runs in a child task (``asyncio.wait_for`` creates one
+        before Python 3.12; ``asyncio.create_task`` always does), which the identity check
+        above misses. Sleeping on the handoff from there still closes the cycle
+        wait -> handoff -> drain -> caller, so the caller must keep the fast failure.
+
+        A task spawned by a drained task is not automatically part of the drain: a
+        background task the tool never awaits finishes on its own, and the drain does not
+        wait for it, so it must retarget to the incoming activity like any other caller.
+        The marker is inherited by everything spawned inside the drained subtree, so it
+        only counts when the marked task currently awaits ``task``. The marker also only
+        counts while the drained ancestor is still running: once it finished, the drain
+        no longer waits on that subtree and retargeting is safe.
+        """
+        if self._is_draining_task(task):
+            return True
+        marked = _DrainGraphContextVar.get()
+        if marked is None or marked[0] is not self or marked[1].done():
+            return False
+        return _is_awaited_by(marked[1], task)
+
     @contextlib.asynccontextmanager
     async def _inline_task_slot(
         self,
@@ -1521,7 +1660,7 @@ class AgentActivity(RecognitionHooks):
         self._new_turns_blocked = False
         self._drain_blocked_tasks.clear()
         self._scheduling_atask = asyncio.create_task(
-            self._scheduling_task(), name="_scheduling_task"
+            _mark_drain_graph(self, self._scheduling_task), name="_scheduling_task"
         )
         self._scheduling_resumed.set()
 
