@@ -316,9 +316,10 @@ impl AudioEmitter {
         Ok(())
     }
 
-    /// What the provider reported it billed for the open segment, carried on the segment's final
-    /// frame. Reports add up, one per provider request; providers that report nothing keep the
-    /// framework's own measure (characters sent, audio received).
+    /// What the provider reported it billed for the open segment, or the next one when none is
+    /// open, carried on the segment's final frame. Reports add up, one per provider request;
+    /// providers that report nothing keep the framework's own measure (characters sent, audio
+    /// received).
     #[pyo3(signature = (usage = None, *, characters_count = None))]
     fn report_usage(
         &self,

@@ -39,8 +39,28 @@ struct SegmentCtx {
     segment_id: String,
     audio_duration: f64,
     /// What the provider reported, carried on the final frame.
-    usage: Option<TokenUsage>,
+    usage: Usage,
+}
+
+/// What the provider reported billing; reports add up.
+#[derive(Debug, Clone, Default)]
+struct Usage {
+    tokens: Option<TokenUsage>,
     characters_count: Option<u64>,
+}
+
+impl Usage {
+    fn add(&mut self, tokens: Option<TokenUsage>, characters_count: Option<u64>) {
+        if let Some(tokens) = tokens {
+            match &mut self.tokens {
+                Some(total) => total.add(&tokens),
+                None => self.tokens = Some(tokens),
+            }
+        }
+        if let Some(n) = characters_count {
+            *self.characters_count.get_or_insert(0) += n;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -64,6 +84,8 @@ pub struct AudioEmitter {
     pending_ids: Option<Vec<String>>,
 
     seg: Option<SegmentCtx>,
+    /// Reported while no segment was open; it rides on the next segment.
+    unattached: Usage,
     abs: Option<AudioByteStream>,
     last_frame: Option<Frame>,
     timed_transcripts: Vec<TimedString>,
@@ -185,8 +207,7 @@ impl AudioEmitter {
         self.seg = Some(SegmentCtx {
             segment_id: segment_id.to_string(),
             audio_duration: 0.0,
-            usage: None,
-            characters_count: None,
+            usage: std::mem::take(&mut self.unattached),
         });
         Ok(())
     }
@@ -268,7 +289,8 @@ impl AudioEmitter {
         Ok(())
     }
 
-    /// What the provider billed for the open segment; reports add up.
+    /// What the provider billed for the open segment, or the next one when none is open (a
+    /// streaming provider can report after its segment ended); reports add up.
     pub fn report_usage(
         &mut self,
         usage: Option<TokenUsage>,
@@ -277,16 +299,11 @@ impl AudioEmitter {
         if !self.live()? {
             return Ok(());
         }
-        let seg = self.seg.as_mut().ok_or(EmitterError::NoSegment)?;
-        if let Some(usage) = usage {
-            match &mut seg.usage {
-                Some(total) => total.add(&usage),
-                None => seg.usage = Some(usage),
-            }
-        }
-        if let Some(n) = characters_count {
-            *seg.characters_count.get_or_insert(0) += n;
-        }
+        let total = match self.seg.as_mut() {
+            Some(seg) => &mut seg.usage,
+            None => &mut self.unattached,
+        };
+        total.add(usage, characters_count);
         Ok(())
     }
 
@@ -500,9 +517,10 @@ impl AudioEmitter {
     }
 
     fn build_event(&mut self, frame: Frame, is_final: bool) -> SynthesizedAudio {
-        let (usage, characters_count) = match self.seg.as_mut().filter(|_| is_final) {
-            Some(seg) => (seg.usage.take(), seg.characters_count.take()),
-            None => (None, None),
+        let Usage { tokens: usage, characters_count } = match self.seg.as_mut().filter(|_| is_final)
+        {
+            Some(seg) => std::mem::take(&mut seg.usage),
+            None => Usage::default(),
         };
         SynthesizedAudio {
             frame: AudioFrame::new(

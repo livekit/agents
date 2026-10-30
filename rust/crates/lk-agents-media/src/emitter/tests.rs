@@ -570,3 +570,19 @@ fn after_stop_mid_segment_nothing_more_is_sent() {
     assert_eq!(fx.sizes().len(), delivered, "the held and buffered audio is dropped");
     assert!(fx.finals().iter().all(|f| !f), "and no final marker follows an interruption");
 }
+
+// Catches (review21): a streaming report made while no segment is open raising `NoSegment`, or
+// lost. It rides on the next segment's final frame, added to that segment's own report.
+#[test]
+fn usage_reported_between_segments_rides_on_the_next_one() {
+    let mut fx = Fx::new(true);
+    fx.em.report_usage(None, Some(3)).unwrap();
+    fx.em.start_segment("seg").unwrap();
+    fx.push(4800);
+    fx.em.report_usage(None, Some(4)).unwrap();
+    fx.end_segment();
+    let reported: Vec<_> = sent(&fx.eff).iter().map(|a| a.characters_count).collect();
+    let (last, rest) = reported.split_last().unwrap();
+    assert!(rest.iter().all(Option::is_none));
+    assert_eq!(*last, Some(7));
+}
