@@ -21,7 +21,7 @@ PERSONA = (
 )
 
 # the back office as the front desk's one tool, described from its card; on a call the turn
-# waits for its answer, or for its first progress on a longer check
+# goes on while it works, and its answer is told when it comes
 back_office = A2ADelegate(BACKEND, announce=False)
 
 chat = Agent(

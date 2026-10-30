@@ -60,6 +60,7 @@ async def test_the_answer_goes_to_the_tool_that_asked_with_no_model_step(
     async with LiveSession(llm=model) as session:
         await session.start(Agent(instructions="front desk", tools=[delegate]))
         await session.run(user_input="change my visit")
+        await soon(lambda: "Which day?" in spoken(session), "the question")
         await session.run(user_input="tuesday")
 
     (asked, _), (answered, text) = heard
@@ -170,6 +171,7 @@ async def test_a_question_asked_on_a_call_is_answered_by_text(
     async with LiveSession(llm=model, thread=Thread(desk.storage, thread, agent_name=AGENT)) as s:
         await s.start(calling)
         await s.run(user_input="change my visit")
+        await soon(lambda: "Which day?" in spoken(s), "the question")
 
     answered = await desk.send("tuesday", context_id=thread)
 

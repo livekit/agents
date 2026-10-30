@@ -14,7 +14,7 @@ import pytest
 from livekit.agents import Agent, LiveSession, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.delegation.a2a import DISPATCHED
+from livekit.agents.delegation.a2a import DISPATCHED, DISPATCHED_SILENTLY
 from livekit.agents.llm import ChatContext
 from livekit.agents.voice.tool_executor import REPLY_INSTRUCTIONS_AT_TAIL
 
@@ -325,6 +325,34 @@ async def test_updates_while_the_turn_speaks_never_pause_the_tool_and_follow_its
         "b1_final",
         "b1_final out",
     ]
+
+
+@pytest.mark.rule("B56")
+async def test_an_answer_after_a_barge_in_over_its_call_is_told_with_no_acknowledgement(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate, ended, speaking = asyncio.Event(), list[str](), asyncio.Event()
+    model = ScriptedRealtimeModel(
+        Reply("Let me check.", [call("ask", "a1", request="slots")], hold=speaking),
+        Reply("Sure.", when=answering("wait, sorry")),
+        Reply("We have 10 slots.", when=told("a1_final")),
+    )
+    desk = Agent(
+        instructions="front desk", tools=[expert(slow_expert(gate, ended), announce=False)]
+    )
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        rt = model.active_session
+        rt.hear("any slots?")
+        await asyncio.sleep(0.2)
+        rt.hear("wait, sorry")  # over the reply that made the call
+        await soon(lambda: "Sure." in spoken(session), "the reply to the barge-in")
+        gate.set()
+        await soon(lambda: "We have 10 slots." in spoken(session), "the answer told")
+
+    assert spoken(session) == ["Let me check.", "Sure.", "We have 10 slots."]
+    assert any(DISPATCHED_SILENTLY in o for o in outputs(session.history))
+    assert len(model.requests) == 3, "the call's first output asked no reply"
 
 
 @pytest.mark.rule("B71")

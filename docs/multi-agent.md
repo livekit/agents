@@ -74,9 +74,9 @@ the card's description in its place, and a call in progress offers it
 to the model at once. The tool hands the request on with the
 run's thread and history, speaks the expert's progress through
 `ctx.update()` and its exact text through `ctx.say()`, returns the answer, or the question the expert has for the
-person, and records the expert's task on the call. On a call its first
-update releases the turn with a line the model acknowledges while the
-expert works; `announce=False` turns that off.
+person, and records the expert's task on the call. On a call the turn
+goes on while the expert works, with a line the model acknowledges; with
+`announce=False` the person hears only what the model said beside the call.
 
 A LiveKit expert gets its own lane in the caller's thread, named after the
 expert agent, and never contends for the caller's lease.

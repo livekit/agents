@@ -68,6 +68,11 @@ DISPATCHED = (
 )
 """What the model reads on a call while the expert works: the line it acknowledges with."""
 
+DISPATCHED_SILENTLY = (
+    "The request is with the expert. The answer is a separate entry, not this one."
+)
+"""What the model reads on a call while the expert works under ``announce=False``, unanswered."""
+
 if TYPE_CHECKING:
     from ..a2a.client import AgentClient, Reply
     from ..a2a.codec import TaskUpdate
@@ -91,8 +96,8 @@ class A2ADelegate(Delegate, Toolset):
     request on with the run's thread and history, passes the expert's progress to ``ctx.update()``
     and its exact text to ``ctx.say()``, records the expert's task on the call and returns the
     answer, or the question the expert has for the person; an answer or a question the expert
-    flagged reaches the person as written. On a call ``announce`` releases the turn with a line the
-    model acknowledges while the expert works.
+    flagged reaches the person as written. On a call the turn goes on while the expert works, and
+    ``announce`` has the model acknowledge it.
 
     An expert whose card offers the Live extension gets the caller's session id as the
     ``contextId`` and the caller's lane as ``livekit/callerLane``, and writes its own lane of
@@ -186,8 +191,12 @@ class A2ADelegate(Delegate, Toolset):
             history = ctx._run.chat_ctx
         # the person's answer to the expert's question: it continues the expert's task
         asked = ctx._answer_ref
-        if session is not None and self._announce and asked is None:
-            ctx.update(DISPATCHED)
+        if session is not None and asked is None:
+            # a barge-in drops the calls of the speech it cuts, so on a call the turn goes on
+            if self._announce:
+                ctx.update(DISPATCHED)
+            else:
+                ctx.update(DISPATCHED_SILENTLY, silent=True)
         try:
             result = await self.run(
                 request,
