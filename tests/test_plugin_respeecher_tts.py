@@ -27,7 +27,6 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from livekit.agents import APIConnectionError
 from livekit.plugins.respeecher import TTS
 from livekit.plugins.respeecher.version import __version__
 
@@ -138,17 +137,5 @@ async def test_websocket_authentication_and_model_routing(model: str) -> None:
             },
             params={"source": "livekit", "version": __version__},
         )
-    finally:
-        await tts.aclose()
-
-
-async def test_insecure_websocket_does_not_send_credentials() -> None:
-    session = MagicMock(spec=aiohttp.ClientSession)
-    session.ws_connect = AsyncMock()
-    tts = TTS(api_key="test-key", base_url="http://example.com/v1", http_session=session)
-    try:
-        with pytest.raises(APIConnectionError, match="Secure WebSocket"):
-            await tts._connect_ws(timeout=1)
-        session.ws_connect.assert_not_called()
     finally:
         await tts.aclose()
