@@ -1,9 +1,9 @@
-//! `APIConnectOptions` (`types.py:113`). The Python type stays a frozen dataclass (the fallback
-//! adapters `dataclasses.replace` it).
+//! `APIConnectOptions` (`types.py:113`). The Python type stays a hand-written frozen dataclass (the
+//! fallback adapters `dataclasses.replace` it, plugins call its methods), crossing by
+//! `lk-agents-py`'s conversions.
 
 use std::time::Duration;
 
-use lk_agents_host_derive::Host;
 use thiserror::Error;
 
 use crate::Ts;
@@ -25,9 +25,8 @@ pub struct ApiConnectOptionsError {
 /// without progress while sending, `read` without progress while a response is expected, `total`
 /// the whole operation (admission, retries and fallback). Each phase defaults to 10 s; `total`
 /// is off.
-#[derive(Debug, Clone, Copy, PartialEq, Host)]
-#[host(host_type = "livekit.agents.types.APIConnectOptions")]
-#[binding(emit, extract)]
+#[crate::host(handwritten(extract, emit, host = "livekit.agents.types.APIConnectOptions", py))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ApiConnectOptions {
     /// Attempts after the first.
     pub max_retry: u32,

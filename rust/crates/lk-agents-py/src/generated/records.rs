@@ -975,7 +975,7 @@ pub mod agent_run {
                 history: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "history", |v| if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; crate::generated::records::chat_items::chat_item_from_py(item) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("RunRequest.history: expected a list or tuple")) })?,
                 answer_tool: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "answer_tool", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 delegated: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "delegated", |v| v.extract::<bool>())?,
-                conn_options: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
+                conn_options: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "conn_options", |v| crate::conversions::api_connect_options_from_py(v))?,
                 host_context: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "host_context", |v| v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into))?,
                 tools_host: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "tools_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             })
@@ -2970,7 +2970,7 @@ pub mod realtime_options {
             Ok(::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig {
                 api_key: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "api_key", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 base_url: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "base_url", |v| v.extract::<::std::string::String>())?,
-                conn_options: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
+                conn_options: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "conn_options", |v| crate::conversions::api_connect_options_from_py(v))?,
                 options: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "options", |v| crate::generated::records::realtime_options::realtime_options_from_py(v))?,
                 dialect: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "dialect", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 model: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "model", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
@@ -4098,7 +4098,7 @@ pub mod session_wire {
     pub fn overlapping_speech_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::OverlappingSpeechWire) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::events::OverlappingSpeechWire { event } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("event", ::pyo3::IntoPyObjectExt::into_bound_py_any(event, py)?)?;
+            kwargs.set_item("event", crate::conversions::overlapping_speech_event_to_py(py, event)?)?;
             crate::host::construct(OVERLAPPING_SPEECH_WIRE.import(py, "livekit.agents._generated.session_wire", "OverlappingSpeechWire")?.as_any(), (), Some(&kwargs))
     }
 
@@ -5666,7 +5666,7 @@ pub mod text_session {
                 message: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "message", |v| crate::generated::records::chat_items::chat_item_from_py(v))?,
                 state: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "state", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::text_session::text_session_state_from_py(v)).map(Some) })?,
                 delegated: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "delegated", |v| v.extract::<bool>())?,
-                conn_options: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
+                conn_options: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "conn_options", |v| crate::conversions::api_connect_options_from_py(v))?,
             })
     }
 

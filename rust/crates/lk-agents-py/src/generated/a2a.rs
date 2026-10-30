@@ -180,9 +180,10 @@ pub struct AgentClient(pub(crate) ::std::sync::Arc<AgentClientImpl>);
 impl AgentClient {
     #[new]
     #[pyo3(signature = (endpoint_url, *, token = None, conn_options = None))]
-    fn new(py: Python<'_>, endpoint_url: ::std::string::String, token: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<AgentClient> {
+    fn new(py: Python<'_>, endpoint_url: ::std::string::String, token: ::std::option::Option<::std::string::String>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<AgentClient> {
         crate::host::check_pid()?;
         let env = crate::process::env();
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let out = py.detach(|| <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::new(&env, endpoint_url, token, conn_options)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentClient(::std::sync::Arc::new(out)))
     }

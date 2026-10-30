@@ -1,7 +1,6 @@
 //! What `start()` decides. The decision is in `lk-agents-voice/src/agent_session/`.
 
 use crate::voice::session_options::RecordingOptions;
-use lk_agents_host_derive::Host;
 
 /// The decision `start()` gets back.
 #[crate::host(record(module = "session_wire", emit))]
@@ -29,14 +28,11 @@ pub trait SessionStart {
 
 /// What a filler's callable answered: nothing, its text to say, or anything else (a speech it
 /// scheduled itself).
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, untagged)]
-#[crate::host(handwritten(extract, host = "str | None | object"))]
+#[crate::host(handwritten(extract, host = "str | None | object", py))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FillerReply {
-    #[binding(none)]
     Declined,
     Text(String),
-    #[binding(rest)]
     Spoke,
 }
 

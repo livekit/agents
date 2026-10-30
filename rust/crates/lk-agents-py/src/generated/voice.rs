@@ -672,11 +672,12 @@ type DefaultNodesImpl = <crate::Selected as super::Implementations>::DefaultNode
 /// defaults. `calls`: the running agent node's, when it runs this one.
 #[pyfunction]
 #[pyo3(signature = (tts, text, *, conn_options = None, calls = None))]
-pub fn tts_node(py: Python<'_>, tts: Bound<'_, PyAny>, text: Bound<'_, PyAny>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, calls: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::TtsNodeFrames> {
+pub fn tts_node(py: Python<'_>, tts: Bound<'_, PyAny>, text: Bound<'_, PyAny>, conn_options: Option<Bound<'_, PyAny>>, calls: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::TtsNodeFrames> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     let tts = crate::generated::tts::TtsProxy::from_host(&tts)?;
     let text = crate::host::capture_context(text.py()).and_then(|context| crate::host::stream::HostStream::open(text.py(), &text, &context, |o| Ok(o.extract::<::std::string::String>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::string::String>>)?;
+    let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
     let calls = calls.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("calls", ": expected the calls of a registered tts_node")))).transpose()?;
     let out = py.detach(|| <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::tts_node(&env, tts, text, conn_options, calls)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(super::voice::TtsNodeFrames(::std::sync::Arc::new(out)))
@@ -684,11 +685,12 @@ pub fn tts_node(py: Python<'_>, tts: Bound<'_, PyAny>, text: Bound<'_, PyAny>, c
 
 #[pyfunction]
 #[pyo3(signature = (stt, audio, *, conn_options = None, vad = None))]
-pub fn stt_node(py: Python<'_>, stt: Bound<'_, PyAny>, audio: Bound<'_, PyAny>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, vad: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::SttNodeEvents> {
+pub fn stt_node(py: Python<'_>, stt: Bound<'_, PyAny>, audio: Bound<'_, PyAny>, conn_options: Option<Bound<'_, PyAny>>, vad: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::SttNodeEvents> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     let stt = crate::generated::stt::SttProxy::from_host(&stt)?;
     let audio = crate::host::capture_context(audio.py()).and_then(|context| crate::host::stream::HostStream::open(audio.py(), &audio, &context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)?;
+    let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
     let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
     let out = py.detach(|| <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::stt_node(&env, stt, audio, conn_options, vad)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(super::voice::SttNodeEvents(::std::sync::Arc::new(out)))
@@ -5155,7 +5157,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::voice::session_effects::FillerReply>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::conversions::filler_reply_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

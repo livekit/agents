@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 
-use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 
 use crate::voice::amd::AmdPrediction;
@@ -557,16 +556,16 @@ pub struct SessionErrorWire {
 // --- the interruption detector's verdict and its wire ----------------------------------------
 
 /// `OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict.
-#[derive(Debug, Clone, PartialEq, Host)]
-// The dict `_on_core_event` reads for `overlapping_speech`, field for field with the model. Also
-// read back for `interruption_metrics`; the `extract_skip` fields are the ones it never reads.
-#[binding(emit, extract)]
+#[crate::host(handwritten(
+    emit,
+    host = "livekit.agents.inference.interruption.OverlappingSpeechEvent",
+    py
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OverlappingSpeechEvent {
     /// Wall clock seconds at construction.
-    #[binding(extract_skip)]
     pub created_at: f64,
     /// Wall clock seconds at which the overlap was resolved.
-    #[binding(extract_skip)]
     pub detected_at: f64,
     /// The verdict. `false` is only a *backchannel* verdict when `agent_ended` is also false.
     pub is_interruption: bool,
@@ -577,13 +576,9 @@ pub struct OverlappingSpeechEvent {
     pub prediction_duration: f64,
     pub detection_delay: f64,
     /// Wall clock seconds at which the overlap began.
-    #[binding(extract_skip)]
     pub overlap_started_at: Option<f64>,
-    #[binding(extract_skip)]
     pub speech_input: Option<Vec<i16>>,
-    #[binding(extract_skip)]
     pub probabilities: Option<Vec<f32>>,
-    #[binding(extract_skip)]
     pub probability: f64,
     /// Requests sent for this overlap. Reset to zero as it is read.
     pub num_requests: u32,

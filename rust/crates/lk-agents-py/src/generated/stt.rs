@@ -78,8 +78,9 @@ impl FallbackStt {
 
     /// `_recognize_impl`: the batch path, over whichever entry answers.
     #[pyo3(signature = (frames, language = None, conn_options = None))]
-    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::recognize(&this, frames, language, conn_options)
@@ -90,8 +91,9 @@ impl FallbackStt {
 
     /// Audio in, tee'd to the serving stream and every recovery probe; events out.
     #[pyo3(signature = (language = None, start_time_offset = None, conn_options = None))]
-    fn stream<'py>(&self, py: Python<'py>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, #[pyo3(from_py_with = _extract_fallback_stt_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn stream<'py>(&self, py: Python<'py>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, #[pyo3(from_py_with = _extract_fallback_stt_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::stream(&this, language, start_time_offset, conn_options)
@@ -172,11 +174,12 @@ impl InferenceStt {
     /// finalizes the transcript (Speechmatics only).
     #[new]
     #[pyo3(signature = (*, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback = None, conn_options, vad = None))]
-    fn new(py: Python<'_>, model: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, encoding: ::std::string::String, #[pyo3(from_py_with = _extract_inference_stt_new_sample_rate)] sample_rate: u32, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, extra_kwargs: Bound<'_, PyAny>, fallback: Option<Bound<'_, PyAny>>, conn_options: ::lk_agents_abi::ApiConnectOptions, vad: Option<Bound<'_, PyAny>>) -> PyResult<InferenceStt> {
+    fn new(py: Python<'_>, model: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, encoding: ::std::string::String, #[pyo3(from_py_with = _extract_inference_stt_new_sample_rate)] sample_rate: u32, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, extra_kwargs: Bound<'_, PyAny>, fallback: Option<Bound<'_, PyAny>>, conn_options: Bound<'_, PyAny>, vad: Option<Bound<'_, PyAny>>) -> PyResult<InferenceStt> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let extra_kwargs = match ::lk_agents_abi::python::value_from_py(&extra_kwargs, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }?;
         let fallback = fallback.map(|v| v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| items.iter().map(|item| { if !item.is_instance_of::<::pyo3::types::PyDict>() { return Err(::pyo3::exceptions::PyValueError::new_err("each fallback entry must be a dict")); } crate::generated::records::inference_stt::fallback_model_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
         let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
         let out = py.detach(|| <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::new(&env, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback, conn_options, vad)).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InferenceStt(::std::sync::Arc::new(out)))
@@ -233,8 +236,9 @@ impl InferenceStt {
     /// Opens a stream; its pump opens the socket. `start_time_offset` shifts its timestamps onto
     /// the caller's input timeline.
     #[pyo3(signature = (*, language = None, start_time_offset = None, conn_options = None))]
-    fn stream(&self, py: Python<'_>, language: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_inference_stt_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<InferenceSttStream> {
+    fn stream(&self, py: Python<'_>, language: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_inference_stt_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<InferenceSttStream> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let out = py.detach(|| <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::stream(&self.0, language, start_time_offset, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok({ let (sink, source) = out; InferenceSttStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) })
     }
@@ -324,8 +328,9 @@ impl SttStreamAdapter {
 
     /// `_recognize_impl`: the wrapped STT's batch path.
     #[pyo3(signature = (frames, language = None, conn_options = None))]
-    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::recognize(&this, frames, language, conn_options)
@@ -336,8 +341,9 @@ impl SttStreamAdapter {
 
     /// Audio into the VAD, its utterances recognized.
     #[pyo3(signature = (language = None, start_time_offset = None, conn_options = None))]
-    fn stream<'py>(&self, py: Python<'py>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, #[pyo3(from_py_with = _extract_stt_stream_adapter_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn stream<'py>(&self, py: Python<'py>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, #[pyo3(from_py_with = _extract_stt_stream_adapter_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::stream(&this, language, start_time_offset, conn_options)
@@ -459,7 +465,7 @@ impl SttProxy {
         };
         let conn_options = {
             let v = crate::host::read(obj, "_core_conn_options")?;
-            if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ApiConnectOptions>()).map(Some) }?
+            if v.is_none() { Ok(None) } else { (crate::conversions::api_connect_options_from_py(&v)).map(Some) }?
         };
         Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, conn_options, conn: None })
     }
@@ -543,7 +549,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(buffer_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::conversions::api_connect_options_to_py(py, bound)?);
                 }
                 Ok((host.bind(py).getattr("_core_recognize")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -573,7 +579,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time_offset_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::conversions::api_connect_options_to_py(py, bound)?);
                 }
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));

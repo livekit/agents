@@ -298,11 +298,12 @@ impl FallbackLlm {
     }
 
     #[pyo3(signature = (chat_ctx_host, *, tools, tools_host = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
-    fn chat<'py>(&self, py: Python<'py>, chat_ctx_host: ::lk_agents_abi::HostRef, tools: Bound<'_, PyAny>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn chat<'py>(&self, py: Python<'py>, chat_ctx_host: ::lk_agents_abi::HostRef, tools: Bound<'_, PyAny>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let tools = tools.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let tool_choice = tool_choice.map(|v| ::lk_agents_abi::python::value_from_py(&v, "tool_choice")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx_host, tools, tools_host, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
@@ -412,8 +413,9 @@ impl FallbackTts {
     }
 
     #[pyo3(signature = (text, conn_options = None))]
-    fn synthesize<'py>(&self, py: Python<'py>, text: ::std::string::String, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+    fn synthesize<'py>(&self, py: Python<'py>, text: ::std::string::String, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, text, conn_options)
@@ -423,8 +425,9 @@ impl FallbackTts {
     }
 
     #[pyo3(signature = (conn_options = None, expressive = false))]
-    fn stream<'py>(&self, py: Python<'py>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, expressive: bool) -> PyResult<Bound<'py, PyAny>> {
+    fn stream<'py>(&self, py: Python<'py>, conn_options: Option<Bound<'_, PyAny>>, expressive: bool) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options, expressive)
@@ -615,10 +618,11 @@ impl InferenceLlm {
     /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
     /// caller's job, read in its context.
     #[pyo3(signature = (items, *, tools, conn_options, parallel_tool_calls = None, tool_choice = None, response_format = None, extra_kwargs = None, headers = None))]
-    fn chat(&self, py: Python<'_>, items: Bound<'_, PyAny>, tools: Bound<'_, PyAny>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
+    fn chat(&self, py: Python<'_>, items: Bound<'_, PyAny>, tools: Bound<'_, PyAny>, conn_options: Bound<'_, PyAny>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
         crate::host::check_pid()?;
         let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let tools = tools.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
         let tool_choice = tool_choice.map(|v| crate::conversions::tool_choice_from_py(&v)).transpose()?;
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
@@ -1801,7 +1805,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, crate::generated::llm::ChatRequest(::std::sync::Arc::new(req_arg)))?.into_any()];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::conversions::api_connect_options_to_py(py, bound)?);
                 }
                 Ok((host.bind(py).getattr("_core_chat")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));

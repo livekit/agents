@@ -174,10 +174,11 @@ type StreamAdapterFunctionsImpl = <crate::Selected as super::Implementations>::S
 
 #[pyfunction]
 #[pyo3(signature = (provider, conn_options))]
-pub fn tts_adapter_stream<'py>(py: Python<'py>, provider: Bound<'_, PyAny>, conn_options: ::lk_agents_abi::ApiConnectOptions) -> PyResult<Bound<'py, PyAny>> {
+pub fn tts_adapter_stream<'py>(py: Python<'py>, provider: Bound<'_, PyAny>, conn_options: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     let provider = crate::generated::tts::TtsProxy::from_host(&provider)?;
+    let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
     crate::host::future_into_py(py, async move {
         let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(&env, provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::TtsStream(::std::sync::Arc::new(out)), py))
@@ -394,7 +395,7 @@ impl TtsProxy {
         };
         let conn_options = {
             let v = crate::host::read(obj, "_core_conn_options")?;
-            if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ApiConnectOptions>()).map(Some) }?
+            if v.is_none() { Ok(None) } else { (crate::conversions::api_connect_options_from_py(&v)).map(Some) }?
         };
         Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn_options, conn: None })
     }
@@ -475,7 +476,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::conversions::api_connect_options_to_py(py, bound)?);
                 }
                 Ok((host.bind(py).getattr("_core_synthesize")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -507,7 +508,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(expressive_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::conversions::api_connect_options_to_py(py, bound)?);
                 }
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));

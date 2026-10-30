@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
-import numpy as np
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
 from typing_extensions import TypedDict, TypeVar
@@ -65,7 +64,6 @@ from .._generated.session_wire import (
 from .._generated.usage import Usage
 from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs, VoiceSessionArgs
-from ..inference.interruption import OverlappingSpeechEvent
 from ..inference.llm import llm_from_model_string
 from ..job import get_job_context
 from ..llm import (
@@ -1243,11 +1241,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         self.emit("error", ErrorEvent(error=error, source=processor))
 
     def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
-        ev = dict(wire.event)
-        for key, dtype in (("speech_input", np.int16), ("probabilities", np.float32)):
-            if ev[key] is not None:
-                ev[key] = np.asarray(ev[key], dtype=dtype)
-        self.emit("overlapping_speech", OverlappingSpeechEvent(**ev))
+        self.emit("overlapping_speech", wire.event)
 
     def _on_amd_result(self, wire: AMDPredictionEvent) -> None:
         if self._amd is not None:

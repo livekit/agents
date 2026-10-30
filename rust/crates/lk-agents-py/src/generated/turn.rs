@@ -106,8 +106,9 @@ impl InferenceEot {
     /// One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
     /// each gateway connection.
     #[pyo3(signature = (headers, conn_options))]
-    fn stream(&self, py: Python<'_>, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, conn_options: ::lk_agents_abi::ApiConnectOptions) -> PyResult<super::turn::EotStream> {
+    fn stream(&self, py: Python<'_>, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, conn_options: Bound<'_, PyAny>) -> PyResult<super::turn::EotStream> {
         crate::host::check_pid()?;
+        let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
         let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(super::turn::EotStream(::std::sync::Arc::new(out)))
     }
@@ -258,9 +259,10 @@ impl InterruptionDetector {
     /// the server's settings.
     #[new]
     #[pyo3(signature = (*, threshold = None, min_interruption_duration = 0.05, max_audio_duration = 3.0, audio_prefix_duration = 1.0, detection_interval = 0.1, inference_timeout = 0.7, base_url = None, api_key = None, api_secret = None, conn_options = None, token_ttl_secs = 600))]
-    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_interruption_detector_new_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_new_min_interruption_duration)] min_interruption_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_max_audio_duration)] max_audio_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_audio_prefix_duration)] audio_prefix_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_detection_interval)] detection_interval: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_inference_timeout)] inference_timeout: f64, base_url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)] token_ttl_secs: u64) -> PyResult<InterruptionDetector> {
+    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_interruption_detector_new_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_new_min_interruption_duration)] min_interruption_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_max_audio_duration)] max_audio_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_audio_prefix_duration)] audio_prefix_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_detection_interval)] detection_interval: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_inference_timeout)] inference_timeout: f64, base_url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, conn_options: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)] token_ttl_secs: u64) -> PyResult<InterruptionDetector> {
         crate::host::check_pid()?;
         let env = crate::process::env();
+        let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let out = py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InterruptionDetector(::std::sync::Arc::new(out)))
     }

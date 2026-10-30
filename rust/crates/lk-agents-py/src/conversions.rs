@@ -9,6 +9,8 @@ use lk_agents_abi::voice::session_options::{
 };
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
+use lk_agents_abi::voice::events::OverlappingSpeechEvent;
+use lk_agents_abi::voice::session_effects::FillerReply;
 use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, ParticipantIdentity, ParticipantKind, RoomIoConfig,
     StreamInfo, TextOutputConfig, TrackPublishOptions, TrackSource,
@@ -34,17 +36,50 @@ pub fn backchannel_boundary_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Backchan
     })
 }
 
+/// An `APIConnectOptions` read by attribute.
+pub fn api_connect_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ApiConnectOptions> {
+    Ok(ApiConnectOptions {
+        max_retry: obj.getattr("max_retry")?.extract()?,
+        retry_interval: obj.getattr("retry_interval")?.extract()?,
+        pool_timeout: obj.getattr("pool_timeout")?.extract()?,
+        connect_timeout: obj.getattr("connect_timeout")?.extract()?,
+        write_timeout: obj.getattr("write_timeout")?.extract()?,
+        read_timeout: obj.getattr("read_timeout")?.extract()?,
+        total_timeout: obj.getattr("total_timeout")?.extract()?,
+    })
+}
+
+/// The host's frozen `APIConnectOptions`.
+pub fn api_connect_options_to_py<'py>(
+    py: Python<'py>,
+    value: ApiConnectOptions,
+) -> PyResult<Bound<'py, PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("max_retry", value.max_retry)?;
+    kwargs.set_item("retry_interval", value.retry_interval)?;
+    kwargs.set_item("pool_timeout", value.pool_timeout)?;
+    kwargs.set_item("connect_timeout", value.connect_timeout)?;
+    kwargs.set_item("write_timeout", value.write_timeout)?;
+    kwargs.set_item("read_timeout", value.read_timeout)?;
+    kwargs.set_item("total_timeout", value.total_timeout)?;
+    let class = CLASS.import(py, "livekit.agents.types", "APIConnectOptions")?;
+    crate::host::construct(class, (), Some(&kwargs))
+}
+
 /// `NOT_GIVEN` and `None` are the defaults; a `SessionConnectOptions` is read by attribute.
 pub fn session_conn_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<SessionConnOptions> {
     let MaybeNull::Given(options) = obj.extract::<MaybeNull<Bound<'_, PyAny>>>()? else {
         return Ok(SessionConnOptions::default());
     };
     let leg = |name: &str| -> PyResult<Option<ApiConnectOptions>> {
-        let conn: Option<ApiConnectOptions> = options.getattr(name)?.extract()?;
-        if let Some(conn) = &conn {
-            conn.validate().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let conn = options.getattr(name)?;
+        if conn.is_none() {
+            return Ok(None);
         }
-        Ok(conn)
+        let conn = api_connect_options_from_py(&conn)?;
+        conn.validate().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Some(conn))
     };
     Ok(SessionConnOptions {
         stt: leg("stt_conn_options")?,
@@ -91,6 +126,14 @@ pub fn expressive_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Expressive> {
         return Ok(Expressive(obj.is_truthy()?.then(ExpressiveConfig::default)));
     }
     Ok(Expressive(Some(crate::generated::records::expressive::expressive_options_from_py(obj)?)))
+}
+
+/// `None` declined, a `str` is the text to say, anything else a speech the callable scheduled.
+pub fn filler_reply_from_py(obj: &Bound<'_, PyAny>) -> PyResult<FillerReply> {
+    if obj.is_none() {
+        return Ok(FillerReply::Declined);
+    }
+    Ok(obj.extract::<String>().map_or(FillerReply::Spoke, FillerReply::Text))
 }
 
 /// A model string, resolved through the gateway; anything else is the caller's own `LLM`.
@@ -281,6 +324,38 @@ pub fn aligned_transcript_to_py<'py>(
         AlignedTranscript::None => pyo3::types::PyBool::new(py, false).to_owned().into_any(),
         other => PyString::new(py, other.as_str()).into_any(),
     })
+}
+
+/// The detector's verdict as the host's `OverlappingSpeechEvent`, the audio it ran on and its
+/// probabilities as numpy arrays.
+pub fn overlapping_speech_event_to_py<'py>(
+    py: Python<'py>,
+    value: OverlappingSpeechEvent,
+) -> PyResult<Bound<'py, PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
+    let numpy = py.import("numpy")?;
+    let array = |values: Bound<'py, PyAny>, dtype: &str| -> PyResult<Bound<'py, PyAny>> {
+        crate::host::construct(&numpy.getattr("asarray")?, (values, numpy.getattr(dtype)?), None)
+    };
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("created_at", value.created_at)?;
+    kwargs.set_item("detected_at", value.detected_at)?;
+    kwargs.set_item("is_interruption", value.is_interruption)?;
+    kwargs.set_item("agent_ended", value.agent_ended)?;
+    kwargs.set_item("total_duration", value.total_duration)?;
+    kwargs.set_item("prediction_duration", value.prediction_duration)?;
+    kwargs.set_item("detection_delay", value.detection_delay)?;
+    kwargs.set_item("overlap_started_at", value.overlap_started_at)?;
+    if let Some(speech) = value.speech_input {
+        kwargs.set_item("speech_input", array(speech.into_pyobject(py)?.into_any(), "int16")?)?;
+    }
+    if let Some(p) = value.probabilities {
+        kwargs.set_item("probabilities", array(p.into_pyobject(py)?.into_any(), "float32")?)?;
+    }
+    kwargs.set_item("probability", value.probability)?;
+    kwargs.set_item("num_requests", value.num_requests)?;
+    let class = CLASS.import(py, "livekit.agents.inference.interruption", "OverlappingSpeechEvent")?;
+    crate::host::construct(class, (), Some(&kwargs))
 }
 
 /// Built as the host's own `TimedString` (a `str` subclass), an absent timing an absent keyword.

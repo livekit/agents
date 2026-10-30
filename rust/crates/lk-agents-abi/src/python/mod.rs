@@ -130,7 +130,7 @@ mod tests {
     }
 }
 
-// For a hand-written type that keeps its own `as_str`/`FromStr`.
+// For a hand-written type that keeps its own `as_str`.
 
 macro_rules! into_host_str {
     ($t:ty, $to:expr) => {
@@ -154,21 +154,6 @@ macro_rules! into_host_str {
     };
 }
 pub(crate) use into_host_str;
-
-/// Parse failure is a `ValueError` carrying the error; `HostStr` names the argument in it.
-macro_rules! from_host_str {
-    ($t:ty) => {
-        impl crate::python::HostStr for $t {}
-        impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for $t {
-            type Error = ::pyo3::PyErr;
-            fn extract(ob: ::pyo3::Borrowed<'a, 'py, ::pyo3::PyAny>) -> ::pyo3::PyResult<Self> {
-                let s = ob.extract::<::pyo3::pybacked::PyBackedStr>()?;
-                <$t as ::std::str::FromStr>::from_str(&s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(e.to_string()))
-            }
-        }
-    };
-}
-pub(crate) use from_host_str;
 
 /// `register_host!(class T)`, `register_host!(fn f)`, `register_host!(exception E)`: hand-written
 /// pyo3 items on `_core`, behind the caller's `python` feature.

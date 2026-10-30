@@ -32,6 +32,7 @@ from .events import (
 if TYPE_CHECKING:
     from livekit import rtc
     from livekit.agents._core import SpeechHandle
+    from livekit.agents.inference.interruption import OverlappingSpeechEvent
 
     from .agent_run import RunError
     from .chat_items import ChatItem, FunctionCall
@@ -303,7 +304,7 @@ class MetricsCollectedWire:
 class OverlappingSpeechWire:
     """`overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it."""
 
-    event: dict[str, object]
+    event: OverlappingSpeechEvent
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -117,8 +117,9 @@ pub struct CoreProviderAttempts(pub(crate) CoreProviderAttemptsImpl);
 impl CoreProviderAttempts {
     #[new]
     #[pyo3(signature = (kind, conn_options, now_ns))]
-    fn new(py: Python<'_>, kind: ::lk_agents_abi::types::retry::RequestKind, conn_options: ::lk_agents_abi::ApiConnectOptions, #[pyo3(from_py_with = _extract_provider_attempts_new_now_ns)] now_ns: u64) -> PyResult<CoreProviderAttempts> {
+    fn new(py: Python<'_>, kind: ::lk_agents_abi::types::retry::RequestKind, conn_options: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_provider_attempts_new_now_ns)] now_ns: u64) -> PyResult<CoreProviderAttempts> {
         crate::host::check_pid()?;
+        let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
         let out = py.detach(|| <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::new(kind, conn_options, now_ns)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(CoreProviderAttempts(out))
     }
