@@ -1039,6 +1039,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 c.acquire_io(loop=self._loop, session=self)
+                if self._text_only:
+                    self.input.set_audio_enabled(False)
+                    self.output.set_audio_enabled(False)
 
                 if c._tcp_transport is not None:
                     self._session_host = SessionHost(
@@ -2377,11 +2380,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
     def _text_only(self) -> bool:
-        """True when running under a text simulation: the session uses no audio
+        """True when running under a text simulation, or replaying a session's LLM
+        responses (which replays its user turns as text): the session uses no audio
         I/O and no audio models (STT/TTS/VAD)."""
         from ..job import current_simulation
+        from ..llm import _replay
         from ..simulation import SimulationMode
 
+        if _replay.replay_url() is not None:
+            return True
         sim = current_simulation()
         return sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
 
