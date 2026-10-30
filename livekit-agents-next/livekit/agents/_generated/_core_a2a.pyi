@@ -135,7 +135,13 @@ class _core_RemoteInteraction:
         tool_id: str,
         function_call: ChatItem,
         history: Sequence[ChatItem],
-    ) -> Self: ...
+        project_url: str,
+        api_key: str,
+        api_secret: str,
+    ) -> Self:
+        """`project_url`, `api_key` and `api_secret` are the server's LiveKit project, which grants
+        and verifies a shared thread; empty when there is none.
+        """
     def message(
         self,
         arguments: object,
@@ -157,9 +163,13 @@ class _core_RemoteInteraction:
 
 def _core_remote_token(
     endpoint: str,
+    project_url: str,
+    api_key: str,
+    api_secret: str,
     token: str | None = None,
     thread_id: str | None = None,
 ) -> str | None:
-    """Resolve an endpoint credential: `token` as given; else, for an endpoint on the configured
-    project's origin, a grant for the caller's `thread_id`, or a project credential without one.
+    """Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
+    project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is
+    none), a grant for the caller's `thread_id`, or a project credential without one.
     """

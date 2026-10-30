@@ -355,13 +355,15 @@ pub struct _core_RemoteInteraction(pub(crate) ::std::sync::Arc<_core_RemoteInter
 
 #[pymethods]
 impl _core_RemoteInteraction {
+    /// `project_url`, `api_key` and `api_secret` are the server's LiveKit project, which grants
+    /// and verifies a shared thread; empty when there is none.
     #[new]
-    #[pyo3(signature = (endpoint, tool_id, function_call, history))]
-    fn new(endpoint: ::std::string::String, tool_id: ::std::string::String, function_call: Bound<'_, PyAny>, history: Bound<'_, PyAny>) -> PyResult<_core_RemoteInteraction> {
+    #[pyo3(signature = (endpoint, tool_id, function_call, history, project_url, api_key, api_secret))]
+    fn new(endpoint: ::std::string::String, tool_id: ::std::string::String, function_call: Bound<'_, PyAny>, history: Bound<'_, PyAny>, project_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String) -> PyResult<_core_RemoteInteraction> {
         crate::host::check_pid()?;
         let function_call = crate::generated::records::chat_items::chat_item_from_py(&function_call)?;
         let history = history.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
-        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history, project_url, api_key, api_secret).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(_core_RemoteInteraction(::std::sync::Arc::new(out)))
     }
 
@@ -409,13 +411,14 @@ impl _core_RemoteInteraction {
 // Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
 type RemoteConfigurationImpl = <crate::Selected as super::Implementations>::RemoteConfiguration;
 
-/// Resolve an endpoint credential: `token` as given; else, for an endpoint on the configured
-/// project's origin, a grant for the caller's `thread_id`, or a project credential without one.
+/// Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
+/// project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is
+/// none), a grant for the caller's `thread_id`, or a project credential without one.
 #[pyfunction]
-#[pyo3(signature = (endpoint, token = None, thread_id = None))]
-pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option::Option<::std::string::String>, thread_id: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+#[pyo3(signature = (endpoint, project_url, api_key, api_secret, token = None, thread_id = None))]
+pub fn _core_remote_token(endpoint: ::std::string::String, project_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, token: ::std::option::Option<::std::string::String>, thread_id: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
     crate::host::check_pid()?;
-    let out = <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, token, thread_id).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, project_url, api_key, api_secret, token, thread_id).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 

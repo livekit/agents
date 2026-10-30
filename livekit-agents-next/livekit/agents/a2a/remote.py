@@ -18,6 +18,7 @@ from .._generated.a2a_remote import (
     RemoteEventProgress,
 )
 from .._generated.tool_report import ToolOutcomeInputRequired, ToolReport
+from ..job import _server_credentials
 from ..llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
 from ..types import APIConnectOptions
 from ..voice.events import RunContext
@@ -68,7 +69,9 @@ class _RemoteTool(Toolset):
 
     async def setup(self) -> _RemoteTool:
         if self._tool is None:
-            client = self._client(_core._core_remote_token(self._url, self._token))
+            client = self._client(
+                _core._core_remote_token(self._url, *_server_credentials(), self._token)
+            )
             try:
                 self._card = await client.connect()
             finally:
@@ -92,16 +95,18 @@ class _RemoteTool(Toolset):
         else:
             assert ctx._run is not None
             history = ctx._run.chat_ctx
+        project = _server_credentials()
         interaction = _core._core_RemoteInteraction(
             self._url,
             self._card.name,
             ctx.function_call,
             history.items,
+            *project,
         )
         # with no token of its own, the call shares its thread with the endpoint under a grant
         # minted for that thread (docs/internals/storage.md "Two brains, one thread")
         thread_id = ctx.thread.id if self._token is None else None
-        token = _core._core_remote_token(self._url, self._token, thread_id)
+        token = _core._core_remote_token(self._url, *project, self._token, thread_id)
         shared = thread_id if self._token is None and token is not None else None
         client = self._client(token)
         reply: Reply | None = None

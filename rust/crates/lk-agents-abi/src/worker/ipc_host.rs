@@ -369,7 +369,8 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    /// `session_end` names the door's `on_session_end`, when it has one.
+    /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
+    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
     #[host(new)]
     fn new(
         env: &Self::Env,
@@ -380,6 +381,7 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         #[host(default = false)] recording: bool,
         #[host(default = None)] session_end: Option<String>,
         #[host(default = 60.0)] session_aclose_timeout: f64,
+        #[host(default = None)] observability_url: Option<String>,
     ) -> Result<Self, WorkerError>;
     /// `callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
     /// framework callback runs in the shutdown's span, any other in its own span named `name`.

@@ -95,7 +95,8 @@ struct Segment {
     decoding: bool,
 }
 
-/// `LK_DUMP_TTS`, read once; a non-integer value disables dumping.
+/// `LK_DUMP_TTS`, read once; a non-integer value disables dumping. A developer's process-wide
+/// debug switch, like `RUST_LOG`: no application or server setting configures it.
 fn dump_default() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {

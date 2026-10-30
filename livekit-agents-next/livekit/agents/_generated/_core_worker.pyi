@@ -218,8 +218,11 @@ class JobRun:
         recording: bool = False,
         session_end: str | None = None,
         session_aclose_timeout: float = 60.0,
+        observability_url: str | None = None,
     ) -> Self:
-        """`session_end` names the door's `on_session_end`, when it has one."""
+        """`session_end` names the door's `on_session_end`, when it has one. `observability_url`
+        overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
+        """
     def add_shutdown_callback(
         self,
         callback: object,

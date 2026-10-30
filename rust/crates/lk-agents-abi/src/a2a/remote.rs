@@ -31,12 +31,17 @@ pub enum RemoteEvent {
 
 #[crate::host(class(name = "_core_RemoteInteraction"))]
 pub trait RemoteInteraction: Send + Sync + Sized + 'static {
+    /// `project_url`, `api_key` and `api_secret` are the server's LiveKit project, which grants
+    /// and verifies a shared thread; empty when there is none.
     #[host(new)]
     fn new(
         endpoint: String,
         tool_id: String,
         function_call: ChatItem,
         history: Vec<ChatItem>,
+        project_url: String,
+        api_key: String,
+        api_secret: String,
     ) -> Result<Self, AgentClientError>;
 
     /// The call's message; `thread_id` shares the caller's thread under `token`'s grant for it.
@@ -70,11 +75,15 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
 
 #[crate::host(functions)]
 pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
-    /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the configured
-    /// project's origin, a grant for the caller's `thread_id`, or a project credential without one.
+    /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
+    /// project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is
+    /// none), a grant for the caller's `thread_id`, or a project credential without one.
     #[host(function)]
     fn _core_remote_token(
         endpoint: String,
+        project_url: String,
+        api_key: String,
+        api_secret: String,
         #[host(default = None)] token: Option<String>,
         #[host(default = None)] thread_id: Option<String>,
     ) -> Result<Option<String>, AgentClientError>;

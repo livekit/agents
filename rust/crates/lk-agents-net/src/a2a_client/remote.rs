@@ -23,6 +23,7 @@ struct State {
     policy: Policy,
     call: FunctionCall,
     livekit: bool,
+    project: Project,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +38,9 @@ impl Port for RemoteInteraction {
         tool_id: String,
         function_call: ChatItem,
         history: Vec<ChatItem>,
+        project_url: String,
+        api_key: String,
+        api_secret: String,
     ) -> Result<Self, AgentClientError> {
         let ChatItem::FunctionCall(function_call) = function_call else {
             return Err(AgentClientError::InvalidInput(
@@ -50,7 +54,10 @@ impl Port for RemoteInteraction {
             parent_call_id: function_call.call_id.clone(),
         };
         let policy = retained::for_call(id, &history).map_err(protocol)?;
-        Ok(Self { inner: Mutex::new(State { policy, call: function_call, livekit: false }) })
+        let project = Project { url: project_url, api_key, api_secret };
+        Ok(Self {
+            inner: Mutex::new(State { policy, call: function_call, livekit: false, project }),
+        })
     }
 
     fn message(
@@ -67,7 +74,7 @@ impl Port for RemoteInteraction {
         let authority = match (thread_id.as_deref(), token.as_deref()) {
             (Some(thread), Some(token)) => {
                 let endpoint = state.policy.snapshot().id.endpoint;
-                let project = Project::of(&endpoint)?.ok_or_else(|| {
+                let project = state.project.serving(&endpoint)?.ok_or_else(|| {
                     AgentClientError::InvalidInput(
                         "sharing a thread needs the endpoint on the configured project".into(),
                     )
@@ -211,6 +218,9 @@ impl lk_agents_abi::a2a::client::MessageContent for RemoteInteraction {
 impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
     fn _core_remote_token(
         endpoint: String,
+        project_url: String,
+        api_key: String,
+        api_secret: String,
         token: Option<String>,
         thread_id: Option<String>,
     ) -> Result<Option<String>, AgentClientError> {
@@ -219,7 +229,8 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         if token.is_some() {
             return Ok(token);
         }
-        let Some(project) = Project::of(&endpoint)? else { return Ok(None) };
+        let project = Project { url: project_url, api_key, api_secret };
+        let Some(project) = project.serving(&endpoint)? else { return Ok(None) };
         let credentials = crate::a2a_auth::Credentials::new(project.api_key, project.api_secret);
         match thread_id.filter(|id| !id.is_empty()) {
             // the caller's thread, shared with the endpoint (docs/internals/storage.md "Two
@@ -245,8 +256,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
 /// The identity of the tokens a remote tool mints for itself.
 const DELEGATE: &str = "delegate";
 
-/// The configured LiveKit project (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`), when
-/// the endpoint is on its origin.
+/// The server's LiveKit project as the host passes it; empty values when there is none.
 struct Project {
     url: String,
     api_key: String,
@@ -254,14 +264,14 @@ struct Project {
 }
 
 impl Project {
-    fn of(endpoint: &str) -> Result<Option<Self>, AgentClientError> {
-        let var = |name| std::env::var(name).ok().filter(|value: &String| !value.is_empty());
-        let (Some(url), Some(api_key), Some(api_secret)) =
-            (var("LIVEKIT_URL"), var("LIVEKIT_API_KEY"), var("LIVEKIT_API_SECRET"))
-        else {
+    /// The project with its URL as an HTTP origin, when `endpoint` is on that origin.
+    fn serving(&self, endpoint: &str) -> Result<Option<Self>, AgentClientError> {
+        let Project { url, api_key, api_secret } = self;
+        if url.is_empty() || api_key.is_empty() || api_secret.is_empty() {
             return Ok(None);
-        };
-        let Ok(mut project) = url::Url::parse(&url) else { return Ok(None) };
+        }
+        let (api_key, api_secret) = (api_key.clone(), api_secret.clone());
+        let Ok(mut project) = url::Url::parse(url) else { return Ok(None) };
         let scheme = match project.scheme() {
             "ws" | "http" => "http",
             "wss" | "https" => "https",

@@ -852,7 +852,7 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
 
 
 async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
-    thread_storage: Storage, monkeypatch: pytest.MonkeyPatch
+    thread_storage: Storage,
 ) -> None:
     """docs/internals/storage.md "Two brains, one thread": the fast brain's ``RemoteAgent(url)``
     with no token, in a conversation on thread T, mints a grant for T and shares it; the
@@ -871,16 +871,11 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
     storage = server.storage
     assert storage is not None
     caller = await storage.threads.create_thread(scope="user:alice")
-    for name, value in (
-        ("LIVEKIT_URL", "wss://agents.test"),
-        ("LIVEKIT_API_KEY", API_KEY),
-        ("LIVEKIT_API_SECRET", API_SECRET),
-    ):
-        monkeypatch.setenv(name, value)
+    project = ("wss://agents.test", API_KEY, API_SECRET)
     url = f"https://agents.test/{ENDPOINT}"
-    token = _core._core_remote_token(url, None, caller.thread_id)
+    token = _core._core_remote_token(url, *project, None, caller.thread_id)
     call = FunctionCall(call_id="call_1", name="desk", arguments='{"request": "book"}')
-    interaction = _core._core_RemoteInteraction(url, "desk", call, [])
+    interaction = _core._core_RemoteInteraction(url, "desk", call, [], *project)
     message = interaction.message({"request": "book"}, False, True, [], caller.thread_id, token)
     assert message.context_id == caller.thread_id
     async with http_client(server) as http:
@@ -892,7 +887,7 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
             caller.thread_id,
             "TASK_STATE_COMPLETED",
         )
-        endpoint_only = _core._core_remote_token(url, None, None)
+        endpoint_only = _core._core_remote_token(url, *project, None, None)
         again = wire("book", "m2", context_id=caller.thread_id)
         r = await rpc(
             http, "message/send", {"message": again}, Authorization=f"Bearer {endpoint_only}"

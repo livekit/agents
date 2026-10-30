@@ -232,6 +232,7 @@ class _JobProc:
             url=info.url,
             recording=info.job.enable_recording,
             session_end=callable_name(self._session_end_fnc) if self._session_end_fnc else None,
+            observability_url=os.environ.get("LIVEKIT_OBSERVABILITY_URL"),
         )
         self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
         self._job_ctx = JobContext(

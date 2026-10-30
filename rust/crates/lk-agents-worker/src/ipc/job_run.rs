@@ -350,8 +350,8 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         recording: bool,
         session_end: Option<String>,
         session_aclose_timeout: f64,
+        observability_url: Option<String>,
     ) -> Result<Self, WorkerError> {
-        let observability = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
         Ok(Self {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
@@ -363,7 +363,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 session_aclose_timeout,
                 observability_url: lk_agents_net::strings::observability_url(
                     &url,
-                    observability.as_deref(),
+                    observability_url.as_deref(),
                 ),
                 recording,
                 state: Mutex::new(State { redaction, ..State::default() }),
@@ -390,7 +390,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         });
     }
 
-    /// `LIVEKIT_OBSERVABILITY_URL`, else the server's when it is LiveKit Cloud's.
+    /// The host's `observability_url`, else the server's when it is LiveKit Cloud's.
     fn observability_url(&self) -> Option<String> {
         self.inner.observability_url.clone()
     }

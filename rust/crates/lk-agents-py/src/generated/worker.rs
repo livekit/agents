@@ -763,13 +763,14 @@ pub struct JobRun(pub(crate) ::std::sync::Arc<JobRunImpl>);
 
 #[pymethods]
 impl JobRun {
-    /// `session_end` names the door's `on_session_end`, when it has one.
+    /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
+    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
     #[new]
-    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), recording = false, session_end = None, session_aclose_timeout = 60.0))]
-    fn new(fake_job: bool, #[pyo3(from_py_with = _extract_job_run_new_session_end_timeout)] session_end_timeout: f64, redaction: bool, url: ::std::string::String, recording: bool, session_end: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_job_run_new_session_aclose_timeout)] session_aclose_timeout: f64) -> PyResult<JobRun> {
+    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), recording = false, session_end = None, session_aclose_timeout = 60.0, observability_url = None))]
+    fn new(fake_job: bool, #[pyo3(from_py_with = _extract_job_run_new_session_end_timeout)] session_end_timeout: f64, redaction: bool, url: ::std::string::String, recording: bool, session_end: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_job_run_new_session_aclose_timeout)] session_aclose_timeout: f64, observability_url: ::std::option::Option<::std::string::String>) -> PyResult<JobRun> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout, observability_url).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(JobRun(::std::sync::Arc::new(out)))
     }
 
