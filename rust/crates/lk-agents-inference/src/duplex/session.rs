@@ -1,9 +1,11 @@
 //! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
 
 use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
+
+use lk_agents_net::lock::Mutex;
 
 use super::host::{DeclaredGate, HostSession, provider_error};
 pub use crate::duplex::{
@@ -103,8 +105,8 @@ pub struct DuplexSession {
 }
 
 impl DuplexSession {
-    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, State> {
+        self.state.lock()
     }
 
     fn publish(&self, events: Vec<Event>) -> bool {
@@ -119,7 +121,7 @@ impl DuplexSession {
                     state.seg.close()
                 };
                 if tail.deactivate_gate {
-                    self.gate.lock().unwrap_or_else(|p| p.into_inner()).deactivate();
+                    self.gate.lock().deactivate();
                 }
                 self.changed.notify_one();
                 return false;
@@ -133,7 +135,7 @@ impl DuplexSession {
 
     fn apply(&self, step: Step) {
         if step.deactivate_gate {
-            self.gate.lock().unwrap_or_else(|p| p.into_inner()).deactivate();
+            self.gate.lock().deactivate();
         }
         self.publish(step.events);
     }
@@ -156,9 +158,7 @@ impl DuplexSession {
         let now = self.clock.now();
         let wall = self.clock.wall();
         let gate_open = match &ev {
-            DuplexEvent::Audio { frame, .. } => {
-                Some(self.gate.lock().unwrap_or_else(|p| p.into_inner()).update(frame))
-            }
+            DuplexEvent::Audio { frame, .. } => Some(self.gate.lock().update(frame)),
             _ => None,
         };
         let step = {

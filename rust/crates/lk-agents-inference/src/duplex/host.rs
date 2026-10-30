@@ -2,7 +2,7 @@
 //! adapter's declared host views. The plugin session's updates apply one after the other, its
 //! output audio and events are pulled here.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::{HostError, ProviderError};
@@ -12,6 +12,7 @@ use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, HostRealtimeError, RealtimeCapabilities, RealtimeError,
 };
 use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt, WallAnchor};
+use lk_agents_net::lock::Mutex;
 use tokio::sync::mpsc;
 
 use super::session::DuplexAdapterModel;
@@ -24,8 +25,8 @@ use lk_agents_net::env::ProcessEnv;
 pub struct GateClass<G>(Arc<Mutex<G>>);
 
 impl<G: AudioGate> GateClass<G> {
-    fn gate(&self) -> std::sync::MutexGuard<'_, G> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    fn gate(&self) -> lk_agents_net::lock::MutexGuard<'_, G> {
+        self.0.lock()
     }
 }
 
@@ -146,7 +147,7 @@ impl HostSession {
     }
 
     fn spawn(&self, f: impl std::future::Future<Output = ()> + Send + 'static) {
-        let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
+        let mut tasks = self.tasks.lock();
         tasks.retain(|t| !t.is_finished());
         tasks.push(self.spawner.spawn(f));
     }
@@ -281,7 +282,7 @@ impl HostSession {
 
     pub(super) async fn aclose(&self) {
         // Cancelled, not awaited.
-        drop(std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())));
+        drop(std::mem::take(&mut *self.tasks.lock()));
         self.view.aclose().await;
     }
 }

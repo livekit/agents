@@ -2,8 +2,8 @@
 //! through; `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::TimedString;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -16,6 +16,7 @@ use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
 use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::strings::shortuuid;
 use tokio::sync::mpsc;
 
@@ -191,7 +192,7 @@ struct AdapterSink {
 
 impl AdapterSink {
     fn send(&self, item: AdapterInput) -> Result<(), ProviderError> {
-        let guard = self.tx.lock().expect("adapter sink poisoned");
+        let guard = self.tx.lock();
         match guard.as_ref() {
             // The source was dropped without `aclose`. Nothing will ever read this.
             None => Ok(()),
@@ -223,7 +224,7 @@ impl StreamSink<String> for AdapterSink {
         // `tts/tts.py:785`: `flush()` then `close()`, in that order.
         let _ = self.flush();
         self.closed.store(true, Ordering::Release);
-        drop(self.tx.lock().expect("adapter sink poisoned").take());
+        drop(self.tx.lock().take());
     }
 }
 
@@ -297,8 +298,8 @@ impl Ledger {
 }
 
 impl AdapterSource {
-    fn ledger(&self) -> std::sync::MutexGuard<'_, Ledger> {
-        self.ledger.lock().unwrap_or_else(|p| p.into_inner())
+    fn ledger(&self) -> lk_agents_net::lock::MutexGuard<'_, Ledger> {
+        self.ledger.lock()
     }
 
     /// Bounded on the session clock; a timeout is remembered for `close`.
@@ -531,9 +532,7 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
 
     fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
         let ledger = Arc::clone(&self.ledger);
-        Some(Arc::new(move |in_flight| {
-            ledger.lock().unwrap_or_else(|p| p.into_inner()).take(in_flight)
-        }))
+        Some(Arc::new(move |in_flight| ledger.lock().take(in_flight)))
     }
 
     /// The worst inner close: `TimedOut` if any did not ack, else `Failed` if any teardown failed.

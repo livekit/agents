@@ -8,7 +8,7 @@ use tokio::sync::{Notify, watch};
 impl Pump {
     pub(super) fn wake_retirement(&self) {
         let start = {
-            let mut retirement = self.shared.retirement.lock().unwrap_or_else(|e| e.into_inner());
+            let mut retirement = self.shared.retirement.lock();
             if retirement.is_some() {
                 None
             } else {

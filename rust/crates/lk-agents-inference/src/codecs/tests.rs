@@ -181,7 +181,7 @@ async fn ready_file_pcm_yields_to_control_without_dropping_audio() {
         AudioDecoder::open_file(&media_pool(), file.path(), false, 24_000, 1, limits).unwrap();
     loop {
         let ready = decoder.shared.ready.notified();
-        if decoder.shared.try_state().map(|state| state.done).unwrap_or(false) {
+        if decoder.shared.state.try_lock().is_some_and(|state| state.done) {
             break;
         }
         ready.await;

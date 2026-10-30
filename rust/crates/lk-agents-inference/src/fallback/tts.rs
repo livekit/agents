@@ -3,7 +3,9 @@
 //! fresh input on failover (`tts:428-434`) and into the streaming probe (`tts:504-531`). A failure
 //! after output remains a failure and cannot replay delivered audio.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use lk_agents_net::lock::Mutex;
 
 use crate::tts::sentence_adapter::StreamAdapter;
 use async_trait::async_trait;
@@ -72,7 +74,7 @@ impl TokenLog {
     }
 
     pub fn snapshot(&self) -> (Vec<Token>, bool) {
-        let s = self.inner.lock().expect("token log");
+        let s = self.inner.lock();
         (s.tokens.clone(), s.ended)
     }
 
@@ -90,7 +92,7 @@ impl TokenLog {
     /// Catch up a fresh child sink (`tts:428-434`) under one lock, so a token pushed during the
     /// failover is neither replayed twice nor lost.
     fn set_main(&self, sink: TtsSink) {
-        let mut s = self.inner.lock().expect("token log");
+        let mut s = self.inner.lock();
         for t in &s.tokens {
             send(&sink, t);
         }
@@ -101,11 +103,11 @@ impl TokenLog {
     }
 
     fn clear_main(&self) {
-        self.inner.lock().expect("token log").main = None;
+        self.inner.lock().main = None;
     }
 
     pub fn push(&self, token: Token) {
-        let mut s = self.inner.lock().expect("token log");
+        let mut s = self.inner.lock();
         if let Some(sink) = s.main.as_ref() {
             send(sink, &token);
         }
@@ -113,7 +115,7 @@ impl TokenLog {
     }
 
     pub fn end(&self) {
-        let mut s = self.inner.lock().expect("token log");
+        let mut s = self.inner.lock();
         s.ended = true;
         if let Some(sink) = s.main.as_ref() {
             sink.end_input();
@@ -176,10 +178,7 @@ impl TtsBackend {
         &self.inner
     }
 
-    pub fn new(
-        tts: &Arc<dyn Tts>,
-        clock: Arc<dyn Clock>,
-    ) -> Arc<Self> {
+    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
@@ -392,7 +391,7 @@ impl FallbackTts {
                             let mut source = session;
                             let streamed = log.is_some();
                             let capture = |source: &TtsSource| -> Option<f64> {
-                                let mut anchor = started.lock().expect("tts started time");
+                                let mut anchor = started.lock();
                                 if streamed && anchor.is_none() {
                                     *anchor = source.started_time();
                                 }

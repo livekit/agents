@@ -17,11 +17,11 @@ impl RealtimeSession for Scripted {
             RealtimeCommand::GenerateReply(g) => format!("generate_reply:{}", g.req_id),
             other => format!("{other:?}").split('(').next().unwrap_or_default().to_owned(),
         };
-        self.sent.lock().unwrap().push(label);
+        self.sent.lock().push(label);
     }
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move {
-            let next = self.events.lock().unwrap().pop_front();
+            let next = self.events.lock().pop_front();
             match next {
                 Some(ev) => Some(ev),
                 None => std::future::pending().await,
@@ -104,7 +104,7 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
     struct Record(Arc<Mutex<Vec<(usize, bool)>>>);
     impl ChainObserver for Record {
         fn availability_changed(&self, ev: AvailabilityChanged) {
-            self.0.lock().unwrap().push((ev.index, ev.available));
+            self.0.lock().push((ev.index, ev.available));
         }
     }
     let model = RealtimeFallbackModel::new(
@@ -142,7 +142,7 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
         ]
     );
     assert!(primary.closed.load(std::sync::atomic::Ordering::Acquire));
-    assert_eq!(*changes.lock().unwrap(), [(0, false)]);
+    assert_eq!(*changes.lock(), [(0, false)]);
     assert_eq!(model.active_index(), 1);
 
     // A reply asked before the driver gave the frame waits for it; the tools end the frame.
@@ -157,16 +157,13 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
     session.send(RealtimeCommand::Interrupt(lk_agents_abi::llm::realtime::Interrupt {
         response_id: Some("r1".into()),
     }));
-    assert!(
-        backup.sent.lock().unwrap().is_empty(),
-        "nothing reaches the new model before its frame"
-    );
+    assert!(backup.sent.lock().is_empty(), "nothing reaches the new model before its frame");
     session.send(RealtimeCommand::UpdateInstructions(lk_agents_abi::UpdateInstructions {
         instructions: "hi".into(),
     }));
     session.send(RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools { tools: vec![] }));
     session.send(ask("late"));
-    let sent = backup.sent.lock().unwrap().clone();
+    let sent = backup.sent.lock().clone();
     assert_eq!(
         sent,
         ["UpdateInstructions", "UpdateTools", "generate_reply:early", "generate_reply:late"]
@@ -176,7 +173,7 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
 struct AvailabilityLog(Mutex<Vec<(usize, bool)>>);
 impl ChainObserver for AvailabilityLog {
     fn availability_changed(&self, ev: AvailabilityChanged) {
-        self.0.lock().unwrap().push((ev.index, ev.available));
+        self.0.lock().push((ev.index, ev.available));
     }
 }
 
@@ -227,7 +224,7 @@ async fn cancellation_case(failed_open: bool) {
         first
     };
     assert_eq!(
-        *changes.0.lock().unwrap(),
+        *changes.0.lock(),
         if failed_open { vec![(0, false)] } else { vec![] },
         "cancellation must not change the cancelled backend's health"
     );
@@ -304,7 +301,7 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
     release.notify_one();
     let _ = reading.await.unwrap();
     assert_eq!(
-        *changes.0.lock().unwrap(),
+        *changes.0.lock(),
         vec![(0, false)],
         "a late failure after close must not announce a health penalty"
     );
@@ -428,7 +425,7 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
     }));
     session.send(RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools { tools: vec![] }));
     assert!(
-        !backup.sent.lock().unwrap().iter().any(|command| command == "generate_reply:queued_32"),
+        !backup.sent.lock().iter().any(|command| command == "generate_reply:queued_32"),
         "a request beyond the bounded replay backlog must never reach the replacement model"
     );
     let rejected = tokio::time::timeout(std::time::Duration::from_secs(1), rejected_reader)
@@ -438,12 +435,10 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
     assert!(matches!(rejected, Some(Event::GenerateReplyFailed(failed))
         if failed.req_id == "queued_32" && failed.error.code.as_deref() == Some("realtime_fallback_backlog_exceeded")));
     assert!(
-        backup.sent.lock().unwrap().iter().any(|command| command == "generate_reply:replacement"),
+        backup.sent.lock().iter().any(|command| command == "generate_reply:replacement"),
         "cancellation releases admission"
     );
-    assert!(
-        !backup.sent.lock().unwrap().iter().any(|command| command == "generate_reply:oversized")
-    );
+    assert!(!backup.sent.lock().iter().any(|command| command == "generate_reply:oversized"));
     let rejected = tokio::time::timeout(std::time::Duration::from_secs(1), session.next_event())
         .await
         .unwrap();

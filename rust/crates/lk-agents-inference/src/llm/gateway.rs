@@ -4,8 +4,10 @@
 //! they were made, and are applied in that order with every deadline due before them.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+
+use lk_agents_net::lock::Mutex;
 
 use crate::headers::{Headers, identification_headers};
 use crate::llm::lifecycle::{
@@ -90,12 +92,12 @@ impl GatewayLlm {
     }
 
     pub fn options(&self) -> LlmOptions {
-        self.opts.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.opts.lock().clone()
     }
 
     /// Read by the next `chat()`.
     pub fn update_options(&self, update: impl FnOnce(&mut LlmOptions)) {
-        update(&mut self.opts.lock().unwrap_or_else(|p| p.into_inner()));
+        update(&mut self.opts.lock());
     }
 
     /// Opens a completion. No I/O until the first pull, which accepts the request: its total
@@ -262,7 +264,7 @@ impl Llm for GatewayLlm {
             (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
         let task = TokioSpawner::new(self.runtime.clone())
             .spawn(async move { http.warm(url, headers.into_vec()).await });
-        *self.prewarm.lock().unwrap_or_else(|p| p.into_inner()) = Some(task);
+        *self.prewarm.lock() = Some(task);
     }
 
     /// The voice session's generation retries its own LLM calls until it delegates them to the

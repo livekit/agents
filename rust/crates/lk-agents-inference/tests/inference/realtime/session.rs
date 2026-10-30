@@ -499,18 +499,18 @@ fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
 async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result() {
     use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
     struct StalledImage {
-        started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
-        settled: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        started: lk_agents_net::lock::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: lk_agents_net::lock::Mutex<std::sync::mpsc::Receiver<()>>,
+        settled: lk_agents_net::lock::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     }
     impl ImageResolver for StalledImage {
         fn resolve(&self, image: &lk_agents_abi::ImageContent) -> Result<SerializedImage, String> {
             assert_eq!(image.id, "frame_1");
-            if let Some(started) = self.started.lock().unwrap().take() {
+            if let Some(started) = self.started.lock().take() {
                 let _ = started.send(());
             }
-            self.release.lock().unwrap().recv().unwrap();
-            if let Some(settled) = self.settled.lock().unwrap().take() {
+            self.release.lock().recv().unwrap();
+            if let Some(settled) = self.settled.lock().take() {
                 let _ = settled.send(());
             }
             Ok(SerializedImage::inline(vec![1, 2, 3], "image/jpeg", Default::default()))
@@ -527,9 +527,9 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(StalledImage {
-            started: std::sync::Mutex::new(Some(started)),
-            release: std::sync::Mutex::new(wait),
-            settled: std::sync::Mutex::new(Some(settled)),
+            started: lk_agents_net::lock::Mutex::new(Some(started)),
+            release: lk_agents_net::lock::Mutex::new(wait),
+            settled: lk_agents_net::lock::Mutex::new(Some(settled)),
         }),
     );
     let session = model.session(false).await;
@@ -625,7 +625,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         settled: Arc<tokio::sync::Notify>,
-        owner: std::sync::Mutex<Option<std::sync::Weak<dyn WsSender>>>,
+        owner: lk_agents_net::lock::Mutex<Option<std::sync::Weak<dyn WsSender>>>,
     }
     #[async_trait::async_trait]
     impl WsTransport for Transport {
@@ -641,7 +641,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
                 release: self.release.clone(),
                 settled: self.settled.clone(),
             });
-            *self.owner.lock().unwrap() = Some(Arc::downgrade(&sender));
+            *self.owner.lock() = Some(Arc::downgrade(&sender));
             Ok((sender, receiver))
         }
     }
@@ -674,7 +674,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
-    let owner = transport.owner.lock().unwrap().as_ref().unwrap().clone();
+    let owner = transport.owner.lock().as_ref().unwrap().clone();
     assert!(
         owner.upgrade().is_some(),
         "the runtime must retain a transport whose close missed its deadline"

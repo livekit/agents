@@ -5,7 +5,7 @@
 //! voice was measured taking (190-250 ms, Cartesia sonic-3's p10 to p90).
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU32, Ordering},
     },
     time::Duration,
@@ -15,6 +15,7 @@ use base64::Engine;
 use lk_agents_abi::Tts;
 use lk_agents_inference::tts::{GatewayTts, TtsOptions};
 use lk_agents_net::clock::SimClock;
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use tokio::sync::mpsc;
@@ -64,7 +65,7 @@ fn each_reply_pays_only_the_voice() {
                 let mut audio = voice.synthesize("Sure, let me check that for you.").await.unwrap();
                 audio.next().await.unwrap().expect("the reply's first audio");
                 let took = asked.elapsed();
-                let owed = *shared.first_audio.lock().unwrap();
+                let owed = *shared.first_audio.lock();
                 assert!(
                     took <= owed + BUDGET,
                     "seed {seed}, reply {reply}: first audio after {took:?}, the voice owed {owed:?} \
@@ -106,8 +107,8 @@ async fn serve(
             }
             Some("input_transcript") if !answering => {
                 answering = true;
-                let delay = Duration::from_millis(shared.rng.lock().unwrap().u64(190..=250));
-                *shared.first_audio.lock().unwrap() = delay;
+                let delay = Duration::from_millis(shared.rng.lock().u64(190..=250));
+                *shared.first_audio.lock() = delay;
                 let (sent, sent_rx) = tokio::sync::oneshot::channel();
                 audio = Some(sent_rx);
                 let tx = tx.clone();
@@ -153,7 +154,7 @@ struct Sender(Mutex<Option<mpsc::UnboundedSender<String>>>);
 #[async_trait::async_trait]
 impl WsSender for Sender {
     async fn send_text(&self, text: String) -> Result<(), TransportError> {
-        let tx = self.0.lock().unwrap();
+        let tx = self.0.lock();
         tx.as_ref().and_then(|tx| tx.send(text).ok()).ok_or(TransportError::Closed)
     }
 
@@ -162,11 +163,11 @@ impl WsSender for Sender {
     }
 
     fn is_closed(&self) -> bool {
-        self.0.lock().unwrap().is_none()
+        self.0.lock().is_none()
     }
 
     async fn close(&self) {
-        self.0.lock().unwrap().take();
+        self.0.lock().take();
     }
 }
 

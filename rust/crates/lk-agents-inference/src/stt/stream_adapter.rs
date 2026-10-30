@@ -230,7 +230,8 @@ mod tests {
     use super::*;
     use lk_agents_abi::{StreamSink, VadCapabilities, VadEvent};
     use std::collections::VecDeque;
-    use std::sync::Mutex;
+
+    use lk_agents_net::lock::Mutex;
 
     struct Ignore;
 
@@ -295,7 +296,7 @@ mod tests {
             _: Option<&LanguageCode>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
             Box::pin(async move {
-                let text = self.0.lock().unwrap().pop_front().unwrap_or_default();
+                let text = self.0.lock().pop_front().unwrap_or_default();
                 let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
                 ev.alternatives.push(lk_agents_abi::SpeechData::new("en", text));
                 Ok(ev)

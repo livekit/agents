@@ -4,9 +4,10 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
+
+use lk_agents_net::lock::Mutex;
 
 use super::machine::{ChainEffect, ChainEvent, ChainRequest, FallbackPolicy};
 use async_trait::async_trait;
@@ -235,12 +236,12 @@ impl<B: Backend> FallbackChain<B> {
     }
 
     pub fn is_available(&self, index: usize) -> bool {
-        let state = self.status.lock().expect("chain status");
+        let state = self.status.lock();
         state.backends.get(index).is_some_and(|backend| state.health.is_available(backend.resource))
     }
 
     fn select(&self, index: usize, selection_id: u64) {
-        let mut state = self.status.lock().expect("chain status");
+        let mut state = self.status.lock();
         if let Some(backend) = state.backends.get(index) {
             let resource = backend.resource;
             state.health.select(resource, selection_id);
@@ -310,7 +311,7 @@ impl<B: Backend> FallbackChain<B> {
             return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).into());
         }
         let all_failed = {
-            let mut status = self.status.lock().expect("chain status");
+            let mut status = self.status.lock();
             let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
             status.health.refresh(&priority, self.clock.now());
             status.backends.iter().all(|entry| !status.health.is_available(entry.resource))
@@ -319,7 +320,7 @@ impl<B: Backend> FallbackChain<B> {
             self.observer.all_unavailable();
         }
         let (mut request, recovery_order) = {
-            let status = self.status.lock().expect("chain status");
+            let status = self.status.lock();
             let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
             let entries = status
                 .backends
@@ -480,7 +481,7 @@ impl<B: Backend> FallbackChain<B> {
                         let _ = result_tx.send((outcome, attempt_state));
                     });
                     {
-                        let mut statuses = self.status.lock().expect("chain status");
+                        let mut statuses = self.status.lock();
                         let active = &mut statuses.backends[index].active;
                         active.retain(|probe| !probe.task.is_finished());
                         active.push(Probe { task });
@@ -519,7 +520,7 @@ impl<B: Backend> FallbackChain<B> {
         }
 
         let generation = {
-            let s = self.status.lock().expect("chain status");
+            let s = self.status.lock();
             let Some(status) = s.backends.get(index) else { return };
             if status.closed {
                 return;
@@ -576,7 +577,7 @@ impl<B: Backend> FallbackChain<B> {
             match outcome {
                 Ok(Recovery::Recovered) => {
                     let changed = {
-                        let mut s = status_for_task.lock().expect("chain status");
+                        let mut s = status_for_task.lock();
                         match s.backends.get(index) {
                             Some(st) if !st.closed => {
                                 let resource = st.resource;
@@ -598,7 +599,7 @@ impl<B: Backend> FallbackChain<B> {
             }
         });
 
-        let mut s = self.status.lock().expect("chain status");
+        let mut s = self.status.lock();
         let stale = s.backends.get(index).is_some_and(|status| {
             status.closed || s.health.probe_generation(status.resource) != generation
         });
@@ -615,7 +616,7 @@ impl<B: Backend> FallbackChain<B> {
     fn begin_close(&self) -> Vec<Probe> {
         self.closed.store(true, Ordering::SeqCst);
         let _ = self.stop.send(true);
-        let mut s = self.status.lock().expect("chain status");
+        let mut s = self.status.lock();
         s.backends
             .iter_mut()
             .flat_map(|status| {
@@ -636,7 +637,7 @@ impl<B: Backend> FallbackChain<B> {
 
     /// The chain keeps owning probes that were told to stop; they settle on their own.
     fn retain(&self, probes: Vec<Probe>) {
-        let mut s = self.status.lock().expect("chain status");
+        let mut s = self.status.lock();
         if let Some(status) = s.backends.first_mut() {
             status.active.extend(probes.into_iter().filter(|p| !p.task.is_finished()));
         }
@@ -665,7 +666,7 @@ impl<B: Backend> FallbackChain<B> {
     fn observe_result(&self, index: usize, result: Result<(), &ProviderError>) -> bool {
         let available = result.is_ok();
         let changed = {
-            let mut s = self.status.lock().expect("chain status");
+            let mut s = self.status.lock();
             match s.backends.get(index) {
                 Some(st) if !st.closed => {
                     let resource = st.resource;

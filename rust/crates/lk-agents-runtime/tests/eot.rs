@@ -1,12 +1,13 @@
 //! Run the lock inversion in a child: a blocked native mutex cannot be cancelled by Tokio.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as _;
+use lk_agents_net::lock::Mutex;
 
 use lk_agents_inference::eot::*;
 
@@ -31,7 +32,7 @@ impl EotTransport for CloudFailure {
 struct Model(Arc<Mutex<Vec<Vec<i16>>>>);
 impl LocalEotModel for Model {
     fn predict(&self, pcm: &[i16]) -> Result<f64, String> {
-        self.0.lock().unwrap().push(pcm.to_vec());
+        self.0.lock().push(pcm.to_vec());
         Ok(0.7)
     }
 }
@@ -53,7 +54,7 @@ impl log::Log for HostLogger {
 /// The host's execution lock (the GIL in Python), held while a host log line is written.
 fn with_host_lock<T>(f: impl FnOnce() -> T) -> T {
     static HOST: Mutex<()> = Mutex::new(());
-    let _host = HOST.lock().unwrap();
+    let _host = HOST.lock();
     f()
 }
 
@@ -142,11 +143,11 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                 .unwrap();
             if mode == "close" {
                 assert_eq!(answer.end_of_turn_probability, 0.0);
-                assert!(seen.lock().unwrap().is_empty(), "close cannot revive a queued prediction");
+                assert!(seen.lock().is_empty(), "close cannot revive a queued prediction");
             } else {
                 assert_eq!(answer.end_of_turn_probability, 0.7);
                 assert_eq!(
-                    *seen.lock().unwrap(),
+                    *seen.lock(),
                     vec![vec![257; 160]],
                     "fallback keeps the request's audio snapshot"
                 );
@@ -157,7 +158,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             tokio::time::timeout(Duration::from_secs(2), closing).await.unwrap();
         });
         if mode == "close" {
-            assert!(seen.lock().unwrap().is_empty(), "settled replacement never ran after close");
+            assert!(seen.lock().is_empty(), "settled replacement never ran after close");
         }
         return;
     }
@@ -239,7 +240,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
     let answer =
         tokio::time::timeout(Duration::from_secs(5), stream.predict()).await.unwrap().unwrap();
     assert!((answer.end_of_turn_probability - 0.7).abs() < 1e-9, "{answer:?}");
-    assert!(!seen.lock().unwrap().is_empty(), "the local model heard the audio");
+    assert!(!seen.lock().is_empty(), "the local model heard the audio");
 
     let closing = stream.aclose();
     let after =

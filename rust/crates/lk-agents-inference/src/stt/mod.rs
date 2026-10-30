@@ -30,9 +30,11 @@ use lk_agents_media::AudioByteStream;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
 use pump::Pump;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use stream::{DeferredExtra, SinkCmd, StreamControl};
+
+use lk_agents_net::lock::Mutex;
 pub use stream::{RecognitionInput, RecognitionOutput};
 
 use lk_agents_net::env::ProcessEnv;
@@ -193,19 +195,19 @@ impl GatewayStt {
 
     /// The model's VAD as the host resolved it (`_resolve_vad_for_model`); later streams use it.
     pub fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
-        *self.shared.vad.lock().unwrap() = vad;
+        *self.shared.vad.lock() = vad;
     }
 
     /// The open streams; a dropped one is pruned on the way.
     fn live_streams(&self) -> Vec<Arc<StreamControl>> {
-        let mut live = self.shared.live.lock().unwrap();
+        let mut live = self.shared.live.lock();
         live.retain(|w| w.strong_count() > 0);
         live.iter().filter_map(Weak::upgrade).collect()
     }
 
     pub fn model(&self) -> String {
         // `"unknown"`, not "": a blank model name in metrics looks like a dropped field.
-        self.shared.opts.lock().unwrap().model.clone().unwrap_or_else(|| "unknown".to_owned())
+        self.shared.opts.lock().model.clone().unwrap_or_else(|| "unknown".to_owned())
     }
 
     /// `update_options` on the STT; the live streams get it as a mid-stream `session.update`.
@@ -215,7 +217,7 @@ impl GatewayStt {
         language: Option<&str>,
         extra: Option<&serde_json::Map<String, serde_json::Value>>,
     ) {
-        let mut opts = self.shared.opts.lock().unwrap();
+        let mut opts = self.shared.opts.lock();
         if let Some(model) = model {
             let (name, parsed_language) = options::parse_model_string(model);
             opts.model = Some(name.to_owned());
@@ -241,12 +243,12 @@ impl GatewayStt {
         }
         // Recompute every capability together; per-branch updates are how `__init__` and
         // `update_options` drifted apart.
-        *self.shared.capabilities.lock().unwrap() =
+        *self.shared.capabilities.lock() =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
         // A user `extra` re-merges the session keyterms, so the update does not drop them.
         let extra = extra.map(|extra| {
             let mut merged = extra.clone();
-            let terms = self.shared.session_keyterms.lock().unwrap().clone();
+            let terms = self.shared.session_keyterms.lock().clone();
             let model = opts.model.as_deref().map(|m| options::parse_model_string(m).0);
             if let Some(keyterms) =
                 options::keyterms_extra_for_model(model, Some(&opts.extra_kwargs), &terms)
@@ -269,26 +271,26 @@ impl GatewayStt {
         keyterms: &[String],
     ) -> Option<serde_json::Map<String, serde_json::Value>> {
         {
-            let existing = self.shared.session_keyterms.lock().unwrap();
+            let existing = self.shared.session_keyterms.lock();
             if *existing == keyterms {
                 return None;
             }
         }
-        let opts = self.shared.opts.lock().unwrap();
+        let opts = self.shared.opts.lock();
         let extra = options::keyterms_extra_for_model(
             opts.model.as_deref(),
             Some(&opts.extra_kwargs),
             keyterms,
         )?;
         drop(opts);
-        *self.shared.session_keyterms.lock().unwrap() = keyterms.to_vec();
+        *self.shared.session_keyterms.lock() = keyterms.to_vec();
         Some(extra)
     }
 
     /// `_sanitize_options`: a per-stream copy, so a later `update_options` on the STT cannot
     /// mutate a stream that is already running.
     fn sanitize(&self, language: Option<&str>) -> SttOptions {
-        let mut opts = self.shared.opts.lock().unwrap().clone();
+        let mut opts = self.shared.opts.lock().clone();
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
@@ -310,7 +312,7 @@ impl GatewayStt {
         opts.conn_options
             .validate()
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-        let keyterms = self.shared.session_keyterms.lock().unwrap().clone();
+        let keyterms = self.shared.session_keyterms.lock().clone();
 
         let (audio_tx, audio_rx) = mpsc::channel::<SinkCmd>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
         let (event_tx, event_rx) =
@@ -329,14 +331,14 @@ impl GatewayStt {
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra::default()),
         });
-        self.shared.live.lock().unwrap().push(Arc::downgrade(&control));
+        self.shared.live.lock().push(Arc::downgrade(&control));
 
         let pump = Pump {
             ws: self.shared.ws.clone(),
             identification: self.identity.for_connection(),
             clock: self.shared.clock.clone(),
             create_frame: wire::session_create(&opts, &keyterms),
-            vad: self.shared.vad.lock().unwrap().clone(),
+            vad: self.shared.vad.lock().clone(),
             offset: start_time_offset,
             opts,
             audio_rx,
@@ -468,7 +470,7 @@ impl Stt for GatewayStt {
     /// `_update_session_keyterms`: a warning once for a model without keyterm prompting, else the
     /// keyterms reach every open stream (now if the user is silent, at end of speech if not).
     fn update_keyterms(&self, keyterms: &[String]) {
-        if !self.shared.capabilities.lock().unwrap().keyterms {
+        if !self.shared.capabilities.lock().keyterms {
             if !self
                 .shared
                 .keyterms_unsupported_warned
@@ -492,10 +494,7 @@ impl Stt for GatewayStt {
     /// `_push_conversation_item`: an assistant turn's text, its tail, biases recognition as
     /// `agent_context` on a model that carries it.
     fn push_conversation_item(&self, role: &str, text: &str) {
-        if role != "assistant"
-            || text.is_empty()
-            || !self.shared.capabilities.lock().unwrap().chat_context
-        {
+        if role != "assistant" || text.is_empty() || !self.shared.capabilities.lock().chat_context {
             return;
         }
         let tail: String = {
@@ -508,7 +507,7 @@ impl Stt for GatewayStt {
     }
 
     fn capabilities(&self) -> SttCapabilities {
-        *self.shared.capabilities.lock().unwrap()
+        *self.shared.capabilities.lock()
     }
 
     /// "LiveKit Inference STT does not support batch recognition, use stream() instead".

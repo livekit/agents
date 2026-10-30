@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
@@ -18,6 +18,7 @@ use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::pool::MediaPool;
 use lk_agents_media::{AudioDecoding, Decoder};
+use lk_agents_net::lock::{Mutex, MutexGuard};
 use tokio::sync::{Notify, watch};
 
 use crate::codecs::{self, DecoderInput, decoder_limits};
@@ -97,7 +98,7 @@ struct Segment {
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+    mutex.lock()
 }
 
 impl AudioEmitter {

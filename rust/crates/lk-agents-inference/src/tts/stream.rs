@@ -61,21 +61,21 @@ mod tests {
     use super::*;
     use lk_agents_abi::tts::streams::TtsStream as _;
     use lk_agents_abi::{StreamSource, TtsSource};
-    use std::sync::Mutex;
+    use lk_agents_net::lock::Mutex;
 
     #[derive(Clone, Default)]
     struct Input(Arc<Mutex<Vec<&'static str>>>);
     impl StreamSink<String> for Input {
         fn push(&self, _: String) -> Result<(), ProviderError> {
-            self.0.lock().unwrap().push("text");
+            self.0.lock().push("text");
             Ok(())
         }
         fn flush(&self) -> Result<(), ProviderError> {
-            self.0.lock().unwrap().push("flush");
+            self.0.lock().push("flush");
             Ok(())
         }
         fn end_input(&self) {
-            self.0.lock().unwrap().push("end_input");
+            self.0.lock().push("end_input");
         }
     }
 
@@ -98,6 +98,6 @@ mod tests {
         let stream = TtsStream::new(Some(Box::new(input.clone())), source);
         stream.push_text("hello".into()).unwrap();
         stream.aclose().await;
-        assert_eq!(*input.0.lock().unwrap(), ["text"], "aclose must not speak pending text");
+        assert_eq!(*input.0.lock(), ["text"], "aclose must not speak pending text");
     }
 }

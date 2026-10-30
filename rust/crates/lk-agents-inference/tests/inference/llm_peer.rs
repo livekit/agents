@@ -37,7 +37,7 @@ struct Peer {
     url: String,
     requests: Arc<AtomicUsize>,
     /// Each request's `X-LiveKit-Session-ID`, in arrival order.
-    sessions: Arc<std::sync::Mutex<Vec<String>>>,
+    sessions: Arc<lk_agents_net::lock::Mutex<Vec<String>>>,
     /// Connections the client closed while the peer was still serving them.
     released: Arc<AtomicUsize>,
 }
@@ -48,7 +48,7 @@ impl Peer {
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
         let replies = Arc::new(Mutex::new(replies.into_iter()));
         let (requests, released) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-        let sessions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sessions = Arc::new(lk_agents_net::lock::Mutex::new(Vec::new()));
         let (req, rel, ses) = (requests.clone(), released.clone(), sessions.clone());
         tokio::spawn(async move {
             loop {
@@ -67,7 +67,7 @@ async fn serve(
     replies: Arc<Mutex<std::vec::IntoIter<Reply>>>,
     requests: Arc<AtomicUsize>,
     released: Arc<AtomicUsize>,
-    sessions: Arc<std::sync::Mutex<Vec<String>>>,
+    sessions: Arc<lk_agents_net::lock::Mutex<Vec<String>>>,
 ) {
     // Requests on a kept-alive connection are served in turn.
     loop {
@@ -88,7 +88,7 @@ async fn serve(
             let (name, value) = line.split_once(':')?;
             name.eq_ignore_ascii_case("x-livekit-session-id").then(|| value.trim().to_owned())
         });
-        sessions.lock().unwrap().extend(session);
+        sessions.lock().extend(session);
         let Some(reply) = replies.lock().await.next() else { return };
         let hang = |mut socket: TcpStream, released: Arc<AtomicUsize>| async move {
             let mut buf = [0u8; 64];
@@ -247,7 +247,7 @@ async fn each_attempt_opens_a_fresh_gateway_session() {
         .chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy(2, 2_000), Some(&job))
         .unwrap();
     assert_eq!(text(&mut chunks).await.unwrap(), "hi");
-    let sessions = peer.sessions.lock().unwrap().clone();
+    let sessions = peer.sessions.lock().clone();
     assert_eq!(sessions.len(), 3, "{sessions:?}");
     assert!(sessions.iter().all(|s| s.starts_with("inference_")), "{sessions:?}");
     let distinct: std::collections::BTreeSet<_> = sessions.iter().collect();

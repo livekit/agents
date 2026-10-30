@@ -54,7 +54,7 @@ impl StreamControl {
     ) {
         if extra.is_some() {
             // An explicit `extra` clears any deferred keyterm change (`_pending_extra = None`).
-            *self.deferred.pending.lock().unwrap() = None;
+            *self.deferred.pending.lock() = None;
         }
         if let Some(frame) = wire::session_update(model, language, extra)
             && self.updates.try_send(frame).is_err()
@@ -73,7 +73,7 @@ impl StreamControl {
     /// Now if the user is silent, at end of speech if not.
     pub fn apply_keyterms(&self, extra: serde_json::Map<String, serde_json::Value>) {
         if self.deferred.speaking.load(std::sync::atomic::Ordering::SeqCst) {
-            *self.deferred.pending.lock().unwrap() = Some(extra);
+            *self.deferred.pending.lock() = Some(extra);
             return;
         }
         self.update_options(None, None, Some(&extra));

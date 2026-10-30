@@ -1,10 +1,11 @@
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::media::emitter::{AudioEmitter as _, EmitterOutput};
 use lk_agents_abi::{AudioFrame, TimedString};
 use lk_agents_net::clock::RealClock;
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::task::TokioSpawner;
 
 use super::{AudioEmitter, EmitterEnv};
@@ -34,13 +35,13 @@ impl EmitterOutput for Output {
         is_final: bool,
         _timed_transcript: Vec<TimedString>,
     ) {
-        self.sent.lock().unwrap().push(Sent {
+        self.sent.lock().push(Sent {
             samples: frame.samples_per_channel,
             channels: frame.num_channels,
             pcm: lk_agents_media::pcm_samples(&frame.data),
             is_final,
         });
-        let emitter = self.reentry.lock().unwrap().as_ref().and_then(Weak::upgrade);
+        let emitter = self.reentry.lock().as_ref().and_then(Weak::upgrade);
         if let Some(emitter) = emitter {
             emitter.num_segments();
             emitter.flush().unwrap();
@@ -49,7 +50,7 @@ impl EmitterOutput for Output {
 
     fn span_attribute(&self, key: String, values: Vec<String>) {
         assert_eq!(key, lk_agents_abi::telemetry::attrs::PROVIDER_REQUEST_IDS);
-        self.ids.lock().unwrap().push(values);
+        self.ids.lock().push(values);
     }
 
     fn closed(&self) -> Result<bool, HostError> {
@@ -59,14 +60,14 @@ impl EmitterOutput for Output {
 
 impl Output {
     fn real_and_finals(&self) -> (u32, usize) {
-        let sent = self.sent.lock().unwrap();
+        let sent = self.sent.lock();
         let real = sent.iter().filter(|s| !s.is_final).map(|s| s.samples).sum();
         (real, sent.iter().filter(|s| s.is_final).count())
     }
 
     /// Every sample sent, final frame included, and whether the final came last and only once.
     fn total_and_final_last(&self) -> (u32, bool) {
-        let sent = self.sent.lock().unwrap();
+        let sent = self.sent.lock();
         let finals = sent.iter().filter(|s| s.is_final).count();
         (sent.iter().map(|s| s.samples).sum(), finals == 1 && sent.last().unwrap().is_final)
     }
@@ -90,7 +91,7 @@ fn initialize(emitter: &AudioEmitter, mime: &str, sample_rate: u32, stream: bool
 async fn a_consumer_re_entering_from_send_is_queued_behind_the_delivery() {
     let output = Arc::new(Output::default());
     let emitter = Arc::new(emitter(&output));
-    *output.reentry.lock().unwrap() = Some(Arc::downgrade(&emitter));
+    *output.reentry.lock() = Some(Arc::downgrade(&emitter));
     initialize(&emitter, "audio/pcm", 1000, true);
     emitter.start_segment("s1".into()).unwrap();
     emitter.push(&[0xff; 600]).unwrap();
@@ -111,7 +112,7 @@ async fn effects_before_a_machine_error_are_delivered_and_the_error_follows() {
     assert_eq!(error, EmitterError::SegmentAlreadyOpen);
     assert!(output.real_and_finals().0 > 0, "the frames from the push reached the host");
     assert_eq!(
-        *output.ids.lock().unwrap(),
+        *output.ids.lock(),
         vec![vec!["p1".to_owned()], vec!["p1".to_owned(), "p2".to_owned()]],
         "each new id is written once, including the one noted before the rejection"
     );
@@ -177,7 +178,7 @@ async fn a_wav_is_framed_in_the_emitters_channel_count() {
         emitter.start_segment("s".into()).unwrap();
         emitter.push(&wav).unwrap();
         emitter.end_segment().unwrap();
-        let sent = output.sent.lock().unwrap();
+        let sent = output.sent.lock();
         assert!(sent.iter().all(|s| s.channels == channels), "{file_channels} -> {channels}");
         let samples: u32 = sent.iter().map(|s| s.samples).sum();
         assert_eq!(samples, 2400, "{file_channels} -> {channels}: 100 ms at 24 kHz");
@@ -223,10 +224,10 @@ async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
     emitter.push(&opus(4800)[..64]).unwrap();
     emitter.end_input().unwrap();
     emitter.aclose().await.unwrap();
-    let after = output.sent.lock().unwrap().len();
+    let after = output.sent.lock().len();
     let _slot = media_pool
         .try_admit(lk_agents_media::pool::JobClass::Decoder)
         .expect("close releases the decoder's admission");
     tokio::task::yield_now().await;
-    assert_eq!(output.sent.lock().unwrap().len(), after);
+    assert_eq!(output.sent.lock().len(), after);
 }

@@ -3,7 +3,9 @@
 
 use async_trait::async_trait;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use lk_agents_net::lock::Mutex;
 
 /// A recorded `connect` call: the URL and its headers.
 pub type ConnectRecord = (String, Vec<(String, String)>);
@@ -73,11 +75,11 @@ impl FakeWs {
     /// Queue another incoming message after the stream is running. Only meaningful with
     /// [`keep_open`](Self::keep_open).
     pub fn feed(&self, msg: Result<WsMessage, TransportError>) {
-        self.incoming.lock().unwrap().push_back(msg);
+        self.incoming.lock().push_back(msg);
     }
 
     pub fn sent(&self) -> Vec<String> {
-        self.sent.lock().unwrap().clone()
+        self.sent.lock().clone()
     }
 
     /// Panics on a non-JSON frame.
@@ -86,11 +88,11 @@ impl FakeWs {
     }
 
     pub fn connect_count(&self) -> usize {
-        self.connects.lock().unwrap().len()
+        self.connects.lock().len()
     }
 
     pub fn last_connect(&self) -> Option<ConnectRecord> {
-        self.connects.lock().unwrap().last().cloned()
+        self.connects.lock().last().cloned()
     }
 }
 
@@ -101,7 +103,7 @@ impl WsTransport for FakeWs {
         url: &str,
         headers: Vec<(String, String)>,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
-        self.connects.lock().unwrap().push((url.to_owned(), headers));
+        self.connects.lock().push((url.to_owned(), headers));
         if let Some(err) = self.connect_error.clone() {
             return Err(err);
         }
@@ -128,31 +130,31 @@ struct FakeWsSender {
 #[async_trait]
 impl WsSender for FakeWsSender {
     async fn send_text(&self, text: String) -> Result<(), TransportError> {
-        if *self.closed.lock().unwrap() {
+        if *self.closed.lock() {
             return Err(TransportError::Closed);
         }
         if self.stall {
             std::future::pending::<()>().await;
         }
-        self.sent.lock().unwrap().push(text);
+        self.sent.lock().push(text);
         Ok(())
     }
 
     /// Recorded as its length, so a test can count the audio sent.
     async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError> {
-        if *self.closed.lock().unwrap() {
+        if *self.closed.lock() {
             return Err(TransportError::Closed);
         }
-        self.sent.lock().unwrap().push(format!("<{} bytes>", data.len()));
+        self.sent.lock().push(format!("<{} bytes>", data.len()));
         Ok(())
     }
 
     fn is_closed(&self) -> bool {
-        *self.closed.lock().unwrap()
+        *self.closed.lock()
     }
 
     async fn close(&self) {
-        *self.closed.lock().unwrap() = true;
+        *self.closed.lock() = true;
     }
 }
 
@@ -165,7 +167,7 @@ struct FakeWsReceiver {
 impl WsReceiver for FakeWsReceiver {
     async fn recv(&mut self) -> Result<WsMessage, TransportError> {
         loop {
-            if let Some(msg) = self.incoming.lock().unwrap().pop_front() {
+            if let Some(msg) = self.incoming.lock().pop_front() {
                 return msg;
             }
             if !self.keep_open {

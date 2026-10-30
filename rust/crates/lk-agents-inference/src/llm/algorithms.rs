@@ -117,7 +117,7 @@ mod tests {
     // repaired value, the strict error), which is all a reader of that warning has to go on.
     #[test]
     fn a_repair_is_logged_with_the_raw_payload_the_repair_and_the_error() {
-        struct Keys(std::sync::Mutex<Vec<(String, String)>>);
+        struct Keys(lk_agents_net::lock::Mutex<Vec<(String, String)>>);
         impl log::Log for Keys {
             fn enabled(&self, _: &log::Metadata<'_>) -> bool {
                 true
@@ -134,7 +134,7 @@ mod tests {
                         Ok(())
                     }
                 }
-                record.key_values().visit(&mut Collect(&mut self.0.lock().unwrap())).unwrap();
+                record.key_values().visit(&mut Collect(&mut self.0.lock())).unwrap();
             }
             fn flush(&self) {}
         }
@@ -142,7 +142,7 @@ mod tests {
         log::set_logger(keys).unwrap();
         log::set_max_level(log::LevelFilter::Warn);
         LlmAlgorithms::parse_function_arguments("{'x':1}").unwrap();
-        let seen = keys.0.lock().unwrap().clone();
+        let seen = keys.0.lock().clone();
         let get = |k: &str| seen.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
         assert_eq!(get("lk.pii.raw_arguments"), Some("{'x':1}"));
         assert_eq!(get("lk.pii.repaired"), Some(r#"{"x":1}"#));

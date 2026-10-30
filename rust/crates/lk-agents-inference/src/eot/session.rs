@@ -3,10 +3,11 @@
 //! warn-once state. The host executes the [`EotAction`]s. `now` is a wall-clock `f64` that only
 //! lands in [`EotPrediction::last_speaking_time`].
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use lk_agents_abi::EotPrediction;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
+use lk_agents_net::lock::Mutex;
 
 use crate::eot::{CancelReason, EotRequestId, EotWarning};
 
@@ -102,7 +103,7 @@ impl EotSession {
 
     /// The table a prediction is judged against, as it is now.
     pub fn thresholds(&self) -> ThresholdOptions {
-        self.thresholds.lock().expect("thresholds mutex").clone()
+        self.thresholds.lock().clone()
     }
 
     /// True once the cloud transport is gone with no local model to replace it (`base.py:151`).
@@ -235,7 +236,7 @@ impl EotSession {
             }));
         }
         actions.extend(self.emit_default_for_inflight(now));
-        self.thresholds.lock().expect("thresholds mutex").to_local_fallback();
+        self.thresholds.lock().to_local_fallback();
         self.model = TurnDetectorModel::V1Mini;
         self.is_fallback = true;
         actions.push(EotAction::SwapToLocal(EotSwapToLocal {}));

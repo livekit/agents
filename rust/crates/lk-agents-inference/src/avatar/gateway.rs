@@ -7,8 +7,10 @@
 //! core owes nothing, so a session created after its caller left is still terminated.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+
+use lk_agents_net::lock::Mutex;
 
 use crate::avatar::lifecycle::{
     AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
@@ -207,11 +209,11 @@ impl InferenceAvatar for GatewayAvatar {
     }
 
     fn session_id(&self) -> Option<String> {
-        self.view.lock().unwrap_or_else(|p| p.into_inner()).session_id.clone()
+        self.view.lock().session_id.clone()
     }
 
     fn provider_session_id(&self) -> Option<String> {
-        self.view.lock().unwrap_or_else(|p| p.into_inner()).provider_session_id.clone()
+        self.view.lock().provider_session_id.clone()
     }
 
     async fn create(
@@ -408,7 +410,7 @@ impl Driver {
                         "avatar session has no provider_session_id or terminate_token; it cannot be explicitly terminated and will bill until its provider idle timeout");
                 }
                 AvatarSessionEffect::SessionTerminated(session) => {
-                    let mut view = self.view.lock().unwrap_or_else(|p| p.into_inner());
+                    let mut view = self.view.lock();
                     if view.provider_session_id == session.provider_session_id {
                         view.provider_session_id = None;
                     }
@@ -443,7 +445,7 @@ impl Driver {
         match outcome {
             Ok(session) => {
                 if caller.reply.send(Ok(session.sample_rate)).is_ok() {
-                    *self.view.lock().unwrap_or_else(|p| p.into_inner()) = View {
+                    *self.view.lock() = View {
                         session_id: session.session_id.clone(),
                         provider_session_id: session.provider_session_id.clone(),
                     };

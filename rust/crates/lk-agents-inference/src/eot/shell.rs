@@ -2,14 +2,15 @@
 //! the transport's task, so all but `session_created` only post to a channel; taking the host's
 //! lock there is how deadlocks happen.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::EotInferenceMetrics;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::tokenize::language::{ThresholdError, ThresholdOptions};
 use lk_agents_abi::turn::eot::PredictionEvent;
+use lk_agents_net::lock::Mutex;
 use tokio::sync::mpsc;
 
 use crate::eot::{EotTransport, EotWarning, PredictionListener, TransportPrediction};
@@ -54,7 +55,7 @@ impl PredictionListener for PredictionChannel {
         backchannel_thresholds: Option<&std::collections::BTreeMap<String, f64>>,
         backchannel_default: f64,
     ) -> Result<(), ThresholdError> {
-        self.thresholds.lock().expect("thresholds mutex").update_defaults(
+        self.thresholds.lock().update_defaults(
             thresholds,
             default,
             backchannel_thresholds,

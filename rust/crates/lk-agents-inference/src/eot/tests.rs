@@ -2,7 +2,7 @@
 //! [`EotSession`], the gateway over an in-memory WebSocket, the local model as a closure.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,6 +12,7 @@ use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdError, ThresholdOptions, TurnDetectorModel,
 };
 use lk_agents_abi::{ApiConnectOptions, EotInferenceMetrics};
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use prost::Message as _;
 
@@ -167,7 +168,7 @@ fn a_prediction_timeout_on_the_cloud_model_swaps_in_the_local_one() {
     assert!(session.is_fallback());
     assert!(!session.is_degraded(), "a fallback is not a degradation");
     assert_eq!(
-        shared.lock().unwrap().lookup(Some(&LanguageCode::new("de"))),
+        shared.lock().lookup(Some(&LanguageCode::new("de"))),
         Some(0.2450),
         "and the table the caller holds moved to the local model's scale"
     );
@@ -320,7 +321,7 @@ struct RecordingSink {
 
 impl PredictionListener for RecordingSink {
     fn resolve(&self, request_id: &str, prediction: TransportPrediction) {
-        self.resolves.lock().unwrap().push((request_id.to_owned(), prediction));
+        self.resolves.lock().push((request_id.to_owned(), prediction));
     }
 
     fn session_created(
@@ -333,16 +334,16 @@ impl PredictionListener for RecordingSink {
         if self.reject_defaults {
             return Err(ThresholdError::UnusableDefaults);
         }
-        self.defaults.lock().unwrap().push((thresholds.clone(), default));
+        self.defaults.lock().push((thresholds.clone(), default));
         Ok(())
     }
 
     fn metrics(&self, metrics: EotInferenceMetrics) {
-        self.metrics.lock().unwrap().push(metrics);
+        self.metrics.lock().push(metrics);
     }
 
     fn warn(&self, warning: EotWarning) {
-        self.warnings.lock().unwrap().push(warning);
+        self.warnings.lock().push(warning);
     }
 
     fn metadata(&self) -> Metadata {
@@ -364,7 +365,7 @@ impl WsSender for FakeSink {
     }
 
     async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError> {
-        self.sent.lock().unwrap().push(data);
+        self.sent.lock().push(data);
         Ok(())
     }
 
@@ -409,12 +410,12 @@ impl WsTransport for FakeConnector {
         url: &str,
         headers: Vec<(String, String)>,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
-        self.urls.lock().unwrap().push(url.to_owned());
-        self.headers.lock().unwrap().push(headers);
+        self.urls.lock().push(url.to_owned());
+        self.headers.lock().push(headers);
         if self.hang {
             std::future::pending::<()>().await;
         }
-        let incoming = self.incoming.lock().unwrap().take().expect("one connection per test");
+        let incoming = self.incoming.lock().take().expect("one connection per test");
         Ok((Arc::new(FakeSink { sent: self.sent.clone() }), Box::new(FakeStream { incoming })))
     }
 }
@@ -480,7 +481,7 @@ async fn a_handshake_that_never_completes_times_out_on_the_session_clock_and_doe
     assert_eq!(error.kind, ApiErrorKind::Timeout);
     assert!(!error.retryable, "`_connect_ws` forces retryable=False; the fallback is the recovery");
     assert!(error.message.contains("turn detector connection timed out"), "{}", error.message);
-    assert_eq!(fixture.urls.lock().unwrap().len(), 1, "dialed once, not retried");
+    assert_eq!(fixture.urls.lock().len(), 1, "dialed once, not retried");
 }
 
 /// Await `f`, but never forever, so a mutant fails the test instead of hanging it.
@@ -514,7 +515,6 @@ fn server_message(message: proto::server_message::Message, request_id: &str) -> 
 
 fn client_messages(sent: &Arc<Mutex<Vec<Vec<u8>>>>) -> Vec<proto::ClientMessage> {
     sent.lock()
-        .unwrap()
         .iter()
         .map(|data| proto::ClientMessage::decode(data.as_slice()).expect("client message"))
         .collect()
@@ -559,7 +559,7 @@ async fn a_prediction_message_resolves_the_request_and_reports_its_metrics() {
     assert_eq!(error.kind, ApiErrorKind::Status);
     assert_eq!(error.status_code, Some(-1), "`ws.close_code or -1`");
 
-    let resolves = sink.resolves.lock().unwrap();
+    let resolves = sink.resolves.lock();
     let (request_id, prediction) = resolves.first().expect("one resolution");
     assert_eq!(request_id, "inference_abc_eot_1");
     assert!((prediction.probability - 0.75).abs() < 1e-6);
@@ -571,7 +571,7 @@ async fn a_prediction_message_resolves_the_request_and_reports_its_metrics() {
         "now minus the request's stamp, in seconds: {detection_delay}"
     );
 
-    let metrics = sink.metrics.lock().unwrap();
+    let metrics = sink.metrics.lock();
     let metrics = metrics.first().expect("one metrics record");
     assert_eq!(metrics.total_duration, 1.25, "client_e2e_latency, seconds *and* nanos");
     assert_eq!(metrics.prediction_duration, 0.04);
@@ -607,7 +607,7 @@ async fn session_created_installs_the_servers_calibrated_defaults() {
     drop(fixture.server);
     let _ = within("the transport", fixture.transport.run()).await;
 
-    let defaults = sink.defaults.lock().unwrap();
+    let defaults = sink.defaults.lock();
     let (thresholds, default) = defaults.first().expect("one SessionCreated");
     assert_eq!(default, &0.5);
     assert_eq!(thresholds.get("en").map(|t| (t * 100.0).round()), Some(61.0));
@@ -682,7 +682,7 @@ async fn a_slow_round_trip_is_reported_and_an_unstamped_message_is_not() {
     drop(fixture.server);
     let _ = within("the transport", fixture.transport.run()).await;
 
-    let warnings = sink.warnings.lock().unwrap();
+    let warnings = sink.warnings.lock();
     assert_eq!(warnings.len(), 1, "the unstamped message must not be reported: {warnings:?}");
     match warnings[0] {
         EotWarning::TransportLatency { millis } => {
@@ -773,8 +773,8 @@ async fn the_handshake_uses_a_ws_url_a_bearer_token_and_the_hosts_session_id() {
     drop(fixture.server);
     let _ = within("the transport", running).await;
 
-    assert_eq!(fixture.urls.lock().unwrap()[0], "wss://gateway.example/v1/eot");
-    let headers = fixture.headers.lock().unwrap()[0].clone();
+    assert_eq!(fixture.urls.lock()[0], "wss://gateway.example/v1/eot");
+    let headers = fixture.headers.lock()[0].clone();
     let token = headers
         .iter()
         .find_map(|(name, value)| (name == "Authorization").then(|| value.strip_prefix("Bearer ")))
@@ -799,7 +799,7 @@ struct RecordingModel {
 
 impl LocalEotModel for RecordingModel {
     fn predict(&self, pcm: &[i16]) -> Result<f64, String> {
-        self.seen.lock().unwrap().push(pcm.to_vec());
+        self.seen.lock().push(pcm.to_vec());
         self.answer.clone()
     }
 }
@@ -829,12 +829,12 @@ async fn the_local_transport_scores_the_audio_it_was_holding_when_the_request_wa
 
     within("the local transport", transport.run()).await.unwrap();
 
-    let seen = seen.lock().unwrap();
+    let seen = seen.lock();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].len(), 19_200, "one prediction sees 1.2 s at 16 kHz");
     assert_eq!(seen[0], ramp[1_600..], "the newest 1.2 s, not the oldest");
     assert_eq!(seen[1], Vec::<i16>::new(), "flush emptied the buffer");
-    let resolves = sink.resolves.lock().unwrap();
+    let resolves = sink.resolves.lock();
     assert_eq!(resolves.len(), 2);
     assert_eq!(resolves[0].0, "turn_request_1");
     assert_eq!(resolves[0].1.probability, 0.9);
@@ -857,9 +857,9 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
     transport.end_input();
     within("the local transport", transport.run()).await.unwrap();
 
-    assert_eq!(sink.resolves.lock().unwrap()[0].1.probability, 0.0);
+    assert_eq!(sink.resolves.lock()[0].1.probability, 0.0);
     assert_eq!(
-        sink.warnings.lock().unwrap().as_slice(),
+        sink.warnings.lock().as_slice(),
         [EotWarning::LocalPredictionFailed { reason: "weights not loaded".to_owned() }]
     );
 }
@@ -891,9 +891,9 @@ async fn a_local_prediction_waits_for_a_media_pool_slot() {
         async move { transport.run().await }
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert!(sink.resolves.lock().unwrap().is_empty(), "predicted while the pool was full");
+    assert!(sink.resolves.lock().is_empty(), "predicted while the pool was full");
     release.send(()).unwrap();
     occupant.await.unwrap();
     within("the local transport", running).await.unwrap().unwrap();
-    assert_eq!(sink.resolves.lock().unwrap()[0].1.probability, 0.9);
+    assert_eq!(sink.resolves.lock()[0].1.probability, 0.9);
 }

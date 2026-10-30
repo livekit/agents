@@ -4,7 +4,7 @@
 //! `.await`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
 use lk_agents_abi::ApiConnectOptions;
@@ -14,6 +14,7 @@ use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::attempts::RequestPolicy;
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
@@ -89,8 +90,8 @@ impl AdaptiveInterruptionDetector {
     /// `update_options` (`inference/interruption.py:391`). The options are shared with live
     /// streams, which are only nudged to reconnect; the next `session.create` carries them.
     pub fn update_options(&self, threshold: Option<f64>, min_interruption_duration: Option<f64>) {
-        self.opts.lock().unwrap().update(threshold, min_interruption_duration);
-        let mut streams = self.streams.lock().unwrap();
+        self.opts.lock().update(threshold, min_interruption_duration);
+        let mut streams = self.streams.lock();
         streams.retain(|s| match s.upgrade() {
             Some(reconnect) => {
                 reconnect.notify_one();
@@ -103,7 +104,7 @@ impl AdaptiveInterruptionDetector {
     /// `stream(conn_options=...)`: its verdicts and errors reach only this stream's reader.
     pub fn stream(&self) -> InterruptionStream {
         let reconnect = Arc::new(Notify::new());
-        self.streams.lock().unwrap().push(Arc::downgrade(&reconnect));
+        self.streams.lock().push(Arc::downgrade(&reconnect));
 
         let (input_tx, input_rx) = mpsc::channel(INPUT_CAPACITY);
         let (input_failure, _) = watch::channel(None);
@@ -425,7 +426,7 @@ async fn run(
     // The core outlives a reconnect, as in the reference: a mid-turn `update_options` keeps the
     // buffered agent audio.
     let core = {
-        let opts = ctx.opts.lock().unwrap().clone();
+        let opts = ctx.opts.lock().clone();
         Arc::new(Mutex::new(InterruptionMachine::new(opts)))
     };
     loop {
@@ -444,16 +445,13 @@ async fn run_once(
     socket: Socket,
 ) -> Result<bool, StreamError> {
     let Socket { sender: sink, receiver: mut source } = socket;
-    let opened = core.lock().unwrap().handle(
-        InterruptionEvent::ConnectionOpened,
-        ctx.clock.now(),
-        ctx.wall(),
-    );
+    let opened =
+        core.lock().handle(InterruptionEvent::ConnectionOpened, ctx.clock.now(), ctx.wall());
     if let Err(error) = opened {
         sink.close().await;
         return Err(error);
     }
-    let connection = core.lock().unwrap().connection();
+    let connection = core.lock().connection();
     let (data_tx, data_rx) = mpsc::unbounded_channel();
     // `closing_ws`: per connection, reset on reconnect; tells an orderly shutdown from a hang-up.
     let closing = Arc::new(AtomicBool::new(false));
@@ -468,7 +466,7 @@ async fn run_once(
     let mut data_tx = Some(data_tx);
 
     let outcome = loop {
-        let deadline = core.lock().unwrap().next_deadline();
+        let deadline = core.lock().next_deadline();
         let inference_deadline = async {
             match deadline {
                 Some(deadline) => ctx.clock.wait_until(deadline).await,
@@ -482,7 +480,7 @@ async fn run_once(
 
             error = ctx.input_failed() => break Err(error),
             _ = inference_deadline => {
-                let outcome = core.lock().unwrap().handle(
+                let outcome = core.lock().handle(
                     InterruptionEvent::Deadline, ctx.clock.now(), ctx.wall(),
                 );
                 if let Err(error) = outcome {
@@ -516,7 +514,7 @@ async fn run_once(
                     let ev = queued.event;
                     let wall = ctx.wall();
                     let outcome = {
-                        let mut core = core.lock().unwrap();
+                        let mut core = core.lock();
                         core.handle(InterruptionEvent::Input(ev), ctx.clock.now(), wall)
                     };
                     match outcome {
@@ -548,7 +546,7 @@ async fn run_once(
     sink.close().await;
     outcome.map_err(|mut error| {
         if error.request.is_none() {
-            error.request = core.lock().unwrap().overlap_request();
+            error.request = core.lock().overlap_request();
         }
         error
     })
@@ -600,7 +598,7 @@ fn handle_incoming(
 
     let now = ctx.clock.now();
     let wall = ctx.wall();
-    let effects = core.lock().unwrap().handle(
+    let effects = core.lock().handle(
         InterruptionEvent::ServerMessage { connection, message: parsed },
         now,
         wall,
@@ -619,7 +617,7 @@ async fn send_task(
     closing: Arc<AtomicBool>,
 ) -> Result<(), StreamError> {
     while let Some((identity, samples)) = data_rx.recv().await {
-        if !core.lock().unwrap().request_eligible(identity) {
+        if !core.lock().request_eligible(identity) {
             continue;
         }
         let payload = frame_request(identity.request_id, &samples);
@@ -646,7 +644,7 @@ fn send_failed(e: TransportError) -> StreamError {
 /// `_connect_ws` (`inference/interruption.py:977`).
 async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
     let (url, settings, api_key, api_secret) = {
-        let opts = ctx.opts.lock().unwrap();
+        let opts = ctx.opts.lock();
         (
             // `_connect_ws`'s URL (`inference/interruption.py:986`).
             format!("{}/bargein", lk_agents_net::transport::to_ws_url(&opts.base_url)),

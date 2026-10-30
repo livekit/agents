@@ -4,8 +4,9 @@
 //! stream that survives the attempts.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use lk_agents_net::lock::Mutex;
 use tokio::sync::Notify;
 
 use lk_agents_abi::errors::{ProviderError, chained_connection_error};
@@ -297,7 +298,7 @@ struct InputState {
 impl Input {
     /// The next attempt's sink: what arrived meanwhile first, then the end if it came.
     fn install(&self, sink: SttSink) {
-        let mut st = self.state.lock().expect("stt input");
+        let mut st = self.state.lock();
         while let Some(item) = st.held.pop_front() {
             let sent = match item.clone() {
                 Pushed::Audio(frame) => sink.push(frame),
@@ -317,7 +318,7 @@ impl Input {
     }
 
     fn clear(&self) {
-        let mut st = self.state.lock().expect("stt input");
+        let mut st = self.state.lock();
         st.sink = None;
         st.failure = None;
     }
@@ -325,7 +326,7 @@ impl Input {
     async fn failure(&self) -> ProviderError {
         loop {
             let notified = self.failed.notified();
-            if let Some(error) = self.state.lock().expect("stt input").failure.take() {
+            if let Some(error) = self.state.lock().failure.take() {
                 return error;
             }
             notified.await;
@@ -334,7 +335,7 @@ impl Input {
 
     /// Held while no attempt takes it, a failed attempt's refusal included: the next one hears it.
     fn send(&self, item: Pushed) -> Result<(), ProviderError> {
-        let mut st = self.state.lock().expect("stt input");
+        let mut st = self.state.lock();
         if let Some(sink) = &st.sink {
             let sent = match item.clone() {
                 Pushed::Audio(frame) => sink.push(frame),
@@ -367,7 +368,7 @@ impl StreamSink<AudioFrame> for InputSink {
     }
 
     fn end_input(&self) {
-        let mut st = self.0.state.lock().expect("stt input");
+        let mut st = self.0.state.lock();
         st.ended = true;
         if let Some(sink) = &st.sink {
             sink.end_input();

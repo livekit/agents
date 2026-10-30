@@ -18,7 +18,7 @@ pub use session::FallbackSession;
 use session::SessionState;
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
@@ -28,6 +28,7 @@ use lk_agents_abi::llm::realtime::{
     Modalities, RealtimeModelError,
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
+use lk_agents_net::lock::Mutex;
 
 use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest};
 use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy, backend_resource};
@@ -159,13 +160,8 @@ impl RealtimeFallbackModel {
     /// `restart_session(switch_model=)`: a fresh session on every live one, preserving the
     /// conversation.
     pub async fn restart(&self, switch_model: bool) {
-        let live: Vec<_> = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-            .filter_map(std::sync::Weak::upgrade)
-            .collect();
+        let live: Vec<_> =
+            self.sessions.lock().iter().filter_map(std::sync::Weak::upgrade).collect();
         for s in live {
             s.request_restart(switch_model);
         }
@@ -219,7 +215,7 @@ impl Realtime for RealtimeFallbackModel {
                 changed: tokio::sync::Notify::new(),
                 restart_rx: tokio::sync::Mutex::new(restart_rx),
             });
-            let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
+            let mut sessions = self.sessions.lock();
             sessions.retain(|w| w.strong_count() > 0);
             sessions.push(Arc::downgrade(&session));
             Ok(session as Arc<dyn RealtimeSession>)

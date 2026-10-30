@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Arc, OnceLock};
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::media::codecs::CodecFailure;
@@ -13,6 +13,7 @@ use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::{AudioFormat, CodecError, StreamBuffer};
+use lk_agents_net::lock::Mutex;
 use tokio::sync::Notify;
 
 use lk_agents_net::env::ProcessEnv;
@@ -87,19 +88,8 @@ impl Shared {
         }
     }
 
-    fn try_state(&self) -> Result<MutexGuard<'_, State>, ()> {
-        match self.state.try_lock() {
-            Ok(state) => Ok(state),
-            Err(TryLockError::Poisoned(error)) => Ok(error.into_inner()),
-            Err(TryLockError::WouldBlock) => Err(()),
-        }
-    }
-
     fn poll_output(&self) -> DecoderPoll {
-        let mut state = match self.try_state() {
-            Ok(state) => state,
-            Err(_) => return DecoderPoll::Busy,
-        };
+        let Some(mut state) = self.state.try_lock() else { return DecoderPoll::Busy };
         if let Some(audio) = state.output.pop_front() {
             state.output_samples -= audio.data.len() / 2;
             if state.output.is_empty() {
@@ -128,7 +118,7 @@ impl Shared {
             return Err(DecoderError::InvalidLimits);
         }
         loop {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state.lock();
             if self.cancelled.load(Ordering::Acquire) {
                 return Err(DecoderError::InputClosed);
             }
@@ -153,7 +143,7 @@ impl Shared {
         }
         let prepared = source::frames(format, samples, self.limits.output_chunk_samples);
         let prepared = prepared.collect::<Vec<_>>();
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         if self.cancelled.load(Ordering::Acquire) {
             return Err(DecoderError::InputClosed);
         }
@@ -260,7 +250,7 @@ impl AudioDecoder {
             }))
             .unwrap_or_else(|_| Err(DecoderError::WorkerFailed("native decode panicked".into())));
             {
-                let mut state = resource.state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut state = resource.state.lock();
                 state.done = true;
                 if let Err(error) = &result
                     && !resource.cancelled.load(Ordering::Acquire)
@@ -272,7 +262,7 @@ impl AudioDecoder {
             // Retain the worker's ownership until accepted PCM transfers or cancellation retires
             // it. Large queue deallocation therefore happens here, never in a host-loop drop.
             loop {
-                let mut state = resource.state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut state = resource.state.lock();
                 if resource.cancelled.load(Ordering::Acquire) {
                     state.output.clear();
                     state.output_samples = 0;
@@ -355,7 +345,7 @@ impl DecoderInput {
     pub fn push(&self, data: &[u8]) -> Result<(), DecoderError> {
         if self.ended.load(Ordering::Acquire)
             || self.shared.cancelled.load(Ordering::Acquire)
-            || self.shared.state.lock().unwrap_or_else(|e| e.into_inner()).done
+            || self.shared.state.lock().done
         {
             return Err(DecoderError::InputClosed);
         }

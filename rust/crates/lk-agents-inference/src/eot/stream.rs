@@ -3,7 +3,7 @@
 //! the local model on a cloud failure, and each `predict()` answered by its own waiter.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
@@ -11,6 +11,7 @@ use lk_agents_abi::turn::inference::EotStream as AbiEotStream;
 use lk_agents_abi::utils::resample::{Quality, Resampler};
 use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use lk_agents_media::pool::{JobClass, MediaPoolError};
+use lk_agents_net::lock::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
@@ -134,8 +135,8 @@ impl EotStream {
         DetectorStream(stream)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, Inner> {
+        self.inner.lock()
     }
 
     fn push(inner: &mut Inner, frame: AudioFrame) {

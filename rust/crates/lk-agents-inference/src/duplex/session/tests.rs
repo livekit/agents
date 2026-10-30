@@ -61,7 +61,7 @@ impl abi::DuplexSession for FakeSession {
     }
     fn next_event(&self) -> BoxFuture<'_, Result<Option<abi::DuplexEvent>, HostError>> {
         Box::pin(async move {
-            let next = self.0.lock().unwrap().as_mut().map(Vec::pop);
+            let next = self.0.lock().as_mut().map(Vec::pop);
             match next {
                 Some(transcript) => Ok(transcript.map(abi::DuplexEvent::Transcript)),
                 None => std::future::pending().await,

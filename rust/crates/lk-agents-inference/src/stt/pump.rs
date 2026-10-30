@@ -143,7 +143,7 @@ impl Pump {
                 .total_timeout
                 .map(|seconds| self.accepted.saturating_add(Duration::from_secs_f64(seconds))),
         )));
-        let opening = machine.lock().unwrap().handle(SttEvent::Start, self.clock.now());
+        let opening = machine.lock().handle(SttEvent::Start, self.clock.now());
         if !opening.iter().any(|effect| matches!(effect, SttEffect::SttStreamOpen { .. })) {
             return opening
                 .into_iter()
@@ -204,7 +204,7 @@ impl Pump {
 
         let settle = async {
             loop {
-                let deadline = machine.lock().unwrap().wake_at();
+                let deadline = machine.lock().wake_at();
                 let wait = async {
                     match deadline {
                         Some(deadline) => self.clock.wait_until(deadline).await,
@@ -216,7 +216,7 @@ impl Pump {
                     _ = rearm.notified() => continue,
                     _ = wait => {}
                 }
-                let effects = machine.lock().unwrap().handle(SttEvent::Wake, self.clock.now());
+                let effects = machine.lock().handle(SttEvent::Wake, self.clock.now());
                 if let Some(result) = effects.into_iter().find_map(|effect| match effect {
                     SttEffect::Finished(result) => Some(result),
                     _ => None,
@@ -240,7 +240,7 @@ impl Pump {
             }
         }
         outcome.map_err(|error| {
-            if machine.lock().unwrap().replay_safe() { error } else { error.with_retryable(false) }
+            if machine.lock().replay_safe() { error } else { error.with_retryable(false) }
         })
     }
 
@@ -341,7 +341,7 @@ impl Pump {
             };
 
             for frame in frames {
-                machine.lock().unwrap().handle(
+                machine.lock().handle(
                     SttEvent::AudioWritten(
                         f64::from(frame.samples_per_channel) / f64::from(sample_rate),
                     ),
@@ -366,7 +366,7 @@ impl Pump {
         if let Some(sink) = vad_sink.as_mut() {
             sink.end_input();
         }
-        let effects = machine.lock().unwrap().handle(SttEvent::InputEof, clock.now());
+        let effects = machine.lock().handle(SttEvent::InputEof, clock.now());
         if effects.iter().any(|effect| matches!(effect, SttEffect::SttFinalize { .. })) {
             sender
                 .send_text(wire::session_finalize().to_string())
@@ -401,7 +401,7 @@ impl Pump {
             };
             match msg {
                 WsMessage::Closed => {
-                    let effects = machine.lock().unwrap().handle(SttEvent::ServerEof, clock.now());
+                    let effects = machine.lock().handle(SttEvent::ServerEof, clock.now());
                     return effects
                         .into_iter()
                         .find_map(|effect| match effect {
@@ -420,7 +420,7 @@ impl Pump {
                         awaiting_first = false;
                     }
                     let effects = {
-                        let mut machine = machine.lock().unwrap();
+                        let mut machine = machine.lock();
                         let effects = machine.handle(SttEvent::Message(incoming), clock.now());
                         deferred
                             .speaking
@@ -436,7 +436,7 @@ impl Pump {
                                 }
                             }
                             SttEffect::EndOfSpeech => {
-                                let extra = deferred.pending.lock().unwrap().take();
+                                let extra = deferred.pending.lock().take();
                                 if let Some(extra) = extra
                                     && let Some(frame) =
                                         wire::session_update(None, None, Some(&extra))

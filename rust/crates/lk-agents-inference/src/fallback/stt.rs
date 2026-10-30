@@ -3,8 +3,8 @@
 //! (`stt:456-466`), so [`Backend::Req`] carries an [`InputTee`]. One availability flag serves two
 //! recovery slots, hence one [`FallbackChain`] with a [`RecoveryMode`] argument. Each attempt binds the resolved policy immediately before opening its provider.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -15,6 +15,7 @@ use lk_agents_abi::{
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_net::lock::Mutex;
 
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_net::env::ProcessEnv;
@@ -79,8 +80,7 @@ impl InputTee {
     /// ends it if the caller already finished.
     fn set_main(&self, sink: SttSink) {
         // Drained before install, so a concurrent `push` cannot overtake a buffered frame.
-        let pending: Vec<PreFrame> =
-            self.preroll.lock().expect("tee preroll").pending.drain(..).collect();
+        let pending: Vec<PreFrame> = self.preroll.lock().pending.drain(..).collect();
         for item in pending {
             let _ = match item {
                 PreFrame::Audio(f) => sink.push(f),
@@ -92,13 +92,13 @@ impl InputTee {
             sink.end_input();
             return;
         }
-        *self.main.lock().expect("tee main") = Some(sink);
+        *self.main.lock() = Some(sink);
     }
 
     /// Preserve utterance boundaries, accounting for each evicted audio frame. A full queue
     /// of boundaries refuses more input rather than growing or merging distinct utterances.
     fn buffer(&self, item: PreFrame) -> Result<(), ProviderError> {
-        let mut preroll = self.preroll.lock().expect("tee preroll");
+        let mut preroll = self.preroll.lock();
         if preroll.pending.len() >= Self::PREROLL_FRAMES {
             let Some(index) =
                 preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
@@ -115,29 +115,29 @@ impl InputTee {
     }
 
     pub fn dropped_preroll_frames(&self) -> u64 {
-        self.preroll.lock().expect("tee preroll").dropped_frames
+        self.preroll.lock().dropped_frames
     }
 
     fn clear_main(&self) {
-        *self.main.lock().expect("tee main") = None;
+        *self.main.lock() = None;
     }
 
     fn add_probe(&self, sink: SttSink) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.probes.lock().expect("tee probes").push((id, sink));
+        self.probes.lock().push((id, sink));
         id
     }
 
     fn remove_probe(&self, id: u64) {
-        self.probes.lock().expect("tee probes").retain(|(i, _)| *i != id);
+        self.probes.lock().retain(|(i, _)| *i != id);
     }
 
     /// Errors are swallowed (`stt:349-350`): a dead probe must not take down the serving path.
     fn fanout(&self, f: impl Fn(&dyn StreamSink<AudioFrame>)) {
-        for (_, sink) in self.probes.lock().expect("tee probes").iter() {
+        for (_, sink) in self.probes.lock().iter() {
             f(sink.as_ref());
         }
-        if let Some(sink) = self.main.lock().expect("tee main").as_ref() {
+        if let Some(sink) = self.main.lock().as_ref() {
             f(sink.as_ref());
         }
     }
@@ -148,7 +148,7 @@ struct TeeSink(Arc<InputTee>);
 impl StreamSink<AudioFrame> for TeeSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         // Buffered when no stream is serving; probes still get it.
-        if self.0.main.lock().expect("tee main").is_none() {
+        if self.0.main.lock().is_none() {
             self.0.buffer(PreFrame::Audio(item.clone()))?;
         }
         self.0.fanout(|s| {
@@ -158,7 +158,7 @@ impl StreamSink<AudioFrame> for TeeSink {
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        if self.0.main.lock().expect("tee main").is_none() {
+        if self.0.main.lock().is_none() {
             self.0.buffer(PreFrame::Flush)?;
         }
         self.0.fanout(|s| {
@@ -170,7 +170,7 @@ impl StreamSink<AudioFrame> for TeeSink {
     fn end_input(&self) {
         // Only the serving stream is ended; a probe closes when its drain finishes (`stt:432`).
         self.0.ended.store(true, Ordering::SeqCst);
-        if let Some(sink) = self.0.main.lock().expect("tee main").as_ref() {
+        if let Some(sink) = self.0.main.lock().as_ref() {
             sink.end_input();
         }
     }
@@ -642,11 +642,11 @@ mod preroll_tests {
 
     impl StreamSink<AudioFrame> for Recorder {
         fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-            self.0.got.lock().unwrap().push(format!("push:{}", item.sample_rate));
+            self.0.got.lock().push(format!("push:{}", item.sample_rate));
             Ok(())
         }
         fn flush(&self) -> Result<(), ProviderError> {
-            self.0.got.lock().unwrap().push("flush".to_owned());
+            self.0.got.lock().push("flush".to_owned());
             Ok(())
         }
         fn end_input(&self) {
@@ -678,7 +678,7 @@ mod preroll_tests {
         let rec = Arc::new(Log::default());
         tee.set_main(Box::new(Recorder(Arc::clone(&rec))));
 
-        assert_eq!(*rec.got.lock().unwrap(), ["push:1", "flush", "push:2"]);
+        assert_eq!(*rec.got.lock(), ["push:1", "flush", "push:2"]);
     }
 
     /// Catches: the replay running after `end_input`, or not at all when the caller finished early.
@@ -694,7 +694,7 @@ mod preroll_tests {
         let rec = Arc::new(Log::default());
         tee.set_main(Box::new(Recorder(Arc::clone(&rec))));
 
-        assert_eq!(*rec.got.lock().unwrap(), ["push:1", "push:2"]);
+        assert_eq!(*rec.got.lock(), ["push:1", "push:2"]);
         assert!(rec.ended.load(Ordering::SeqCst), "the stream was never told the input had ended");
     }
 
@@ -710,7 +710,7 @@ mod preroll_tests {
         let rec = Arc::new(Log::default());
         tee.set_main(Box::new(Recorder(Arc::clone(&rec))));
 
-        let got = rec.got.lock().unwrap();
+        let got = rec.got.lock();
         assert_eq!(got.len(), InputTee::PREROLL_FRAMES);
         // The oldest ten went; the newest is still there.
         assert_eq!(got[0], "push:10");
@@ -728,7 +728,7 @@ mod preroll_tests {
         }
         let rec = Arc::new(Log::default());
         tee.set_main(Box::new(Recorder(rec.clone())));
-        let got = rec.got.lock().unwrap();
+        let got = rec.got.lock();
         assert!(got.iter().any(|item| item == "flush"), "overflow discarded an utterance boundary");
         assert_eq!(got.len(), InputTee::PREROLL_FRAMES);
         assert_eq!(tee.dropped_preroll_frames(), 2);
@@ -750,7 +750,7 @@ mod preroll_tests {
         let second = Arc::new(Log::default());
         tee.set_main(Box::new(Recorder(Arc::clone(&second))));
 
-        assert_eq!(*first.got.lock().unwrap(), ["push:1"]);
-        assert_eq!(*second.got.lock().unwrap(), ["push:2"]);
+        assert_eq!(*first.got.lock(), ["push:1"]);
+        assert_eq!(*second.got.lock(), ["push:2"]);
     }
 }

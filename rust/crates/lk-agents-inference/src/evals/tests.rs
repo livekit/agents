@@ -1,6 +1,6 @@
 //! The pure transcript and verdict rules, and judges run on a scripted model and a fake host.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::errors::{HostError, ProviderError, RefRegistry};
@@ -8,6 +8,7 @@ use lk_agents_abi::{
     AgentConfigUpdate, AgentHandoffItem, ChoiceDelta, Closed, FunctionCall, FunctionCallOutput,
     FunctionToolCall, LlmStream, Ts,
 };
+use lk_agents_net::lock::Mutex;
 use tokio::sync::Barrier;
 
 use super::*;
@@ -142,7 +143,7 @@ impl Llm for Verdicts {
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
             let ChatItem::Message(prompt) = &req.chat_ctx.items[1] else { unreachable!() };
-            self.prompts.lock().unwrap().push(prompt.raw_text_content().unwrap_or_default());
+            self.prompts.lock().push(prompt.raw_text_content().unwrap_or_default());
             self.barrier.wait().await;
             let tool_calls = self.arguments.map_or_else(Vec::new, |arguments| {
                 vec![FunctionToolCall {
@@ -226,7 +227,7 @@ async fn judges_run_concurrently_and_answer_in_judge_order() {
     assert_eq!(outcomes[1], JudgeOutcome::Judged { name: "booking".into(), judgment: booked });
     let JudgeOutcome::Judged { judgment, .. } = &outcomes[2] else { panic!("{outcomes:?}") };
     assert_eq!(judgment.reasoning, prompts::NO_HANDOFFS);
-    let prompts = llm.prompts.lock().unwrap();
+    let prompts = llm.prompts.lock();
     assert_eq!(prompts.len(), 2);
     assert!(prompts.iter().all(|p| p.contains("Reference:\nassistant: hello")), "{prompts:?}");
 }

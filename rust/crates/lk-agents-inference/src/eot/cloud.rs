@@ -2,13 +2,14 @@
 //! is a [`WsTransport`]; this file owns the protocol, metrics and error taxonomy.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
@@ -93,7 +94,7 @@ impl CloudTransport {
 
     /// `_send_message` (`transports.py:143`): dropped if there is no live connection.
     fn send_message(&self, message: proto::client_message::Message) {
-        let state = self.state.lock().expect("cloud state mutex");
+        let state = self.state.lock();
         if let Some(send) = state.send.as_ref() {
             let _ = send.send(proto::ClientMessage { created_at: None, message: Some(message) });
         }
@@ -221,14 +222,14 @@ impl CloudTransport {
         };
         sink.send_binary(session_create.encode_to_vec()).await.map_err(socket_error)?;
 
-        self.state.lock().expect("cloud state mutex").session_id = session_id;
+        self.state.lock().session_id = session_id;
         Ok((sink, stream))
     }
 
     async fn run_once(&self) -> Result<(), ApiError> {
         let (ws_sink, mut ws_stream) = self.connect().await?;
         let (send, mut send_rx) = mpsc::unbounded_channel();
-        self.state.lock().expect("cloud state mutex").send = Some(send);
+        self.state.lock().send = Some(send);
 
         let closing = AtomicBool::new(false);
 
@@ -278,7 +279,7 @@ impl CloudTransport {
         };
 
         let result = tokio::try_join!(sender, receiver).map(|_| ());
-        let mut state = self.state.lock().expect("cloud state mutex");
+        let mut state = self.state.lock();
         state.send = None;
         state.session_id = None;
         result
@@ -292,7 +293,7 @@ fn f32_map(map: &std::collections::HashMap<String, f32>) -> BTreeMap<String, f64
 #[async_trait]
 impl EotTransport for CloudTransport {
     fn session_id(&self) -> Option<String> {
-        self.state.lock().expect("cloud state mutex").session_id.clone()
+        self.state.lock().session_id.clone()
     }
 
     fn run_inference(&self, request_id: &EotRequestId) {
@@ -318,11 +319,11 @@ impl EotTransport for CloudTransport {
 
     fn end_input(&self) {
         self.send_message(proto::client_message::Message::SessionClose(proto::SessionClose {}));
-        self.state.lock().expect("cloud state mutex").send = None;
+        self.state.lock().send = None;
     }
 
     fn detach(&self) {
-        self.state.lock().expect("cloud state mutex").send = None;
+        self.state.lock().send = None;
     }
 
     /// `run` (`transports.py:270`): one attempt, since every failure is non-retryable (the

@@ -116,7 +116,7 @@ async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
 
     let plain = stt_once(Arc::new(FakeWs::new(vec![]).keep_open()));
     Stt::push_conversation_item(&plain, "assistant", "hi");
-    assert!(plain.shared.opts.lock().unwrap().extra_kwargs.get("agent_context").is_none());
+    assert!(plain.shared.opts.lock().extra_kwargs.get("agent_context").is_none());
 }
 
 // Catches: transcripts of a stream opened mid-input left at zero on the caller's timeline.

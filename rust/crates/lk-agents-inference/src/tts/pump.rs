@@ -25,13 +25,13 @@ impl Pump {
             );
             let configuration = connection_configuration(&self.create_frame, &self.headers);
             let (mut reused, mut expired) =
-                self.connections.lock().unwrap().take(self.clock.now().as_secs_f64());
+                self.connections.lock().take(self.clock.now().as_secs_f64());
             if reused.as_ref().is_some_and(|(_, connection)| {
                 connection.configuration != configuration
                     || connection.session_id != self.session_id
             }) {
                 let (id, connection) = reused.take().unwrap();
-                self.connections.lock().unwrap().forget(id);
+                self.connections.lock().forget(id);
                 expired.push(connection);
             }
             for connection in expired {
@@ -57,8 +57,7 @@ impl Pump {
                             &self.create_frame,
                         )
                         .await?;
-                        let id =
-                            self.connections.lock().unwrap().opened(self.clock.now().as_secs_f64());
+                        let id = self.connections.lock().opened(self.clock.now().as_secs_f64());
                         Ok((
                             id,
                             Connection {
@@ -104,9 +103,9 @@ impl Pump {
             }
             if matches!(outcome, Ok(true)) && !*self.stopped.borrow() && !self.audio_tx.is_closed()
             {
-                self.connections.lock().unwrap().give_back(id, connection);
+                self.connections.lock().give_back(id, connection);
             } else {
-                self.connections.lock().unwrap().forget(id);
+                self.connections.lock().forget(id);
                 connection.sender.close().await;
             }
             outcome.map(|_| ())

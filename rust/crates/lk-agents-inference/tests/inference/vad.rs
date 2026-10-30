@@ -1,12 +1,13 @@
 //! VAD constructors and recurrent model operations must not occupy the calling runtime thread.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::ThreadId;
 use std::time::Duration;
 
 use lk_agents_abi::{AudioFrame, StreamSink, StreamSource, VadEventType};
 use lk_agents_inference::vad::machine::VadOptions;
 use lk_agents_inference::vad::{LocalVad, VadModel, VadModelFactory};
+use lk_agents_net::lock::Mutex;
 
 struct Model {
     calls: Arc<Mutex<Vec<(&'static str, ThreadId)>>>,
@@ -14,12 +15,12 @@ struct Model {
 
 impl VadModel for Model {
     fn predict(&mut self, _: &[i16]) -> (f32, f64) {
-        self.calls.lock().unwrap().push(("predict", std::thread::current().id()));
+        self.calls.lock().push(("predict", std::thread::current().id()));
         std::thread::sleep(Duration::from_millis(20));
         (0.0, 0.02)
     }
     fn reset(&mut self) {
-        self.calls.lock().unwrap().push(("reset", std::thread::current().id()));
+        self.calls.lock().push(("reset", std::thread::current().id()));
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -28,7 +29,7 @@ struct SlowFactory(Arc<Mutex<Vec<(&'static str, ThreadId)>>>);
 
 impl VadModelFactory for SlowFactory {
     fn create(&self) -> Box<dyn VadModel> {
-        self.0.lock().unwrap().push(("create", std::thread::current().id()));
+        self.0.lock().push(("create", std::thread::current().id()));
         std::thread::sleep(Duration::from_millis(20));
         Box::new(Model { calls: self.0.clone() })
     }
@@ -52,7 +53,7 @@ async fn model_construction_prediction_and_reset_leave_the_runtime_thread_free()
     })
     .await
     .unwrap();
-    let calls = calls.lock().unwrap();
+    let calls = calls.lock();
     assert_eq!(
         calls.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
         ["create", "predict", "reset"]
@@ -184,7 +185,7 @@ struct GatedFactory(Mutex<Option<GatedModel>>);
 
 impl VadModelFactory for GatedFactory {
     fn create(&self) -> Box<dyn VadModel> {
-        Box::new(self.0.lock().unwrap().take().unwrap())
+        Box::new(self.0.lock().take().unwrap())
     }
 }
 

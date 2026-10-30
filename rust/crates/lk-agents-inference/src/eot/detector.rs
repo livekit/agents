@@ -2,7 +2,7 @@
 //! streams it opens. One table is shared by the detector and all its streams, so a stream's
 //! cloud-to-local fallback rescales what the detector answers.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::{
@@ -10,6 +10,7 @@ use lk_agents_abi::tokenize::language::{
 };
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModelFactory};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame};
+use lk_agents_net::lock::{Mutex, MutexGuard};
 
 use super::{
     CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,
@@ -33,7 +34,7 @@ pub struct AudioEot {
 
 impl AudioEot {
     fn table(&self) -> MutexGuard<'_, ThresholdOptions> {
-        self.thresholds.lock().unwrap_or_else(|p| p.into_inner())
+        self.thresholds.lock()
     }
 
     /// The gateway for `turn-detector-v1`, else the linked native mini model or the host's.

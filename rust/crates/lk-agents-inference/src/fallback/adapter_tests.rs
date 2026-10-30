@@ -3,8 +3,8 @@
 
 use std::collections::VecDeque;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tokenize::language::LanguageCode;
@@ -15,6 +15,7 @@ use lk_agents_abi::{
 use lk_agents_abi::{
     ApiConnectOptions, ChoiceDelta, LlmChunk, SpeechData, SpeechEvent, SpeechEventType,
 };
+use lk_agents_net::lock::Mutex;
 use tokio::sync::mpsc;
 
 use crate::fallback::ChainPolicy;
@@ -103,7 +104,7 @@ impl Llm for FakeLlm {
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
-            self.seen.lock().expect("seen").push(req.conn_options);
+            self.seen.lock().push(req.conn_options);
             if self.outages.load(Ordering::SeqCst) > 0 {
                 self.outages.fetch_sub(1, Ordering::SeqCst);
                 return Err(boom(&format!("{} is down for now", self.label)));
@@ -172,14 +173,14 @@ async fn a_wrapped_llm_receives_the_chains_conn_options_not_the_callers() {
 
     // A probe also goes through `open`; assert on the first call.
     for who in [&primary, &backup] {
-        let seen = who.seen.lock().expect("seen").clone();
+        let seen = who.seen.lock().clone();
         let first = *seen.first().unwrap_or_else(|| panic!("{} was never called", who.label));
         assert_eq!(first.max_retry, 0, "max_retry_per_llm defaults to 0");
         assert_eq!(first.read_timeout, Some(5.0), "attempt_timeout caps each phase");
         assert_eq!(first.total_timeout, None, "the caller's total stays the operation's");
         assert_eq!(first.retry_interval, 0.5);
     }
-    assert_eq!(backup.seen.lock().expect("seen").len(), 1, "the backup served and was not probed");
+    assert_eq!(backup.seen.lock().len(), 1, "the backup served and was not probed");
     assert_eq!(fb.active().label(), "b");
     stream.close(NO_DEADLINE).await;
 }
@@ -213,7 +214,7 @@ async fn a_content_chunk_does_block_the_failover() {
     assert!(within("the first chunk", stream.next()).await.expect("no error").is_some());
     let err = within("the failure", stream.next()).await.expect_err("the turn must abort");
     assert!(err.message().contains("stream died"), "{}", err.message());
-    assert!(backup.seen.lock().expect("seen").is_empty(), "the backup must never be opened");
+    assert!(backup.seen.lock().is_empty(), "the backup must never be opened");
     stream.close(NO_DEADLINE).await;
 }
 
@@ -310,11 +311,7 @@ async fn a_closed_llm_adapter_starts_no_more_recovery_probes() {
         tokio::task::yield_now().await;
     }
 
-    assert_eq!(
-        primary.seen.lock().expect("seen").len(),
-        0,
-        "close prevents every new attempt and probe"
-    );
+    assert_eq!(primary.seen.lock().len(), 0, "close prevents every new attempt and probe");
     stream.close(NO_DEADLINE).await;
 }
 
@@ -370,7 +367,7 @@ impl Stt for FakeStt {
         _language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move {
-            self.calls.lock().expect("calls").push((self.label.clone(), self.conn));
+            self.calls.lock().push((self.label.clone(), self.conn));
             if self.fails {
                 return Err(boom("stt down"));
             }
@@ -415,11 +412,11 @@ async fn a_wrapped_stt_never_runs_an_independent_retry_loop() {
     assert_eq!(ev.kind, SpeechEventType::FinalTranscript);
 
     until("the primary's probe to have run", || {
-        calls.lock().expect("calls").iter().filter(|(l, _)| l == "p").count() >= 2
+        calls.lock().iter().filter(|(l, _)| l == "p").count() >= 2
     })
     .await;
 
-    let seen = calls.lock().expect("calls").clone();
+    let seen = calls.lock().clone();
     let p: Vec<u32> = seen.iter().filter(|(l, _)| l == "p").map(|(_, c)| c.max_retry).collect();
     assert_eq!(p[0], 0, "the chain owns retry attempts");
     assert_eq!(p[1], 0, "the probe pins it to 0");
@@ -446,7 +443,7 @@ struct SttSessSink(Arc<SttSess>);
 
 impl StreamSink<AudioFrame> for SttSessSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        self.0.frames.lock().expect("frames").push(item);
+        self.0.frames.lock().push(item);
         Ok(())
     }
     fn flush(&self) -> Result<(), ProviderError> {
@@ -513,18 +510,18 @@ impl DuplexStt {
         })
     }
     fn sessions(&self) -> usize {
-        self.made.lock().expect("made").len()
+        self.made.lock().len()
     }
     fn sess(&self, i: usize) -> Arc<SttSess> {
-        Arc::clone(&self.made.lock().expect("made")[i].0)
+        Arc::clone(&self.made.lock()[i].0)
     }
     fn send(&self, i: usize, ev: Result<SpeechEvent, ProviderError>) {
-        let made = self.made.lock().expect("made");
+        let made = self.made.lock();
         made[i].1.as_ref().expect("session is still open").send(ev).expect("nobody dropped it");
     }
     /// The provider's own end of stream.
     fn end(&self, i: usize) {
-        self.made.lock().expect("made")[i].1 = None;
+        self.made.lock()[i].1 = None;
     }
 }
 
@@ -555,7 +552,7 @@ impl Stt for DuplexStt {
             }
             let sess = Arc::new(SttSess::default());
             let (tx, rx) = mpsc::unbounded_channel();
-            self.made.lock().expect("made").push((Arc::clone(&sess), Some(tx)));
+            self.made.lock().push((Arc::clone(&sess), Some(tx)));
             Ok(Some((
                 Box::new(SttSessSink(Arc::clone(&sess))) as SttSink,
                 Box::new(SttSessSource { sess, rx }) as SttSource,
@@ -640,7 +637,7 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
     sink.flush().expect("flush");
     sink.end_input();
 
-    assert_eq!(s.frames.lock().expect("frames").len(), 2, "every frame reaches the provider");
+    assert_eq!(s.frames.lock().len(), 2, "every frame reaches the provider");
     assert_eq!(s.flushes.load(Ordering::SeqCst), 1, "a flush is a segment boundary, not a close");
     assert!(s.ended.load(Ordering::SeqCst), "end_input reaches the stream that is serving");
 
@@ -654,7 +651,7 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
 
     sink.push(frame(3)).expect("push");
     assert_eq!(
-        s.frames.lock().expect("frames").len(),
+        s.frames.lock().len(),
         2,
         "the turn is over: audio must not reach a provider the chain has released"
     );
@@ -678,11 +675,11 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
 
     sink.push(frame(1)).expect("push");
     assert_eq!(
-        p.sess(0).frames.lock().expect("frames").len(),
+        p.sess(0).frames.lock().len(),
         1,
         "the probe shadows the live audio -- there is nothing else for it to listen to"
     );
-    assert_eq!(b.sess(0).frames.lock().expect("frames").len(), 1, "and the serving stream gets it");
+    assert_eq!(b.sess(0).frames.lock().len(), 1, "and the serving stream gets it");
 
     p.send(0, Ok(speech(SpeechEventType::InterimTranscript, "hel")));
     p.send(0, Ok(speech(SpeechEventType::FinalTranscript, "")));
@@ -698,11 +695,11 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
 
     sink.push(frame(2)).expect("push");
     assert_eq!(
-        p.sess(0).frames.lock().expect("frames").len(),
+        p.sess(0).frames.lock().len(),
         1,
         "a finished probe has left the tee and stops consuming the user's audio"
     );
-    assert_eq!(b.sess(0).frames.lock().expect("frames").len(), 2);
+    assert_eq!(b.sess(0).frames.lock().len(), 2);
     source.close(NO_DEADLINE).await;
     fb.aclose();
 }

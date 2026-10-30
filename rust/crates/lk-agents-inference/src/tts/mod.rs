@@ -17,12 +17,12 @@ pub mod sentences;
 pub mod stream;
 pub mod wire;
 
-use lk_agents_core::tts::transcript::AudioTranscriptNormalizer;
 use crate::abi::{
     StreamSink, StreamSource, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
+use lk_agents_core::tts::transcript::AudioTranscriptNormalizer;
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
     WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url,
@@ -37,10 +37,12 @@ use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_net::connection_pool::ConnectionPool;
 use std::collections::HashMap;
 use std::pin::pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use wire::FallbackModel;
+
+use lk_agents_net::lock::Mutex;
 
 const WHAT: &str = "LiveKit Inference TTS";
 
@@ -202,7 +204,7 @@ impl GatewayTts {
         reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
     ) -> Self {
         let mut view = GatewayTts::new(
-            self.opts.lock().unwrap().clone(),
+            self.opts.lock().clone(),
             self.ws.clone(),
             self.spawner.clone(),
             self.clock.clone(),
@@ -218,7 +220,7 @@ impl GatewayTts {
 
     /// `prewarm()`: a configured socket waits in the pool for the first synthesis.
     pub fn prewarm_identified(&self, identification: Option<Headers>) {
-        let opts = self.opts.lock().unwrap().clone();
+        let opts = self.opts.lock().clone();
         let identification = identification.or_else(|| self.identity.for_connection());
         let Ok(headers) =
             gateway_headers(identification.as_ref(), None, None, &opts.api_key, &opts.api_secret)
@@ -243,7 +245,7 @@ impl GatewayTts {
                 &create_frame,
             );
             if let Ok((sender, receiver)) = opened.await {
-                let mut connections = connections.lock().unwrap();
+                let mut connections = connections.lock();
                 let id = connections.opened(clock.now().as_secs_f64());
                 connections
                     .give_back(id, Connection { sender, receiver, session_id, configuration });
@@ -272,16 +274,16 @@ impl GatewayTts {
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
 impl GatewayTts {
     pub fn model(&self) -> String {
-        self.opts.lock().unwrap().model.clone()
+        self.opts.lock().model.clone()
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.opts.lock().unwrap().sample_rate
+        self.opts.lock().sample_rate
     }
 
     /// `TTSCapabilities.aligned_transcript`, recomputed from the model and extra kwargs.
     pub fn aligned_transcript(&self) -> bool {
-        let opts = self.opts.lock().unwrap();
+        let opts = self.opts.lock();
         wire::has_aligned_transcript(&opts.model, &opts.extra_kwargs)
     }
 
@@ -293,7 +295,7 @@ impl GatewayTts {
         language: Option<&str>,
         extra: Option<&serde_json::Map<String, serde_json::Value>>,
     ) {
-        let mut opts = self.opts.lock().unwrap();
+        let mut opts = self.opts.lock();
         if let Some(model) = model {
             opts.model = model.to_owned();
         }
@@ -317,7 +319,7 @@ impl GatewayTts {
         identification: Option<&Headers>,
         expressive: bool,
     ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
-        let mut opts = self.opts.lock().unwrap().clone();
+        let mut opts = self.opts.lock().clone();
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
@@ -487,7 +489,7 @@ struct TextPrep {
 
 impl SynthesisInput {
     fn send(&self, sentences: Vec<String>) -> Result<(), ProviderError> {
-        let prep = self.prep.lock().unwrap();
+        let prep = self.prep.lock();
         for sentence in sentences {
             let converted = match &prep.markup {
                 Some(markup) => markup.convert(&markup.normalize(&sentence)),
@@ -509,7 +511,7 @@ impl StreamSink<String> for SynthesisInput {
             return Err(ApiError::new("TTS text exceeds the pending text limit").into());
         }
         let sentences = {
-            let mut prep = self.prep.lock().unwrap();
+            let mut prep = self.prep.lock();
             if prep.pending_bytes.saturating_add(item.len()) > MAX_PENDING_TEXT_BYTES {
                 return Err(ApiError::new("TTS pending text exceeds its limit").into());
             }
@@ -529,7 +531,7 @@ impl StreamSink<String> for SynthesisInput {
     /// The `_FlushSentinel`: whatever the tokenizer holds goes out as a sentence.
     fn flush(&self) -> Result<(), ProviderError> {
         let sentences = {
-            let mut prep = self.prep.lock().unwrap();
+            let mut prep = self.prep.lock();
             prep.pending_bytes = 0;
             prep.sentences.flush()
         };
@@ -538,7 +540,7 @@ impl StreamSink<String> for SynthesisInput {
 
     fn end_input(&self) {
         let sentences = {
-            let mut prep = self.prep.lock().unwrap();
+            let mut prep = self.prep.lock();
             prep.pending_bytes = 0;
             prep.sentences.flush()
         };

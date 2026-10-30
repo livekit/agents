@@ -100,7 +100,7 @@ impl Connect {
 pub struct OpenAIRealtime {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.
-    opts: std::sync::Mutex<SessionOptions>,
+    opts: lk_agents_net::lock::Mutex<SessionOptions>,
     connect: Arc<Connect>,
     transport: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
@@ -113,7 +113,7 @@ pub struct OpenAIRealtime {
     /// The host class's `label`, stamped on errors and metrics; `None` names the dialect.
     label: Option<String>,
     /// `self._sessions`: the live sessions an `update_options` reaches.
-    sessions: std::sync::Mutex<Vec<Weak<super::queue::Ingress>>>,
+    sessions: lk_agents_net::lock::Mutex<Vec<Weak<super::queue::Ingress>>>,
 }
 
 impl OpenAIRealtime {
@@ -129,7 +129,7 @@ impl OpenAIRealtime {
         let connect = Connect::openai(api_key, dialect.default_base_url);
         OpenAIRealtime {
             dialect,
-            opts: std::sync::Mutex::new(opts),
+            opts: lk_agents_net::lock::Mutex::new(opts),
             connect: Arc::new(connect),
             transport,
             spawner,
@@ -138,13 +138,13 @@ impl OpenAIRealtime {
             ids: Arc::new(RandomIds),
             turn_detection_given: false,
             label: None,
-            sessions: std::sync::Mutex::new(Vec::new()),
+            sessions: lk_agents_net::lock::Mutex::new(Vec::new()),
         }
     }
 
     /// `turn_detection_given` is `is_given(turn_detection)` before a default was applied.
     pub fn with_options(mut self, opts: SessionOptions, turn_detection_given: bool) -> Self {
-        self.opts = std::sync::Mutex::new(opts);
+        self.opts = lk_agents_net::lock::Mutex::new(opts);
         self.turn_detection_given = turn_detection_given;
         self
     }
@@ -164,8 +164,8 @@ impl OpenAIRealtime {
         self
     }
 
-    fn options(&self) -> std::sync::MutexGuard<'_, SessionOptions> {
-        self.opts.lock().unwrap_or_else(|e| e.into_inner())
+    fn options(&self) -> lk_agents_net::lock::MutexGuard<'_, SessionOptions> {
+        self.opts.lock()
     }
 
     /// `get_inference_headers()` of the job the model now serves; every later connection carries
@@ -188,7 +188,7 @@ impl OpenAIRealtime {
         };
         patch.transcription = lk_agents_abi::Maybe::Given(transcription);
         patch.noise_reduction = lk_agents_abi::Maybe::Given(noise_reduction);
-        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock();
         sessions.retain(|s| match s.upgrade() {
             Some(tx) => {
                 tx.send(Cmd::Options(Box::new(patch.clone())));
@@ -290,10 +290,10 @@ impl OpenAIRealtime {
         let (ev_tx, ev_rx) = super::queue::events();
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
-            caps: std::sync::Mutex::new(caps),
+            caps: lk_agents_net::lock::Mutex::new(caps),
             closing: tokio::sync::Notify::new(),
-            cleanup: std::sync::Mutex::new(None),
-            retirement: std::sync::Mutex::new(None),
+            cleanup: lk_agents_net::lock::Mutex::new(None),
+            retirement: lk_agents_net::lock::Mutex::new(None),
             retirement_wake: Arc::new(tokio::sync::Notify::new()),
             context_ready: tokio::sync::Notify::new(),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
@@ -306,7 +306,7 @@ impl OpenAIRealtime {
             clock: self.clock.clone(),
             label: label.clone(),
         });
-        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&commands));
+        self.sessions.lock().push(Arc::downgrade(&commands));
 
         let pump = Pump {
             shared: shared.clone(),
@@ -327,7 +327,7 @@ impl OpenAIRealtime {
             shared,
             commands,
             events: Mutex::new(ev_rx),
-            pump: std::sync::Mutex::new(Some(pump)),
+            pump: lk_agents_net::lock::Mutex::new(Some(pump)),
             clock: self.clock.clone(),
             ids: self.ids.clone(),
         }
@@ -337,21 +337,21 @@ impl OpenAIRealtime {
 pub(super) struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
     pub(super) closing: tokio::sync::Notify,
-    cleanup: std::sync::Mutex<Option<crate::realtime::ConnectionEffect>>,
+    cleanup: lk_agents_net::lock::Mutex<Option<crate::realtime::ConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
-    retirement: std::sync::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    retirement: lk_agents_net::lock::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     retirement_wake: Arc<tokio::sync::Notify>,
     context_ready: tokio::sync::Notify,
     retirement_closing: std::sync::atomic::AtomicBool,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
-    caps: std::sync::Mutex<RealtimeCapabilities>,
+    caps: lk_agents_net::lock::Mutex<RealtimeCapabilities>,
     /// Socket closes and context retirement, which outlive their caller's budget.
     disposal: Arc<lk_agents_net::task::TaskSet>,
 }
 
 impl Shared {
     fn record_incomplete_cleanup(&self, generation: u64) -> bool {
-        let mut cleanup = self.cleanup.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cleanup = self.cleanup.lock();
         if cleanup.is_some() {
             return false;
         }
@@ -375,19 +375,19 @@ pub struct OpenAIRealtimeSession {
     /// One consumer is the contract.
     events: Mutex<super::queue::EventReceiver>,
     /// Taken by the first close.
-    pump: std::sync::Mutex<Option<lk_agents_abi::OwnedTask>>,
+    pump: lk_agents_net::lock::Mutex<Option<lk_agents_abi::OwnedTask>>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
 }
 
 impl OpenAIRealtimeSession {
     pub fn capabilities(&self) -> RealtimeCapabilities {
-        *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner())
+        *self.shared.caps.lock()
     }
 
     /// Framework cleanup diagnostics stay separate from provider errors and conversation events.
     pub fn cleanup_observation(&self) -> Option<crate::realtime::ConnectionEffect> {
-        self.shared.cleanup.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.shared.cleanup.lock().clone()
     }
 
     /// The *mirror*: what the server believes.
@@ -433,7 +433,7 @@ impl OpenAIRealtimeSession {
         }));
         self.commands.send(Cmd::Close);
         self.shared.closing.notify_one();
-        let pump = self.pump.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let pump = self.pump.lock().take();
         if let Some(mut pump) = pump {
             let settled = lk_agents_abi::timeout(
                 &*self.clock,
@@ -717,7 +717,7 @@ impl Pump {
                     Some(Cmd::Options(patch)) => {
                         let mut m = self.shared.machine.lock().await;
                         let step = m.update_options(*patch);
-                        *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner()) = m.capabilities();
+                        *self.shared.caps.lock() = m.capabilities();
                         step
                     }
                     Some(Cmd::Close) | None => {
@@ -775,7 +775,7 @@ impl Pump {
     }
 
     async fn wait_for_retirement(&self) {
-        let done = self.shared.retirement.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let done = self.shared.retirement.lock().clone();
         if let Some(mut done) = done {
             let _ = done.wait_for(|settled| *settled).await;
         }

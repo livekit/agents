@@ -1,7 +1,7 @@
 //! `_LocalTransport` (`transports.py:398`): the in-process mini model behind [`LocalEotModel`], a
 //! 1.2 s ring buffer snapshotted at request time, and a failed prediction scored 0.0.
 
-use std::sync::Mutex;
+use lk_agents_net::lock::Mutex;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -115,23 +115,23 @@ impl EotTransport for LocalTransport {
 
     fn run_inference(&self, request_id: &EotRequestId) {
         // Snapshot here, not in `run` (`transports.py:414`).
-        let pcm = self.buf.lock().expect("ring buffer mutex").read();
-        if let Some(tx) = self.tx.lock().expect("job sender mutex").as_ref() {
+        let pcm = self.buf.lock().read();
+        if let Some(tx) = self.tx.lock().as_ref() {
             let _ = tx.send((request_id.clone(), pcm));
         }
     }
 
     fn push_frame(&self, frame: &AudioFrame) {
         let pcm = lk_agents_media::pcm_samples(&frame.data);
-        self.buf.lock().expect("ring buffer mutex").push(&pcm);
+        self.buf.lock().push(&pcm);
     }
 
     fn flush(&self) {
-        self.buf.lock().expect("ring buffer mutex").clear();
+        self.buf.lock().clear();
     }
 
     fn end_input(&self) {
-        *self.tx.lock().expect("job sender mutex") = None;
+        *self.tx.lock() = None;
     }
 
     fn detach(&self) {
@@ -139,7 +139,7 @@ impl EotTransport for LocalTransport {
     }
 
     async fn run(&self) -> Result<(), ApiError> {
-        let Some(mut rx) = self.rx.lock().expect("job receiver mutex").take() else {
+        let Some(mut rx) = self.rx.lock().take() else {
             return Ok(());
         };
         while let Some((request_id, pcm)) = rx.recv().await {

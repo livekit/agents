@@ -41,10 +41,10 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
     );
     let shared = Arc::new(Shared {
         machine: Mutex::new(machine),
-        caps: std::sync::Mutex::new(caps),
+        caps: lk_agents_net::lock::Mutex::new(caps),
         closing: tokio::sync::Notify::new(),
-        cleanup: std::sync::Mutex::new(None),
-        retirement: std::sync::Mutex::new(None),
+        cleanup: lk_agents_net::lock::Mutex::new(None),
+        retirement: lk_agents_net::lock::Mutex::new(None),
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
@@ -80,7 +80,7 @@ async fn cancelling_close_keeps_the_runtime_owner_until_context_retirement_settl
     ));
     closing.abort();
     let _ = closing.await;
-    let mut done = shared.retirement.lock().unwrap().clone().expect("runtime cleanup owner");
+    let mut done = shared.retirement.lock().clone().expect("runtime cleanup owner");
     tokio::time::timeout(Duration::from_secs(5), done.wait_for(|settled| *settled))
         .await
         .expect("cancelling close abandoned the remaining context retirement")
@@ -99,7 +99,7 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
     shared.retirement_closing.store(true, std::sync::atomic::Ordering::Release);
     let weak = Arc::downgrade(&shared);
     let (settled, mut done) = tokio::sync::watch::channel(false);
-    *shared.retirement.lock().unwrap() = Some(done.clone());
+    *shared.retirement.lock() = Some(done.clone());
     let cleanup = tokio::spawn(super::retirement::run(
         weak.clone(),
         shared.retirement_wake.clone(),
@@ -144,7 +144,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     pump.transport = ws.clone();
     let (settled, done) = tokio::sync::watch::channel(false);
-    *shared.retirement.lock().unwrap() = Some(done);
+    *shared.retirement.lock() = Some(done);
     let cleanup = tokio::spawn(super::retirement::run(
         Arc::downgrade(&shared),
         shared.retirement_wake.clone(),

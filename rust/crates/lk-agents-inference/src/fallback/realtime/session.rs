@@ -45,8 +45,8 @@ pub struct FallbackSession {
 }
 
 impl FallbackSession {
-    fn lock(&self) -> std::sync::MutexGuard<'_, SessionState> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, SessionState> {
+        self.state.lock()
     }
 
     pub(super) fn request_restart(&self, switch_model: bool) {

@@ -107,10 +107,10 @@ pub struct HostRealtimeLeg {
     host: Arc<dyn HostRealtimeSession>,
     caps: RealtimeCapabilities,
     lane: tokio::sync::mpsc::UnboundedSender<RealtimeCommand>,
-    requests: Arc<std::sync::Mutex<Requests>>,
+    requests: Arc<lk_agents_net::lock::Mutex<Requests>>,
     events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Event>>,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
-    tasks: std::sync::Mutex<Vec<lk_agents_abi::OwnedTask>>,
+    tasks: lk_agents_net::lock::Mutex<Vec<lk_agents_abi::OwnedTask>>,
     /// The host's event pump, apart from `tasks`: it runs until the host reports the end, so a
     /// close loses no event.
     forward: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
@@ -147,7 +147,7 @@ impl HostRealtimeLeg {
 
     fn spawn(&self, f: impl std::future::Future<Output = ()> + Send + 'static) {
         use lk_agents_abi::SpawnerExt;
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.lock();
         tasks.retain(|t| !t.is_finished());
         tasks.push(self.spawner.spawn(f));
     }
@@ -196,7 +196,7 @@ impl HostRealtimeLeg {
                     continue;
                 }
             };
-            if leg.requests.lock().unwrap().cancelled.remove(&req_id) {
+            if leg.requests.lock().cancelled.remove(&req_id) {
                 continue;
             }
             let request = match leg.host.request(cmd).await {
@@ -208,18 +208,18 @@ impl HostRealtimeLeg {
                 }
             };
             // Cancelled while it was being sent: the future is cancelled instead of awaited.
-            if leg.requests.lock().unwrap().cancelled.remove(&req_id) {
+            if leg.requests.lock().cancelled.remove(&req_id) {
                 leg.host.cancel(request).await;
                 continue;
             }
-            leg.requests.lock().unwrap().pending.insert(req_id.clone(), request.clone());
+            leg.requests.lock().pending.insert(req_id.clone(), request.clone());
             let host = Arc::clone(&leg.host);
             let requests = Arc::clone(&leg.requests);
             let events = events.clone();
             leg.spawn(async move {
                 let generation = host.generation(request).await;
                 // Gone from `pending`: cancelled, and a cancelled request reports nothing.
-                let asked = requests.lock().unwrap().pending.remove(&req_id).is_some();
+                let asked = requests.lock().pending.remove(&req_id).is_some();
                 match generation {
                     Ok(generation) => host.drain(generation, Some(req_id)).await,
                     Err(error) if asked => {
@@ -266,7 +266,7 @@ impl RealtimeSession for HostRealtimeLeg {
         match cmd {
             RealtimeCommand::CancelReply(CancelReply { req_id }) => {
                 let pending = {
-                    let mut requests = self.requests.lock().unwrap();
+                    let mut requests = self.requests.lock();
                     let pending = requests.pending.remove(&req_id);
                     if pending.is_none() {
                         requests.cancelled.insert(req_id);
@@ -309,7 +309,7 @@ impl RealtimeSession for HostRealtimeLeg {
         Box::pin(async move {
             // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
             // session closes.
-            drop(std::mem::take(&mut *self.tasks.lock().unwrap()));
+            drop(std::mem::take(&mut *self.tasks.lock()));
             self.host.aclose().await;
         })
     }

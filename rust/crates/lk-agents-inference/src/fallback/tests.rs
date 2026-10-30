@@ -2,9 +2,11 @@
 //! [`Backend`]. Probes are real tasks, gated by semaphores and observed through [`until`].
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use lk_agents_net::lock::Mutex;
 
 use crate::fallback::chain::StreamTask;
 use async_trait::async_trait;
@@ -53,7 +55,7 @@ struct Recorder {
 
 impl Recorder {
     fn events(&self) -> Vec<AvailabilityChanged> {
-        self.events.lock().expect("recorder").clone()
+        self.events.lock().clone()
     }
     fn transitions(&self) -> Vec<(usize, bool)> {
         self.events().into_iter().map(|e| (e.index, e.available)).collect()
@@ -62,7 +64,7 @@ impl Recorder {
 
 impl ChainObserver for Recorder {
     fn availability_changed(&self, ev: AvailabilityChanged) {
-        self.events.lock().expect("recorder").push(ev);
+        self.events.lock().push(ev);
     }
     fn all_unavailable(&self) {
         self.all_unavailable.fetch_add(1, Ordering::SeqCst);
@@ -118,7 +120,7 @@ impl Fake {
     }
 
     fn recovers(self: &Arc<Self>, verdicts: &[Recovery]) -> Arc<Self> {
-        *self.probe_verdict.lock().expect("verdicts") = verdicts.iter().copied().collect();
+        *self.probe_verdict.lock() = verdicts.iter().copied().collect();
         Arc::clone(self)
     }
 
@@ -129,7 +131,7 @@ impl Fake {
     }
 
     fn next_step(&self) -> Step {
-        let mut s = self.script.lock().expect("script");
+        let mut s = self.script.lock();
         if s.len() > 1 {
             s.pop_front().expect("non-empty")
         } else {
@@ -138,7 +140,7 @@ impl Fake {
     }
 
     fn probe_count(&self, slot: RecoveryMode) -> usize {
-        self.probes.lock().expect("probes").iter().filter(|(s, _)| *s == slot).count()
+        self.probes.lock().iter().filter(|(s, _)| *s == slot).count()
     }
 }
 
@@ -164,7 +166,7 @@ impl Backend for Fake {
         _req: &Self::Req,
         conn: &ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError> {
-        self.opened.lock().expect("opened").push(*conn);
+        self.opened.lock().push(*conn);
         match self.next_step() {
             Step::OpenErr => Err(boom()),
             other => Ok(other),
@@ -178,10 +180,10 @@ impl Backend for Fake {
         slot: RecoveryMode,
         _stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
-        self.probes.lock().expect("probes").push((slot, *conn));
+        self.probes.lock().push((slot, *conn));
         self.probes_entered.fetch_add(1, Ordering::SeqCst);
         let _permit = self.gate[slot as usize].acquire().await.expect("gate is never closed");
-        let verdict = match self.probe_verdict.lock().expect("verdicts").pop_front() {
+        let verdict = match self.probe_verdict.lock().pop_front() {
             Some(v) => Ok(v),
             None => Err(boom()),
         };
@@ -294,14 +296,14 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
     let rig = rig(vec![Arc::clone(&primary)], ChainPolicy::tts_defaults());
 
     let _ = run_once(&rig, RecoveryMode::Streaming).await;
-    let opened = primary.opened.lock().expect("opened").clone();
+    let opened = primary.opened.lock().clone();
     assert_eq!(opened.len(), 1);
     let limits =
         ApiConnectOptions { max_retry: 0, retry_interval: opened[0].retry_interval, ..caller() };
     assert_eq!(opened[0], limits, "the chain owns every retry; TTS keeps the caller's limits");
 
     until("the probe to run", || primary.probe_count(RecoveryMode::Streaming) == 1).await;
-    let probes = primary.probes.lock().expect("probes").clone();
+    let probes = primary.probes.lock().clone();
     assert_eq!(probes[0].1.max_retry, 0, "a probe must never retry internally");
 }
 
@@ -362,10 +364,10 @@ async fn a_skipped_entry_is_still_probed() {
     until("the first probe", || a.probe_count(RecoveryMode::OneShot) == 1).await;
 
     // `a` is now unavailable and will be skipped, not opened -- but must still be probed.
-    let opens_before = a.opened.lock().expect("opened").len();
+    let opens_before = a.opened.lock().len();
     let _ = run_once(&rig, RecoveryMode::OneShot).await;
     until("the second probe", || a.probe_count(RecoveryMode::OneShot) == 2).await;
-    assert_eq!(a.opened.lock().expect("opened").len(), opens_before, "skipped means not opened");
+    assert_eq!(a.opened.lock().len(), opens_before, "skipped means not opened");
 }
 
 // Catches: a probe started after `aclose` (`tts:155-159`).
@@ -563,7 +565,7 @@ async fn every_modality_fails_after_partial_output_without_replay() {
         let (out, drained) = run_once(&rig, RecoveryMode::Streaming).await;
         assert!(out.is_err(), "partial output must retain its failure");
         assert_eq!(drained, vec![0]);
-        assert!(backup.opened.lock().expect("opened").is_empty());
+        assert!(backup.opened.lock().is_empty());
     }
 }
 
@@ -596,8 +598,8 @@ async fn recovery_probes_inherit_the_remaining_operation_deadline() {
         .await;
     assert!(out.is_ok());
     until("the probe to open", || primary.probes_entered.load(Ordering::SeqCst) > 0).await;
-    assert_eq!(backup.opened.lock().unwrap()[0].total_timeout, Some(3.0));
-    assert_eq!(primary.probes.lock().unwrap()[0].1.total_timeout, Some(3.0));
+    assert_eq!(backup.opened.lock()[0].total_timeout, Some(3.0));
+    assert_eq!(primary.probes.lock()[0].1.total_timeout, Some(3.0));
     rig.chain.close().await;
 }
 
@@ -703,7 +705,7 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
         release.add_permits(1);
         let error = run.await.unwrap_err();
         assert!(
-            backend.opened.lock().unwrap().is_empty(),
+            backend.opened.lock().is_empty(),
             "queued task performed provider I/O after revocation"
         );
         assert_eq!(

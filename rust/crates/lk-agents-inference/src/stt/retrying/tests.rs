@@ -16,7 +16,7 @@ struct Count(Arc<Mutex<Vec<usize>>>, usize);
 
 impl StreamSink<AudioFrame> for Count {
     fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
-        self.0.lock().unwrap()[self.1] += 1;
+        self.0.lock()[self.1] += 1;
         Ok(())
     }
     fn flush(&self) -> Result<(), ProviderError> {
@@ -66,7 +66,7 @@ impl Stt for Flaky {
         SttCapabilities { streaming: true, ..SttCapabilities::default() }
     }
     fn failed(&self, _: ProviderError, recoverable: bool) {
-        self.reports.lock().unwrap().push(recoverable);
+        self.reports.lock().push(recoverable);
     }
     fn recognize(
         &self,
@@ -81,9 +81,9 @@ impl Stt for Flaky {
         offset: Option<f64>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
         Box::pin(async move {
-            let mut opened = self.opened.lock().unwrap();
+            let mut opened = self.opened.lock();
             opened.push(offset.unwrap_or_default());
-            self.heard.lock().unwrap().push(0);
+            self.heard.lock().push(0);
             let attempt = match (opened.len(), self.cancels) {
                 (1, true) => Attempt::Cancelled,
                 (1, false) => Attempt::Fail,
@@ -112,8 +112,8 @@ async fn a_stream_the_provider_cancels_ends_unreported() {
     let stt = retrying(Arc::clone(&inner), 3);
     let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
     assert!(source.next().await.unwrap().is_none());
-    assert!(inner.reports.lock().unwrap().is_empty());
-    assert_eq!(inner.opened.lock().unwrap().len(), 1);
+    assert!(inner.reports.lock().is_empty());
+    assert_eq!(inner.opened.lock().len(), 1);
 }
 
 // Catches: a retried stream that loses what was pushed while no attempt was open, reports the
@@ -125,17 +125,17 @@ async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
     let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
     let hooked = Arc::new(Mutex::new(0));
     let calls = Arc::clone(&hooked);
-    source.report_retries(Arc::new(move |_, _, _| *calls.lock().unwrap() += 1));
+    source.report_retries(Arc::new(move |_, _, _| *calls.lock() += 1));
     let next = tokio::spawn(async move { source.next().await.map(|ev| ev.map(|ev| ev.kind)) });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     sink.push(AudioFrame::new(vec![0u8; 4], 16_000, 1, 2)).unwrap();
     assert_eq!(next.await.unwrap().unwrap(), Some(SpeechEventType::FinalTranscript));
-    assert_eq!(*inner.reports.lock().unwrap(), vec![true]);
-    assert_eq!(*hooked.lock().unwrap(), 1);
-    let opened = inner.opened.lock().unwrap().clone();
+    assert_eq!(*inner.reports.lock(), vec![true]);
+    assert_eq!(*hooked.lock(), 1);
+    let opened = inner.opened.lock().clone();
     assert_eq!(opened.len(), 2);
     assert!((opened[1] - 0.1).abs() < 1e-3, "offset {}", opened[1]);
-    assert_eq!(*inner.heard.lock().unwrap(), vec![0, 1]);
+    assert_eq!(*inner.heard.lock(), vec![0, 1]);
 }
 
 // Catches: a batch recognition retried past its budget, or exhausted without the reference's
@@ -147,7 +147,7 @@ async fn a_recognition_gives_up_after_its_budget() {
     let stt = retrying(Arc::clone(&inner), 1);
     let error = stt.recognize(&[], None).await.unwrap_err();
     assert_eq!(error.message(), "failed to recognize speech after 2 attempts");
-    assert_eq!(*inner.reports.lock().unwrap(), vec![true, false]);
+    assert_eq!(*inner.reports.lock(), vec![true, false]);
 }
 
 /// Every attempt connects, stays silent for `uptime`, then drops; a recognition never answers.
