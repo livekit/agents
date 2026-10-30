@@ -334,6 +334,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         self._base_models: dict[str, Any] = {}
         self._model_layers: list[dict[str, Any]] = []
         self._agent: Agent | None = None
+        # an `update_agent` the core has not answered yet: the agent the session is handing to
+        self._handing_to: Agent | None = None
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
         self._user_state: UserState = "listening"
@@ -451,9 +453,15 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
 
     @property
     def current_agent(self) -> Agent:
-        if self._agent is None:
+        # once started, the agent being handed to, else the one the core installed last: a
+        # refused handoff, or one a VoiceTask's end replaces, leaves the core's
+        if self._core is None:
+            agent = self._agent
+        else:
+            agent = self._handing_to or self._core.current_agent
+        if agent is None:
             raise RuntimeError("VoiceSession isn't running")
-        return self._agent
+        return cast(Agent, agent)
 
     @property
     def usage(self) -> Usage:
@@ -876,15 +884,22 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
     def update_agent(self, agent: Agent, *, chat_ctx: ChatContext | None = None) -> None:
         """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is
         the context ``agent`` works on instead of the conversation carried forward."""
-        self._agent = agent
         if self._core is None:
+            self._agent = agent
             if chat_ctx is not None:
                 self._chat_ctx = chat_ctx.copy()
             return
         frame = self._frame(agent)
         if chat_ctx is not None:
             frame["chat_ctx"] = chat_ctx.items
-        self._core.update_agent(UpdateAgentArgs(**frame))
+        installed = asyncio.ensure_future(self._core.update_agent(UpdateAgentArgs(**frame)))
+        self._handing_to = agent
+
+        def answered(_: asyncio.Future[bool]) -> None:
+            if self._handing_to is agent:
+                self._handing_to = None
+
+        installed.add_done_callback(answered)
 
     def _agent_chat_ctx(self) -> ChatContext:
         """The driving agent's own context, as the core keeps it."""
@@ -1373,12 +1388,8 @@ class VoiceTask(Generic[Output_T, Context_T]):
             origin=binding.origin,
             opens_with_reply=not agent._has_on_enter(),
         )
-        session._agent = agent
-        try:
-            output: Output_T = await reply
-            return output
-        finally:
-            session._agent = binding.agent
+        output: Output_T = await reply
+        return output
 
 
 def _wire_run(run: object | None) -> _VoiceRun | None:

@@ -14,8 +14,7 @@ use lk_agents_abi::{ChatItem, ToolSpec};
 use lk_agents_voice::agent_activity::DriverConfig;
 use lk_agents_voice::agent_activity::options::{AgentSessionOptions, DetectorKind, OverrideLayer};
 use lk_agents_voice::agent_session::{
-    ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, IoKind, IvrCommand,
-    TurnCommand,
+    ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, IoKind, IvrCommand, TurnCommand,
 };
 use lk_agents_voice::filler_scheduler::FillerId;
 
@@ -250,6 +249,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn usage(&self) -> lk_agents_abi::usage::Usage {
         self.view.borrow().usage.clone()
+    }
+
+    fn current_agent(&self) -> Option<HostRef> {
+        let agent = self.view.borrow().agent.clone();
+        self.agents.get(&agent)
     }
 
     fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {

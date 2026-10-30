@@ -351,6 +351,11 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn usage(&self) -> crate::usage::Usage;
 
+    /// `session.current_agent`: the host's agent the loop installed last, the task's while a
+    /// `VoiceTask` holds the floor.
+    #[host(getter)]
+    fn current_agent(&self) -> Option<HostRef>;
+
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
     /// handle each call over the same leg; safe before or after `start()`.
     #[host(getter)]

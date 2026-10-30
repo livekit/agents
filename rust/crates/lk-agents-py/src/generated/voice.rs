@@ -1351,6 +1351,15 @@ impl VoiceSession {
         Ok(crate::generated::records::usage::usage_to_py(py, out)?)
     }
 
+    /// `session.current_agent`: the host's agent the loop installed last, the task's while a
+    /// `VoiceTask` holds the floor.
+    #[getter]
+    fn current_agent<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::current_agent(&self.0));
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::host_ref_to_py(py, value)?)).transpose()?)
+    }
+
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
     /// handle each call over the same leg; safe before or after `start()`.
     #[getter]

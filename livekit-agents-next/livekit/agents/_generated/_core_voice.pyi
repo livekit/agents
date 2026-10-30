@@ -446,6 +446,11 @@ class VoiceSession:
     def usage(self) -> Usage:
         """`session.usage`: the latest snapshot of the session's usage, settled once it closed."""
     @property
+    def current_agent(self) -> object | None:
+        """`session.current_agent`: the host's agent the loop installed last, the task's while a
+        `VoiceTask` holds the floor.
+        """
+    @property
     def audio_input(self) -> RoomAudioInput | None:
         """The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
         handle each call over the same leg; safe before or after `start()`.
