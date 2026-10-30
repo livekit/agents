@@ -404,8 +404,8 @@ start a reply without that input. Provider-initiated speech remains under Prism'
 control. The helpers do not rewrite the session's past event log.
 
 SDK alpha26 supports these features within its existing reference-cache lifetime.
-Long tasks and delayed playback beyond 128 responses require the SDK version with
-`hold_response` (currently the companion SDK source change, not a published floor).
+Long tasks and delayed playback beyond 128 responses require `rimelabs-sdk>=0.1.0a27`,
+which provides `hold_response`. The plugin's baseline dependency remains alpha26.
 That SDK retains up to 128 ordinary and 128 protected responses. Active generation,
 unresolved calls, and holds count toward the protected bound. Limit exhaustion
 raises an error instead of evicting a pending owner. No audio is retained by holds.
