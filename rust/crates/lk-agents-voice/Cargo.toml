@@ -18,7 +18,7 @@ serde = { workspace = true }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # The shared agent execution core: the tool outcome table, approval and AgentRun.
 lk-agents-core = { path = "../lk-agents-core" }
-# BlingFire supplies sentence boundaries for the TTS leg's batching.
+# Audio framing, resampling, the endpointing filter and the pre-connect audio decode.
 lk-agents-media = { path = "../lk-agents-media" }
 log.workspace = true
 serde_json.workspace = true
