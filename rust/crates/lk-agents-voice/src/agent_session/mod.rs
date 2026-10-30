@@ -49,8 +49,10 @@ pub(crate) struct VoiceSession {
     >,
     /// The realtime responses created and not yet measured, by response id.
     pub(crate) realtime_requests: std::collections::BTreeMap<String, u64>,
-    /// The request of each recognition stream opened, by stream; kept after the stream ended.
+    /// The request of each recognition stream opened and not yet ended, by stream.
     pub(crate) stt_requests: std::collections::BTreeMap<lk_agents_abi::resources::ResourceId, u64>,
+    /// The last recognition stream that ended, whose late reports still add to its request.
+    pub(crate) ended_stt: Option<(lk_agents_abi::resources::ResourceId, u64)>,
     pub(crate) next_request: u64,
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
@@ -144,6 +146,7 @@ impl VoiceSession {
             requests: Default::default(),
             realtime_requests: Default::default(),
             stt_requests: Default::default(),
+            ended_stt: None,
             next_request: 0,
             states: AgentUserState::new(cfg.timers.user_away()),
             aec: AecWarmup::new(cfg.timers.aec_warmup()),

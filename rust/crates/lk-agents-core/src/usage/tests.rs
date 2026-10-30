@@ -151,7 +151,7 @@ fn a_late_stream_report_adds_to_the_ended_request() {
     };
     let mut l = Ledger::default();
     l.start(1, ModelKind::Stt, "deepgram", "nova-3");
-    l.finish(1, true);
+    l.finish_stream(1);
     assert_eq!(l.snapshot().unmeasured_requests, 1);
     l.report_delta(1, &report(2.0));
     let u = l.snapshot();

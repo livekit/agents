@@ -114,16 +114,28 @@ impl Ledger {
     /// unmeasured unless it `completed` with a report.
     pub fn finish(&mut self, request: u64, completed: bool) {
         let Some(Pending { bucket, partial }) = self.pending.remove(&request) else { return };
-        let unmeasured = !(completed && partial.is_some());
-        self.ended.insert(request, Ended { bucket, unmeasured });
         let bucket = &mut self.buckets[bucket];
-        if unmeasured {
+        if !(completed && partial.is_some()) {
             bucket.unmeasured += 1;
         }
         if let Some(partial) = partial {
             fold(&mut bucket.measured, &partial);
         }
         self.revision += 1;
+    }
+
+    /// The stream behind `request` ended: as [`finish`](Self::finish), and its late reports still
+    /// add to it until it is [`forgotten`](Self::forget).
+    pub fn finish_stream(&mut self, request: u64) {
+        let Some(pending) = self.pending.get(&request) else { return };
+        let ended = Ended { bucket: pending.bucket, unmeasured: pending.partial.is_none() };
+        self.finish(request, true);
+        self.ended.insert(request, ended);
+    }
+
+    /// No more late reports for the ended stream behind `request`.
+    pub fn forget(&mut self, request: u64) {
+        self.ended.remove(&request);
     }
 
     /// `requests` that started and were measured at once (a provider metrics record).

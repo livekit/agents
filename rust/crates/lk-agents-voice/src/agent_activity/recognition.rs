@@ -61,11 +61,13 @@ impl Driver {
         self.session.stt_requests.insert(stream, request);
     }
 
-    /// The stream ended: its request is measured when it reported usage. The stream keeps its
-    /// request for the reports that arrive after its end.
+    /// The stream ended: its request is measured when it reported usage. Its late reports add to
+    /// it until the next stream ends.
     pub(crate) fn stt_stream_ended(&mut self, stream: lk_agents_abi::resources::ResourceId) {
-        if let Some(&request) = self.session.stt_requests.get(&stream) {
-            self.session.usage.finish(request, true);
+        let Some(request) = self.session.stt_requests.remove(&stream) else { return };
+        self.session.usage.finish_stream(request);
+        if let Some((_, previous)) = self.session.ended_stt.replace((stream, request)) {
+            self.session.usage.forget(previous);
         }
     }
 
@@ -90,7 +92,8 @@ impl Driver {
             };
             let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record));
             // The stream's request takes the report here, also after the stream ended.
-            let request = self.session.stt_requests.get(&stream).copied();
+            let ended = self.session.ended_stt.filter(|(ended, _)| *ended == stream);
+            let request = self.session.stt_requests.get(&stream).copied().or(ended.map(|e| e.1));
             if let Some(request) = request {
                 self.session.usage.report_delta(request, &metrics);
             }
@@ -432,7 +435,8 @@ impl Driver {
     fn begin_turn(&mut self, now: Ts, info: EndOfTurnInfo, out: &mut Out) {
         // A turn that asks for a reply while the current speech cannot be interrupted is dropped,
         // before the hook and with no user item.
-        if !info.skip_reply && self.current_speech().is_some_and(|(_, h)| !h.allow_interruptions()) {
+        if !info.skip_reply && self.current_speech().is_some_and(|(_, h)| !h.allow_interruptions())
+        {
             out.machine().emit(crate::events::SessionEvent::Diagnostic(
                 crate::events::DiagnosticEvent::warning(
                     crate::events::diagnostics::UNINTERRUPTIBLE_SPEECH,
