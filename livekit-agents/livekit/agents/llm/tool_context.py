@@ -609,6 +609,7 @@ class ToolContext:
         self, tools: Sequence[Tool | Toolset], *, exclude: Sequence[Tool] = ()
     ) -> None:
         self._tools = list(tools)
+        self._excluded_tools = list(exclude)
         self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         self._provider_tools: list[ProviderTool] = []
         self._tool_sets: list[Toolset] = []
@@ -661,12 +662,16 @@ class ToolContext:
         if current_ids == tool_ids:
             return
 
-        added = [t for t in tools if id(t) not in current_ids]
+        # Toolset members are restored by rebuilding their owning toolset.
+        registered_ids = current_ids | {id(t) for ts in self._tool_sets for t in ts.tools}
+        added = [t for t in tools if id(t) not in registered_ids]
         removed_ids = current_ids - tool_ids
         removed = [c for c in current if id(c) in removed_ids]
 
         structured = [t for t in self._tools if not any(t is r for r in removed)]
-        self._update_tools([*structured, *added], exclude=removed)
+        # Preserve earlier removals unless the caller explicitly adds the tool back.
+        excluded = [t for t in self._excluded_tools if id(t) not in tool_ids]
+        self._update_tools([*structured, *added], exclude=[*excluded, *removed])
 
     def _exclude(self, tools: Sequence[Tool]) -> None:
         """Hide ``tools`` from the callable set while keeping their toolsets intact."""
@@ -676,7 +681,9 @@ class ToolContext:
         self._sync_flattened(kept)
 
     def copy(self) -> ToolContext:
-        return ToolContext(self._tools.copy())
+        ctx = ToolContext.empty()
+        ctx._update_tools(self._tools, exclude=self._excluded_tools)
+        return ctx
 
     @overload
     def parse_function_tools(
