@@ -50,7 +50,6 @@ from livekit.plugins.reson8._utils import (
     status_error,
 )
 from livekit.plugins.reson8.stt import (
-    _FINAL_TURN_TIMEOUT,
     AudioOptions,
     BiasingOptions,
     SpeechStream,
@@ -115,11 +114,12 @@ def make_stream() -> MakeStream:
         stream._opts = STTOptions(**overrides)  # type: ignore[arg-type]
         stream._request_id = "req-test"
         stream._speaking = False
+        stream._final_response_required = asyncio.Event()
         stream._candidate = None
         stream._pending_reconnect = False
-        stream._turn_settled = asyncio.Event()
         stream._turn_ended = asyncio.Event()
         stream._start_time_offset = 0.0
+        stream._on_provider_progress = None
         stream._speech_duration = 0.0
         stream._event_ch = FakeChan()  # type: ignore[assignment]
         return stream
@@ -1482,11 +1482,13 @@ async def test_a_close_with_a_turn_open_is_an_error(
     await stream.aclose()
 
 
-async def test_trailing_silence_does_not_fail_the_stream(
+async def test_trailing_silence_drains_without_another_turn_end(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     server = await reson8_server()
-    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+    stream = _stt(server.base_url, client_session, language="en").stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.2, final_response_timeout=0.2)
+    )
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     stream.push_frame(_frame())
@@ -1501,7 +1503,7 @@ async def test_trailing_silence_does_not_fail_the_stream(
 
     events: list[stt.SpeechEvent] = []
     started = time.time()
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(2):
         async for event in stream:
             events.append(event)
 
@@ -1510,19 +1512,21 @@ async def test_trailing_silence_does_not_fail_the_stream(
 
     finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
     assert [e.alternatives[0].text for e in finals] == ["all done"]
-    assert elapsed < _FINAL_TURN_TIMEOUT * 3
+    assert elapsed < 1
 
 
-async def test_an_unanswered_flush_closes_cleanly(
+async def test_an_unanswered_flush_has_a_bounded_quiet_drain(
     finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
     base_url = await finalizing_server(answer_flush=False)
-    stream = _stt(base_url, client_session).stream(conn_options=NO_RETRY)
+    stream = _stt(base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.2, final_response_timeout=0.2)
+    )
 
     stream.push_frame(_frame())
     stream.end_input()
 
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(2):
         async for _ in stream:
             pass
 
@@ -2239,3 +2243,46 @@ async def test_batch_rejects_a_buffer_with_too_many_channels(
         )
 
     assert not server.post_headers, "nothing should have been posted"
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("active_turn", [False, True])
+async def test_peer_close_during_idle_flush_requires_only_known_turns(monkeypatch, active_turn):
+    from dataclasses import replace
+
+    from .stt_harness.discovery import provider_by_name
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+    from .stt_harness.server import STTServer
+
+    provider = replace(provider_by_name("reson8"), final_response_timeout=2)
+    first = make_audio_segments(provider)[0]
+    server = STTServer(provider, segments=(first,))
+    server.processing_stalled = True
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        peer = server.connections[0]
+        if active_turn:
+            peer.send({"type": "turn_start"})
+
+            async def wait_for_start():
+                while not events:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_start(), 1)
+        await peer.ws.close()
+        if active_turn:
+            with pytest.raises(APIConnectionError, match="turn still open") as error:
+                await asyncio.wait_for(collector, 1)
+            assert not error.value.retryable
+            assert errors
+        else:
+            await asyncio.wait_for(collector, 1)
+            assert not errors

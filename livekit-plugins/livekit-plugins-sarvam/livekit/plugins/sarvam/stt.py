@@ -47,6 +47,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
@@ -930,6 +931,7 @@ class SpeechStream(stt.SpeechStream):
             1,
         )
         self._end_of_stream_msg = self._build_end_of_stream_message()
+        self._drain_started = asyncio.Event()
 
     def _build_end_of_stream_message(self) -> str:
         return json.dumps(
@@ -1071,7 +1073,9 @@ class SpeechStream(stt.SpeechStream):
         async with self._connection_lock:
             self._connection_state = ConnectionState.DISCONNECTED
 
-        # Cancel running tasks first
+        await super().aclose()
+
+        # Cancel remaining auxiliary tasks
         tasks_to_cancel = []
         if self._audio_task and not self._audio_task.done():
             tasks_to_cancel.append(self._audio_task)
@@ -1099,12 +1103,6 @@ class SpeechStream(stt.SpeechStream):
             self._logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
         finally:
             self._ws = None
-
-        # Call parent cleanup
-        try:
-            await super().aclose()
-        except Exception as e:
-            self._logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
 
         # Close session last
         try:
@@ -1243,72 +1241,24 @@ class SpeechStream(stt.SpeechStream):
             await self._send_initial_config(ws)
 
         # Create tasks for audio processing and message handling
+        self._drain_started.clear()
         self._audio_task = asyncio.create_task(self._process_audio(ws))
         self._message_task = asyncio.create_task(self._process_messages(ws))
 
-        # Wait for both tasks to complete or reconnection event
         tasks = [self._audio_task, self._message_task]
-        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
         try:
-            done, pending = await asyncio.wait(
-                tasks + [reconnect_task],
-                return_when=asyncio.FIRST_COMPLETED,
+            reconnect = await self._run_connection_tasks(
+                self._audio_task,
+                self._message_task,
+                reconnect=self._reconnect_event,
+                drain_started=self._drain_started,
+                require_completion=False,
             )
-
-            # Check if reconnection was requested
-            if reconnect_task in done:
-                self._logger.info(
-                    "Reconnection requested, closing current connection",
-                    extra=self._build_log_context(),
-                )
+            if reconnect:
                 self._reconnect_event.clear()
-                return
-
-            # Keep listening for server-side terminal errors when audio finishes first.
-            if self._audio_task in done and self._message_task in pending:
-                audio_exc = self._audio_task.exception()
-                if audio_exc is not None:
-                    raise audio_exc
-
-                done2, pending2 = await asyncio.wait(
-                    [self._message_task, reconnect_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                    timeout=self._conn_options.timeout,
-                )
-                done |= done2
-                pending = pending2
-
-                if reconnect_task in done2:
-                    self._logger.info(
-                        "Reconnection requested, closing current connection",
-                        extra=self._build_log_context(),
-                    )
-                    self._reconnect_event.clear()
-                    return
-
-                if not done2:
-                    raise APITimeoutError(
-                        "Timed out waiting for STT server response after audio input ended"
-                    )
-
-            # Cancel remaining tasks using LiveKit's utility
-            if pending:
-                await utils.aio.cancel_and_wait(*pending)
-
-            # Check for exceptions in completed tasks
-            for task in done:
-                if task != reconnect_task:
-                    exc = task.exception()
-                    if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
-
         finally:
             # Clean up tasks
-            all_tasks = tasks + [reconnect_task]
+            all_tasks = tasks
             fallback_task = self._cancel_eos_fallback()
             if fallback_task is not None:
                 all_tasks.append(fallback_task)
@@ -1406,6 +1356,7 @@ class SpeechStream(stt.SpeechStream):
                     if self._opts.flush_signal:
                         await ws.send_str(json.dumps({"type": "flush"}))
 
+            self._drain_started.set()
             await ws.send_str(self._end_of_stream_msg)
 
         except Exception as e:
@@ -1468,17 +1419,12 @@ class SpeechStream(stt.SpeechStream):
                             body={"raw_message": msg.data},
                         ) from e
 
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {msg.data}"
-                    self._logger.error(error_msg, extra=self._build_log_context())
-                    raise APIConnectionError(error_msg)
-
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    close_code = ws.close_code if ws.close_code is not None else msg.data
+                    close_code = msg.data if isinstance(msg.data, int) else ws.close_code
                     close_reason = msg.extra
                     is_expected_close = close_code in (1000, 1001, None)
                     has_error_reason = _looks_like_error_text(close_reason)
@@ -1492,20 +1438,8 @@ class SpeechStream(stt.SpeechStream):
                                 "close_reason": close_reason,
                             },
                         )
-                        msg_type = getattr(msg.type, "name", str(msg.type))
-                        raw_close = {
-                            "msg_type": msg_type,
-                            "close_code": close_code,
-                            "close_reason": close_reason,
-                        }
-                        raise APIStatusError(
-                            message=(
-                                "Sarvam STT WebSocket closed unexpectedly: "
-                                f"{json.dumps(raw_close, ensure_ascii=False)}"
-                            ),
-                            status_code=int(close_code) if isinstance(close_code, int) else -1,
-                            body=raw_close,
-                        )
+                        raise WebSocketCloseError(close_code, close_reason)
+
                     self._logger.info(
                         f"WebSocket closed: {msg.type}",
                         extra={

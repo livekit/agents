@@ -44,7 +44,6 @@ from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient
 
 _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
-_RECV_COMPLETION_TIMEOUT = 5.0
 _IDLE_CHECK_INTERVAL = 1.0
 
 
@@ -156,7 +155,8 @@ class SpeechStream(stt.SpeechStream):
         self._connection_lock = asyncio.Lock()
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
         self._last_audio_at: float | None = None
-        self._idle_task: asyncio.Task[None] | None = None
+        self._recv_failed: asyncio.Future[None] | None = None
+        self._drain_started = asyncio.Event()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         config = self._rtzr_stt._client.build_config(
@@ -202,17 +202,34 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("RTZR API connection failed") from e
 
     async def _run(self) -> None:
+        self._state = _StreamState.IDLE
+        self._drain_started.clear()
+        self._recv_failed = asyncio.get_running_loop().create_future()
         send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
-        self._idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
+        idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
 
         try:
-            await send_task
+            await self._run_connection_tasks(
+                send_task,
+                self._recv_failed,
+                background=[idle_task],
+                sender_waits_for_completion=True,
+                drain_started=self._drain_started,
+            )
         finally:
+            self._recv_failed.cancel()
             self._state = _StreamState.CLOSED
-            if self._idle_task and not self._idle_task.done():
-                await utils.aio.gracefully_cancel(self._idle_task)
-            await self._await_recv_completion()
-            await self._cleanup_connection()
+            tasks = [send_task, idle_task]
+            if self._recv_task is not None:
+                tasks.append(self._recv_task)
+            # Cancel every child before awaiting: aclose() can interrupt error cleanup.
+            for task in tasks:
+                task.cancel()
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                self._recv_task = None
+                await self._cleanup_connection()
 
     async def _ensure_connected(self) -> None:
         """Lazy connect on first audio."""
@@ -224,10 +241,16 @@ class SpeechStream(stt.SpeechStream):
                 self._ws = ws
                 self._state = _StreamState.ACTIVE
                 self._recv_task = asyncio.create_task(self._recv_loop(ws), name="RTZR.recv_loop")
+                self._recv_task.add_done_callback(self._on_recv_done)
                 self._last_audio_at = time.monotonic()
             except Exception:
                 self._state = _StreamState.IDLE
                 raise
+
+    def _on_recv_done(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and self._recv_failed is not None and not self._recv_failed.done():
+            if (error := task.exception()) is not None:
+                self._recv_failed.set_exception(error)
 
     async def _end_segment(self) -> None:
         """Close current segment, prepare for next."""
@@ -238,8 +261,8 @@ class SpeechStream(stt.SpeechStream):
             try:
                 await self._ws.send_str("EOS")
                 logger.info("Sent EOS to close audio segment")
-            except Exception:
-                logger.exception("Failed to send EOS")
+            except (aiohttp.ClientError, ConnectionError) as e:
+                raise APIConnectionError("RTZR STT end-of-stream send failed") from e
             await self._await_recv_completion()
             await self._cleanup_connection()
             self._state = _StreamState.IDLE
@@ -272,9 +295,10 @@ class SpeechStream(stt.SpeechStream):
     async def _await_recv_completion(self) -> None:
         if self._recv_task:
             try:
-                await asyncio.wait_for(self._recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
+                # This receiver belongs to one segment, not to the whole STT stream.
+                await asyncio.wait_for(self._recv_task, self._conn_options.final_response_timeout)
             except asyncio.TimeoutError:
-                await utils.aio.gracefully_cancel(self._recv_task)
+                raise APITimeoutError("RTZR STT final response timed out") from None
             finally:
                 self._recv_task = None
 
@@ -306,10 +330,13 @@ class SpeechStream(stt.SpeechStream):
 
             if has_ended:
                 if self._ws:
+                    if self._input_ch.closed and self._input_ch.empty():
+                        self._drain_started.set()
                     await self._end_segment()
                 has_ended = False  # always reset - flush without active WS is a no-op
 
         # Final shutdown
+        self._drain_started.set()
         if self._ws:
             self._state = _StreamState.CLOSING
             try:
@@ -437,14 +464,8 @@ class SpeechStream(stt.SpeechStream):
                 for event in events:
                     self._event_ch.send_nowait(event)
 
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.CLOSED,
-            ):
-                break
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error("WebSocket error: %s", ws.exception())
-                raise APIConnectionError("WebSocket error occurred")
             else:
                 logger.debug("Ignored WebSocket message type: %s", msg.type)
+
+        if self._state == _StreamState.ACTIVE:
+            raise APIConnectionError("RTZR STT connection closed unexpectedly")

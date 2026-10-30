@@ -561,8 +561,6 @@ class SpeechStream(stt.RecognizeStream):
         self._vad: vad.VAD | None = vad_instance
         self._vad_stream: vad.VADStream | None = None
 
-        self._tasks: list[asyncio.Task] = []
-
         # Speaker result event
         self._speaker_result_event: asyncio.Event = asyncio.Event()
         self._speaker_result: list[SpeakerIdentifier] | None = None
@@ -580,6 +578,23 @@ class SpeechStream(stt.RecognizeStream):
         return info.session_id if info is not None else None
 
     async def _run(self) -> None:
+        try:
+            await self._run_connection()
+        finally:
+            if self._vad_stream is not None:
+                await self._vad_stream.aclose()
+                self._vad_stream = None
+            if self._client is not None:
+                await self._client.close()
+                self._client = None
+
+    async def _main_task(self) -> None:
+        try:
+            await super()._main_task()
+        finally:
+            self._stt._streams.remove(self)
+
+    async def _run_connection(self) -> None:
         """Run the STT stream."""
         logger.debug("Connecting to Speechmatics STT service")
 
@@ -605,8 +620,13 @@ class SpeechStream(stt.RecognizeStream):
             ),
         )
 
+        transcript_ended = asyncio.Event()
+        drain_started = asyncio.Event()
+
         # Add message handlers
         def add_message(message: dict[str, Any]) -> None:
+            if message.get("message") == ServerMessageType.END_OF_TRANSCRIPT:
+                transcript_ended.set()
             self._msg_queue.put_nowait(message)
 
         # Default messages to listen to
@@ -619,6 +639,7 @@ class SpeechStream(stt.RecognizeStream):
             ServerMessageType.ADD_SEGMENT,
             ServerMessageType.START_OF_TURN,
             ServerMessageType.END_OF_TURN,
+            ServerMessageType.END_OF_TRANSCRIPT,
         ]
 
         # Speaker IDs message handler
@@ -639,6 +660,7 @@ class SpeechStream(stt.RecognizeStream):
         except (SMConnectionError, SMTimeoutError, TransportError) as e:
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
         logger.debug("Connected to Speechmatics STT service")
+        client = self._client
 
         # Open external VAD stream (if provided) before tasks start pushing frames.
         # Only in EXTERNAL mode: the VAD exists solely to drive finalize(), and in VAD
@@ -646,100 +668,84 @@ class SpeechStream(stt.RecognizeStream):
         if self._vad is not None and self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
             self._vad_stream = self._vad.stream()
 
-        # Audio and messaging tasks
-        audio_task = asyncio.create_task(self._process_audio())
-        message_task = asyncio.create_task(self._process_messages())
+        vad_task = (
+            asyncio.create_task(self._process_vad(self._vad_stream))
+            if self._vad_stream is not None
+            else None
+        )
 
-        # Tasks
-        self._tasks = [audio_task, message_task]
-
-        # Optional VAD task: calls `client.finalize()` on end of speech
-        vad_task: asyncio.Task | None = None
-        if self._vad_stream is not None:
-            vad_task = asyncio.create_task(self._process_vad(self._vad_stream))
-            self._tasks.append(vad_task)
-
-        # Wait for tasks to complete
-        try:
-            done, pending = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
-
-        # Disconnect the client
-        finally:
-            # Cancel audio first — stops sending audio to the STT engine
-            audio_task.cancel()
-            try:
-                await audio_task
-            except asyncio.CancelledError:
-                pass
-
-            # Close the VAD stream so its task drains and exits
-            if self._vad_stream is not None:
-                await self._vad_stream.aclose()
-                self._vad_stream = None
-
+        async def finish() -> None:
             if vad_task is not None:
-                await utils.aio.cancel_and_wait(vad_task)
+                await vad_task
+            # disconnect() suppresses SDK teardown failures; stop_session() does not.
+            await client.stop_session()
+            if client.session_error is not None or not transcript_ended.is_set():
+                raise APIConnectionError("Speechmatics failed to finish transcription")
+            # SDK callbacks enqueue messages. Process the last callbacks before success.
+            await self._msg_queue.join()
 
-            # Disconnect flushes final messages from the STT engine
-            await self._client.disconnect()
+        async def send() -> None:
+            await self._process_audio()
+            drain_started.set()
+            await asyncio.wait_for(finish(), self._conn_options.final_response_timeout)
 
-            # Cancel message task after disconnect — final messages have been processed
-            message_task.cancel()
-            try:
-                await message_task
-            except asyncio.CancelledError:
-                pass
+        async def watch_transport() -> None:
+            # The SDK exposes no public wait_closed; this event also wakes on transport EOF.
+            await client._session_done_evt.wait()
+            if not transcript_ended.is_set() and client.session_error is None:
+                raise APIConnectionError("Speechmatics connection closed before EndOfTranscript")
 
-            # Remove from active streams so stale streams aren't iterated
-            if self in self._stt._streams:
-                self._stt._streams.remove(self)
+        await self._run_connection_tasks(
+            asyncio.create_task(send()),
+            asyncio.create_task(self._process_messages()),
+            background=[
+                asyncio.create_task(watch_transport()),
+                *([vad_task] if vad_task is not None else []),
+            ],
+            sender_waits_for_completion=True,
+            drain_started=drain_started,
+        )
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
-        try:
-            # Input audio stream
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._stt._sample_rate,
-                num_channels=1,
-            )
+        # Input audio stream
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._stt._sample_rate,
+            num_channels=1,
+        )
 
-            # Process input audio
-            async for data in self._input_ch:
-                # Handle flush sentinel
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    # Forward the original frame to the VAD before resampling/repacking
-                    if self._vad_stream is not None:
-                        self._vad_stream.push_frame(data)
-                    frames = audio_bstream.write(data.data.tobytes())
+        # Process input audio
+        async for data in self._input_ch:
+            # Handle flush sentinel
+            if isinstance(data, self._FlushSentinel):
+                frames = audio_bstream.flush()
+            else:
+                # Forward the original frame to the VAD before resampling/repacking
+                if self._vad_stream is not None:
+                    self._vad_stream.push_frame(data)
+                frames = audio_bstream.write(data.data.tobytes())
 
-                if self._client:
-                    for frame in frames:
-                        await self._client.send_audio(frame.data.tobytes())
+            if self._client:
+                for frame in frames:
+                    await self._client.send_audio(frame.data.tobytes())
 
-                        # send_audio never raises: it closes the audio gate and drops
-                        # this and every later frame. A session error is already raised
-                        # as fatal in _handle_message, so only a clean gate close is a
-                        # lost connection.
-                        if not self._client.is_ready_for_audio:
-                            if self._client.session_error is None:
-                                raise APIConnectionError(
-                                    "lost connection to Speechmatics while sending audio"
-                                )
-                            break
+                    # send_audio never raises: it closes the audio gate and drops
+                    # this and every later frame. A session error is already raised
+                    # as fatal in _handle_message, so only a clean gate close is a
+                    # lost connection.
+                    if not self._client.is_ready_for_audio:
+                        if self._client.session_error is None:
+                            raise APIConnectionError(
+                                "lost connection to Speechmatics while sending audio"
+                            )
+                        break
 
-                        # Only audio the service accepted counts towards usage.
-                        self._speech_duration += frame.duration
+                    # Only audio the service accepted counts towards usage.
+                    self._speech_duration += frame.duration
 
-            # No more input — let the VAD flush any pending event
-            if self._vad_stream is not None:
-                self._vad_stream.end_input()
-
-        except asyncio.CancelledError:
-            pass
+        # No more input — let the VAD flush any pending event
+        if self._vad_stream is not None:
+            self._vad_stream.end_input()
 
     async def _process_vad(self, vad_stream: vad.VADStream) -> None:
         """Call `client.finalize()` whenever the external VAD reports end of speech."""
@@ -756,7 +762,10 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 message = await self._msg_queue.get()
-                self._handle_message(message)
+                try:
+                    self._handle_message(message)
+                finally:
+                    self._msg_queue.task_done()
         except asyncio.CancelledError:
             pass
 
@@ -876,31 +885,12 @@ class SpeechStream(stt.RecognizeStream):
         self._speaker_result_event.set()
 
     async def aclose(self) -> None:
-        """Close the STT stream."""
         await super().aclose()
-
-        # Cancel message processing task
-        if self._tasks:
-            for task in self._tasks:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-        # Close the VAD stream if it's still open
-        if self._vad_stream is not None:
-            await self._vad_stream.aclose()
-            self._vad_stream = None
-
-        # Close the client
-        if self._client and self._client.is_connected:
-            await self._client.disconnect()
-        self._client = None
-
-        # Remove from active streams
         if self in self._stt._streams:
             self._stt._streams.remove(self)
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
 
 def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | None:

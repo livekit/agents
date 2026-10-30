@@ -34,7 +34,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -381,8 +380,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
-    # Asks the server to transcribe whatever audio it still has buffered. It replies
-    # with any remaining transcripts, then {"type": "end_audio", "body": {"status": "finished"}}.
+    # The server acknowledges end_audio, sends trailing transcripts, then finished.
     _END_AUDIO_MSG: str = json.dumps({"type": "end_audio"})
 
     def __init__(
@@ -438,15 +436,10 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = False
-        # input_ended is set once the input channel is drained, end_audio_sent_at once
-        # end_audio is on the wire, flush_deadline once the server acknowledges it
-        input_ended = False
-        end_audio_sent_at: float | None = None
-        flush_deadline: float | None = None
+        drain_started = asyncio.Event()
+        completion_required = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal input_ended, end_audio_sent_at
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -468,57 +461,28 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
-
-                # input ended: send the partial last buffer, then ask the server to flush
-                input_ended = True
                 for frame in audio_bstream.flush():
                     await ws.send_bytes(frame.data.tobytes())
+                drain_started.set()
                 await ws.send_str(SpeechStream._END_AUDIO_MSG)
-                end_audio_sent_at = asyncio.get_running_loop().time()
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws, flush_deadline
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
-            loop = asyncio.get_running_loop()
             while True:
-                wait = 5.0
-                if flush_deadline is not None:
-                    wait = min(wait, flush_deadline - loop.time())
-                    if wait <= 0:
-                        raise APITimeoutError("Baseten did not finish flushing audio")
-                try:
-                    msg = await asyncio.wait_for(monitor.receive(), timeout=wait)
-                except asyncio.TimeoutError:
-                    # a runtime without end_audio support never acknowledges it, so
-                    # stop waiting; once acknowledged, wait until flush_deadline
-                    if closing_ws:
-                        break
-                    if (
-                        end_audio_sent_at is not None
-                        and flush_deadline is None
-                        and loop.time() - end_audio_sent_at >= 5.0
-                    ):
-                        break
-                    continue
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        return
-                    raise APIStatusError(
-                        "Baseten connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+                    if completion_required.is_set():
+                        raise APIConnectionError("Baseten closed before end_audio finished")
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
@@ -529,15 +493,15 @@ class SpeechStream(stt.SpeechStream):
 
                     msg_type = data.get("type")
                     if msg_type == "end_audio":
-                        # every transcript for the flushed audio arrives before "finished"
                         status = (data.get("body") or {}).get("status")
                         if status == "finished":
                             return
-                        if status == "acknowledged" and flush_deadline is None:
-                            flush_deadline = loop.time() + self._conn_options.timeout
+                        if status == "acknowledged":
+                            completion_required.set()
                         continue
-
-                    # Skip non-transcription messages (e.g. error, status)
+                    if msg_type == "error":
+                        raise APIStatusError("Baseten STT returned an error", body=data)
+                    # Skip non-transcription status messages.
                     if msg_type and msg_type not in ("transcription",):
                         logger.debug("Ignoring message type: %s", msg_type)
                         continue
@@ -632,6 +596,8 @@ class SpeechStream(stt.SpeechStream):
                     if msg_type == "transcription" or "transcript" in data or "segments" in data:
                         self._mark_provider_progress()
 
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
 
@@ -639,35 +605,19 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                drain_started.clear()
+                completion_required.clear()
                 ws = await self._connect_ws()
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            try:
-                                task.result()
-                            except APIError as e:
-                                # the input channel is drained, so a retry would reconnect
-                                # with no audio and report an empty flush as success
-                                if input_ended:
-                                    e.retryable = False
-                                raise
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                    require_completion=completion_required,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 if ws is not None:
                     await ws.close()

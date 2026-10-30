@@ -465,11 +465,10 @@ class SpeechStreamv2(stt.SpeechStream):
             logger.debug("failed to send Configure to deepgram")
 
     async def _run(self) -> None:
-        closing_ws = False
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             # Repack incoming frames into the configured outgoing PCM chunk duration.
             chunk_samples = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
@@ -498,20 +497,17 @@ class SpeechStreamv2(stt.SpeechStream):
                         has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
-                closing_ws = True
+                drain_started.set()
                 await ws.send_str(SpeechStreamv2._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # a mid-write socket drop surfaces here as a raw connection error.
                 # if the close is expected (aclose or the http session closing) just
                 # return; otherwise re-raise as a retryable APIError so _main_task
                 # reconnects, symmetric with recv_task.
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -522,24 +518,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    # close is expected, see SpeechStream.aclose
-                    # or when the agent session ends, the http session is closed
-                    if closing_ws or self._session.closed:
-                        return
-
-                    # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError("deepgram connection lost") from ws.exception()
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -564,33 +543,18 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                drain_started.clear()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 self._ws = None
                 if self._reconfigure_atask is not None:

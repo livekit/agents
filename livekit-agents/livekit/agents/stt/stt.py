@@ -3,18 +3,19 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
+import aiohttp
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
@@ -351,7 +352,6 @@ class STT(
 
     def prewarm(self) -> None:
         """Pre-warm connection to the STT service"""
-        pass
 
 
 @runtime_checkable
@@ -369,8 +369,6 @@ class SpeakerContext(Protocol):
 class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
-
-        pass
 
     def __init__(
         self,
@@ -399,6 +397,7 @@ class RecognizeStream(ABC):
         )
 
         self._num_retries = 0
+        self._last_provider_progress_at = 0.0
         self._on_provider_progress: Callable[[], None] | None = None
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -470,6 +469,121 @@ class RecognizeStream(ABC):
             ),
         )
 
+    async def _run_connection_tasks(
+        self,
+        sender: asyncio.Future[Any],
+        receiver: asyncio.Future[Any],
+        *,
+        reconnect: asyncio.Event | None = None,
+        background: Sequence[asyncio.Future[Any]] = (),
+        sender_waits_for_completion: bool = False,
+        drain_started: asyncio.Event | None = None,
+        require_completion: bool | asyncio.Event = True,
+        drain_quiet_timeout: float | None = None,
+    ) -> bool:
+        """Run one provider connection; return True when a reconnect is requested.
+
+        Sending must finish before success. A receiver that ends during active
+        input is a connection failure. drain_started signals the interval after
+        the last audio write and before the sender returns (for example while
+        writing EOS or waiting for an SDK acknowledgement).
+
+        Once sending finishes, final_response_timeout bounds the remaining wait.
+        Providers without a completion guarantee use a best-effort drain by setting
+        require_completion=False. A drain timeout then ends normally; write and
+        transport failures still propagate. For a negotiated guarantee, pass an event
+        that is set when the peer acknowledges completion support. Transport activity
+        cannot extend the deadline.
+        Set sender_waits_for_completion when the sender waits for the final acknowledgement.
+        For a best-effort drain, drain_quiet_timeout permits an earlier finish after
+        provider progress stops. It cannot extend final_response_timeout.
+        All supplied tasks are cancelled and awaited on exit.
+        """
+        reconnect_task = asyncio.create_task(reconnect.wait()) if reconnect is not None else None
+        drain_started_task = (
+            asyncio.create_task(drain_started.wait()) if drain_started is not None else None
+        )
+        tasks = {sender, receiver, *background}
+        if drain_started_task is not None:
+            tasks.add(drain_started_task)
+        if reconnect_task is not None:
+            tasks.add(reconnect_task)
+        pending = set(tasks)
+        deadline: float | None = None
+        quiet_started: float | None = None
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                timeout = None if deadline is None else max(0.0, deadline - loop.time())
+                completion_required = (
+                    require_completion.is_set()
+                    if isinstance(require_completion, asyncio.Event)
+                    else require_completion
+                )
+                quiet_deadline: float | None = None
+                if deadline is not None and sender.done() and drain_quiet_timeout is not None:
+                    if quiet_started is None:
+                        quiet_started = loop.time()
+                    quiet_deadline = (
+                        max(quiet_started, self._last_provider_progress_at) + drain_quiet_timeout
+                    )
+                    if completion_required:
+                        timeout = min(max(0.0, deadline - loop.time()), drain_quiet_timeout)
+                    else:
+                        timeout = max(0.0, min(deadline, quiet_deadline) - loop.time())
+                done, _ = await asyncio.wait(
+                    pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not done:
+                    completion_required = (
+                        require_completion.is_set()
+                        if isinstance(require_completion, asyncio.Event)
+                        else require_completion
+                    )
+                    if sender.done() and not completion_required:
+                        if (
+                            quiet_deadline is not None
+                            and deadline is not None
+                            and drain_quiet_timeout is not None
+                            and loop.time() < deadline
+                            and loop.time() < self._last_provider_progress_at + drain_quiet_timeout
+                        ):
+                            continue
+                        return False
+                    if deadline is not None and loop.time() < deadline:
+                        continue
+                    raise APITimeoutError("STT final response timed out")
+                # Failures take precedence over a simultaneous completion or reconnect.
+                for task in done:
+                    if task.cancelled():
+                        raise APIConnectionError("STT connection task was cancelled unexpectedly")
+                    try:
+                        task.result()
+                    except asyncio.TimeoutError as e:
+                        raise APITimeoutError("STT connection operation timed out") from e
+                    except aiohttp.ClientResponseError as e:
+                        raise APIStatusError(e.message, status_code=e.status) from None
+                    except (aiohttp.ClientError, ConnectionError, OSError) as e:
+                        raise APIConnectionError("STT connection operation failed") from e
+                if reconnect is not None and reconnect.is_set():
+                    return True
+                if receiver in done and not sender.done():
+                    if drain_started is None or not drain_started.is_set():
+                        raise APIConnectionError(
+                            "STT connection ended before audio sending finished"
+                        )
+                if sender.done() and (receiver.done() or sender_waits_for_completion):
+                    return False
+                if deadline is None and (
+                    sender in done or receiver in done or drain_started_task in done
+                ):
+                    deadline = loop.time() + self._conn_options.final_response_timeout
+                pending.difference_update(done)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     @abstractmethod
     async def _run(self) -> None: ...
 
@@ -485,10 +599,24 @@ class RecognizeStream(ABC):
                 self._start_time = time.time()
                 last_start_time = time.time()
                 return await self._run()
-            except APIError as e:
-                if not e.retryable or max_retries == 0:
+            except (APIError, aiohttp.ClientResponseError) as exception:
+                # Some providers use aiohttp directly. Preserve HTTP status and
+                # retry policy without retaining request headers in the cause.
+                e = (
+                    APIStatusError(exception.message, status_code=exception.status)
+                    if isinstance(exception, aiohttp.ClientResponseError)
+                    else exception
+                )
+                if (
+                    not e.retryable
+                    or max_retries == 0
+                    or (self._input_ch.closed and self._input_ch.empty())
+                ):
+                    # There is no audio to replay once the closed input is drained.
                     self._emit_error(e, recoverable=False)
-                    raise
+                    if e is exception:
+                        raise
+                    raise e from None
                 elif self._num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
@@ -522,6 +650,11 @@ class RecognizeStream(ABC):
         not indicate provider progress.
         """
         self._num_retries = 0
+        try:
+            self._last_provider_progress_at = asyncio.get_running_loop().time()
+        except RuntimeError:
+            # SDK callbacks and synchronous event handlers can run outside the loop.
+            self._last_provider_progress_at = time.monotonic()
         if self._on_provider_progress is not None:
             self._on_provider_progress()
 
@@ -607,8 +740,9 @@ class RecognizeStream(ABC):
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
-        self._input_ch.close()
+        # Abort the producer before closing its input; EOF would request a drain.
         await aio.cancel_and_wait(self._task)
+        self._input_ch.close()
 
         if self._metrics_task is not None:
             await aio.cancel_and_wait(self._metrics_task)

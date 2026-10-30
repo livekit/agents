@@ -499,7 +499,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = False
+        drain_started = asyncio.Event()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Resets the public API's inactivity timer while no audio flows; the server
@@ -514,13 +514,12 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # With no audio flowing this write is where a dropped socket shows first.
-                if closing_ws or self._session.closed:
+                if drain_started.is_set() or self._session.closed:
                     return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             # 50 ms packets, the cadence the Pulse docs recommend.
             samples_per_chunk = self._opts.sample_rate // 20
@@ -553,18 +552,15 @@ class SpeechStream(stt.SpeechStream):
                             await ws.send_str(SpeechStream._FINALIZE_MSG)
 
                 # Input closed: the server flushes, answers with is_last and closes.
-                closing_ws = True
+                drain_started.set()
                 await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # A dropped socket surfaces on the write side first. Expected closes just
                 # return; anything else reconnects through _run, like recv_task.
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -575,19 +571,9 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIStatusError(
-                        message="Smallest AI STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                    raise APIConnectionError(
+                        "smallestai STT closed before its final response completed"
                     )
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError("Smallest AI STT connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Smallest AI STT message type: %s", msg.type)
@@ -635,32 +621,18 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                tasks = [
+                drain_started.clear()
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                # Not in the gather: recv_task ends on is_last before the socket closes, and the
-                # session must not wait on a keepalive loop. Its failure still ends the session.
-                keepalive = asyncio.create_task(keepalive_task(ws))
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task, keepalive),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
+                    reconnect=self._reconnect_event,
+                    background=[asyncio.create_task(keepalive_task(ws))],
+                    drain_started=drain_started,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
 
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task, keepalive)
-                    tasks_group.cancel()
-                    tasks_group.exception()
             finally:
                 if ws is not None:
                     await ws.close()

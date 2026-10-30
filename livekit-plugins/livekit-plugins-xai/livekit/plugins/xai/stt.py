@@ -328,11 +328,10 @@ class SpeechStream(stt.RecognizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = False
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             await self._server_ready.wait()
 
@@ -355,12 +354,11 @@ class SpeechStream(stt.RecognizeStream):
                     await ws.send_bytes(frame.data.tobytes())
 
             self._audio_duration_collector.flush()
+            drain_started.set()
             await ws.send_str(json.dumps({"type": "audio.done"}))
-            closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -371,16 +369,7 @@ class SpeechStream(stt.RecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return
-
-                    raise APIStatusError(message="xAI connection closed unexpectedly")
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError("xAI connection lost") from ws.exception()
+                    raise APIConnectionError("xai STT closed before its final response completed")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected xAI message type %s", msg.type)
@@ -389,8 +378,9 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
+                    if data.get("type") == "transcript.done":
+                        return
                     if data.get("type") in (
-                        "transcript.created",
                         "transcript.partial",
                         "transcript.done",
                     ):
@@ -402,33 +392,18 @@ class SpeechStream(stt.RecognizeStream):
 
         while True:
             try:
-                closing_ws = False
+                drain_started.clear()
                 ws = await self._connect_ws()
                 self._server_ready.clear()
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 if ws is not None:
                     await ws.close()

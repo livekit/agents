@@ -18,8 +18,10 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -28,6 +30,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -268,8 +271,35 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        drain_started = asyncio.Event()
+
+        async def process_input() -> None:
+            async for input in self._input_ch:
+                if isinstance(input, rtc.AudioFrame):
+                    self._audio_duration += input.duration
+                    self._maybe_emit_recognition_usage()
+                    self._stream.write(input.data.tobytes())
+                elif isinstance(input, self._FlushSentinel):
+                    self._emit_recognition_usage()
+            self._emit_recognition_usage()
+
+        async def send() -> None:
+            await process_input()
+            drain_started.set()
+            self._stream.close()
+
+        async def receive() -> None:
+            await self._session_stopped_event.wait()
+            if self._cancellation_error is not None:
+                details = self._cancellation_error
+                raise APIConnectionError(
+                    f"Azure STT canceled: "
+                    f"{details.error_details or details.reason} ({details.code})"
+                )
+
         while True:
-            self._session_stopped_event.clear()
+            self._session_started_event = asyncio.Event()
+            self._session_stopped_event = asyncio.Event()
             self._cancellation_error = None
 
             self._stream = speechsdk.audio.PushAudioInputStream(
@@ -280,13 +310,16 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
             self._recognizer = _create_speech_recognizer(config=self._opts, stream=self._stream)
-            self._recognizer.recognizing.connect(self._on_recognizing)
-            self._recognizer.recognized.connect(self._on_recognized)
-            self._recognizer.speech_start_detected.connect(self._on_speech_start)
-            self._recognizer.speech_end_detected.connect(self._on_speech_end)
-            self._recognizer.session_started.connect(self._on_session_started)
-            self._recognizer.session_stopped.connect(self._on_session_stopped)
-            self._recognizer.canceled.connect(self._on_canceled)
+            for signal, callback in (
+                (self._recognizer.recognizing, self._on_recognizing),
+                (self._recognizer.recognized, self._on_recognized),
+                (self._recognizer.speech_start_detected, self._on_speech_start),
+                (self._recognizer.speech_end_detected, self._on_speech_end),
+                (self._recognizer.session_started, self._on_session_started),
+                (self._recognizer.session_stopped, self._on_session_stopped),
+                (self._recognizer.canceled, self._on_canceled),
+            ):
+                signal.connect(partial(self._dispatch_event, self._recognizer, callback))
             self._recognizer.start_continuous_recognition()
 
             try:
@@ -294,54 +327,23 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
 
-                async def process_input() -> None:
-                    async for input in self._input_ch:
-                        if isinstance(input, rtc.AudioFrame):
-                            self._audio_duration += input.duration
-                            self._maybe_emit_recognition_usage()
-                            self._stream.write(input.data.tobytes())
-                        elif isinstance(input, self._FlushSentinel):
-                            self._emit_recognition_usage()
-                    self._emit_recognition_usage()
+                drain_started.clear()
 
-                process_input_task = asyncio.create_task(process_input())
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
+                reconnect = await self._run_connection_tasks(
+                    asyncio.create_task(send()),
+                    asyncio.create_task(receive()),
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                )
+                if reconnect:
+                    self._reconnect_event.clear()
+                    self._stream.close()
+                    try:
+                        await asyncio.wait_for(receive(), self._conn_options.final_response_timeout)
+                    except asyncio.TimeoutError as e:
+                        raise APITimeoutError("Azure STT final response timed out") from e
 
-                input_ended = False
-                try:
-                    done, _ = await asyncio.wait(
-                        [process_input_task, wait_reconnect_task, wait_stopped_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task not in [wait_reconnect_task, wait_stopped_task]:
-                            task.result()
-
-                    if wait_stopped_task in done:
-                        if self._cancellation_error is not None:
-                            details = self._cancellation_error
-                            raise APIConnectionError(
-                                f"Azure STT canceled: "
-                                f"{details.error_details or details.reason} ({details.code})"
-                            )
-                        raise APIConnectionError("SpeechRecognition session stopped")
-
-                    # session-stopped is handled above, so the wait unblocked
-                    # either because input ended (process_input drained) or a
-                    # reconnect was requested; reset the event in the latter case
-                    input_ended = wait_reconnect_task not in done
-                    if not input_ended:
-                        self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
-
-                # close the push stream to flush finals for buffered audio before
-                # teardown, otherwise ending input truncates the transcript
-                self._stream.close()
-                await self._session_stopped_event.wait()
-
-                if input_ended:
+                if not reconnect:
                     break
             finally:
 
@@ -350,6 +352,16 @@ class SpeechStream(stt.SpeechStream):
                     del self._recognizer
 
                 await asyncio.to_thread(_cleanup)
+
+    def _dispatch_event(
+        self, recognizer: speechsdk.SpeechRecognizer, callback: Callable[[Any], None], evt: Any
+    ) -> None:
+        def dispatch() -> None:
+            if getattr(self, "_recognizer", None) is recognizer:
+                callback(evt)
+
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(dispatch)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         with contextlib.suppress(RuntimeError):

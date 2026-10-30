@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from collections.abc import Callable
 from typing import Any
@@ -15,7 +16,76 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference, vad
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
+from .stt_harness.discovery import provider_by_name
+
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("during_drain", [False, True])
+async def test_failed_item_does_not_drop_other_transcripts(monkeypatch, during_drain, caplog):
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio, wait_for_final
+
+    provider = provider_by_name("openai")
+
+    class FailedItem(provider.protocol):
+        async def send_transcript(self, result):
+            if not result.final or result.index != 0:
+                return await super().send_transcript(result)
+            peer = self.connection
+            await peer.acknowledge({"type": "input_audio_buffer.committed", "item_id": "item-0"})
+            peer.send(
+                {
+                    "type": "conversation.item.input_audio_transcription.failed",
+                    "item_id": "item-0",
+                    "content_index": 0,
+                    "error": {"code": "server_error", "message": "test transcription failed"},
+                },
+                final=True,
+            )
+
+    provider = dataclasses.replace(provider, protocol=FailedItem)
+    async with open_stream(provider, monkeypatch, max_retry=2) as (
+        stream,
+        collector,
+        server,
+        events,
+        errors,
+    ):
+        server.automatic_finals = True
+        if during_drain:
+            server.release_results.clear()
+        first, tail = make_audio_segments(provider)
+        push_audio(stream, provider, first)
+        if not during_drain:
+            stream.flush()
+            await asyncio.wait_for(server.wait_for_audio(len(first.audio)), 1)
+            await _wait_for(
+                "the failed item",
+                lambda: any("transcription failed" in record.message for record in caplog.records),
+            )
+            assert not collector.done()
+        push_audio(stream, provider, tail)
+        stream.end_input()
+        if during_drain:
+            await _wait_for(
+                "the end of input",
+                lambda: (
+                    bool(server.connections)
+                    and any(
+                        message.type == aiohttp.WSMsgType.TEXT
+                        and json.loads(message.data).get("type") == "input_audio_buffer.clear"
+                        for message in server.connections[0].messages
+                    )
+                ),
+            )
+            assert not collector.done()
+            server.release_results.set()
+        await asyncio.wait_for(collector, 1)
+        await wait_for_final(collector, events, tail.text)
+        assert not errors
+        assert len(server.connections) == 1
+        assert any("transcription failed" in record.message for record in caplog.records)
 
 
 class _FakeMessage:
@@ -830,3 +900,91 @@ async def test_file_transcription_language_override_applies_to_one_call() -> Non
     assert 'name="language"\r\n\r\nen' in second
     assert default.alternatives[0].language == "en"
     assert instance._opts.languages == ["en"]
+
+
+@pytest.mark.parametrize("empty_commit", [False, True])
+async def test_end_input_drains_all_items_after_clear_ack(empty_commit: bool) -> None:
+    instance = _offline_stt(use_realtime=True, model="gpt-4o-mini-transcribe")
+    stream = instance.stream()
+    ws = await _connected(stream)
+    try:
+        # Server VAD can commit a turn before the caller ends input.
+        ws.incoming.put_nowait({"type": "input_audio_buffer.committed", "item_id": "prior"})
+        stream.push_frame(_silence())
+        stream.end_input()
+        await _wait_for("the input barrier", lambda: bool(_of_type(ws, "input_audio_buffer.clear")))
+        commit = _of_type(ws, "input_audio_buffer.commit")[-1]
+        if empty_commit:
+            ws.incoming.put_nowait(
+                {
+                    "type": "error",
+                    "error": {
+                        "code": "input_audio_buffer_commit_empty",
+                        "event_id": commit["event_id"],
+                    },
+                }
+            )
+        else:
+            ws.incoming.put_nowait({"type": "input_audio_buffer.committed", "item_id": "last"})
+        ws.incoming.put_nowait({"type": "input_audio_buffer.cleared"})
+        await asyncio.sleep(0.01)
+        assert not stream._task.done(), "committed audio still needs a transcript"
+        if not empty_commit:
+            ws.incoming.put_nowait(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "last",
+                    "transcript": "last",
+                }
+            )
+            await asyncio.sleep(0.01)
+            assert not stream._task.done(), "transcripts can finish out of order"
+        ws.incoming.put_nowait(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": "prior",
+                "transcript": "prior",
+            }
+        )
+        await asyncio.wait_for(asyncio.shield(stream._task), 1)
+        texts = [
+            event.alternatives[0].text
+            async for event in stream
+            if event.type == SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert texts == (["prior"] if empty_commit else ["last", "prior"])
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
+@pytest.mark.parametrize("message", ["input_audio_buffer.commit", "input_audio_buffer.clear"])
+async def test_final_control_write_failure_is_retryable(message, monkeypatch):
+    from .stt_harness.fixtures import assert_control_write_failure
+
+    await assert_control_write_failure(
+        provider_by_name("openai").transport_fixture, monkeypatch, message, "end"
+    )
+
+
+async def test_remote_close_before_final_ack_is_an_error(monkeypatch):
+    from livekit.agents import APIError
+
+    from .stt_harness.fixtures import create_transport_fixture
+
+    _, instance, transport = create_transport_fixture(
+        provider_by_name("openai").transport_fixture, monkeypatch
+    )
+    stream = instance.stream(
+        conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    )
+    try:
+        stream.end_input()
+        await _wait_for("the socket", lambda: bool(transport.sockets))
+        await asyncio.sleep(0.01)
+        transport.sockets[0].server_close()
+        with pytest.raises(APIError):
+            await asyncio.wait_for(stream._task, 1)
+    finally:
+        await stream.aclose()
+        await instance.aclose()

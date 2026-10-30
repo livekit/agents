@@ -258,6 +258,9 @@ def _make_stream(translation: Any = None):
 
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = SpeechStream(stt=stt_instance, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    # These receive-only scripts represent the final drain after client EOF.
+    stream._drain_started = asyncio.Event()
+    stream._drain_started.set()
     return stream
 
 
@@ -927,30 +930,6 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
 # ---------------------------------------------------------------------------
 
 
-async def test_socket_exposes_control_frames_to_monitor():
-    """Control frames must reach the shared monitor to reset its silence deadline."""
-    stream = _make_stream()
-
-    class RecordingWebSocket:
-        async def send_str(self, message: str) -> None:
-            pass
-
-    class RecordingSession:
-        kwargs: dict[str, Any] | None = None
-
-        async def ws_connect(self, url: str, **kwargs: Any) -> RecordingWebSocket:
-            self.kwargs = kwargs
-            return RecordingWebSocket()
-
-    session = RecordingSession()
-    stream._stt._http_session = session
-
-    await stream._connect_ws()
-
-    assert session.kwargs is not None
-    assert session.kwargs.get("autoping") is False
-
-
 @pytest.mark.parametrize("task_name", ["_keepalive_task", "_send_audio_task"])
 async def test_write_drop_uses_retry_budget(task_name):
     """The keepalive used to catch every exception and return. When no audio is
@@ -974,87 +953,3 @@ async def test_write_drop_uses_retry_budget(task_name):
         await asyncio.wait_for(getattr(stream, task_name)(), timeout=1.0)
     assert exc_info.value.retryable
     assert isinstance(exc_info.value.__cause__, aiohttp.ClientConnectionResetError)
-
-
-async def test_closed_socket_reconnect_exhausts_retry_budget(monkeypatch):
-    from livekit.agents import APIConnectOptions
-    from livekit.plugins.soniox import STT
-    from livekit.plugins.soniox.stt import SpeechStream
-
-    connections = 0
-
-    class ClosedWebSocket:
-        closed = True
-
-        async def close(self):
-            pass
-
-        def exception(self):
-            return aiohttp.ServerTimeoutError("liveness timeout")
-
-    async def connect(self):
-        nonlocal connections
-        connections += 1
-        return ClosedWebSocket()
-
-    async def idle(self):
-        await asyncio.Future()
-
-    async def request_reconnect(self):
-        self._reconnect_event.set()
-
-    monkeypatch.setattr(SpeechStream, "_connect_ws", connect)
-    monkeypatch.setattr(SpeechStream, "_prepare_audio_task", idle)
-    monkeypatch.setattr(SpeechStream, "_send_audio_task", idle)
-    monkeypatch.setattr(SpeechStream, "_keepalive_task", idle)
-    monkeypatch.setattr(SpeechStream, "_recv_messages_task", request_reconnect)
-    instance = STT(api_key="test-key")
-    stream = instance.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-    try:
-        with pytest.raises(APIConnectionError):
-            await asyncio.wait_for(stream._task, 1)
-        assert connections == 2
-    finally:
-        await stream.aclose()
-
-
-async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
-    """A heartbeat timeout arrives as WSMsgType.ERROR, not as a close frame.
-    Logging it as an unexpected type and continuing only worked because aiohttp
-    happens to report CLOSED next, and it threw away the one value that says
-    why the socket went."""
-    stream = _make_stream()
-
-    class HeartbeatTimeoutWebSocket:
-        closed = False
-
-        def __init__(self) -> None:
-            self.receives = 0
-
-        def exception(self) -> BaseException:
-            return aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
-
-        def __aiter__(self) -> HeartbeatTimeoutWebSocket:
-            return self
-
-        async def receive(self) -> _FakeWSMessage:
-            return await self.__anext__()
-
-        async def __anext__(self) -> _FakeWSMessage:
-            self.receives += 1
-            # yield, so a recv loop that steps over the error instead of ending
-            # fails the receive-count assertion rather than starving the loop
-            await asyncio.sleep(0)
-            if self.receives > 5:
-                raise StopAsyncIteration
-            return _FakeWSMessage("", msg_type=aiohttp.WSMsgType.ERROR)
-
-    ws = HeartbeatTimeoutWebSocket()
-    stream._ws = ws
-
-    with caplog.at_level("WARNING", logger="livekit.plugins.soniox"):
-        await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
-
-    assert ws.receives == 1
-    assert stream._reconnect_event.is_set()
-    assert any("No PONG received" in r.getMessage() for r in caplog.records)

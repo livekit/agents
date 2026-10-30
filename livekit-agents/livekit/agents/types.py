@@ -153,6 +153,12 @@ class APIConnectOptions:
     Supported by streaming STT providers that use the framework WebSocket monitor.
     """
 
+    final_response_timeout: float = 10.0
+    """
+    Maximum time, in seconds, for streaming STT final responses after audio sending
+    finishes. This is independent of connection and transport liveness timeouts.
+    """
+
     def __post_init__(self) -> None:
         if self.max_retry < 0:
             raise ValueError("max_retry must be greater than or equal to 0")
@@ -162,6 +168,9 @@ class APIConnectOptions:
 
         if self.timeout < 0:
             raise ValueError("timeout must be greater than or equal to 0")
+
+        if not math.isfinite(self.final_response_timeout) or self.final_response_timeout <= 0:
+            raise ValueError("final_response_timeout must be a finite number greater than 0")
 
         if not math.isfinite(self.liveness_timeout) or self.liveness_timeout <= 0:
             raise ValueError("liveness_timeout must be a finite number greater than 0")

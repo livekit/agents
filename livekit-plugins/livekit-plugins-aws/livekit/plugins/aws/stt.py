@@ -25,6 +25,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -33,7 +34,6 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
-from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
@@ -237,13 +237,13 @@ class SpeechStream(stt.SpeechStream):
             await self._http_client.close()
 
     async def _run(self) -> None:
-        while True:
-            # a restarted attempt needs its own transport: the pooled HTTP/2 connection
-            # of the finished stream cannot carry a second StartStreamTranscription
-            if self._http_client is not None:
-                await self._http_client.close()
-            self._http_client = AWSCRTHTTPClient()
+        # a restarted attempt needs its own transport: the pooled HTTP/2 connection
+        # of the finished stream cannot carry a second StartStreamTranscription
+        if self._http_client is not None:
+            await self._http_client.close()
+        self._http_client = AWSCRTHTTPClient()
 
+        try:
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
                 # Use a credentials resolver for explicit credentials
@@ -325,101 +325,68 @@ class SpeechStream(stt.SpeechStream):
                 elif v is not None and is_given(v):
                     filtered_config[k] = v
 
-            tasks: list[asyncio.Task[Any]] = []
+            drain_started = asyncio.Event()
 
-            try:
-                stream = await client.start_stream_transcription(
-                    input=StartStreamTranscriptionInput(**filtered_config)
-                )
+            stream = await client.start_stream_transcription(
+                input=StartStreamTranscriptionInput(**filtered_config)
+            )
 
-                # Get the output stream
-                _, output_stream = await stream.await_output()
+            # Get the output stream
+            _, output_stream = await stream.await_output()
 
-                async def input_generator(
-                    audio_stream: EventPublisher[AudioStream],
-                ) -> None:
-                    try:
-                        async for frame in self._input_ch:
-                            if isinstance(frame, rtc.AudioFrame):
-                                await audio_stream.send(
-                                    AudioStreamAudioEvent(
-                                        value=AudioEvent(audio_chunk=frame.data.tobytes())
-                                    )
-                                )
-                                self._audio_duration += frame.duration
-                                self._maybe_emit_recognition_usage()
-                            elif isinstance(frame, self._FlushSentinel):
-                                self._emit_recognition_usage()
-                    finally:
-                        self._emit_recognition_usage()
-                        # Send empty frame to close (required by AWS Transcribe)
-                        try:
+            async def input_generator(
+                audio_stream: EventPublisher[AudioStream],
+            ) -> None:
+                try:
+                    async for frame in self._input_ch:
+                        if isinstance(frame, rtc.AudioFrame):
                             await audio_stream.send(
-                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                                AudioStreamAudioEvent(
+                                    value=AudioEvent(audio_chunk=frame.data.tobytes())
+                                )
                             )
-                        except Exception:
-                            pass
-                        finally:
-                            with contextlib.suppress(Exception):
-                                await audio_stream.close()
+                            self._audio_duration += frame.duration
+                            self._maybe_emit_recognition_usage()
+                        elif isinstance(frame, self._FlushSentinel):
+                            self._emit_recognition_usage()
+                finally:
+                    self._emit_recognition_usage()
+                # End the write side only after all queued audio was accepted.
+                drain_started.set()
+                try:
+                    await audio_stream.send(
+                        AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                    )
+                    await audio_stream.close()
+                except Exception as e:
+                    raise APIConnectionError("AWS Transcribe end-of-stream send failed") from e
 
-                async def handle_transcript_events(
-                    output_stream: EventReceiver[TranscriptResultStream],
-                ) -> None:
-                    try:
-                        async for event in output_stream:
-                            if isinstance(event.value, TranscriptEvent):
-                                self._process_transcript_event(event.value)
-                                self._mark_provider_progress()
-                    except BadRequestException as e:
-                        if (
-                            e.message
-                            and "complete signal was sent without the preceding empty frame"
-                            in e.message
-                        ):
-                            # This can happen during cancellation if the empty frame wasn't sent in time
-                            logger.warning(
-                                "AWS Transcribe stream closed with empty frame error (this is usually harmless)"
-                            )
-                        else:
-                            raise
-                    except concurrent.futures.InvalidStateError:
-                        logger.warning(
-                            "AWS Transcribe stream closed unexpectedly (InvalidStateError)"
-                        )
-                        pass
+            async def handle_transcript_events(
+                output_stream: EventReceiver[TranscriptResultStream],
+            ) -> None:
+                try:
+                    async for event in output_stream:
+                        if isinstance(event.value, TranscriptEvent):
+                            self._process_transcript_event(event.value)
+                            self._mark_provider_progress()
+                except concurrent.futures.InvalidStateError as e:
+                    raise APIConnectionError("AWS Transcribe output stream failed") from e
 
-                tasks = [
-                    asyncio.create_task(input_generator(stream.input_stream)),
-                    asyncio.create_task(handle_transcript_events(output_stream)),
-                ]
-                gather_future = asyncio.gather(*tasks)
-
-                await asyncio.shield(gather_future)
-            except BadRequestException as e:
-                if e.message and e.message.startswith("Your request timed out"):
-                    if self._input_ch.closed:
-                        return
-                    raise APIConnectionError("AWS Transcribe stream timed out") from e
-                else:
-                    raise e
-            finally:
-                if tasks:
-                    # Close input stream first
-                    await utils.aio.gracefully_cancel(tasks[0])
-
-                    # Wait for output stream to close cleanly
-                    try:
-                        await asyncio.wait_for(tasks[1], timeout=3.0)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        await utils.aio.gracefully_cancel(tasks[1])
-                    except BadRequestException:
-                        # Already handled above; preserve the retryable timeout error.
-                        pass
-
-                # Ensure gather future is retrieved to avoid "exception never retrieved"
-                with contextlib.suppress(Exception):
-                    await gather_future
+            await self._run_connection_tasks(
+                asyncio.create_task(input_generator(stream.input_stream)),
+                asyncio.create_task(handle_transcript_events(output_stream)),
+                drain_started=drain_started,
+            )
+        except BadRequestException as e:
+            if e.message and e.message.startswith("Your request timed out"):
+                raise APIConnectionError("AWS Transcribe stream timed out") from e
+            raise APIStatusError(
+                "AWS Transcribe rejected the stream", status_code=400, body=e.message
+            ) from None
+        finally:
+            if self._http_client is not None:
+                await self._http_client.close()
+                self._http_client = None
 
     def _maybe_emit_recognition_usage(self) -> None:
         if time.monotonic() - self._last_audio_duration_report_time >= 5.0:

@@ -90,6 +90,7 @@ class FakeSocket:
         self.pending_audio = bytearray()
         self.commits: list[bytes] = []
         self.closed = False
+        self.close_code = None
         self.emit({"type": "session.created", "session": {"id": "test-session"}})
 
     def emit(self, event: dict[str, object]) -> None:

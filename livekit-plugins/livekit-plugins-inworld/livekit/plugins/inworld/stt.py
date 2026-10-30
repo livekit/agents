@@ -20,7 +20,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any
 
 import aiohttp
 
@@ -227,6 +226,7 @@ class SpeechStream(stt.SpeechStream):
         self._stt: STT = stt
         self._language = language
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._drain_started = asyncio.Event()
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._request_id = ""
@@ -290,33 +290,20 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._ws = ws
+                self._drain_started.clear()
 
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                    reconnect=self._reconnect_event,
+                    drain_started=self._drain_started,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
 
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
-
+            except APIConnectionError:
+                raise
             except asyncio.TimeoutError as e:
                 logger.error(f"Timeout during Inworld STT connection: {e}")
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
@@ -343,11 +330,14 @@ class SpeechStream(stt.SpeechStream):
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
+                # closeStream finalizes the last turn itself.
+                if self._input_ch.closed and self._input_ch.empty():
+                    continue
                 try:
                     await self._ws.send_str(json.dumps({"endTurn": {}}))
                 except Exception as e:
                     logger.error(f"Error sending endTurn: {e}")
-                    break
+                    raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
             elif isinstance(data, rtc.AudioFrame):
                 self._audio_duration_collector.push(data.duration)
                 pcm_bytes = data.data.tobytes()
@@ -356,15 +346,16 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_str(json.dumps({"audioChunk": {"content": audio_b64}}))
                 except Exception as e:
                     logger.error(f"Error sending audio chunk: {e}")
-                    break
+                    raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
 
         self._audio_duration_collector.flush()
         # Input channel closed — tell the server to close the stream
         if self._ws:
+            self._drain_started.set()
             try:
                 await self._ws.send_str(json.dumps({"closeStream": {}}))
-            except Exception:
-                pass
+            except (aiohttp.ClientError, ConnectionError) as e:
+                raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
 
     def _on_audio_duration_report(self, duration: float) -> None:
         self._event_ch.send_nowait(
@@ -391,17 +382,12 @@ class SpeechStream(stt.SpeechStream):
                         continue
                     self._process_stream_event(data)
                     result = data.get("result", {})
+                    if self._drain_started.is_set() and "usage" in result:
+                        return
                     if "speechStarted" in result or "transcription" in result:
                         self._mark_provider_progress()
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    return
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Inworld STT WebSocket error: {self._ws.exception()}")
-                    return
+        except APIConnectionError:
+            raise
         except aiohttp.ClientError as e:
             logger.error(f"WebSocket error while receiving: {e}")
             raise
