@@ -8,9 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import httpx2 as httpx
+import pydantic
 import pytest
 from openai.types import Reasoning
 from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
@@ -651,3 +653,180 @@ async def test_completed_response_without_cache_write_reports_zero() -> None:
     )
 
     assert usage.cache_creation_tokens == 0
+
+
+# Models like gpt-6-luna can answer with a `commentary` message followed by a
+# `final_answer` message in one response. The shapes below are the ones observed.
+
+_STREAM_EVENT: pydantic.TypeAdapter[ResponseStreamEvent] = pydantic.TypeAdapter(ResponseStreamEvent)
+_QUESTION = "Got it. Please tell me about a project you have completed."
+_OTHER = "Thanks. What did you build?"
+
+
+def _message_item(item_id: str, phase: str | None, text: str = "") -> dict:
+    content = [{"type": "output_text", "text": text, "annotations": []}] if text else []
+    return {
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "phase": phase,
+        "content": content,
+    }
+
+
+def _message_frames(item_id: str, phase: str | None, text: str, output_index: int) -> list[dict]:
+    frames: list[dict] = [
+        {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": output_index,
+            "item": {**_message_item(item_id, phase), "status": "in_progress"},
+        }
+    ]
+    for i, word in enumerate(text.split(" ") if text else []):
+        frames.append(
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "delta": word if i == 0 else f" {word}",
+                "logprobs": [],
+            }
+        )
+    frames.append(
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 3,
+            "output_index": output_index,
+            "item": _message_item(item_id, phase, text),
+        }
+    )
+    return frames
+
+
+def _function_call_frames(output_index: int) -> list[dict]:
+    item = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "lookup",
+        "arguments": "{}",
+        "status": "completed",
+    }
+    return [
+        {
+            "type": "response.output_item.added",
+            "sequence_number": 4,
+            "output_index": output_index,
+            "item": {**item, "status": "in_progress"},
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 5,
+            "output_index": output_index,
+            "item": item,
+        },
+    ]
+
+
+_RESPONSE_COMPLETED = {
+    "type": "response.completed",
+    "sequence_number": 9,
+    "response": {**_RESPONSE_CREATED["response"], "status": "completed"},
+}
+
+
+async def _chunks_from_frames(
+    frames: list[dict], transport_kind: str
+) -> list[agents_llm.ChatChunk]:
+    frames = [_RESPONSE_CREATED, *frames, _RESPONSE_COMPLETED]
+    if transport_kind == "websocket":
+        llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+        llm_model._ws = _ReplayResponsesWS(frames)  # type: ignore[assignment]
+    else:
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        events = [_STREAM_EVENT.validate_python(frame) for frame in frames]
+        client.responses.create = AsyncMock(
+            side_effect=lambda **_kwargs: _ReplayHTTPStream(events)  # type: ignore[arg-type]
+        )
+        llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="I don't have any work experience.")
+
+    chunks: list[agents_llm.ChatChunk] = []
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=5.0)
+        ) as stream:
+            async for chunk in stream:
+                chunks.append(chunk)
+    finally:
+        await llm_model.aclose()
+    return chunks
+
+
+def _text(chunks: list[agents_llm.ChatChunk]) -> str:
+    return "".join(c.delta.content for c in chunks if c.delta is not None and c.delta.content)
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_commentary_repeated_as_final_answer_is_spoken_once(transport_kind: str) -> None:
+    frames = [
+        *_message_frames("msg_c", "commentary", _QUESTION, 0),
+        *_message_frames("msg_f", "final_answer", _QUESTION, 1),
+    ]
+    assert _text(await _chunks_from_frames(frames, transport_kind)) == _QUESTION
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_final_answer_replaces_different_commentary(transport_kind: str) -> None:
+    frames = [
+        *_message_frames("msg_c", "commentary", _QUESTION, 0),
+        *_message_frames("msg_f", "final_answer", _OTHER, 1),
+    ]
+    assert _text(await _chunks_from_frames(frames, transport_kind)) == _OTHER
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_commentary_is_spoken_when_final_answer_is_empty(transport_kind: str) -> None:
+    frames = [
+        *_message_frames("msg_c", "commentary", _QUESTION, 0),
+        *_message_frames("msg_f", "final_answer", "", 1),
+    ]
+    assert _text(await _chunks_from_frames(frames, transport_kind)) == _QUESTION
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_message_without_phase_is_unchanged(transport_kind: str) -> None:
+    frames = _message_frames("msg_1", None, _QUESTION, 0)
+    assert _text(await _chunks_from_frames(frames, transport_kind)) == _QUESTION
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_commentary_preamble_before_tool_call_is_spoken(transport_kind: str) -> None:
+    frames = [
+        *_message_frames("msg_c", "commentary", "Let me look that up.", 0),
+        *_function_call_frames(1),
+    ]
+    chunks = await _chunks_from_frames(frames, transport_kind)
+
+    tool_calls = [tc for c in chunks if c.delta for tc in c.delta.tool_calls]
+    assert _text(chunks) == "Let me look that up."
+    assert [tc.name for tc in tool_calls] == ["lookup"]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_final_answer_after_tool_call_replaces_commentary(transport_kind: str) -> None:
+    frames = [
+        *_message_frames("msg_c", "commentary", "I will check.", 0),
+        *_function_call_frames(1),
+        *_message_frames("msg_f", "final_answer", "I will check.", 2),
+    ]
+    chunks = await _chunks_from_frames(frames, transport_kind)
+
+    assert _text(chunks) == "I will check."
