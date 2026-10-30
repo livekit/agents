@@ -495,6 +495,7 @@ impl Driver {
             s.stt.as_ref().map(|r| r.id),
             s.vad.as_ref().map(|r| r.id),
             s.keyterms.as_ref().and_then(crate::keyterm_detection::KeytermSlot::resource),
+            self.input.video_instance,
             self.activity.rt_session.as_ref().map(|r| r.id),
             s.outputs.audio.as_ref().map(|r| r.id),
             s.outputs.transcription.as_ref().map(|r| r.id),

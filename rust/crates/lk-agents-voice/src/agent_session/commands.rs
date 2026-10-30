@@ -637,6 +637,7 @@ impl Command {
                 run.update.resources().collect()
             }
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
+            Command::Activity(ActivityCommand::SetVideoInput(Some(input))) => vec![*input],
             Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
                 handed(stt, |r| r.id),
