@@ -111,13 +111,28 @@ class _LLMOptions:
 class LLM(llm.LLM):
     """Responses API LLM routed through the LiveKit inference gateway.
 
-    With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled sockets, so
-    ``inference_class`` and the other upgrade headers are fixed per connection.
+    Credentials and gateway URL resolve the same way as ``inference.LLM``. REST is the
+    default. With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled
+    sockets, so ``inference_class`` and the other upgrade headers are fixed per connection.
+
+    Conversation state is client-side. The gateway strips ``previous_response_id`` and
+    forces ``store=false``, so every turn sends the full context.
+
+    Web search is the only hosted tool the gateway accepts. Any other hosted tool is
+    rejected with HTTP 400, or a ``gateway.error`` over WebSocket.
+
+    ``prompt_cache_options`` (including ``ttl``) is forwarded as given.
 
     Each read waits ``conn_options.timeout`` for the next event. REST streams get gateway
     keepalives while a model reasons silently; over WebSocket they are rolling out behind a
     gateway flag, so until then raise ``conn_options.timeout`` for models that reason silently
     for longer than it.
+
+    When a reply holds several message items, only the first one that emits text is
+    spoken. A later message that emits text joins the reply when the last spoken message
+    is ``commentary``, or when hosted tool calls, such as web search, completed since
+    that message; a run of hosted calls lets one message join. Every other message that
+    emits text is dropped. Function tool calls are always kept.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
