@@ -12,4 +12,17 @@ pip install livekit-plugins-simli
 
 ## Pre-requisites
 
-You'll need an API key from Simli. It can be set as an environment variable: `SIMLI_API_KEY`
+You'll need an API key and a face ID from Simli. The plugin doesn't read either from the environment, so pass them to `SimliConfig`, for example from an environment variable such as `SIMLI_API_KEY`:
+
+```python
+import os
+
+from livekit.plugins import simli
+
+avatar = simli.AvatarSession(
+    simli_config=simli.SimliConfig(
+        api_key=os.environ["SIMLI_API_KEY"],
+        face_id="<your-face-id>",
+    ),
+)
+```
