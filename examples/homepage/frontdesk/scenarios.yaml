@@ -181,3 +181,29 @@ scenarios:
         new_patient: false
         booked: false
         moved: false
+
+  - id: SCN_yWjZgtPHfVb7
+    label: Confirmation call, patient can make it
+    instructions: |
+      PERSONA: Taylor Smith, a patient on file, born March 14, 1988, answering the phone at home.
+      When Riley asks if this is Taylor, say "Yes, this is Taylor."
+      If asked for your date of birth, say "March 14th, 1988."
+      DO, IN ORDER:
+      1. When told about the appointment, say "Yes, that still works."
+      2. If asked whether there's anything for the doctor, say "No, nothing."
+      3. Say that's all and hang up.
+    agent_expectations: >
+      After Taylor says it's them, asks for the date of birth with a quick demo note that this is
+      a demo and any date will do, before going over the appointment. After the check, tells
+      Taylor about the knee pain follow-up with its day and time, and confirms it once Taylor says
+      it works. Replies are one or two short spoken sentences.
+    tags:
+      feature: confirmation-call
+    userdata:
+      direction: outbound
+      expected:
+        patient: Taylor Smith
+        born: "1988-03-14"
+        new_patient: false
+        booked: false
+        moved: false

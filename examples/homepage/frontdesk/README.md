@@ -10,8 +10,8 @@ records. The clinic, its patients, and its calendar are made up.
   their name, or registers them as a new patient. Then it books an appointment or moves one they
   already have.
 - **Outbound, confirmation call:** Riley calls a patient about their next appointment, verifies
-  them, and confirms it. It takes a note for the doctor, or moves the appointment if the time no
-  longer works.
+  them with a demo note that any date of birth will do, and confirms it. It takes a note for the
+  doctor, or moves the appointment if the time no longer works.
 
 The job metadata picks the call. `"direction": "outbound"` makes it the confirmation call, and
 `"dial"`, with `"trunk"` and `"from"`, rings a real phone. Otherwise the agent waits for someone to

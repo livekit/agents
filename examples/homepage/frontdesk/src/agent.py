@@ -53,6 +53,8 @@ hold_playout()
 @server.rtc_session(agent_name=AGENT_NAME, on_simulation_end=on_simulation_end)
 async def front_desk(ctx: JobContext) -> None:
     meta = json.loads(ctx.job.metadata or "{}")
+    if sim := ctx.simulation_context():
+        meta |= sim.userdata()
     outbound = meta.get("direction") == "outbound"
     ctx.log_context_fields = {
         "room": ctx.room.name,
