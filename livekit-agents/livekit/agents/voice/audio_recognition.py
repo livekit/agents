@@ -58,6 +58,9 @@ _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
 _STT_RECONNECT_INTERVAL = 0.5
+# A commit that already holds a final covering the pushed audio waits this long for a second final a
+# streaming STT may still emit for audio it accepted earlier, instead of the full transcript_timeout.
+_PARTIAL_FINAL_GRACE = 1.0
 
 
 @dataclass
@@ -316,6 +319,9 @@ class AudioRecognition:
         self._user_silence_ev.set()
 
         self._last_final_transcript_time: float | None = None
+        # Last frame pushed to STT: lets a commit tell a final that already covers the audio from one
+        # that predates speech the STT has not finalized yet.
+        self._last_audio_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
 
@@ -801,6 +807,7 @@ class AudioRecognition:
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
         self._sample_rate = frame.sample_rate
+        self._last_audio_time = time.time()
         if self._stt_pipeline is not None:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
@@ -1096,11 +1103,31 @@ class AudioRecognition:
 
         async def _commit_user_turn() -> None:
             can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
-            if (
+            # A final that already covers every frame pushed so far is very likely this turn's transcript,
+            # but not certainly: a streaming STT can still be decoding audio it already accepted and
+            # finalize it separately (one phrase finalized, the next still in flight). So the commit keeps
+            # waiting for a possible second final, just for a short grace window instead of the full
+            # transcript_timeout, which is what made an already-finalized turn stall for 10s.
+            final_covers_audio = (
+                self._last_final_transcript_time is not None
+                and not self._audio_interim_transcript
+                and (
+                    self._last_audio_time is None
+                    or self._last_audio_time <= self._last_final_transcript_time
+                )
+            )
+            # A manual-flush pipeline needs the explicit flush on every commit to keep its turn
+            # boundaries, so the shorter wait only applies to pipelines that finalize on their own.
+            # A final that predates audio already pushed is stale whatever its age, so it cannot
+            # take the fast path either: that case used to return immediately and drop the speech
+            # the STT had not transcribed yet.
+            last_final_at = self._last_final_transcript_time
+            flush_and_wait = (
                 can_flush
-                or self._last_final_transcript_time is None
-                or (time.time() - self._last_final_transcript_time > 0.5)
-            ):
+                or not final_covers_audio
+                or (last_final_at is not None and time.time() - last_final_at > 0.5)
+            )
+            if flush_and_wait:
                 self._final_transcript_received.clear()
 
                 if can_flush and self._stt_pipeline is not None:
@@ -1111,11 +1138,16 @@ class AudioRecognition:
                     for _ in range(num_frames):
                         self._push_audio(silence)
 
+                wait_timeout = (
+                    min(transcript_timeout, _PARTIAL_FINAL_GRACE)
+                    if final_covers_audio and not can_flush
+                    else transcript_timeout
+                )
                 # wait for the final transcript to be available
                 try:
                     await asyncio.wait_for(
                         self._final_transcript_received.wait(),
-                        timeout=transcript_timeout,
+                        timeout=wait_timeout,
                     )
                 except asyncio.TimeoutError:
                     if self._audio_interim_transcript:

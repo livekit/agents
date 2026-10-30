@@ -1765,6 +1765,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             transcript_timeout (float, optional): The timeout for the final transcript
                 to be received after committing the user turn.
                 Default ``2.0`` s. Increase this value if the STT is slow to respond.
+                An upper bound rather than a fixed wait: when the final already covers all the
+                audio pushed so far, the commit waits at most one second for a second final.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
                 to flush the buffer and generate the final transcript when audio input is
                 detached and STT does not support manual flushing. STT with manual flush
