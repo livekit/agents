@@ -231,8 +231,11 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -259,6 +262,8 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     logger.exception("failed to parse Cartesia STT message")
                 else:
                     self._process_stream_event(data)
+                    if data["type"] == "transcript":
+                        self._mark_provider_progress()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -322,6 +327,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                         API_AUTH_HEADER: self._api_key,
                         "User-Agent": USER_AGENT,
                     },
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
