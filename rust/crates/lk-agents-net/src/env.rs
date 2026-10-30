@@ -1,12 +1,11 @@
 //! What the hosting process lends the async crates' clients: its Tokio runtime,
-//! the executor its host awaits on, the host's clock, its connection pool and image preparation,
-//! as one [`ProcessEnv`] value. Internal constructors take the handles they need;
+//! the executor its host awaits on, the host's clock and its connection pool, as one
+//! [`ProcessEnv`] value. Internal constructors take the handles they need;
 //! a class the host constructs receives the runtime's value from the generated bindings.
 
 use std::sync::Arc;
 
-use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
-use lk_agents_abi::{Clock, ImageContent, Spawner};
+use lk_agents_abi::{Clock, Spawner};
 
 use crate::http::GatewayHttp;
 
@@ -24,8 +23,6 @@ pub struct ProcessEnv {
     pub clock: Arc<dyn Clock>,
     /// The process's shared connection pool.
     pub http: fn() -> Result<Arc<GatewayHttp>, String>,
-    /// How a request's images are prepared for a provider.
-    pub images: Arc<dyn ImageResolver + Send + Sync>,
 }
 
 impl ProcessEnv {
@@ -36,7 +33,7 @@ impl ProcessEnv {
 
     /// A Rust caller with no host: the caller's Tokio runtime, the wall clock, a connection pool
     /// per client (a pool's connections belong to the runtime that opened them, and the
-    /// caller's runtime may not outlive the client), and no image preparation.
+    /// caller's runtime may not outlive the client).
     pub fn current_runtime() -> Self {
         fn runtime() -> Result<tokio::runtime::Handle, String> {
             tokio::runtime::Handle::try_current().map_err(|error| error.to_string())
@@ -46,16 +43,6 @@ impl ProcessEnv {
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
             clock: Arc::new(crate::clock::RealClock::new()),
             http: || GatewayHttp::new().map(Arc::new),
-            images: Arc::new(NoImagePreparation),
         }
-    }
-}
-
-/// No image preparation: every image is refused.
-pub struct NoImagePreparation;
-
-impl ImageResolver for NoImagePreparation {
-    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
-        Err(format!("image {}: no image preparation in this process", image.id))
     }
 }

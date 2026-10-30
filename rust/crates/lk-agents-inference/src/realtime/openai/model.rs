@@ -128,7 +128,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_net::clock::RealClock::default()),
-            env.images.clone(),
+            crate::images::resolver(),
             lk_agents_media::pool::media_pool(),
         )
         .with_options(opts, turn_detection_given)

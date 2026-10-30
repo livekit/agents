@@ -103,13 +103,13 @@ on the runtime. It is a plain struct:
 | `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
 | `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
 | `http` | The shared HTTP pool |
-| `images` | Image preparation and encoding |
 
 Process-wide resources that need no runtime are owned by the crate whose work
 they bound, made on first use in each process (a forked child makes its own):
 the media pool (`lk_agents_media::pool::media_pool()`), the blocking I/O pool
 (`lk_agents_net::blocking_io::blocking_io()`) and the session report admission
-(`ReportAdmission::process()`). Both pools are instances of one primitive, media's
+(`ReportAdmission::process()`). Image preparation is inference's: the host
+installs its frame reader there (`_core_install_frame_reader`). Both pools are instances of one primitive, media's
 `Pool`: plain threads that start on demand and exit when idle, with synchronous
 admission per class. The media pool runs codec, recording, image and model work;
 the blocking I/O pool (four threads) runs name resolution, file access and

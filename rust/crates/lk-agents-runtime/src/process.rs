@@ -1,9 +1,7 @@
 //! The process-wide Tokio runtime, started on first use and never at import: `fork()` copies only
 //! the calling thread, so a runtime inherited across a fork has no workers. The process records
-//! its owner and refuses to serve another. The host's ports (its time and frame reader) are
-//! installed here once.
+//! its owner and refuses to serve another.
 
-use lk_agents_abi::media::images::FrameReader;
 use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 
@@ -25,18 +23,15 @@ struct Started {
     http: Arc<lk_agents_net::http::GatewayHttp>,
 }
 
-/// What the process holds: the runtime once started, and the host's ports handed to it at init.
-/// The ports outlive a fork: the host objects are the child's too.
+/// What the process holds: the runtime once started, and its owner.
 struct State {
     started: Option<Started>,
-    /// The host's frame reader, installed once as the host starts.
-    frames: Option<Arc<dyn FrameReader>>,
     /// The process that declared itself the core's (`_core.init`, else its first entry or the
     /// runtime's start): the runtime, when started, is this process's.
     owner: Option<u32>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, owner: None });
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, owner: None });
 
 fn state() -> lk_agents_net::lock::MutexGuard<'static, State> {
     PROCESS.lock()
@@ -121,28 +116,6 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         spawner: host_spawner,
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
-        images: images(),
-    }
-}
-
-/// Image preparation with the host's frame reader, once the host installed one.
-#[cfg(feature = "media-images")]
-fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    Arc::new(lk_agents_media::images::Images::new(state().frames.clone()))
-}
-
-#[cfg(not(feature = "media-images"))]
-fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    Arc::new(lk_agents_net::env::NoImagePreparation)
-}
-
-/// The process the runtime owns: its host ports.
-pub struct Process;
-
-impl lk_agents_abi::media::images::FrameReaderInstall for Process {
-    /// The first one installed stays.
-    fn install_frame_reader(reader: Arc<dyn FrameReader>) {
-        state().frames.get_or_insert(reader);
     }
 }
 

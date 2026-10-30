@@ -1,7 +1,7 @@
-//! The declared image functions: provider images prepared on the injected media pool by the
-//! process's image preparation (`ProcessEnv::images`).
+//! The declared image functions: provider images prepared on the media pool, host frames read
+//! through the frame reader the host installs.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use lk_agents_abi::MediaRef;
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageError, ImageInput, PreparedImage};
@@ -9,15 +9,49 @@ use lk_agents_abi::media::images::{ImageEncodeOptions, ImageError, ImageInput, P
 use lk_agents_media::pool::{JobClass, MediaPool};
 
 use lk_agents_abi::llm::provider_format::ImageResolver;
+use lk_agents_abi::media::images::FrameReader;
 use lk_agents_net::env::ProcessEnv;
 
 pub struct ImageFunctions;
+
+/// The host's frame reader, installed once as the host starts.
+static FRAME_READER: OnceLock<Arc<dyn FrameReader>> = OnceLock::new();
+
+impl lk_agents_abi::media::images::FrameReaderInstall for ImageFunctions {
+    /// The first one installed stays.
+    fn install_frame_reader(reader: Arc<dyn FrameReader>) {
+        let _ = FRAME_READER.set(reader);
+    }
+}
+
+/// How this process prepares a request's images: media's preparation with the host's frame
+/// reader, or none in a build without image support.
+pub fn resolver() -> Arc<dyn ImageResolver + Send + Sync> {
+    #[cfg(feature = "images")]
+    return Arc::new(lk_agents_media::images::Images::new(FRAME_READER.get().cloned()));
+    #[cfg(not(feature = "images"))]
+    Arc::new(NoImagePreparation)
+}
+
+/// No image preparation: every image is refused.
+#[cfg(not(feature = "images"))]
+struct NoImagePreparation;
+
+#[cfg(not(feature = "images"))]
+impl ImageResolver for NoImagePreparation {
+    fn resolve(
+        &self,
+        image: &lk_agents_abi::ImageContent,
+    ) -> Result<lk_agents_abi::llm::provider_format::SerializedImage, String> {
+        Err(format!("image {}: no image preparation in this build", image.id))
+    }
+}
 
 impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     type Env = ProcessEnv;
 
     async fn encode_image(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         frame: MediaRef,
         format: String,
         quality: Option<u8>,
@@ -27,12 +61,12 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     ) -> Result<Vec<u8>, ImageError> {
         let options =
             ImageEncodeOptions { format, quality, resize_width, resize_height, resize_strategy };
-        let prepared = prepare(env, ImageInput::HostFrame(frame), options).await?;
+        let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
         prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))
     }
 
     async fn serialize_image_frame(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         frame: MediaRef,
         inference_width: Option<u32>,
         inference_height: Option<u32>,
@@ -45,27 +79,26 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
             resize_height: resize.map(|(_, h)| h),
             resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
         };
-        let prepared = prepare(env, ImageInput::HostFrame(frame), options).await?;
+        let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
         let bytes =
             prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))?;
         Ok((bytes, "image/jpeg".into()))
     }
 
     async fn serialize_image_url(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         url: String,
         mime_type: Option<String>,
     ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError> {
-        prepare(env, ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await
+        prepare(ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await
     }
 }
 
 async fn prepare(
-    env: &ProcessEnv,
     input: ImageInput,
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, ImageError> {
-    prepare_on(&lk_agents_media::pool::media_pool(), env.images.clone(), input, options)
+    prepare_on(&lk_agents_media::pool::media_pool(), resolver(), input, options)
         .await
         .map_err(ImageError)
 }
@@ -84,7 +117,7 @@ pub async fn prepare_on(
         .map_err(|e| e.to_string())?
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "images"))]
 mod tests {
     use std::time::Duration;
 
