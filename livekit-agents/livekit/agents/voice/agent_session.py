@@ -2077,7 +2077,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async for frame in audio_input:
-            if self._activity is not None:
+            if self._activity is not None and self.input.audio_enabled:
                 self._activity.push_audio(frame)
 
     @utils.log_exceptions(logger=logger)
@@ -2323,6 +2323,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_audio_enabled_changed(self, enabled: bool) -> None:
         """End user speaking state when audio is disabled by default."""
+        if self._activity is not None:
+            self._activity._sync_input_silence()
+
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
                 self._activity.on_end_of_speech(None)
@@ -2419,6 +2422,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_audio_input_changed(self) -> None:
+        if self._activity is not None:
+            self._activity._sync_input_silence()
+
         if not self._started:
             return
 
