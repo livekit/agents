@@ -144,6 +144,10 @@ class _WavState(enum.IntEnum):
     STREAMING = 4
 
 
+class _UnsupportedWavFormat(ValueError):
+    """A WAV encoding that requires PyAV rather than the inline PCM16 decoder."""
+
+
 class _WavInlineDecoder:
     """Incremental WAV decoder that runs entirely on the event loop (no thread).
 
@@ -284,12 +288,12 @@ class _WavInlineDecoder:
         if len(fmt) >= 16:
             bits_per_sample = struct.unpack("<H", fmt[14:16])[0]
             if bits_per_sample != 16:
-                raise ValueError(
+                raise _UnsupportedWavFormat(
                     f"Unsupported WAV bits per sample: {bits_per_sample}"
                     " (only 16-bit PCM supported)"
                 )
         if audio_format != 1:
-            raise ValueError(f"Unsupported WAV audio format: {audio_format}")
+            raise _UnsupportedWavFormat(f"Unsupported WAV audio format: {audio_format}")
 
         self._wave_channels = channels
         self._wave_rate = rate
@@ -370,21 +374,46 @@ class AudioStreamDecoder:
 
         # lazy-initialized only for WAV
         self._wav_decoder: _WavInlineDecoder | None = None
+        # Retain the initial header until inline decoding is selected, so PyAV
+        # can replay it if the WAV uses another sample encoding.
+        self._wav_header: bytearray | None = bytearray() if self._is_wav else None
 
     def push(self, chunk: bytes) -> None:
+        if self._closed:
+            return
         if self._is_wav:
             if self._wav_decoder is None:
                 self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
+            if self._wav_header is not None:
+                self._wav_header.extend(chunk)
             try:
                 self._wav_decoder.push(chunk)
+            except _UnsupportedWavFormat:
+                if self._wav_header is None:
+                    logger.exception("error decoding WAV audio")
+                    self._output_ch.close()
+                    self._closed = True
+                    return
             except Exception:
                 if not self._closed:
                     logger.exception("error decoding WAV audio")
                     self._output_ch.close()
                     self._closed = True
                 return
-            self._started = True
-            return
+            else:
+                if self._wav_decoder._state == _WavState.STREAMING:
+                    self._wav_header = None
+                # Bound header replay storage for large metadata chunks.
+                if self._wav_header is None or len(self._wav_header) <= 65536:
+                    self._started = True
+                    return
+
+            assert self._wav_header is not None
+            chunk = bytes(self._wav_header)
+            self._wav_header = None
+            self._wav_decoder = None
+            self._is_wav = False
+            self._started = False
 
         if self._input_buf is None:
             self._input_buf = StreamBuffer()
