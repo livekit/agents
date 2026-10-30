@@ -107,6 +107,7 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/media/images.rs",
     "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
     "rust/crates/lk-agents-abi/src/telemetry/policy.rs",
+    "rust/crates/lk-agents-abi/src/voice/session.rs",
 ];
 
 /// The authoritative v2 Python project. Generation must not recreate the retired v1 package.
@@ -370,7 +371,9 @@ fn unlisted_exports(root: &Path) -> Result<(), String> {
         }
         let Ok(text) = std::fs::read_to_string(root.join(path)) else { continue };
         let exports = text.lines().map(str::trim_start).any(|l| {
-            l.starts_with("#[") && ["host(export", "host(object("].iter().any(|h| l.contains(h))
+            // A declared exception (`error(.., declare = "..")`) is a `_core` class too.
+            l.starts_with("#[")
+                && ["host(export", "host(object(", "declare = "].iter().any(|h| l.contains(h))
         });
         if exports {
             unlisted.push(path);

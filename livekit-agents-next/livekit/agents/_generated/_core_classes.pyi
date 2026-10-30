@@ -276,3 +276,7 @@ class ChatRequest:
 
 class StaleHandle(RuntimeError):
     """A handle whose originating host no longer owns a live entry."""
+
+
+class SessionClosing(RuntimeError):
+    """`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing."""

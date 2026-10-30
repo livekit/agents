@@ -62,6 +62,7 @@ from ._generated._core_classes import (
     GetSecurityCodeResult as GetSecurityCodeResult,
     PlaybackInfo as PlaybackInfo,
     RoomEventBus as RoomEventBus,
+    SessionClosing as SessionClosing,
     StaleHandle as StaleHandle,
     StreamBytesOptions as StreamBytesOptions,
     StreamTextOptions as StreamTextOptions,
