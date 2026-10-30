@@ -77,6 +77,7 @@ class STTOptions:
     dictation: bool = False
     replace: dict[str, str] | None = None
     search: list[str] | None = None
+    language_hint: list[str] = dataclasses.field(default_factory=list)
 
 
 class STT(stt.STT):
@@ -98,6 +99,7 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
         redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -132,6 +134,10 @@ class STT(stt.STT):
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
                      `keyterm` is only supported by Nova-3 models.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
+            language_hint: List of str of language hints to bias Nova-3 toward particular
+                     languages. Applies only to "nova-3" and "nova-3-general" in
+                     `language="multi"`, Deepgram's multilingual mode; Deepgram rejects a hint
+                     sent for any other model or language. Defaults to NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
             redact: Redact sensitive information from the transcription. Accepts a single value or
                 list of values. Supported values: "pci", "numbers", "ssn", "true" (redact all).
@@ -213,6 +219,7 @@ class STT(stt.STT):
             mip_opt_out=mip_opt_out,
             vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
+            language_hint=language_hint if is_given(language_hint) else [],
             endpoint_url=base_url,
             utterance_end_ms=utterance_end_ms,
             dictation=dictation,
@@ -224,6 +231,8 @@ class STT(stt.STT):
         self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+        # one warning per instance: every batch request rebuilds its config
+        self._language_hint_warned = False
 
     @property
     def model(self) -> str:
@@ -267,6 +276,13 @@ class STT(stt.STT):
 
         if config.language:
             recognize_config["language"] = config.language
+
+        if self._opts.language_hint:
+            if _language_hint_applies(config.model, config.language):
+                recognize_config["language_hint"] = self._opts.language_hint
+            elif not self._language_hint_warned:
+                self._language_hint_warned = True
+                _warn_language_hint_not_sent(config.model, config.language)
 
         try:
             async with self._ensure_session().post(
@@ -339,6 +355,7 @@ class STT(stt.STT):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
         dictation: NotGivenOr[bool] = NOT_GIVEN,
@@ -367,6 +384,7 @@ class STT(stt.STT):
             self._opts.endpointing_ms = endpointing_ms
         if is_given(enable_diarization):
             self._opts.enable_diarization = enable_diarization
+            self._capabilities.diarization = enable_diarization
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -392,6 +410,8 @@ class STT(stt.STT):
             self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(utterance_end_ms):
@@ -413,6 +433,7 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 no_delay=no_delay,
                 endpointing_ms=endpointing_ms,
+                enable_diarization=enable_diarization,
                 filler_words=filler_words,
                 keywords=keywords,
                 keyterm=keyterm,
@@ -421,6 +442,8 @@ class STT(stt.STT):
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
+                language_hint=language_hint,
+                tags=tags,
                 endpoint_url=endpoint_url,
                 utterance_end_ms=utterance_end_ms,
                 dictation=dictation,
@@ -490,6 +513,8 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
         self._pending_keyterm: list[str] | None = None
+        # one warning per stream: a reconnect rebuilds the connect config
+        self._language_hint_warned = False
 
         # Track how much duration has already been reported so we can emit
         # the connection-lifetime remainder on close, matching what Deepgram
@@ -518,6 +543,7 @@ class SpeechStream(stt.SpeechStream):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
         dictation: NotGivenOr[bool] = NOT_GIVEN,
@@ -570,6 +596,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(utterance_end_ms):
@@ -658,8 +686,11 @@ class SpeechStream(stt.SpeechStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -681,9 +712,7 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws or self._session.closed:
                         return
 
-                    # the heartbeat closes the socket when a ping goes unanswered,
-                    # and that surfaces here rather than as a close frame.
-                    # ws.exception() is the only place the reason survives.
+                    # Preserve the underlying transport error.
                     raise APIConnectionError("deepgram connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -691,7 +720,10 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in ("SpeechStarted", "Results", "UtteranceEnd"):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process deepgram message")
 
@@ -783,6 +815,12 @@ class SpeechStream(stt.SpeechStream):
             live_config["redact"] = self._opts.redact
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
+        if self._opts.language_hint:
+            if _language_hint_applies(self._opts.model, self._opts.language):
+                live_config["language_hint"] = self._opts.language_hint
+            elif not self._language_hint_warned:
+                self._language_hint_warned = True
+                _warn_language_hint_not_sent(self._opts.model, self._opts.language)
 
         t0 = time.perf_counter()
         try:
@@ -794,7 +832,7 @@ class SpeechStream(stt.SpeechStream):
                     # connection, no FIN/RST) is never noticed: recv_task parks on
                     # ws.receive() forever and the reconnect loop below, which is
                     # exception-driven, never runs. matches stt_v2.
-                    heartbeat=30.0,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -1039,6 +1077,37 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
+
+
+# Mirrors the gateway's gate (livekit/agent-gateway#1741): a hint applies only to Nova-3's
+# multilingual mode, and only to these provider model ids, so a model added to the catalog
+# for billing does not silently start taking hints.
+_NOVA3_LANGUAGE_HINT_MODELS = frozenset({"nova-3", "nova-3-general"})
+
+
+def _language_hint_applies(model: DeepgramModels | str, language: LanguageCode | None) -> bool:
+    """Whether Deepgram takes a `language_hint` under this model and language.
+
+    A hint applies only to Nova-3's multilingual mode (`language=multi`), the same gate
+    the gateway applies: Deepgram fails the session with anything else, so the caller of
+    this predicate leaves the hint off the wire instead of failing the connection.
+    """
+    if language is None or str(language).strip().lower() != "multi":
+        return False
+    return str(model).strip().lower() in _NOVA3_LANGUAGE_HINT_MODELS
+
+
+def _warn_language_hint_not_sent(
+    model: DeepgramModels | str, language: LanguageCode | None
+) -> None:
+    logger.warning(
+        "not sending `language_hint` for model '%s': Deepgram applies a hint only to "
+        "Nova-3 (nova-3, nova-3-general) in 'multi' language mode, and this "
+        "session's language is '%s'. The hint stays set, and is sent again if "
+        "model and language allow it",
+        model,
+        language if language else "unset",
+    )
 
 
 def _validate_keyterm(

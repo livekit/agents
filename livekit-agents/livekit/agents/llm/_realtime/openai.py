@@ -90,7 +90,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.agents.voice.generation import remove_instructions
 
 from .openai_types import RealtimeModels
@@ -99,6 +99,7 @@ from .openai_utils import (
     AZURE_DEFAULT_TURN_DETECTION,
     DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
     DEFAULT_MAX_SESSION_DURATION,
+    _ItemIdMap,
     calculate_confidence_from_logprobs,
     livekit_item_to_openai_item,
     openai_item_to_livekit_item,
@@ -127,7 +128,7 @@ NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # Azure OpenAI Realtime API uses old-style (beta) event names.
 # This mapping normalizes them to the current OpenAI GA event names
@@ -292,6 +293,7 @@ class _DiscardedGeneration:
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
+        "credit_balance_exhausted",
         "invalid_api_key",
         "account_deactivated",
         "billing_hard_limit_reached",
@@ -300,8 +302,12 @@ _FATAL_ERROR_CODES = frozenset(
 
 
 def _is_fatal_error(error: object | None) -> bool:
-    code = getattr(error, "code", None) or getattr(error, "type", None)
-    return isinstance(code, str) and code in _FATAL_ERROR_CODES
+    # match either field: OpenAI has changed the code while keeping the type (#7805)
+    code = getattr(error, "code", None)
+    type_ = getattr(error, "type", None)
+    return (isinstance(code, str) and code in _FATAL_ERROR_CODES) or (
+        isinstance(type_, str) and type_ in _FATAL_ERROR_CODES
+    )
 
 
 _TranscriptionUsage = UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration
@@ -935,6 +941,7 @@ class RealtimeSession(
         # the in-flight chat ctx events already sent, by event id, so a reconnection can send
         # again the ones the lost connection never confirmed
         self._sent_chat_ctx_events: dict[str, dict[str, Any]] = {}
+        self._item_ids = _ItemIdMap()
 
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
@@ -1023,6 +1030,7 @@ class RealtimeSession(
 
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(ev)
+                    self._item_ids.shorten(ev)
 
                     self.emit("openai_client_event_queued", ev)
                     await ws_conn.send_str(json.dumps(ev))
@@ -1153,6 +1161,7 @@ class RealtimeSession(
                     # the new API uses "output_text" for assistant content.
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(msg)
+                    self._item_ids.shorten(msg)
 
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
@@ -1201,6 +1210,7 @@ class RealtimeSession(
                     normalized = _AZURE_EVENT_MAPPING.get(event_type)
                     if normalized is not None:
                         event["type"] = normalized
+                self._item_ids.restore(event)
 
                 # emit the raw json dictionary instead of the BaseModel because different
                 # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
@@ -1954,8 +1964,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "message":
             item_generation = _MessageGeneration(
@@ -1982,8 +1994,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item_id) is not None, "item_id is None"
-        assert (item_type := event.part.type) is not None, "part.type is None"
+        item_id = event.item_id
+        assert item_id is not None, "item_id is None"
+        item_type = event.part.type
+        assert item_type is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
             logger.warning(
@@ -2243,8 +2257,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall

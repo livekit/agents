@@ -293,8 +293,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -321,6 +324,14 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     logger.exception("failed to parse Cartesia STT message")
                 else:
                     self._process_stream_event(data)
+                    if data["type"] in (
+                        "turn.start",
+                        "turn.update",
+                        "turn.eager_end",
+                        "turn.resume",
+                        "turn.end",
+                    ):
+                        self._mark_provider_progress()
 
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh. Without this, stale
@@ -398,6 +409,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                         API_AUTH_HEADER: self._api_key,
                         "User-Agent": USER_AGENT,
                     },
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -494,7 +506,8 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
         if data["type"] == "turn.resume":
             # turn.resume has no transcript; re-emit the most recent cumulative
-            # transcript as an interim so the pipeline cancels the preflight.
+            # transcript as an interim. it matches the preflight, so the pipeline keeps the
+            # preemptive generation until a turn.update moves the transcript past it.
             if not self._speaking or not self._current_transcript:
                 return
             self._send_transcript_event(
