@@ -40,6 +40,7 @@ mod llm;
 mod nodes;
 mod output;
 pub mod realtime;
+mod storage;
 mod stt;
 pub(crate) mod tools;
 mod tts;
@@ -56,6 +57,7 @@ pub use output::{
     HALF, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, ServerSetup, Vad as RealtimeVad};
+pub use storage::FakeVoiceStorage;
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::{FakeTts, MS_PER_WORD};

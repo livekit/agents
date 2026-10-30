@@ -37,6 +37,7 @@ mod host_interrupt_lands_on_every_end;
 mod idle_after_untranscribed_turn;
 mod idle_while_closing;
 mod input_required_tool_takes_the_answer;
+mod lane_lost_call_goes_on;
 mod late_leg_open_closed;
 mod late_mic_released;
 mod late_verdict_pause_resumes;

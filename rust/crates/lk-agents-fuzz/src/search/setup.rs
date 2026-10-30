@@ -101,6 +101,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         agent_aligned_transcript: None,
         tools_refuse_cancel: false,
         stray: 0.0,
+        storage_lost_at: None,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -192,5 +193,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.agent_aligned_transcript = said(rng);
     // Drawn last: one setup in ten has tool bodies that refuse their cancellation.
     setup.tools_refuse_cancel = rng.u8(0..100) < 10;
+    // Drawn last: one setup in ten stores its lane and loses the lease at one of its first answers.
+    setup.storage_lost_at = (rng.u8(0..100) < 10).then(|| rng.u32(1..6));
     setup
 }

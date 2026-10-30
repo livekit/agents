@@ -239,6 +239,9 @@ pub struct Setup {
     /// The share of provider delays that stray from the measured ones to a deadline or a stall
     /// (`fakes::delay`): the search's randomness, so a pure conversation keeps real timings.
     pub stray: f64,
+    /// The voice lane is stored, its lease lost at this storage answer (the n-th turn committed or
+    /// abandoned); `None` runs the session without storage, as most do.
+    pub storage_lost_at: Option<u32>,
 }
 
 /// The pre-connect buffer wait the room's legs run with: shorter than the half second of frames
@@ -490,6 +493,7 @@ impl Default for Setup {
             chunked_tts: false,
             tools_refuse_cancel: false,
             stray: 0.0,
+            storage_lost_at: None,
         }
     }
 }
