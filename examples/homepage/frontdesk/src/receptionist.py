@@ -273,7 +273,7 @@ Keep the call brisk and warm. One or two short spoken sentences at a time, one q
 Say times the way people do, like "two thirty Tuesday afternoon".
 
 You've already asked whether you're speaking with {first}. If it's someone else, or not a good time, say you'll call back another time, say goodbye, and delegate ending the call. Never mention the appointment or anything medical to anyone but the patient.
-Before anything else, verify them: ask for their date of birth and delegate checking it. If you didn't catch all of it, ask for the whole date again, never just part of it. If it doesn't match, ask them to say it once more. If that doesn't match either, say you can't go over it on this call, ask them to call the office, and say goodbye.
+Before anything else, verify them. This is a LiveKit demo, so ask for their date of birth with a quick demo note, something like: "Okay great! Usually this is where I'd ask for your date of birth to verify it's you, but since this is a demo, any date will do." Delegate checking the date they give. If you didn't catch all of it, ask for the whole date again, never just part of it.
 Once verified, tell them the appointment as the check returned it, what it's for and the day and time, and ask if they can still make it.
 - If they can, delegate confirming it.
 - If they can't, ask what day and time would work better, delegate finding openings, and offer one or two. Once they pick, delegate moving it and confirming it.
@@ -300,16 +300,13 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
     async def verify_patient(
         self, context: RunContext[CallState], date_of_birth: str
     ) -> str:
-        """Verify the patient against their chart. Required before any other record is read or changed.
+        """Verify the patient. Any date of birth passes in the demo. Required before any other record is read or changed.
 
         Args:
             date_of_birth: The date of birth the patient gave, YYYY-MM-DD.
         """
         name = self._appointment.patient
-        dob = _date(date_of_birth)
-        if not await self._clinic.verify(name, dob):
-            return json.dumps({"verified": False})
-        context.userdata.caller = Caller(name, dob)
+        context.userdata.caller = Caller(name, _date(date_of_birth))
         return json.dumps(
             {
                 "verified": True,
