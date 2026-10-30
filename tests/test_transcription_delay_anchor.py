@@ -309,6 +309,23 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
 
 
 @both_modes
+async def test_untimed_eos_does_not_inherit_an_earlier_segment_final(mode: str) -> None:
+    """A final can stabilize a segment while the utterance continues."""
+    now = time.time()
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0, mode=mode)
+    await ar._on_stt_event(_final_transcript(end_time=9.0))
+    assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
+
+    before_eos = time.time()
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
+    if mode == "stt":
+        assert before_eos <= ar._last_speaking_time <= time.time()
+    else:
+        assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
+
+
+@both_modes
 async def test_wired_vad_speaking_state_reaches_the_transcript_hooks(mode: str) -> None:
     """``speaking is False`` on the transcript hooks is what arms the
     false-interruption resume timer (see ``on_final_transcript`` in

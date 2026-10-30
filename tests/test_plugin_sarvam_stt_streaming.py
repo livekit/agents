@@ -1670,6 +1670,49 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
 
 
 @pytest.mark.asyncio
+async def test_manual_eos_precedes_final_received_during_send() -> None:
+    stream = _make_stream(endpointing="manual")
+    stream._input_ch = stt_streaming.stt.RecognizeStream._InputChan()
+    stream._input_ch.send_nowait(stt_streaming.rtc.AudioFrame.create(16000, 1, 8000))
+    stream._input_ch.send_nowait(stream._FlushSentinel())
+    stream._input_ch.close()
+
+    async def send_str(payload: str) -> None:
+        if json.loads(payload)["event"] == "speech_end":
+            # A socket send can yield to the receive task before it returns.
+            await stream._handle_message(
+                {
+                    "event": "transcript.final",
+                    "utterance_idx": 0,
+                    "text": "hello",
+                    "start_s": 0.1,
+                    "end_s": 0.4,
+                }
+            )
+
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=send_str,
+        send_bytes=lambda payload: asyncio.sleep(0),
+    )
+    await stream._process_audio(ws)
+
+    events = [
+        event
+        for event in stream._event_ch.events
+        if event.type != stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.type for event in events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert events[1].alternatives == []
+    assert events[1].speech_end_time is None
+    assert events[2].alternatives[0].end_time == pytest.approx(0.4)
+
+
+@pytest.mark.asyncio
 async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None:
     stream = _make_stream(endpointing="manual")
     stream._audio_position = 4.0
