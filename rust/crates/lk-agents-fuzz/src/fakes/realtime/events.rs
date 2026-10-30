@@ -316,7 +316,7 @@ impl Socket {
             cancelled: false,
             tokens: TokenUsage::default(),
             tokens_per_second: 0.0,
-            acquire_time: acquire.as_secs_f64(),
+            acquire_time: Some(acquire.as_secs_f64()),
             connection_reused: false,
             metadata: Some(Self::metadata()),
         };
@@ -347,7 +347,7 @@ impl Socket {
                 0.0
             },
             tokens: usage.clone(),
-            acquire_time: 0.0,
+            acquire_time: None,
             connection_reused: false,
             metadata: Some(Self::metadata()),
         };
@@ -361,7 +361,7 @@ impl Socket {
             label: LABEL.into(),
             request_id: String::new(),
             timestamp: self.wall_secs(),
-            duration: 0.0,
+            duration: None,
             audio_duration: None,
             streamed: true,
             tokens: TokenUsage {
@@ -370,7 +370,7 @@ impl Socket {
                 input_audio_tokens: Some(20),
                 ..TokenUsage::default()
             },
-            acquire_time: 0.0,
+            acquire_time: None,
             connection_reused: false,
             metadata: Some(Metadata {
                 model_name: Some(TRANSCRIPTION_MODEL.into()),

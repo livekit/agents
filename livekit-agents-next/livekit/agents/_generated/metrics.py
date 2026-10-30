@@ -81,15 +81,15 @@ class STTMetrics(_BaseMetrics):
     label: str
     request_id: str
     timestamp: float
-    duration: float
-    """The request duration in seconds, 0.0 if the STT is streaming."""
+    duration: float | None = None
+    """The request duration in seconds; ``None`` for a streaming STT, whose requests have none."""
     audio_duration: float | None = None
     """The duration of the pushed audio in seconds; ``None`` when unknown."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
     tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
-    acquire_time: float = 0.0
-    """Time in seconds to acquire the connection. (WebSocket only)"""
+    acquire_time: float | None = None
+    """Time in seconds to acquire the connection (WebSocket only); ``None`` when not measured."""
     connection_reused: bool = False
     """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None
@@ -110,8 +110,8 @@ class TTSMetrics(_BaseMetrics):
     tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
     """Token-based billing (e.g., OpenAI TTS): text in, audio out."""
     streamed: bool
-    acquire_time: float = 0.0
-    """Time in seconds to acquire the connection. (WebSocket only)"""
+    acquire_time: float | None = None
+    """Time in seconds to acquire the connection (WebSocket only); ``None`` when not measured."""
     connection_reused: bool = False
     """Whether the connection was reused from a pool. (WebSocket only)"""
     segment_id: str | None = None
@@ -140,8 +140,10 @@ class EOUMetrics(_BaseMetrics):
     """Time taken to obtain the transcript after the end of the user's speech; ``None`` if the end
     of speech was not detected.
     """
-    on_user_turn_completed_delay: float
-    """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
+    on_user_turn_completed_delay: float | None = None
+    """Time taken to invoke the user's `on_user_turn_completed` callback; ``None`` when it was not
+    measured.
+    """
     speech_id: str | None = None
     metadata: Metadata | None = None
 
@@ -163,8 +165,8 @@ class RealtimeModelMetrics(_BaseMetrics):
     tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
     tokens_per_second: float = 0.0
     """The number of tokens per second."""
-    acquire_time: float = 0.0
-    """Time in seconds to acquire the connection. (WebSocket only)"""
+    acquire_time: float | None = None
+    """Time in seconds to acquire the connection (WebSocket only); ``None`` when not measured."""
     connection_reused: bool = False
     """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None

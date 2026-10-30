@@ -140,8 +140,9 @@ pub struct SttMetrics {
     pub label: String,
     pub request_id: String,
     pub timestamp: f64,
-    /// The request duration in seconds, 0.0 if the STT is streaming.
-    pub duration: f64,
+    /// The request duration in seconds; ``None`` for a streaming STT, whose requests have none.
+    #[host(default = None)]
+    pub duration: Option<f64>,
     /// The duration of the pushed audio in seconds; ``None`` when unknown.
     #[host(default = None)]
     pub audio_duration: Option<f64>,
@@ -149,9 +150,9 @@ pub struct SttMetrics {
     pub streamed: bool,
     #[host(default_factory = "TokenUsage()")]
     pub tokens: TokenUsage,
-    /// Time in seconds to acquire the connection. (WebSocket only)
-    #[host(default = 0.0)]
-    pub acquire_time: f64,
+    /// Time in seconds to acquire the connection (WebSocket only); ``None`` when not measured.
+    #[host(default = None)]
+    pub acquire_time: Option<f64>,
     /// Whether the connection was reused from a pool. (WebSocket only)
     #[host(default = false)]
     pub connection_reused: bool,
@@ -190,9 +191,9 @@ pub struct TtsMetrics {
     #[host(default_factory = "TokenUsage()")]
     pub tokens: TokenUsage,
     pub streamed: bool,
-    /// Time in seconds to acquire the connection. (WebSocket only)
-    #[host(default = 0.0)]
-    pub acquire_time: f64,
+    /// Time in seconds to acquire the connection (WebSocket only); ``None`` when not measured.
+    #[host(default = None)]
+    pub acquire_time: Option<f64>,
     /// Whether the connection was reused from a pool. (WebSocket only)
     #[host(default = false)]
     pub connection_reused: bool,
@@ -255,8 +256,10 @@ pub struct EouMetrics {
     /// of speech was not detected.
     #[host(default = None)]
     pub transcription_delay: Option<f64>,
-    /// Time taken to invoke the user's `Agent.on_user_turn_completed` callback.
-    pub on_user_turn_completed_delay: f64,
+    /// Time taken to invoke the user's `on_user_turn_completed` callback; ``None`` when it was not
+    /// measured.
+    #[host(default = None)]
+    pub on_user_turn_completed_delay: Option<f64>,
     #[host(default = None)]
     pub speech_id: Option<String>,
     #[host(default = None)]
@@ -302,9 +305,9 @@ pub struct RealtimeModelMetrics {
     /// The number of tokens per second.
     #[host(default = 0.0)]
     pub tokens_per_second: f64,
-    /// Time in seconds to acquire the connection. (WebSocket only)
-    #[host(default = 0.0)]
-    pub acquire_time: f64,
+    /// Time in seconds to acquire the connection (WebSocket only); ``None`` when not measured.
+    #[host(default = None)]
+    pub acquire_time: Option<f64>,
     /// Whether the connection was reused from a pool. (WebSocket only)
     #[host(default = false)]
     pub connection_reused: bool,

@@ -227,7 +227,7 @@ impl RealtimeMachine {
             cancelled: false,
             tokens: TokenUsage::default(),
             tokens_per_second: 0.0,
-            acquire_time: acquire_time.as_secs_f64(),
+            acquire_time: Some(acquire_time.as_secs_f64()),
             connection_reused: false,
             metadata: Some(self.metadata(&self.opts.model)),
         };
@@ -257,11 +257,11 @@ impl RealtimeMachine {
             label: self.label.clone(),
             request_id: t.event_id.clone(),
             timestamp: self.wall_secs(now),
-            duration: 0.0,
+            duration: None,
             audio_duration,
             streamed: true,
             tokens,
-            acquire_time: 0.0,
+            acquire_time: None,
             connection_reused: false,
             metadata: Some(lk_agents_abi::metrics::base::Metadata {
                 model_name: model.map(str::to_owned),
@@ -299,7 +299,7 @@ impl RealtimeMachine {
                 0.0
             },
             tokens: usage.clone(),
-            acquire_time: 0.0,
+            acquire_time: None,
             connection_reused: false,
             metadata: Some(self.metadata(&self.opts.model)),
         };

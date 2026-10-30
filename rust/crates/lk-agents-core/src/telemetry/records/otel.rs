@@ -195,7 +195,7 @@ pub fn usage_records(ev: &AgentMetrics) -> Vec<OtelRecord> {
         AgentMetrics::RealtimeModel(m) => Some((m.acquire_time, m.connection_reused)),
         _ => None,
     };
-    if let Some((acquire_time, reused)) = conn {
+    if let Some((Some(acquire_time), reused)) = conn {
         if acquire_time > 0.0 {
             let mut conn_attrs = model_attrs(ev.metadata());
             conn_attrs
@@ -282,7 +282,7 @@ mod tests {
     fn connection_timing_is_additive_not_an_alternative() {
         let mut m = tk::tts();
         m.characters_count = 12;
-        m.acquire_time = 0.25;
+        m.acquire_time = Some(0.25);
         m.connection_reused = true;
         let out = usage_records(&AgentMetrics::Tts(m));
         assert_eq!(names(&out), vec![TTS_CHARACTERS, CONNECTION_ACQUIRE_TIME]);
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn a_negative_acquire_time_is_not_a_latency() {
         let mut m = tk::stt();
-        m.acquire_time = -1.0;
+        m.acquire_time = Some(-1.0);
         assert_eq!(usage_records(&AgentMetrics::Stt(m)), Vec::new());
     }
 
@@ -323,7 +323,7 @@ mod tests {
 
         let mut realtime = tk::realtime();
         realtime.connection_duration = Some(1.0);
-        realtime.acquire_time = 1.0;
+        realtime.acquire_time = Some(1.0);
         realtime.tokens = lk_agents_abi::usage::TokenUsage {
             input_tokens: 1,
             output_tokens: 1,

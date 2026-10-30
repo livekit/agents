@@ -505,11 +505,11 @@ impl Driver {
             (None, TurnDetection::RealtimeLlm) => Some(mode_metadata("realtime_llm")),
             (None, TurnDetection::Auto) => None,
         };
-        let secs = |d: Option<std::time::Duration>| d.map_or(0.0, |d| d.as_secs_f64());
+        let secs = |d: Option<std::time::Duration>| d.map(|d| d.as_secs_f64());
         let record = lk_agents_abi::metrics::base::EouMetrics {
             timestamp: self.step.wall_secs(),
-            end_of_utterance_delay: info.metrics.end_of_turn_delay.map(|d| d.as_secs_f64()),
-            transcription_delay: info.metrics.transcription_delay.map(|d| d.as_secs_f64()),
+            end_of_utterance_delay: secs(info.metrics.end_of_turn_delay),
+            transcription_delay: secs(info.metrics.transcription_delay),
             on_user_turn_completed_delay: secs(info.metrics.on_user_turn_completed_delay),
             speech_id: speech.map(|s| s.to_string()),
             metadata,

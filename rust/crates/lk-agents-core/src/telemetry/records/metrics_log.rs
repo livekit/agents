@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn the_eou_line_carries_only_its_two_delays() {
         let mut eou = tk::eou();
-        eou.on_user_turn_completed_delay = 9.0;
+        eou.on_user_turn_completed_delay = Some(9.0);
         let l = log_fields(&AgentMetrics::Eou(eou)).unwrap();
         assert_eq!(l.message, "EOU metrics");
         assert_eq!(keys(&l), ["end_of_utterance_delay", "transcription_delay"]);

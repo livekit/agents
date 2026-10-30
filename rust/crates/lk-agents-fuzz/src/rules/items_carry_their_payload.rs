@@ -192,7 +192,7 @@ fn metrics_are_whole(
             &m.label,
             &m.request_id,
             m.timestamp,
-            m.duration >= 0.0 && non_negative(m.audio_duration),
+            non_negative(m.duration) && non_negative(m.audio_duration),
             None,
         ),
         AgentMetrics::RealtimeModel(m) => (
@@ -284,7 +284,7 @@ fn metrics_on_another_clock() -> Recording {
         cancelled: false,
         tokens: Default::default(),
         tokens_per_second: 0.0,
-        acquire_time: 0.0,
+        acquire_time: None,
         connection_reused: false,
         metadata: None,
     };

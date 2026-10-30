@@ -60,11 +60,11 @@ impl Driver {
                 label: id.label.clone(),
                 request_id: ev.request_id.clone(),
                 timestamp: self.step.wall_secs(),
-                duration: 0.0,
+                duration: None,
                 audio_duration: usage.audio_duration,
                 streamed: true,
                 tokens: usage.tokens,
-                acquire_time: 0.0,
+                acquire_time: None,
                 connection_reused: false,
                 metadata: Some(id.metadata()),
             };
