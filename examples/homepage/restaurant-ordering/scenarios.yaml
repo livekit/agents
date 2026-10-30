@@ -1,4 +1,4 @@
-# Zappi's Pizzeria: fourteen calls in, and ten calls to a customer whose delivery is on its way.
+# Zappi's Pizzeria: fourteen calls in, and ten calls to a customer whose delivery is about to go out.
 #
 # Calls in start with an empty order. Prices come from src/zappis.json: tax is 9% of the food,
 # delivery is $4.99, and an order under $15 has a $2.99 small-order fee. The Buffalo Cauliflower
@@ -7,10 +7,11 @@
 # Order numbers start at 215.
 #
 # Calls out are about order #214: a large pepperoni, a dozen bone-in wings with hot sauce, and a
-# large Sprite, going to 300 De Haro St with Marco, about five minutes away, $49.65 due at the
-# door. The Sprite ran out after it went in; a large Coke, Diet Coke, or Lemonade is the same price.
-# Marco carries spare breadsticks ($5.99 an order, up to two). userdata.name is who the order is
-# under; without it, nobody's name is known.
+# large Sprite, going to 300 De Haro St, $49.65 due at the door. Marco, the driver, is about to
+# leave with it, about twenty minutes to the door, and found packing it up that the Sprite ran
+# out; a large Coke, Diet Coke, or Lemonade is the same price. Breadsticks ($5.99 an order, up to
+# two) can still go along. userdata.name is who the order is under; without it, nobody's name is
+# known.
 #
 # userdata.expected is checked against the point of sale's final state by src/simulation.py. To
 # drive one by hand: [CALL_DIRECTION=outbound] lk agent debugger start
@@ -365,12 +366,13 @@ scenarios:
       3. If Gabby says the code or unit back wrong, correct it.
       4. Say that's all, listen to the read-back, and say thanks and goodbye.
     agent_expectations: >
-      Its opening line says who's calling and goes straight into the update: Marco's on the way,
-      the Sprite ran out, and would a large Coke at the same price work or should it come off.
+      Its opening line says who's calling and goes straight into the update: Marco's about to
+      head out, the Sprite ran out, and would a large Coke at the same price work or should it
+      come off.
       Greeting Sam by name is fine; asking whether it's Sam, or who it's speaking to, is not. It
       swaps the Sprite for a large Coke at the same price, saves gate code 4512 and unit 3B for
       the driver, and reads back the changes with $49.65 still due at the door and Marco about
-      five minutes away before ending.
+      twenty minutes away before ending.
     tags: { feature: update, direction: outbound }
     userdata:
       direction: outbound
@@ -393,8 +395,9 @@ scenarios:
       4. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
     agent_expectations: >
       Takes the Sprite off ($4.35 less at the door, not a refund), explains the cannoli can't be
-      added because the order is on its way, adds one order of breadsticks, saves leaving it at the
-      door for the driver, and reads back the changes with $51.83 due at the door before ending.
+      added because the order's packed and about to go out, adds one order of breadsticks, saves
+      leaving it at the door for the driver, and reads back the changes with $51.83 due at the door
+      before ending.
     tags: { feature: update, direction: outbound }
     userdata:
       direction: outbound
@@ -415,7 +418,7 @@ scenarios:
       2. When asked to confirm, say: "Yes, cancel it."
       3. Say goodbye.
     agent_expectations: >
-      Asks the customer to confirm cancelling the whole order, saying the driver turns back and
+      Asks the customer to confirm cancelling the whole order, saying it won't go out and
       nothing is due, cancels only after they agree, then says it's cancelled and nothing is due,
       without giving an arrival time or offering anyone else to talk to.
     tags: { feature: cancelling, direction: outbound }
@@ -543,8 +546,8 @@ scenarios:
       3. When told the address can't change, say: "Never mind, I'll head home. Keep it as it is."
       4. Nothing for the driver. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
     agent_expectations: >
-      Swaps the Sprite for a large Coke. Says the address can't change now that the order is on its
-      way, and that cancelling is the only way out, without claiming the address was updated. The
+      Swaps the Sprite for a large Coke. Says the address can't change now that the order is
+      packed, and that cancelling is the only way out, without claiming the address was updated. The
       order goes on to 300 De Haro St with $49.65 due at the door.
     tags: { feature: address, direction: outbound }
     userdata:

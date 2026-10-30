@@ -311,6 +311,6 @@ async def test_the_changes_are_read_back_before_asking_for_anything_else(judge):
             .judge(
                 judge,
                 intent="Says the Sprite is now a Coke, that forty-nine sixty-five is still due "
-                "at the door, and that Marco is about five minutes away.",
+                "at the door, and that Marco will be there in about twenty minutes.",
             )
         )

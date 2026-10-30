@@ -1,5 +1,5 @@
 """Zappi's Pizzeria's point of sale: the menu, an order being taken over the phone, and order #214,
-already out with the driver.
+about to go out with the driver.
 
 No LiveKit in here. Everything the agent passes in is a choice from the menu (ids, sizes, sauces,
 allergens) or a value the caller gave, so this checks structure and the restaurant's rules, never
@@ -263,12 +263,12 @@ class Order:
 
 @dataclass
 class Delivery:
-    """Order #214, already out with the driver: paid at the door, cash or card."""
+    """Order #214, about to go out with the driver: paid at the door, cash or card."""
 
     driver: str
     eta_minutes: int
-    due: Decimal  # what was due at the door when it went out
-    ordered: dict[str, Line]  # each line as it went out
+    due: Decimal  # what was due at the door as placed
+    ordered: dict[str, Line]  # each line as placed
     ran_out: str  # the line whose item ran out after it went in
     ended_early: EndedEarly | None = None
     read_back_revision: int | None = None
@@ -298,8 +298,8 @@ class Pizzeria:
     def out_for_delivery(
         cls, customer: str | None, publish: Publish = _discard
     ) -> Pizzeria:
-        """Order #214: placed earlier, out with the driver now, and one item ran out after it
-        went in. Under the customer's name if it's known; never a made-up one."""
+        """Order #214: placed earlier, about to go out with the driver, and one item ran out
+        after it went in. Under the customer's name if it's known; never a made-up one."""
         pos = cls(publish=publish, name=customer or None)
         for spec in OUT["items"]:
             pos.lines.append(
@@ -564,7 +564,7 @@ class Pizzeria:
         if self.delivery:
             return {
                 "cancel": f"order {order.number}",
-                "driverTurnsBack": self.delivery.driver,
+                "goesOut": False,
                 "due": money(Decimal("0")),
             }
         return {"cancel": f"order {order.number}", "due": money(Decimal("0"))}
@@ -665,7 +665,7 @@ class Pizzeria:
         carried = OUT["driverCarries"][0]
         if not 0 <= orders <= OUT["mostExtras"]:
             raise PizzeriaError(
-                f"{d.driver} carries at most {OUT['mostExtras']} orders of breadsticks."
+                f"{d.driver} can take at most {OUT['mostExtras']} orders of breadsticks."
             )
         before = self.due_now()
         existing = next((ln for ln in self.lines if ln.item.id == carried), None)
@@ -926,7 +926,7 @@ class Pizzeria:
     def _taking_order(self) -> None:
         if self.delivery:
             raise PizzeriaError(
-                f"Order {OUT['orderNumber']} is already on its way: only the item that ran out, "
+                f"Order {OUT['orderNumber']} is packed and about to go out: only the item that ran out, "
                 "breadsticks, a note for the driver, and a tip can change."
             )
         if self.order:
@@ -983,8 +983,7 @@ class Pizzeria:
             )
         if self.order and self.order.cancelled:
             raise PizzeriaError(
-                f"Order {self.order.number} is cancelled: {d.driver} is turning back and "
-                "nothing is due."
+                f"Order {self.order.number} is cancelled: it isn't going out and nothing is due."
             )
         return d
 
