@@ -13,16 +13,15 @@ use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionM
 use crate::events::SessionEvent;
 use crate::run_result::Owned;
 use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, TurnStep};
+use lk_agents_abi::Ts;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
-use lk_agents_abi::{FrameId, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
 pub struct Out {
-    frame: FrameId,
     /// What the machines asked for, not yet performed or settled.
     todo: Vec<Planned>,
     /// What a machine writes into. Drained into `todo` by [`Out::absorb`].
@@ -33,14 +32,13 @@ pub struct Out {
 
 impl std::fmt::Debug for Out {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Out").field("frame", &self.frame).field("todo", &self.todo).finish()
+        f.debug_struct("Out").field("todo", &self.todo).finish()
     }
 }
 
 impl Out {
-    /// `frame` is the driver's `current` at the moment the event was dequeued.
-    pub fn new(frame: FrameId, journal: bool) -> Self {
-        Out { frame, todo: Vec::new(), machine: Effects::new(), signals: VecDeque::new(), journal }
+    pub fn new(journal: bool) -> Self {
+        Out { todo: Vec::new(), machine: Effects::new(), signals: VecDeque::new(), journal }
     }
 
     pub(crate) fn signal(&mut self, signal: Signal) {
@@ -54,10 +52,6 @@ impl Out {
             self.absorb();
             self.todo.push(Planned::Effect(Effect::Answer(call, answer)));
         }
-    }
-
-    pub fn frame(&self) -> FrameId {
-        self.frame
     }
 
     /// Where this cycle's effects are written; [`Out::take`] reads them.

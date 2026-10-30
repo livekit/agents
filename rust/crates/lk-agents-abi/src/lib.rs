@@ -131,7 +131,6 @@ pub use utils::clock::{
     timeout, unix_now, unix_now_ms, unix_secs, wall_from_secs,
 };
 pub use utils::filters::FilterError;
-pub use utils::frame::FrameId;
 pub use utils::maybe::Maybe;
 pub use utils::timer::{TimerId, TimerSet};
 

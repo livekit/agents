@@ -16,7 +16,7 @@ use crate::trace::{CloseAct, CloseStep, CoreStep, PlayoutStep, RoomStep, SpeechS
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::rtc::RoomEvent;
-use lk_agents_abi::{FrameId, SpeechEvent, TimerSet, Ts, VadEvent};
+use lk_agents_abi::{SpeechEvent, TimerSet, Ts, VadEvent};
 use std::sync::Arc;
 
 /// Only what a host could read, in loop order; never machine state.
@@ -129,8 +129,6 @@ pub struct Driver {
     pub(crate) session: VoiceSession,
     pub(crate) activity: crate::agent_activity::AgentActivity,
     pub(crate) input: crate::agent_activity::io::AgentInput,
-    /// Machines never see it; [`Out`] carries it for them.
-    pub(crate) current: FrameId,
     pub(crate) timers: TimerSet<Timer>,
     pub(crate) journalled: bool,
     /// Decides ownership (a tool's hold is its run's).
@@ -167,7 +165,7 @@ impl Driver {
     }
 
     pub(crate) fn out(&self) -> Out {
-        Out::new(self.current, self.journalled)
+        Out::new(self.journalled)
     }
 
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.

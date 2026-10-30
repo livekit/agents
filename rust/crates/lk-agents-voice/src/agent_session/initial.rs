@@ -10,7 +10,7 @@ use crate::audio_recognition::{AudioRecognition, TurnDetectionMode};
 use crate::generation::{ExpressiveLayers, Instructions};
 use crate::trace::{CoreStep, RealtimeStep, Step};
 use lk_agents_abi::resources::{RealtimeRef, ResourceId};
-use lk_agents_abi::{FrameId, TimerSet, Ts};
+use lk_agents_abi::{TimerSet, Ts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,7 +84,6 @@ impl Driver {
             session,
             activity,
             input,
-            current: FrameId::ROOT,
             timers: TimerSet::new(),
             journalled: initial.journalled,
             command_origin: Origin::Host,

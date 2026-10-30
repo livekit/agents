@@ -5,7 +5,6 @@ pub mod clock;
 pub mod connection_pool;
 pub mod dates;
 pub mod filters;
-pub mod frame;
 pub mod host_ref;
 pub mod maybe;
 pub mod resample;

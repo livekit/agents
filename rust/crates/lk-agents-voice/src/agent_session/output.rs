@@ -314,7 +314,7 @@ mod tests {
         let request = RequestId(3);
         let mut bindings = OutputBindings::default();
         let grant = bindings.bind(request, speech, &original).unwrap();
-        let mut out = Out::new(lk_agents_abi::FrameId::ROOT, false);
+        let mut out = Out::new(false);
         assert!(bindings.activate(request, speech, &original, &mut out).is_some());
         out.take();
         bindings.retire(&replacement, &mut out);
@@ -342,7 +342,7 @@ mod tests {
         let replacement = outputs(2, true);
         let mut bindings = OutputBindings::default();
         let speech = SpeechId(7);
-        let mut out = Out::new(lk_agents_abi::FrameId::ROOT, false);
+        let mut out = Out::new(false);
         let first = bindings.bind(RequestId(1), speech, &original).unwrap();
         assert!(bindings.activate(RequestId(1), speech, &original, &mut out).is_some());
         out.take();
@@ -376,7 +376,7 @@ mod tests {
         let original = outputs(1, true);
         let replacement = Outputs::new(None, None);
         let mut bindings = OutputBindings::default();
-        let mut out = Out::new(lk_agents_abi::FrameId::ROOT, false);
+        let mut out = Out::new(false);
         bindings.bind(RequestId(1), SpeechId(1), &original).unwrap();
         assert!(bindings.activate(RequestId(1), SpeechId(1), &original, &mut out).is_some());
         bindings.bound.remove(&RequestId(1));

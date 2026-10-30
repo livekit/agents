@@ -287,7 +287,6 @@ fn follow_up(prev: &ReplyContext, next: NextReply) -> ReplyContext {
         source: ReplySource::Llm,
         // Always concrete on a follow-up: `"none"` or `"auto"`, never `"required"`.
         tool_choice: planned.tool_choice,
-        frame: prev.frame,
         toolset: prev.toolset.clone(),
         providers: prev.providers.clone(),
         // Carried over when this turn forwarded no text, for `e2e_latency`.

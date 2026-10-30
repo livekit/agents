@@ -16,8 +16,8 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 pub use lk_agents_abi::voice::session_options::Instructions;
 use lk_agents_abi::{
-    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FrameId, FunctionCall,
-    FunctionCallOutput, Llm, MetricsReport, Role, ToolSpec, Tts,
+    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput, Llm,
+    MetricsReport, Role, ToolSpec, Tts,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -570,8 +570,6 @@ pub struct ReplyContext {
     /// The first request is re-planned once the speech playing at creation is on the record.
     pub replan: Option<Replan>,
     pub source: ReplySource,
-    /// Every host call inherits it.
-    pub frame: FrameId,
     /// Fixed before the first frame; the anchor for `e2e_latency`.
     pub user_metrics: Option<lk_agents_abi::MetricsReport>,
     /// Minted by the driver: the pure tier has no RNG.
@@ -597,10 +595,7 @@ pub struct ReplyContext {
 
 impl std::fmt::Debug for ReplyContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReplyContext")
-            .field("frame", &self.frame)
-            .field("message_id", &self.message_id)
-            .finish_non_exhaustive()
+        f.debug_struct("ReplyContext").field("message_id", &self.message_id).finish_non_exhaustive()
     }
 }
 

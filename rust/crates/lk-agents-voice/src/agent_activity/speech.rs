@@ -655,7 +655,6 @@ impl Driver {
             replan,
             source: spec.source,
             tool_choice: spec.tool_choice,
-            frame: self.current,
             toolset: spec.toolset,
             providers: Providers {
                 dynamic_instructions: self.activity.dynamic_instructions.clone(),
