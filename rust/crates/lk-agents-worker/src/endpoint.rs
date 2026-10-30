@@ -91,7 +91,7 @@ pub trait AsgiApp: Send + Sync {
     async fn call(&self, scope: Scope, conn: Conn) -> Result<(), AppError>;
 }
 
-pub use admission::Registry;
+pub use admission::{EndpointAdmission, Registry};
 
 /// Serve one exchange stream to completion.
 pub async fn serve(

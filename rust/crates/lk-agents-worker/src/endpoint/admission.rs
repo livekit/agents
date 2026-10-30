@@ -11,8 +11,9 @@ use super::WsExchange;
 use super::budget::{EndpointBudget, EndpointOccupancy, EndpointPayloadBudget};
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 
+/// The endpoint's handler and payload budget: what an exchange holds while it runs.
 #[derive(Clone)]
-pub(super) struct EndpointAdmission {
+pub struct EndpointAdmission {
     pub limits: EndpointLimits,
     budget: Arc<Mutex<EndpointBudget>>,
 }
@@ -53,7 +54,7 @@ impl EndpointAdmission {
     }
 }
 
-pub(super) struct EndpointReservation {
+pub struct EndpointReservation {
     budget: Arc<Mutex<EndpointBudget>>,
     bytes: usize,
     handler: bool,

@@ -3,8 +3,7 @@
 
 pub(crate) mod stream;
 
-use lk_agents_abi::worker::endpoint::EndpointLimits;
-use lk_agents_worker::endpoint::budget::EndpointBudget;
+use lk_agents_worker::endpoint::EndpointAdmission;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -38,7 +37,7 @@ pub struct Door {
     /// Accepted operations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
-    budget: Arc<parking_lot::Mutex<EndpointBudget>>,
+    admission: EndpointAdmission,
 }
 
 struct Inner {
@@ -87,7 +86,7 @@ impl A2ADoor for Door {
             }),
             tasks: Arc::default(),
             runtime,
-            budget: Arc::new(parking_lot::Mutex::new(EndpointBudget::new(EndpointLimits::default()))),
+            admission: EndpointAdmission::default(),
         })
     }
 
@@ -105,17 +104,7 @@ impl A2ADoor for Door {
         host_context: Option<lk_agents_abi::HostRef>,
     ) -> Response {
         let body_size = body_size.unwrap_or(body.len()).max(body.len());
-        let admission = {
-            let mut budget = self.budget.lock();
-            if !budget.admit_handler() {
-                None
-            } else if !budget.admit_payload(body_size) {
-                budget.release_handler();
-                None
-            } else {
-                Some(Admission { budget: self.budget.clone(), bytes: body_size })
-            }
-        };
+        let admission = self.admission.try_exchange(body_size);
         let decoded = rpc::admit(
             &body,
             body_size,
@@ -161,19 +150,6 @@ impl A2ADoor for Door {
         if !self.tasks.wait_empty(clock, Some(deadline)).await {
             log::error!(target: "livekit.agents", "A2A door cleanup missed its deadline; runtime retains accepted operations");
         }
-    }
-}
-
-struct Admission {
-    budget: Arc<parking_lot::Mutex<EndpointBudget>>,
-    bytes: usize,
-}
-
-impl Drop for Admission {
-    fn drop(&mut self) {
-        let mut budget = self.budget.lock();
-        budget.release_payload(self.bytes);
-        budget.release_handler();
     }
 }
 
