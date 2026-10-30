@@ -19,11 +19,8 @@ use pyo3::prelude::*;
 
 /// Re-exported for the expansions, so a core crate needs no dependency of its own.
 pub use inventory;
-pub use pyo3_async_runtimes;
 pub use log;
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-/// Awaited in `recv`, taken in `aclose`.
-pub use tokio::sync::Mutex as AsyncMutex;
+pub use pyo3_async_runtimes;
 
 /// For a Rust-native stream, whose teardown consults no clock. Host-backed streams never reach it.
 pub const NATIVE_CLOSE_DEADLINE: crate::Ts = crate::Ts::from_nanos(u64::MAX);

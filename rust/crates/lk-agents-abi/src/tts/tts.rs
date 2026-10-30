@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `Tts`: `synthesize()` is universal; `stream()` is optional per instance (`tts/tts.py:229`), so
 //! non-streaming ones get [`StreamAdapter`](crate::StreamAdapter).
 
@@ -112,7 +104,6 @@ impl SynthesizedAudio {
 
 /// May not drop: a dropped token silently mangles speech.
 pub type TtsSink = Box<dyn StreamSink<String>>;
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Both TTS paths yield this, drained by a `TtsStream` (no sink for a one-shot `synthesize()`).
 pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
 

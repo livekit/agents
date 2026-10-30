@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! The seam is `LLM.chat()` (`llm/llm.py:149`), not `_run()`: the plugin builds its own `LLMStream`,
 //! so a host-backed provider keeps retry, metrics and channels in Python.
 
