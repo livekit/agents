@@ -3312,9 +3312,9 @@ class Peer:
 
 
 @asynccontextmanager
-async def peer_model(**options):
+async def peer_model(*, process_request=None, **options):
     peer = Peer()
-    async with serve(peer.handler, "127.0.0.1", 0) as server:
+    async with serve(peer.handler, "127.0.0.1", 0, process_request=process_request) as server:
         endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1/realtime"
         async with Rime(api_key="test") as client:
             model = rime.realtime.RealtimeModel(endpoint=endpoint, client=client, **options)
@@ -3387,6 +3387,145 @@ async def acknowledge(peer, item_id, kept_text, *, content_index=0):
 
 @pytest.mark.skipif(not HAS_REALTIME_SDK, reason="Rime realtime SDK is not installed")
 class TestRealtime:
+    @pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+    async def test_startup_retries_refusal_and_preserves_waiting_reply(self, status):
+        attempts = 0
+
+        async def refuse_first(connection, request):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return connection.respond(status, "busy")
+
+        async with peer_model(
+            process_request=refuse_first,
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        ) as (peer, model, _):
+            session = model.session()
+            errors = []
+            session.on("error", errors.append)
+            reply = session.generate_reply(instructions="Say hello")
+            if not hasattr(RimeInputError("test"), "status_code"):
+                with pytest.raises(asyncio.CancelledError):
+                    await reply
+                assert attempts == 1
+                assert [e.recoverable for e in errors] == [False]
+                assert f"HTTP {status}" in str(errors[0].error)
+                return
+            request = await peer.next()
+            response_id = await peer.start(request)
+            await peer.end(response_id)
+            assert (await reply).response_id == response_id
+            assert attempts == 2
+            assert peer.connections == 1
+            assert [e.recoverable for e in errors] == [True]
+            assert [e.retryable for e in errors] == [True]
+
+    @pytest.mark.parametrize("status", [400, 401, 402, 403, 404, 501])
+    async def test_startup_does_not_retry_permanent_refusal(self, status):
+        attempts = 0
+
+        async def refuse(connection, request):
+            nonlocal attempts
+            attempts += 1
+            return connection.respond(status, "refused")
+
+        async with peer_model(process_request=refuse) as (_, model, _):
+            session = model.session()
+            errors = []
+            session.on("error", errors.append)
+            with pytest.raises(Exception, match=f"HTTP {status}"):
+                await session.update_instructions("test")
+            assert attempts == 1
+            assert [e.recoverable for e in errors] == [False]
+
+    @pytest.mark.parametrize("max_retry", [0, 2])
+    async def test_startup_retry_budget(self, max_retry):
+        attempts = 0
+
+        async def refuse(connection, request):
+            nonlocal attempts
+            attempts += 1
+            return connection.respond(503, "busy")
+
+        async with peer_model(
+            process_request=refuse,
+            conn_options=APIConnectOptions(
+                max_retry=max_retry,
+                retry_interval=0,
+            ),
+        ) as (_, model, _):
+            session = model.session()
+            errors = []
+            session.on("error", errors.append)
+            with pytest.raises(Exception, match="HTTP 503"):
+                await session.update_instructions("test")
+            retries = max_retry if hasattr(RimeInputError("test"), "status_code") else 0
+            assert attempts == retries + 1
+            assert [e.recoverable for e in errors] == [True] * retries + [False]
+
+    async def test_startup_close_cancels_retry_delay(self):
+        attempts = 0
+        refused = asyncio.Event()
+
+        async def refuse(connection, request):
+            nonlocal attempts
+            attempts += 1
+            response = connection.respond(503, "busy")
+            response.headers["Retry-After"] = "2"
+            return response
+
+        async with peer_model(process_request=refuse) as (_, model, _):
+            session = model.session()
+            session.on("error", lambda _: refused.set())
+            waiting = asyncio.create_task(session.update_instructions("test"))
+            await asyncio.wait_for(refused.wait(), 2)
+            await session.aclose()
+            await asyncio.gather(waiting, return_exceptions=True)
+            await asyncio.sleep(0.15)
+            assert attempts == 1
+
+    async def test_startup_retry_after_cannot_exceed_deadline(self):
+        attempts = 0
+
+        async def refuse(connection, request):
+            nonlocal attempts
+            attempts += 1
+            response = connection.respond(503, "busy")
+            response.headers["Retry-After"] = "60"
+            return response
+
+        async with peer_model(process_request=refuse, startup_timeout=0.2) as (_, model, _):
+            session = model.session()
+            with pytest.raises(Exception, match="HTTP 503"):
+                await asyncio.wait_for(session.update_instructions("test"), 1)
+            assert attempts == 1
+
+    @pytest.mark.parametrize(
+        "options",
+        [
+            {"startup_timeout": 0.1},
+            {"conn_options": APIConnectOptions(timeout=0.1)},
+        ],
+    )
+    async def test_startup_deadline_closes_unfinished_initialization(self, options):
+        async with peer_model(**options) as (peer, model, client):
+            peer.update_release.clear()
+            session = model.session()
+            try:
+                with pytest.raises(Exception, match="timed out|no acknowledgment"):
+                    await asyncio.wait_for(session.update_instructions("test"), 1)
+            finally:
+                # The SDK settles the submitted settings request before its
+                # cancellation cleanup closes the partially opened session.
+                peer.update_release.set()
+            await asyncio.wait_for(peer.socket.wait_closed(), 3)
+            assert session._shutdown_task is not None
+            await asyncio.wait_for(asyncio.shield(session._shutdown_task), 3)
+            assert not client.realtime._opening
+            assert not client.realtime._sessions
+            assert peer.connections == 1
+
     async def test_startup_seeds_history_before_first_request(self):
         async with peer_model() as (peer, model, _):
             session = model.session()

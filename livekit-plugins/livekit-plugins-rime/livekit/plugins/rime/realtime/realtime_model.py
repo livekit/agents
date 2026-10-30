@@ -9,6 +9,7 @@ at bc8a500249536f369d20bc094baa9169e5986758.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import OrderedDict
 from collections.abc import Coroutine, Mapping
@@ -17,14 +18,33 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import numpy as np
-from rimelabs_sdk import Rime, RimeInputError, RimeResourceLimitError, realtime as r
+from rimelabs_sdk import (
+    Rime,
+    RimeInputError,
+    RimeResourceLimitError,
+    RimeTimeoutError,
+    RimeUnavailableError,
+    realtime as r,
+)
 
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from livekit.agents.utils import is_given
 
 from ._history import HistoryUpdateError, PrismHistory
+
+
+def _startup_retryable(error: Exception) -> bool:
+    # Older SDKs have no structured status. Unknown failures must not be replayed.
+    return isinstance(error, (RimeUnavailableError, RimeResourceLimitError)) and getattr(
+        error, "status_code", None
+    ) in {408, 429, 500, 502, 503, 504}
 
 
 class PrismUnsupported(llm.RealtimeError):
@@ -68,6 +88,8 @@ class RealtimeModel(llm.RealtimeModel):
         turn_detection: r.TurnDetection | None = None,
         truncation: r.Truncation | None = None,
         timeouts: r.RealtimeTimeouts | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        startup_timeout: float = 30.0,
         request_id: str | None = None,
         response_metadata: Mapping[str, str] | None = None,
         tool_fillers: Mapping[str, r.PrismFiller] | None = None,
@@ -85,6 +107,14 @@ class RealtimeModel(llm.RealtimeModel):
                 mutable_tools=True,
             )
         )
+        if not math.isfinite(startup_timeout) or startup_timeout <= 0:
+            raise ValueError("startup_timeout must be finite and greater than zero")
+        if not math.isfinite(conn_options.timeout) or not math.isfinite(
+            conn_options.retry_interval
+        ):
+            raise ValueError("Connection timeout and retry interval must be finite")
+        self._conn_options = conn_options
+        self._startup_timeout = startup_timeout
         self._endpoint = endpoint
         self._voice = voice
         self._turn_detection = turn_detection
@@ -190,6 +220,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         self._model = model
         self._sdk: r.RealtimeSession | None = None
         self._connection: AbstractAsyncContextManager[r.RealtimeSession] | None = None
+        self._opening_task: asyncio.Task[None] | None = None
         self._initialized: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._initialized.add_done_callback(lambda f: None if f.cancelled() else f.exception())
         self._closed = False
@@ -246,6 +277,31 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
 
     async def _connect(self) -> None:
         try:
+            async with asyncio.timeout(self._model._startup_timeout):
+                await self._open_connection()
+            if self._failure is not None:
+                # A startup failure can occur while the handshake is pending,
+                # before _fatal has an SDK connection to close.
+                self._shutdown_task = asyncio.create_task(self._shutdown())
+                return
+            assert self._sdk is not None
+            self._history = PrismHistory(self._sdk)
+            self._spawn(self._read_events())
+            self._initialized.set_result(None)
+            self._spawn(self._send_audio())
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            self._fatal(RimeTimeoutError("Prism startup timed out"))
+        except Exception as error:
+            self._fatal(error)
+
+    async def _open_connection(self) -> None:
+        options = self._model._conn_options
+        deadline = asyncio.get_running_loop().time() + self._model._startup_timeout
+        for attempt in range(options.max_retry + 1):
+            if self._closed:
+                raise asyncio.CancelledError
             if self._failure:
                 raise self._failure
             self._connection = self._model._client.realtime.connect(
@@ -258,20 +314,40 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 request_id=self._model._request_id,
                 response_metadata=self._model._response_metadata,
             )
-            self._sdk = await self._connection.__aenter__()
-            if self._failure is not None:
-                # A startup failure can occur while the handshake is pending,
-                # before _fatal has an SDK connection to close.
-                self._shutdown_task = asyncio.create_task(self._shutdown())
+            self._opening_task = asyncio.create_task(self._enter_connection(self._connection))
+            try:
+                async with asyncio.timeout(options.timeout):
+                    await asyncio.shield(self._opening_task)
                 return
-            self._history = PrismHistory(self._sdk)
-            self._spawn(self._read_events())
-            self._initialized.set_result(None)
-            self._spawn(self._send_audio())
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            self._fatal(error)
+            except asyncio.CancelledError:
+                self._opening_task.cancel()
+                raise
+            except TimeoutError:
+                self._opening_task.cancel()
+                raise RimeTimeoutError("Prism connection initialization timed out") from None
+            except Exception as error:
+                if (
+                    self._failure
+                    or self._closed
+                    or attempt == options.max_retry
+                    or not _startup_retryable(error)
+                ):
+                    raise
+                delay = options._interval_for_retry(attempt)
+                retry_after = getattr(error, "retry_after_s", None)
+                if isinstance(retry_after, (int, float)) and math.isfinite(retry_after):
+                    delay = max(delay, retry_after)
+                # A server delay that cannot fit the startup budget ends with its original refusal.
+                if asyncio.get_running_loop().time() + delay >= deadline:
+                    raise
+                self._emit_error(error, recoverable=True)
+                await asyncio.sleep(delay)
+
+    async def _enter_connection(
+        self, connection: AbstractAsyncContextManager[r.RealtimeSession]
+    ) -> None:
+        # Store success before delivering it to a waiter that may already be cancelled.
+        self._sdk = await connection.__aenter__()
 
     async def update_instructions(self, instructions: str) -> None:
         await self._apply_settings(instructions=instructions)
@@ -945,7 +1021,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 recoverable=recoverable,
                 retryable=error.retryable
                 if isinstance(error, PrismError)
-                else (error.fault.retryable if isinstance(error, r.RimeRealtimeError) else None),
+                else (
+                    error.fault.retryable
+                    if isinstance(error, r.RimeRealtimeError)
+                    else (
+                        _startup_retryable(error)
+                        if getattr(error, "status_code", None) is not None
+                        else None
+                    )
+                ),
             ),
         )
 
@@ -961,7 +1045,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         self._emit_error(error, recoverable=False)
         if not self._initialized.done():
             self._initialized.set_exception(error)
-        if self._sdk is not None and not self._closed:
+        if (self._sdk is not None or self._opening_task is not None) and not self._closed:
             self._shutdown_task = asyncio.create_task(self._shutdown())
         for generation in self._generations.values():
             self._end(generation)
@@ -992,6 +1076,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         if not self._initialized.done():
             self._initialized.cancel()
         tasks = list(self._tasks)
+        if self._opening_task is not None:
+            tasks.append(self._opening_task)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
