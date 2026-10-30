@@ -185,10 +185,10 @@ where
     }
     connections.iter().for_each(OwnedTask::cancel);
     while let Some(joined) = connections.next().await {
-        if let Err(error) = joined {
-            if !matches!(error, TaskError::Cancelled) {
-                result = Err(format!("health/metrics connection: {error}"));
-            }
+        if let Err(error) = joined
+            && !matches!(error, TaskError::Cancelled)
+        {
+            result = Err(format!("health/metrics connection: {error}"));
         }
     }
     result

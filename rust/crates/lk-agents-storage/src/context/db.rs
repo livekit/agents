@@ -106,7 +106,7 @@ mod tests {
             value: json!("saved"),
         };
         let mut activation = ContextActivation::new(Vec::new(), None, false).unwrap();
-        activation.load("root", "Booking", &[field.clone()]).unwrap();
+        activation.load("root", "Booking", std::slice::from_ref(&field)).unwrap();
         activation.save("root", "Booking", 0, &[field]).unwrap();
         let first = activation.writes().remove(0);
         batch(&mut conn, &[write("desk", &first, None).unwrap()]).unwrap();

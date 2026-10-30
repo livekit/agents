@@ -57,7 +57,9 @@ impl Rule for SynthesizedSpeechIsPlayed {
             // of it played, the speech none the wiser (a cut reports where playback stood).
             let done = speech.done_at().unwrap_or(r.now());
             let reset = inputs.accepted().any(|a| {
-                a.at > asked && a.at <= done && matches!(a.input, crate::input::Input::SinkReset { .. })
+                a.at > asked
+                    && a.at <= done
+                    && matches!(a.input, crate::input::Input::SinkReset { .. })
             });
             // The same from the output's own side: it reset, or reported the speech's playback
             // cut that the driver never cut, as an avatar whose worker never answered a clear
@@ -92,7 +94,7 @@ impl Rule for SynthesizedSpeechIsPlayed {
                 continue;
             }
             check.expect(
-                &speech,
+                speech,
                 trace.audio_played(),
                 format!(
                     "speech {} requested synthesis at seq {} and finished, but no audio was ever played",

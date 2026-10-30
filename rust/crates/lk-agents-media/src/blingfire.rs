@@ -245,7 +245,8 @@ mod tests {
     //   * a trailing fragment with no terminator is still a sentence.
     #[test]
     fn split_sentences_matches_the_python_implementation() {
-        let cases: Vec<(&str, usize, bool, Vec<(&str, usize, usize)>)> = vec![
+        type Case<'a> = (&'a str, usize, bool, Vec<(&'a str, usize, usize)>);
+        let cases: Vec<Case<'_>> = vec![
             (
                 "Hello there. How are you? I am well.",
                 1,

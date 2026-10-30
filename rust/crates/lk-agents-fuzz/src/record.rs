@@ -10,6 +10,7 @@
 //!
 //! One log holds every resource the run opened, and [`Live`] is the part still open, because
 //! "what can an input point at" and "what is open" are one question asked twice.
+
 use lk_agents_runtime::voice::session::Timebase;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -654,7 +655,7 @@ pub struct Recording {
     heard_generations: Vec<(Observed, u32, u64, bool)>,
     /// What a realtime socket's server held as the client closed a connection: each assistant
     /// message it generated, by generation, with the milliseconds of audio it keeps.
-    held: Vec<(Observed, u32, Vec<(u32, u64)>)>,
+    held: Vec<HeldRealtimeAudio>,
     /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
     /// link, made visible so a rule can hold injected VAD and STT events against the audio.
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
@@ -1000,7 +1001,7 @@ impl Recording {
         &self.heard_generations
     }
 
-    pub fn held(&self) -> &[(Observed, u32, Vec<(u32, u64)>)] {
+    pub fn held(&self) -> &[HeldRealtimeAudio] {
         &self.held
     }
 

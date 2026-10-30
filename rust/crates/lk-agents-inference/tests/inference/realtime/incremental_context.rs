@@ -15,7 +15,7 @@ fn context(count: usize) -> ChatContext {
     ChatContext::new(
         (0..count)
             .map(|id| {
-                ChatMessage::text(&id.to_string(), Role::User, &id.to_string(), UNIX_EPOCH).into()
+                ChatMessage::text(id.to_string(), Role::User, id.to_string(), UNIX_EPOCH).into()
             })
             .collect(),
     )

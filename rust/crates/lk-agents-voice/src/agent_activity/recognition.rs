@@ -76,7 +76,7 @@ impl Driver {
         self.anchor_stt_stream(now);
         // `RecognizeStream._metrics_monitor_task`: one `STTMetrics` per usage report.
         if ev.kind == SpeechEventType::RecognitionUsage {
-            let usage = ev.recognition_usage.clone().unwrap_or_default();
+            let usage = ev.recognition_usage.unwrap_or_default();
             let id = self.stt_identity().unwrap_or_default();
             let record = lk_agents_abi::metrics::base::SttMetrics {
                 label: id.label.clone(),
@@ -285,7 +285,7 @@ impl Driver {
                 self.apply_config(now, ConfigLayer::Session, diff, out);
             }
             TurnCommand::Override(layer) => {
-                let diff = self.session.config.push_override(layer);
+                let diff = self.session.config.push_override(*layer);
                 self.apply_config(now, ConfigLayer::Override, diff, out);
             }
             TurnCommand::ReleaseOverride(id) => {
@@ -653,6 +653,10 @@ impl Driver {
         );
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the operation’s existing explicit arguments"
+    )]
     pub(crate) fn begin_commit(
         &mut self,
         now: Ts,

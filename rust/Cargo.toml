@@ -109,10 +109,19 @@ debug = 0
 
 # Generated Python adapters are the largest codegen unit. The fast path keeps
 # line tables in the runtime and decision crates; python-debug restores them here.
+# Basic optimization keeps the generated adapters within macOS’s unwind-table limit.
 [profile.dev.package.lk-agents-py]
 debug = 0
+opt-level = 1
 
 [profile.test]
 debug = 1
 # Test binaries use the same target-specific symbol policy in .cargo/config.toml.
 # The previous unpacked policy produced thousands of orphan objects per integration test.
+
+# Source parsing dominates repeated checks. Optimize the checker and its dependencies
+# without changing the runtime's development profile.
+[profile.check-tools]
+inherits = "dev"
+opt-level = 1
+debug = 0

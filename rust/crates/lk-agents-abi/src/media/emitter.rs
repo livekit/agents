@@ -16,6 +16,7 @@ use crate::{AudioFrame, TimedString};
 pub trait EmitterOutput: Send + Sync {
     /// One `SynthesizedAudio`; its frame's userdata carries the words it covers.
     #[host(notify)]
+    #[allow(clippy::too_many_arguments, reason = "Preserve the host notification signature")]
     fn send(
         &self,
         frame: AudioFrame,

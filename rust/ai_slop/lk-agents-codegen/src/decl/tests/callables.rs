@@ -69,7 +69,10 @@ fn wire_enum_parameters_cross_as_their_string() {
     .expect("legacy wire enum is a declared string boundary");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
-    assert!(adapter.contains("let role = crate::python::str_from_py(&role)?;"), "{adapter}");
+    assert!(
+        adapter.contains("let role = crate::python::str_from_py(role.as_any())?;"),
+        "{adapter}"
+    );
     assert!(adapter.contains("crate::python::str_to_py(py, &"), "{adapter}");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
@@ -93,7 +96,7 @@ fn maybe_parameters_preserve_omission_null_and_given_values() {
     assert!(adapter.contains("data: crate::conversions::Omittable<'_>"), "{adapter}");
     assert!(adapter.contains("data.map(|value| "), "{adapter}");
     assert!(adapter.contains("if value.is_none() { Ok(None) }"), "{adapter}");
-    assert!(adapter.contains("value_from_py(&value"), "{adapter}");
+    assert!(adapter.contains("value_from_py(value.as_any()"), "{adapter}");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
     assert!(text.contains("from ..types import NotGivenOr"), "{text}");
@@ -299,7 +302,9 @@ fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy
     let converted =
         crate::adapter::from_object("obj", argument, "\"Client.input\"", "test").unwrap();
     assert!(
-        converted.contains("python::native::<dyn ::lk_agents_abi::llm::class::AudioInput>(&obj)"),
+        converted.contains(
+            "python::native::<dyn ::lk_agents_abi::llm::class::AudioInput>(obj.as_any())"
+        ),
         "{converted}"
     );
     assert!(
@@ -356,7 +361,8 @@ fn a_refused_native_trait_is_any_of_its_classes_and_refuses_other_objects() {
     let argument = &functions.methods[0].params[0].ty;
     let converted = crate::adapter::from_object("obj", argument, "\"track\"", "test").unwrap();
     assert!(
-        converted.contains("python::native::<dyn ::lk_agents_abi::llm::class::Tracker>(&obj)")
+        converted
+            .contains("python::native::<dyn ::lk_agents_abi::llm::class::Tracker>(obj.as_any())")
             && converted.contains("\": expected a native tracker\"")
             && !converted.contains("HostProxy"),
         "{converted}"
@@ -460,7 +466,7 @@ fn callable_annotations_follow_the_declared_call_and_its_iterable_result_reader(
     );
     let conversions = crate::records::conversions(&declarations).unwrap().text;
     assert!(
-        conversions.contains("crate::generated::llm::CallbackProxy::from_host(&v)"),
+        conversions.contains("crate::generated::llm::CallbackProxy::from_host(v.as_any())"),
         "modern record fields use the same generated Python extractor: {conversions}"
     );
 }
@@ -507,7 +513,7 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
     let code = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
     assert!(
         code.contains(
-            "let out = py.detach(|| <MatrixImpl as ::lk_agents_abi::llm::class::Matrix>::values());"
+            "let out = py.detach(<MatrixImpl as ::lk_agents_abi::llm::class::Matrix>::values);"
         ) && code.contains("for (k, x) in out {"),
         "the adapter must retain the native enum-keyed map: {code}"
     );
@@ -625,7 +631,7 @@ fn writable_property_keeps_its_name_validates_the_value_and_propagates_failures(
     let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
     syn::parse_file(adapter).expect("a fallible writable property emits valid Rust");
     assert!(adapter.contains("#[setter(target)]"), "{adapter}");
-    assert!(adapter.contains("number_from_py::<usize>(&obj, \"count\")"), "{adapter}");
+    assert!(adapter.contains("number_from_py::<usize>(obj.as_any(), \"count\")"), "{adapter}");
     assert!(
         adapter.contains("#[pyo3(from_py_with = _extract_pool_set_target_count)]"),
         "{adapter}"

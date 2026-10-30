@@ -154,14 +154,15 @@ impl Parser {
                 self.index += 1;
                 continue;
             }
-            if pending && matches!(c, '[' | '{' | '(') {
-                if let Some(end) = self.inline_end(0) {
-                    out.push_str(&self.slice(self.index, self.index + end as usize));
-                    self.index += end as usize;
-                    pending = false;
-                    stack.clear();
-                    continue;
-                }
+            if pending
+                && matches!(c, '[' | '{' | '(')
+                && let Some(end) = self.inline_end(0)
+            {
+                out.push_str(&self.slice(self.index, self.index + end as usize));
+                self.index += end as usize;
+                pending = false;
+                stack.clear();
+                continue;
             }
             if self.current() == Some(Context::Value) && c == ',' && !pending && stack.is_empty() {
                 match self.comma_kind() {
@@ -258,22 +259,22 @@ impl Parser {
                 {
                     let mut start = self.comment_scroll(i + 3);
                     let mut keep_container = false;
-                    if self.at(start).is_some_and(|c| matches!(c, '[' | '{' | '(')) {
-                        if let Some(end) = self.inline_end(start) {
-                            let after = self.scroll(end);
-                            let ch = self.at(after);
-                            if matches!(ch, None | Some('}'))
-                                || ch == Some(',')
-                                    && (self
-                                        .at(self.comment_scroll(after + 1))
-                                        .is_none_or(|c| c == '}')
-                                        || self.member(self.comment_scroll(after + 1)))
-                            {
-                                break;
-                            }
-                            keep_container = true;
-                            start = end;
+                    if self.at(start).is_some_and(|c| matches!(c, '[' | '{' | '('))
+                        && let Some(end) = self.inline_end(start)
+                    {
+                        let after = self.scroll(end);
+                        let ch = self.at(after);
+                        if matches!(ch, None | Some('}'))
+                            || ch == Some(',')
+                                && (self
+                                    .at(self.comment_scroll(after + 1))
+                                    .is_none_or(|c| c == '}')
+                                    || self.member(self.comment_scroll(after + 1)))
+                        {
+                            break;
                         }
+                        keep_container = true;
+                        start = end;
                     }
                     let mut q = self.skip(&[right], start);
                     while self.at(q).is_some() {
@@ -292,62 +293,56 @@ impl Parser {
             }
             out.push(c);
             self.index += 1;
-            if out.ends_with('\\') {
-                if let Some(e) = self.at(0) {
-                    if matches!(e, 't' | 'n' | 'r' | 'b' | '\\')
-                        || e == right
-                        || quote(e)
-                        || e == '„'
+            if out.ends_with('\\')
+                && let Some(e) = self.at(0)
+            {
+                if matches!(e, 't' | 'n' | 'r' | 'b' | '\\') || e == right || quote(e) || e == '„'
+                {
+                    out.pop();
+                    out.push(match e {
+                        't' => '\t',
+                        'n' => '\n',
+                        'r' => '\r',
+                        'b' => '\u{8}',
+                        _ => e,
+                    });
+                    self.index += 1;
+                    while out.ends_with('\\') && self.at(0).is_some_and(|c| c == right || c == '\\')
                     {
                         out.pop();
-                        out.push(match e {
-                            't' => '\t',
-                            'n' => '\n',
-                            'r' => '\r',
-                            'b' => '\u{8}',
-                            _ => e,
-                        });
+                        out.push(self.at(0).unwrap());
                         self.index += 1;
-                        while out.ends_with('\\')
-                            && self.at(0).is_some_and(|c| c == right || c == '\\')
-                        {
-                            out.pop();
-                            out.push(self.at(0).unwrap());
-                            self.index += 1;
-                        }
-                        continue;
                     }
-                    if e == 'u' || e == 'x' {
-                        let n = if e == 'u' { 4 } else { 2 };
-                        let code = self.slice(self.index + 1, self.index + 1 + n);
-                        if code.len() == n && code.chars().all(|c| c.is_ascii_hexdigit()) {
-                            let u = u32::from_str_radix(&code, 16).unwrap();
-                            if (0xD800..=0xDBFF).contains(&u)
-                                && self.at((n + 1) as isize) == Some('\\')
-                                && self.at((n + 2) as isize) == Some('u')
+                    continue;
+                }
+                if e == 'u' || e == 'x' {
+                    let n = if e == 'u' { 4 } else { 2 };
+                    let code = self.slice(self.index + 1, self.index + 1 + n);
+                    if code.len() == n && code.chars().all(|c| c.is_ascii_hexdigit()) {
+                        let u = u32::from_str_radix(&code, 16).unwrap();
+                        if (0xD800..=0xDBFF).contains(&u)
+                            && self.at((n + 1) as isize) == Some('\\')
+                            && self.at((n + 2) as isize) == Some('u')
+                        {
+                            let tail = self.slice(self.index + n + 3, self.index + n + 7);
+                            if let Ok(low) = u32::from_str_radix(&tail, 16)
+                                && (0xDC00..=0xDFFF).contains(&low)
                             {
-                                let tail = self.slice(self.index + n + 3, self.index + n + 7);
-                                if let Ok(low) = u32::from_str_radix(&tail, 16) {
-                                    if (0xDC00..=0xDFFF).contains(&low) {
-                                        out.pop();
-                                        out.push(
-                                            char::from_u32(
-                                                0x10000 + ((u - 0xD800) << 10) + (low - 0xDC00),
-                                            )
-                                            .unwrap(),
-                                        );
-                                        self.index += n + 7;
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            if let Some(ch) = char::from_u32(u) {
                                 out.pop();
-                                out.push(ch);
-                                self.index += 1 + n;
+                                out.push(
+                                    char::from_u32(0x10000 + ((u - 0xD800) << 10) + (low - 0xDC00))
+                                        .unwrap(),
+                                );
+                                self.index += n + 7;
                                 continue;
                             }
+                        }
+
+                        if let Some(ch) = char::from_u32(u) {
+                            out.pop();
+                            out.push(ch);
+                            self.index += 1 + n;
+                            continue;
                         }
                     }
                 }

@@ -7,7 +7,6 @@ use crate::errors::ProviderError;
 use crate::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use crate::storage::journal::ToolExecution;
 use crate::storage::{ItemRow, TaskRecord, TaskState};
-use crate::{StreamSink, StreamSource};
 
 pub use crate::a2a::client::Message;
 
@@ -92,7 +91,7 @@ pub enum TurnEvent {
     #[host(name = "Checkpoint")]
     Checkpoint,
     #[host(name = "Output")]
-    Output { output: HandlerOutput },
+    Output { output: Box<HandlerOutput> },
     #[host(name = "Progress")]
     Progress { task_id: String, text: String },
     #[host(name = "Token")]
@@ -105,10 +104,7 @@ pub trait TurnHost: Send + Sync {
     fn handle<'a>(
         &'a self,
         #[host(context)] ctx: &'a TurnContext,
-    ) -> crate::BoxFuture<
-        'a,
-        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
-    >;
+    ) -> crate::BoxFuture<'a, Result<crate::StreamPair<Verdict, TurnEvent>, ProviderError>>;
 }
 
 impl crate::agent::HostContext for TurnContext {

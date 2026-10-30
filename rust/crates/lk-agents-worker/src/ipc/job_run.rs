@@ -342,6 +342,7 @@ fn log_level(level: Level) -> log::Level {
 impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     type Env = ProcessEnv;
 
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
     fn new(
         env: &ProcessEnv,
         fake_job: bool,

@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "purpose": "Decision 62 measurement bootstrap, not full K-23/K-26 qualification",
+  "workload": {
+    "sessions_per_process": [1, 8, 32],
+    "qualification_ceiling_sessions": 32,
+    "seconds_per_case": 6,
+    "control_cadence_ms": [10, 20],
+    "fake_room_input_frame_ms": 20,
+    "input_sample_rate_hz": 48000,
+    "channels": 1,
+    "tts_sample_rate_hz": 24000,
+    "tts_frame_ms": 20,
+    "stt_utterance_ms": 400,
+    "stt_finalize_ms": 100,
+    "llm_chunk_ms": 30,
+    "tts_startup_ms": 80,
+    "tts_words_per_minute": 150,
+    "vad_window_ms": 32,
+    "vad_model_cpu": "not simulated; boundary cadence only",
+    "direct_core_instances": [1, 8, 32],
+    "direct_core_frames_ms": [10, 20],
+    "direct_core_frames_per_instance": 1000,
+    "direct_core_conversion_hz": [48000, 16000]
+  },
+  "interfaces": {
+    "asyncio": {
+      "heartbeat_ms": 1,
+      "loop_lag_p999_exclusive_fraction_of_cadence": 0.2,
+      "loop_lag_max_exclusive_fraction_of_cadence": 0.5,
+      "derivation": "Reserve 80% of each frame for downstream work at the tail; never consume half a frame in scheduling alone. 10ms gives <2ms p99.9 / <5ms max; 20ms gives <4ms / <10ms."
+    },
+    "synchronous_native_call": {
+      "thread_cpu_max_fraction_of_cadence": 0.1,
+      "derivation": "One uninterrupted dispatch may consume 10% of the frame: 1ms at 10ms, 2ms at 20ms. These boundary calls exclude async Driver steps."
+    },
+    "audio_forwarder_step": {
+      "thread_cpu_p999_fraction_of_cadence": 0.05,
+      "thread_cpu_max_fraction_of_cadence": 0.1,
+      "derivation": "Target half the dispatch ceiling at p99.9, leaving 2x margin to the maximum; 10ms gives 0.5ms / 1ms, 20ms gives 1ms / 2ms. Includes clock overhead, excludes input allocation and effect execution."
+    },
+    "pcm_binding": {
+      "measured_baseline_copies_per_input_frame_lower_bound": 2,
+      "measurement": "Count and size frames actually consumed by STT and VAD. Each crosses AudioFrame::into_pyobject, whose PyBytes::new copies once; fake providers never construct their own RTC frames.",
+      "upper_bound": null,
+      "limitation": "Excludes TTS, other Rust allocations/copies and RTC native internals. Zero visible memoryview.tobytes calls does not mean zero copies."
+    },
+    "tokio_workers": {
+      "measurement": "Separate external native stack sampling, typed per-thread inclusive counts and original raw call tree",
+      "exact_stall_max_ms": null,
+      "limitation": "Parked workers are normal; aggregate call trees have no consecutive-sample order. Sampling cannot derive heartbeat lateness, exact poll duration or per-step CPU."
+    },
+    "worker_endpoint": {
+      "profile_command": "cargo test -p lk-agents-runtime --lib endpoint_resource_profile -- --ignored --nocapture",
+      "workload": {
+        "transport": "real TCP loopback, WebSocket upgrade and masked binary frames",
+        "sessions": [
+          1,
+          8,
+          32,
+          64
+        ],
+        "seconds_per_case": 2,
+        "incoming_messages_per_exchange": 8,
+        "incoming_message_bytes": 16384,
+        "outgoing_messages_per_exchange": 1,
+        "outgoing_message_bytes": 16384,
+        "runtime_threads": 4,
+        "heartbeat_ms": 1
+      },
+      "limits": {
+        "worker_payload_bytes": 536870912,
+        "pending_handlers": 256,
+        "request_head_bytes": 1048576,
+        "chunk_line_bytes": 8192,
+        "trailers_bytes": 65536,
+        "websocket_frame_bytes": 1048576,
+        "websocket_message_bytes": 4194304,
+        "websocket_inbox_items": 16,
+        "websocket_inbox_bytes": 8388608,
+        "minimum_outgoing_charge_bytes": 65536,
+        "admission_waiters": 0,
+        "websocket_close_flush_ms": 2000,
+        "websocket_outbox_bytes": 8388608
+      },
+      "accounting": {
+        "unit": "logical payload reservations, including parser head/read bounds, queued messages and outgoing serialization",
+        "http_exchange_reservation_bytes": 1114112,
+        "websocket_exchange_reservation_bytes": 4259840,
+        "reservation_lifetime": "HTTP head/read reservation is released after upgrade; parser reservation, handler admission, queued messages and pending writes stay owned through cancellation and cleanup.",
+        "excluded": "application-owned request/response values, TLS/kernel buffers, codec allocation overhead, Python conversion copies and allocator retention"
+      },
+      "derivation": "64 upgraded peers each reserve a4MiB parser plus64KiB read, eight16KiB queued inputs and a minimum64KiB output:272MiB.512MiB leaves1.88x capacity for this workload. During upgrade an additional1MiB head plus64KiB read is reserved, then released after transferring the request scope.8MiB inbox/outbox quotas each admit two maximum-size messages; the worker ceiling may refuse full queues before their local limits. Graceful close uses the existing2s IPC flush budget; stop/reset admission has a separate frame-cadence contract.",
+      "overload": {
+        "exchange": "HSR_REFUSED before reads",
+        "inbox": "WebSocket close 1009, before copying into the inbox",
+        "outgoing": "explicit send error before encoding or waiting for serialization",
+        "cleanup": "permits remain owned until retained payloads and pending writes settle; close/reset does not wait for data capacity"
+      },
+      "evidence_limits": [
+        "This row qualifies endpoint payload admission only; IPC, process pool, native-worker and telemetry ceilings remain owned by their separate interfaces.",
+        "The real-TCP profile measures delivered bytes and loop-lag, plus zero settled logical reservations. It does not establish RSS or allocator high-water bounds.",
+        "The supported workload fits under the ceiling; simultaneous maximum-size payloads may be explicitly refused.",
+        "Shared macOS host timings do not qualify Linux CPU quotas or Windows."
+      ],
+      "measurement": {
+        "platform": "macOS arm64, shared development host",
+        "results": [
+          {
+            "sessions": 1,
+            "batches": 1156,
+            "delivered_bytes": 151519232,
+            "elapsed_seconds": 2.003,
+            "loop_lag_p999_us": 4761,
+            "loop_lag_max_us": 4948,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          },
+          {
+            "sessions": 8,
+            "batches": 583,
+            "delivered_bytes": 611319808,
+            "elapsed_seconds": 2.004,
+            "loop_lag_p999_us": 4300,
+            "loop_lag_max_us": 11959,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          },
+          {
+            "sessions": 32,
+            "batches": 172,
+            "delivered_bytes": 721420288,
+            "elapsed_seconds": 2.004,
+            "loop_lag_p999_us": 9770,
+            "loop_lag_max_us": 10314,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          },
+          {
+            "sessions": 64,
+            "batches": 84,
+            "delivered_bytes": 704643072,
+            "elapsed_seconds": 2.009,
+            "loop_lag_p999_us": 18650,
+            "loop_lag_max_us": 20844,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          }
+        ],
+        "frame_cadence_ms": 10,
+        "loop_lag_p999_exclusive_gate_us": 2000,
+        "loop_lag_max_exclusive_gate_us": 5000,
+        "frame_cadence_qualified": false,
+        "result": "Delivery and reservation release passed. Frame-cadence gates remain unqualified on the shared macOS host."
+      }
+    },
+    "worker_native_io": {
+      "service": "process-wide blocking I/O pool (lk_agents_net::blocking_io), four plain threads",
+      "limits": {
+        "running_and_queued": 4,
+        "shared_native_total": 64,
+        "reserved_control_slots": 4,
+        "shared_payload_total": 60,
+        "native_service_admission_waiters": 0,
+        "startup_waiters_per_server": 1
+      },
+      "consumers": [
+        "worker CPU/cgroup sampler",
+        "process memory sampler",
+        "server diagnostics/Prometheus-directory/CPU setup"
+      ],
+      "derivation": "The blocking I/O pool has its own 4 threads, independent of the media pool and its payload classes, so payload saturation never blocks health sampling. CPU sampling runs at 500ms cadence; memory sampling at 5s cadence. Exact fleet throughput and CPU-quota calibration remain unmeasured.",
+      "overload": {
+        "cpu_sample": "retain cached load and retry at the next sample cadence",
+        "process_memory_sample": "typed Sample::Failed and retry at the next cadence",
+        "server_setup": "owned startup future retries at the existing100ms pool-refill cadence, bounded by initialize_process_timeout; close cancels the wait before native work is retained"
+      },
+      "ownership": "The admitted native receipt keeps its class and total permits until actual completion, including cancelled callers and setup/sampling cleanup. Worker/server/supervisor drivers receive the service explicitly; production shares the process service and test fixtures own a service on their runtime.",
+      "checks": [
+        "worker_sampler_off_loop saturates BlockingIo while registration/drain/close stay serviceable",
+        "cancelled_caller_does_not_release_a_running_worker covers the reused native admission mechanism",
+        "native_payload_saturation_reserves_health_sampling_capacity exhausts payload admission while a health sample still enters the same shared pool",
+        "server_startup_waits_for_sampling_capacity, close_interrupts_a_server_waiting_for_sampling_capacity and server_setup_capacity_timeout_keeps_close_successful use fixture-owned services"
+      ],
+      "evidence_limits": [
+        "This change integrates the existing ceiling; it does not qualify native I/O throughput across Linux CPU quotas or Windows.",
+        "Worker control/outbox, IPC and process-pool byte ceilings still need their own aggregate calibration; endpoint payload admission and native running-work admission do not establish those bounds."
+      ]
+    },
+    "session_report": {
+      "workload": {
+        "sessions": [
+          1,
+          8,
+          32,
+          64
+        ],
+        "history_items": 10000,
+        "minimum_observations_per_distribution": 1000,
+        "heartbeat_ms": 1,
+        "control_cadence_ms": 10
+      },
+      "limits": {
+        "loop_lag_p999_ms_exclusive": 2,
+        "loop_lag_max_ms_exclusive": 5,
+        "callback_thread_cpu_p999_ms": 1,
+        "callback_thread_cpu_max_ms": 2
+      },
+      "measurement": [
+        "idle and workload absolute-deadline heartbeats",
+        "SDK callback wall/thread CPU by preparation stage",
+        "asyncio callback wall/thread CPU by coroutine or callback name",
+        "same-thread GC overlap and host load",
+        "complete transcript and SDK item counts with observable admission refusals"
+      ]
+    },
+    "media": {
+      "commands": {
+        "native": "cargo test -p lk-agents-runtime --test media_measurements --features media-images,media-ffmpeg -- --ignored --nocapture",
+        "python": "PYTHONPATH=livekit-agents-next:. uv run --no-sync python scripts/bench/media.py --output media-python.json"
+      },
+      "workload": {
+        "heartbeat_ms": 1,
+        "control_cadence_ms": 10,
+        "minimum_observations": 1000,
+        "image_dimensions": [
+          [
+            1920,
+            1080
+          ],
+          [
+            3840,
+            2160
+          ]
+        ],
+        "image_formats": [
+          "JPEG",
+          "PNG"
+        ],
+        "image_concurrency": 4,
+        "ogg_decode_streams": 32,
+        "audio_seconds": 10,
+        "source_sample_rate_hz": 48000,
+        "recording_streams": [
+          1,
+          8,
+          16
+        ],
+        "python_decode_target_sample_rate_hz": 24000
+      },
+      "limits": {
+        "loop_lag_p999_ms_exclusive": 2.0,
+        "loop_lag_max_ms_exclusive": 5.0,
+        "poll_thread_cpu_p999_ms": 1.0,
+        "poll_thread_cpu_max_ms": 2.0
+      },
+      "admission": {
+        "decoder_streams": 32,
+        "recording_streams": 16,
+        "image_jobs": 4,
+        "total_running_and_queued": 64,
+        "reserved_worker_io_slots": 4,
+        "admission_waiters": 0
+      },
+      "measurement": {
+        "native": "Real JPEG/PNG, Ogg/Opus encode/decode and recording filesystem adapters on a current-thread Tokio loop; each future poll records wall and thread CPU, with total process CPU and an independent absolute-deadline heartbeat. Samples are printed as MEDIA_MEASUREMENT JSON.",
+        "python": "First decoder and recorder construction after import, ten-second WAV resampling, real RTC frame conversion and four parallel JPEG/PNG encodes. Callback wall/thread CPU, independent heartbeat and Python-thread progress are recorded. Captures identify the loaded extension by path and SHA-256.",
+        "qualification": "Host-dependent timing is recorded. --check enables the Python cadence gates; short workloads without 1000 active heartbeats remain unqualified. Rust assertions check media duration, successful encoding and admission refusal only.",
+        "raw_captures": "Save captures outside the repository; include matching source revision, build features and host profile when comparing."
+      }
+    }
+  },
+  "evidence_limits": [
+    "MacOS shared machine with concurrent builds; no production CPU quota or deployment-capacity claim.",
+    "FakeRoom input is always 20ms; 10ms in full sessions is control/clock cadence. Direct Rust steps exercise genuine 10ms and 20ms frames.",
+    "Profiled and externally sampled passes perturb timing and must remain separate from the primary clean pass.",
+    "No real Silero/EOT model inference, codec drain, recording, stalled transport, 30-minute soak or multi-process job qualification.",
+    "Direct AudioForwarder CPU is not the async session decision Driver CPU. Missing exact measurements remain null.",
+    "Loop progress under fake native work cannot establish GIL release across unexecuted native waits.",
+    "Played bytes are FakeRoom local playback evidence, not remote receiver rendering.",
+    "Retained resources, queue bytes, allocation counts and worker-wide admission ceilings are not measured here; K-26 remains open."
+  ]
+}

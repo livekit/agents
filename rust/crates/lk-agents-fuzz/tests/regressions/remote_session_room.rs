@@ -2,7 +2,6 @@
 //! seeds run the protocol over a socket.
 use lk_agents_abi::voice::rtc::{ConnectionState, StreamInfo};
 use lk_agents_fuzz::fakes::room::FakeRtc;
-use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::rtc::events::{RoomEventBus, byte_streams};
 use lk_agents_runtime::voice::remote_session::room::RoomTransport;
 use lk_agents_runtime::voice::remote_session::{SessionTransport, TOPIC_SESSION_MESSAGES, proto};
@@ -33,8 +32,7 @@ fn request_id(message: proto::AgentSessionMessage) -> String {
 async fn the_room_carries_one_message_per_stream() {
     let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
     let room = rtc.room("call");
-    let transport =
-        Arc::new(RoomTransport::new(room.clone(), clock, Arc::new(TokioSpawner::current())));
+    let transport = Arc::new(RoomTransport::new(room.clone(), clock));
     transport.start().await.unwrap();
     transport.start().await.expect("idempotent");
     let info = || StreamInfo { topic: TOPIC_SESSION_MESSAGES.into(), ..StreamInfo::default() };

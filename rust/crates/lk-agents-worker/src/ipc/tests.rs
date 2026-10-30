@@ -244,11 +244,11 @@ async fn waits(
 
 #[tokio::test(start_paused = true)]
 async fn initialize_sends_hello_and_logs_the_elapsed_time() {
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, child) = setup(opts());
     let init = waits(&sup).await;
-    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
+    assert_eq!(recv(&child).await, ToChild::Hello(hello()));
     tokio::time::sleep(Duration::from_millis(1234)).await;
-    write(&mut child, &ToParent::Ready { error: None }).await.unwrap();
+    write(&child, &ToParent::Ready { error: None }).await.unwrap();
     let elapsed = init.await.unwrap().unwrap().unwrap();
     assert!(elapsed >= Duration::from_millis(1234));
     assert_eq!(host.messages(), ["initializing process", "process initialized"]);
@@ -260,9 +260,9 @@ async fn initialize_sends_hello_and_logs_the_elapsed_time() {
 // being treated as ready.
 #[tokio::test(start_paused = true)]
 async fn initialize_raises_the_child_error_and_a_version_mismatch() {
-    let (sup, _host, mut child) = setup(opts());
+    let (sup, _host, child) = setup(opts());
     let init = waits(&sup).await;
-    write(&mut child, &ToParent::Ready { error: Some("no model".into()) }).await.unwrap();
+    write(&child, &ToParent::Ready { error: Some("no model".into()) }).await.unwrap();
     assert_eq!(
         init.await.unwrap().unwrap_err().to_string(),
         "process initialization failed: no model"
@@ -275,9 +275,9 @@ async fn initialize_raises_the_child_error_and_a_version_mismatch() {
     child.write_all(&(VERSION + 1).to_be_bytes()).await.unwrap();
     assert!(matches!(init.await.unwrap(), Err(InitError::Version(v)) if v == VERSION + 1));
 
-    let (sup, _host, mut child) = setup(opts());
+    let (sup, _host, child) = setup(opts());
     let init = waits(&sup).await;
-    write(&mut child, &ToParent::ShutdownAck).await.unwrap();
+    write(&child, &ToParent::ShutdownAck).await.unwrap();
     assert!(matches!(init.await.unwrap(), Err(InitError::Unexpected)));
 
     let (sup, _host, child) = setup(opts());
@@ -316,16 +316,16 @@ async fn initialize_timeout_kills_the_process() {
 
 #[tokio::test(start_paused = true)]
 async fn pings_on_the_interval_and_warns_on_a_late_pong() {
-    let (sup, host, mut child) = setup(uninitialized());
+    let (sup, host, child) = setup(uninitialized());
     let start = Instant::now();
     sup.supervise().await;
-    let ToChild::Ping { sent_ms } = recv(&mut child).await else { panic!() };
+    let ToChild::Ping { sent_ms } = recv(&child).await else { panic!() };
     assert_eq!(start.elapsed(), Duration::ZERO);
     assert!((unix_now_ms() - sent_ms as i64).abs() < 5_000);
     // the next ping waits for this one's pong
     tokio::time::sleep(Duration::from_secs(4)).await;
-    write(&mut child, &ToParent::Pong { sent_ms: (unix_now_ms() - 2_000) as u64 }).await.unwrap();
-    assert!(matches!(recv(&mut child).await, ToChild::Ping { .. }));
+    write(&child, &ToParent::Pong { sent_ms: (unix_now_ms() - 2_000) as u64 }).await.unwrap();
+    assert!(matches!(recv(&child).await, ToChild::Ping { .. }));
     assert_eq!(start.elapsed(), Duration::from_millis(5000));
 
     while host.find("process is unresponsive").is_none() {
@@ -336,7 +336,7 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     let ExtraValue::Int(delay) = extra[0].1 else { panic!() };
     assert!(extra[0].0 == "delay" && delay >= 2_000);
 
-    write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
+    write(&child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(host.messages().iter().filter(|m| *m == "process is unresponsive").count(), 1);
 }
@@ -357,12 +357,12 @@ async fn one_ping_is_in_flight_at_a_time() {
 
 #[tokio::test(start_paused = true)]
 async fn missing_pongs_kill_the_process_after_ping_timeout() {
-    let (sup, host, mut child) = setup(uninitialized());
+    let (sup, host, child) = setup(uninitialized());
     let start = Instant::now();
     sup.supervise().await;
     // one pong at 60 s moves the deadline to 150 s
     tokio::time::sleep(Duration::from_secs(60)).await;
-    write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
+    write(&child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
     let drain = tokio::spawn(async move { while child.recv().await.is_ok() {} });
     while host.kills.load(Ordering::SeqCst) == 0 {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -381,16 +381,16 @@ async fn missing_pongs_kill_the_process_after_ping_timeout() {
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_waits_for_the_ack_and_the_exit() {
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, child) = setup(opts());
     sup.supervise().await;
     let close = tokio::spawn({
         let sup = sup.clone();
         async move { sup.shutdown().await }
     });
-    assert_eq!(recv_skipping_pings(&mut child).await, ToChild::Shutdown { reason: String::new() });
-    write(&mut child, &ToParent::ShutdownAck).await.unwrap();
-    write(&mut child, &ToParent::Exiting { reason: "shutdown".into() }).await.unwrap();
-    write(&mut child, &ToParent::ShuttingDown).await.unwrap();
+    assert_eq!(recv_skipping_pings(&child).await, ToChild::Shutdown { reason: String::new() });
+    write(&child, &ToParent::ShutdownAck).await.unwrap();
+    write(&child, &ToParent::Exiting { reason: "shutdown".into() }).await.unwrap();
+    write(&child, &ToParent::ShuttingDown).await.unwrap();
     child.close().await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(!close.is_finished(), "returns only once the process exited");
@@ -458,13 +458,13 @@ async fn a_runner_that_cannot_be_forced_is_asked_and_waited_for() {
 
 #[tokio::test(start_paused = true)]
 async fn the_socket_closing_resolves_the_shutdown_waits() {
-    let (sup, host, mut child) = setup(opts());
+    let (sup, host, child) = setup(opts());
     sup.supervise().await;
     let close = tokio::spawn({
         let sup = sup.clone();
         async move { sup.shutdown().await }
     });
-    assert_eq!(recv_skipping_pings(&mut child).await, ToChild::Shutdown { reason: String::new() });
+    assert_eq!(recv_skipping_pings(&child).await, ToChild::Shutdown { reason: String::new() });
     drop(child);
     tokio::time::sleep(Duration::from_secs(1)).await;
     finish(&sup, &host, 1).await;
@@ -515,15 +515,15 @@ async fn a_native_memory_sample_enforces_the_process_limit() {
 
 // ------------------------------------------------------------------------------------- child
 
-/// The child's watch over a channel whose parent end the test drives.
-fn watched(
-    health_timeout: Option<Duration>,
-) -> (
+type WatchedChannel = (
     tokio::sync::mpsc::Receiver<ToChild>,
     lk_agents_abi::OwnedTask<Result<(), ChannelError>>,
     Channel<ToChild, ToParent>,
     Arc<AtomicUsize>,
-) {
+);
+
+/// The child's watch over a channel whose parent end the test drives.
+fn watched(health_timeout: Option<Duration>) -> WatchedChannel {
     let (parent, child) = memory();
     let orphaned = Arc::new(AtomicUsize::new(0));
     let count = orphaned.clone();
@@ -607,11 +607,11 @@ async fn supervisor_blocked_writer() {
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_ack_phase_deadline() {
-    let (sup, host, mut child) = setup(uninitialized());
+    let (sup, host, child) = setup(uninitialized());
     // Poll shutdown through command admission without waiting for the process to exit.
     let _ = tokio::time::timeout(Duration::ZERO, sup.shutdown()).await;
-    assert!(matches!(recv_skipping_pings(&mut child).await, ToChild::Shutdown { .. }));
-    write(&mut child, &ToParent::ShutdownAck).await.unwrap();
+    assert!(matches!(recv_skipping_pings(&child).await, ToChild::Shutdown { .. }));
+    write(&child, &ToParent::ShutdownAck).await.unwrap();
     tokio::time::sleep(Duration::from_secs(61)).await;
     assert_eq!(
         host.kills.load(Ordering::SeqCst),
@@ -622,11 +622,11 @@ async fn shutdown_ack_phase_deadline() {
 
 #[tokio::test(start_paused = true)]
 async fn repeated_initialize_callers_are_refused_without_replacing_the_first_waiter() {
-    let (sup, _host, mut child) = setup(opts());
+    let (sup, _host, child) = setup(opts());
     let first = waits(&sup).await;
-    assert!(matches!(recv(&mut child).await, ToChild::Hello(_)));
+    assert!(matches!(recv(&child).await, ToChild::Hello(_)));
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
-    write(&mut child, &ToParent::Ready { error: None }).await.unwrap();
+    write(&child, &ToParent::Ready { error: None }).await.unwrap();
     assert!(first.await.unwrap().unwrap().is_some());
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
 }

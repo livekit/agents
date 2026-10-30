@@ -677,10 +677,11 @@ impl Driver {
         // Announced, recorded and scheduled in `request`, the one place every speech passes.
         let admitted =
             self.schedule_speech(now, id, state, kind, spec.add_to_chat_ctx, spec.host_asked, out);
-        if admitted && kind.scheduled() {
-            if let Some(state) = self.activity.speech_scheduler.speech_mut(id) {
-                state.mark_scheduled();
-            }
+        if admitted
+            && kind.scheduled()
+            && let Some(state) = self.activity.speech_scheduler.speech_mut(id)
+        {
+            state.mark_scheduled();
         }
         if admitted && !past_edge {
             self.storage_started(id);
@@ -1104,7 +1105,7 @@ impl Driver {
             self.run_speech_ended(speech, failed, out);
         }
         // The deferred tool reply's fate is read off the handle; the tools' fillers go with it.
-        self.tool_reply_done(now, speech, out);
+        self.tool_reply_done(speech, out);
         self.fillers_speech_ended(speech, out);
         // The handle leaves with the queue's entry (`speech_finished`, below); `speech_frames`
         // keeps its entry: a call and output can land after the speech is done.

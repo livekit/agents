@@ -30,15 +30,16 @@ impl CoreJudgeRunner {
     ) -> PyResult<CoreJudgeRunner> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
-        let tools = crate::conversions::host_ref_from_py(&tools)?;
-        let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
+        let llm =
+            llm.map(|v| crate::generated::llm::LlmProxy::from_host(v.as_any())).transpose()?;
+        let tools = crate::conversions::host_ref_from_py(tools.as_any())?;
+        let host = crate::generated::evals::EvaluationHostProxy::from_host(host.as_any())?;
         let out = py.detach(|| {
             <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(
                 &env, llm, tools, host,
             )
         });
-        Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
     }
 
     /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
@@ -56,7 +57,7 @@ impl CoreJudgeRunner {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::evals::judge_spec_from_py(&item)
+                    crate::generated::records::evals::judge_spec_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
@@ -64,7 +65,7 @@ impl CoreJudgeRunner {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::chat_items::chat_item_from_py(&item)
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
@@ -74,7 +75,7 @@ impl CoreJudgeRunner {
                     items
                         .map(|item| {
                             let item = item?;
-                            crate::generated::records::chat_items::chat_item_from_py(&item)
+                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
                         })
                         .collect::<PyResult<Vec<_>>>()
                 })
@@ -89,11 +90,7 @@ impl CoreJudgeRunner {
                     ::pyo3::types::PyList::new(
                         py,
                         out.into_iter()
-                            .map(|x| {
-                                PyResult::Ok(crate::generated::records::evals::judge_outcome_to_py(
-                                    py, x,
-                                )?)
-                            })
+                            .map(|x| crate::generated::records::evals::judge_outcome_to_py(py, x))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -149,16 +146,15 @@ pub fn _core_evaluation_score<'py>(
         .map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| {
             <::lk_agents_abi::evals::InvalidJudgment as crate::python::HostException>::to_py_err(&e)
         })?;
-    Ok(crate::generated::records::evals::evaluation_score_to_py(py, out)?)
+    crate::generated::records::evals::evaluation_score_to_py(py, out)
 }
 
 /// The judge tools' raw schemas, which the host offers a model it implements.
 #[pyfunction]
 pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let out =
-        py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas());
-    Ok(crate::python::value_to_py(py, &out)?)
+    let out = py.detach(<EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas);
+    crate::python::value_to_py(py, &out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/evals.rs.
@@ -247,7 +243,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::evals::judgment_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

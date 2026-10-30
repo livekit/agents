@@ -74,7 +74,7 @@ fn registration_needs_the_url_the_credentials_and_a_name_for_routes() {
 #[test]
 fn invalid_server_update_cannot_partially_change_launch_configuration() {
     use lk_agents_abi::Maybe::Given;
-    use lk_agents_abi::worker::worker::ServerOptions;
+    use lk_agents_abi::worker::types::ServerOptions;
     let mut server = settings();
     let original_url = server.ws_url.clone();
     let error = server
@@ -103,7 +103,7 @@ fn invalid_server_update_cannot_partially_change_launch_configuration() {
 #[test]
 fn unsupported_start_method_is_refused_before_launch() {
     use lk_agents_abi::Maybe::Given;
-    use lk_agents_abi::worker::worker::ServerOptions;
+    use lk_agents_abi::worker::types::ServerOptions;
     let mut server = settings();
     let method = server.multiprocessing_context.clone();
     let error = server

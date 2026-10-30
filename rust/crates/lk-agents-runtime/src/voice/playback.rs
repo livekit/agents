@@ -216,7 +216,6 @@ impl PlaybackObserver for Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future::Future;
     use std::task::{Context, Poll, Wake, Waker};
 
     struct Woken(OnceLock<()>);

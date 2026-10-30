@@ -7,7 +7,6 @@ pub mod duplex;
 pub mod events;
 pub mod fallback;
 pub mod inference;
-pub mod llm;
 pub mod mcp;
 #[cfg(feature = "serde")]
 mod persistence;
@@ -16,3 +15,5 @@ pub mod realtime;
 pub mod schema;
 pub mod to_dict;
 pub mod tool_executor;
+#[path = "llm.rs"]
+pub mod types;

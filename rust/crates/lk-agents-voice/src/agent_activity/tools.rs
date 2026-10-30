@@ -126,7 +126,8 @@ impl Driver {
         }
         let first = Box::new(self.reply_call_start(speech, id));
         let host = self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), out);
-        let start = ToolGo::Start { call: id, item: Box::new(call), host, first };
+        let start =
+            ToolGo::Start { call: id, item: Box::new(call), host: host.map(Box::new), first };
         out.answer(Some(go), Answer::ToolGo(start));
     }
 
@@ -401,11 +402,11 @@ impl Driver {
                 match report.outcome {
                     ToolOutcome::Cancelled => {
                         emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);
-                        return self.try_deliver_tool_reply(now, out);
+                        return self.try_deliver_tool_reply(out);
                     }
                     ToolOutcome::Nothing | ToolOutcome::StopResponse => {
                         emit_ended(out, id, call_id, None, ToolEndStatus::Done);
-                        return self.try_deliver_tool_reply(now, out);
+                        return self.try_deliver_tool_reply(out);
                     }
                     _ => {}
                 }
@@ -418,7 +419,7 @@ impl Driver {
                 self.commit_pair(&running, id, pair, out);
             }
         }
-        self.try_deliver_tool_reply(now, out);
+        self.try_deliver_tool_reply(out);
     }
 
     /// Commit the pair to the record at once, so an earlier reply still sees it, deliver what it
@@ -573,7 +574,7 @@ impl Driver {
 
     /// One reply for every pending update, at the first idle instant with no current speech. Runs
     /// before idle waiters are answered, so a `foreground()` waits behind it.
-    pub(crate) fn try_deliver_tool_reply(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn try_deliver_tool_reply(&mut self, out: &mut Out) {
         let tools = &self.activity.tools;
         if tools.pending.is_empty() || tools.reply.is_some() {
             return;
@@ -674,7 +675,7 @@ impl Driver {
     }
 
     /// A speech ended: if it was the deferred reply, its fate is reported and the next batch may go.
-    pub(crate) fn tool_reply_done(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn tool_reply_done(&mut self, speech: SpeechId, out: &mut Out) {
         let speaking =
             |r: &mut ToolReply| matches!(r, ToolReply::Speaking { speech: s, .. } if *s == speech);
         let Some(ToolReply::Speaking { update_ids, .. }) =
@@ -694,10 +695,14 @@ impl Driver {
             status,
             speech,
         }));
-        self.try_deliver_tool_reply(now, out);
+        self.try_deliver_tool_reply(out);
     }
 
     /// `SpeechCommand::FillerStart`: the scope opened. The dwell begins at the first idle instant.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the operation’s existing explicit arguments"
+    )]
     pub(crate) fn on_filler_start(
         &mut self,
         now: Ts,

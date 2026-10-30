@@ -59,10 +59,10 @@ python-debug:
 		--config 'profile.dev.package.lk-agents-py.debug=1' $(BUILD_ARGS)
 
 format:
-	cargo fmt --all
+	cargo fmt
 
 format-check:
-	cargo fmt --all -- --check
+	cargo fmt -- --check
 
 # One config for this explicit package group. Other policies get separate invocations.
 # This is a diagnostic pass; architecture also validates exemptions and baselines.

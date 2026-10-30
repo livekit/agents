@@ -72,7 +72,7 @@ impl Run {
                     Input::VadEnd { vad, .. } if vad.nth == nth => Some(false),
                     _ => None,
                 })
-                .last()
+                .next_back()
                 .unwrap_or(false);
             if still_speaking {
                 out.push(Input::VadEnd { vad: Ref::new(nth), silence_ms: Millis(500) });
@@ -100,7 +100,7 @@ impl Run {
                     } if s.nth == socket => Some(false),
                     _ => None,
                 })
-                .last()
+                .next_back()
                 .unwrap_or(false);
             if still_speaking {
                 out.push(Input::RealtimeEvent {
@@ -673,6 +673,36 @@ fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>>
     out
 }
 
+/// `VOICE_JOURNAL=1`: every journal step, host event and applied input of the run, in sequence
+/// order.
+fn dump_journal(record: &crate::record::Recording) {
+    let mut lines: Vec<(u64, String)> = record
+        .journal()
+        .iter()
+        .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms   {step:?}", at.seq, at.at_ms)))
+        .collect();
+    lines.extend(
+        record
+            .host()
+            .iter()
+            .map(|(at, h)| (at.seq, format!("{:>6} {:>7}ms H {h:?}", at.seq, at.at_ms))),
+    );
+    lines.extend(
+        record
+            .avatar()
+            .iter()
+            .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms A {step:?}", at.seq, at.at_ms))),
+    );
+    lines.extend(record.applied().iter().map(|a| {
+        let mark = if a.accepted { ">" } else { "x" };
+        (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))
+    }));
+    lines.sort_by_key(|(seq, _)| *seq);
+    for (_, line) in lines {
+        eprintln!("{line}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,35 +802,5 @@ mod tests {
                 assert!(made > 0, "{} probe never reached its prerequisite", contract.id);
             }
         }
-    }
-}
-
-/// `VOICE_JOURNAL=1`: every journal step, host event and applied input of the run, in sequence
-/// order.
-fn dump_journal(record: &crate::record::Recording) {
-    let mut lines: Vec<(u64, String)> = record
-        .journal()
-        .iter()
-        .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms   {step:?}", at.seq, at.at_ms)))
-        .collect();
-    lines.extend(
-        record
-            .host()
-            .iter()
-            .map(|(at, h)| (at.seq, format!("{:>6} {:>7}ms H {h:?}", at.seq, at.at_ms))),
-    );
-    lines.extend(
-        record
-            .avatar()
-            .iter()
-            .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms A {step:?}", at.seq, at.at_ms))),
-    );
-    lines.extend(record.applied().iter().map(|a| {
-        let mark = if a.accepted { ">" } else { "x" };
-        (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))
-    }));
-    lines.sort_by_key(|(seq, _)| *seq);
-    for (_, line) in lines {
-        eprintln!("{line}");
     }
 }

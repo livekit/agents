@@ -177,7 +177,10 @@ impl ipc_host::JobSupervisor for JobSupervisor {
 
     fn _core_thread_exited(&self) -> Result<(), WorkerError> {
         match &*self.launcher.lock() {
-            Some(Launcher::Thread(executor)) => Ok(executor.exited()),
+            Some(Launcher::Thread(executor)) => {
+                executor.exited();
+                Ok(())
+            }
             _ => Err(WorkerError::Failed("no job thread to report".into())),
         }
     }

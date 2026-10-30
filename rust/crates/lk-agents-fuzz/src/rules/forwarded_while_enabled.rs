@@ -61,7 +61,10 @@ impl Rule for ForwardedWhileEnabled {
                 _ => None,
             })
             .flat_map(|(at, (stt, vad))| {
-                [(stt, Kind::Stt), (vad, Kind::Vad)].into_iter().filter(|(on, _)| *on).map(move |(_, k)| (at, k))
+                [(stt, Kind::Stt), (vad, Kind::Vad)]
+                    .into_iter()
+                    .filter(|(on, _)| *on)
+                    .map(move |(_, k)| (at, k))
             })
             .collect();
         // The close's edge detaches the microphone: it asks for the frame census and closes the
@@ -111,8 +114,13 @@ impl Rule for ForwardedWhileEnabled {
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
                 let dropped = unpublished.iter().find(|at| **at > sent.at).copied();
-                let replaced =
-                    mic_closed.get(&mic.nth).copied().into_iter().chain(detached).chain(dropped).min();
+                let replaced = mic_closed
+                    .get(&mic.nth)
+                    .copied()
+                    .into_iter()
+                    .chain(detached)
+                    .chain(dropped)
+                    .min();
                 let frame = (mic.nth, chunk);
                 expect_reached(
                     &inputs,
@@ -139,14 +147,10 @@ impl Rule for ForwardedWhileEnabled {
                 let late =
                     pushed_enabled.get(&(mic, chunk)).is_some_and(|pushed| *pushed < heard.at);
                 let raced = pushed_at.get(&(mic, chunk)).is_some_and(|pushes| {
-                    pushes
-                        .iter()
-                        .filter(|pushed| **pushed < heard.at)
-                        .next_back()
-                        .is_some_and(|pushed| {
-                            switching(&inputs, &audio_input, *pushed)
-                                || switched_in_its_turn(&inputs, &audio_input, *pushed)
-                        })
+                    pushes.iter().rfind(|pushed| **pushed < heard.at).is_some_and(|pushed| {
+                        switching(&inputs, &audio_input, *pushed)
+                            || switched_in_its_turn(&inputs, &audio_input, *pushed)
+                    })
                 });
                 check.expect_with(Subject::Resource(Kind::Mic, mic), late || raced, || {
                     format!(
@@ -197,6 +201,7 @@ const LISTENERS: [Kind; 2] = [Kind::Stt, Kind::Vad];
 
 /// One frame pushed at `pushed` while input was enabled reached every listening stream that was
 /// open for its whole journey.
+#[allow(clippy::too_many_arguments, reason = "Keep the operation’s existing explicit arguments")]
 fn expect_reached(
     inputs: &InputsView,
     audio_input: &Switch,

@@ -368,11 +368,11 @@ impl Playout {
     fn cleared(&self) -> Vec<u32> {
         let cut: Vec<(u32, lk_agents_abi::voice::io::PlaybackSegment, Duration)> = {
             let mut state = self.state.lock().unwrap();
-            let mut outstanding: Vec<(u32, Vec<(Option<u32>, Duration)>)> =
-                std::mem::take(&mut state.flushed)
-                    .into_keys()
-                    .map(|s| (s, state.flushed_frames.remove(&s).unwrap_or_default()))
-                    .collect();
+            type OutstandingGeneration = (u32, Vec<(Option<u32>, Duration)>);
+            let mut outstanding: Vec<OutstandingGeneration> = std::mem::take(&mut state.flushed)
+                .into_keys()
+                .map(|s| (s, state.flushed_frames.remove(&s).unwrap_or_default()))
+                .collect();
             if let Some(open) = state.open.take() {
                 state.duration = Duration::ZERO;
                 outstanding.push((open, std::mem::take(&mut state.frames)));

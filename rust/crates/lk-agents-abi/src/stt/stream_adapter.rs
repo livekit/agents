@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::errors::ProviderError;
 use crate::tokenize::language::LanguageCode;
 use crate::utils::stream::{StreamSink, StreamSource};
-use crate::vad::vad::Vad;
+use crate::vad::types::Vad;
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 
 /// `stt.StreamAdapter`'s engine as the host builds it; the public class stays Python.

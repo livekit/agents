@@ -38,7 +38,10 @@ impl Rule for SpeechSettles {
             }
             // A preemptive reply parked for a turn that never ended waits on the person's final
             // words, which the case never sent: the reference parks it the same way.
-            if speech.is_speculative() && !speech.is_scheduled() && !turn_ended(r, &speech, answered) {
+            if speech.is_speculative()
+                && !speech.is_scheduled()
+                && !turn_ended(r, &speech, answered)
+            {
                 continue;
             }
             // A speech held at its launch waits for the person to stop, as the reference's reply
@@ -68,7 +71,11 @@ impl Rule for SpeechSettles {
                 continue;
             }
             let done = speech.done_at().is_some_and(|done| done <= answered);
-            check.expect(&speech, done, format!("still running after everything was answered ({speech:?})"));
+            check.expect(
+                speech,
+                done,
+                format!("still running after everything was answered ({speech:?})"),
+            );
         }
     }
 }
@@ -106,14 +113,14 @@ fn held_at_launch(r: &Recording, speech: &SpeechView, answered: Observed) -> boo
         .iter()
         .filter(|(at, _)| *at <= answered)
         .filter_map(|(_, step)| match step {
-            Step::Interrupt(InterruptStep::PlayoutGate { speech, op, cause: GateCause::Launch })
-                if speech.0 == id =>
-            {
-                Some(*op == GateOp::Pause)
-            }
+            Step::Interrupt(InterruptStep::PlayoutGate {
+                speech,
+                op,
+                cause: GateCause::Launch,
+            }) if speech.0 == id => Some(*op == GateOp::Pause),
             _ => None,
         })
-        .last()
+        .next_back()
         .unwrap_or(false)
 }
 

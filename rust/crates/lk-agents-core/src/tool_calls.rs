@@ -526,7 +526,8 @@ impl ToolCalls {
                 .map(|c| ChatItem::FunctionCall(c.item.clone()))
                 .collect();
             let call = &mut self.calls[index];
-            let decided = history.map(|item| item).chain(&earlier);
+            // Shorten history references to the lifetime of this step’s local decisions.
+            let decided = history.map(|item| -> &ChatItem { item }).chain(&earlier);
             if approval::granted(decided, &self.approval_answers, &call.item.name, &canonical) {
                 approval::set_mark(&mut call.item, Approval::Granted, &canonical);
             } else if read_back == ReadBack::Function {

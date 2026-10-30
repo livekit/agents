@@ -393,6 +393,10 @@ pub(crate) enum StepOp {
 
 /// One entry of a step's to-do list, in the order decided.
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the ordered step buffer contiguous without per-effect allocations"
+)]
 pub(crate) enum Planned {
     Effect(Effect),
     Op(StepOp),
@@ -405,6 +409,10 @@ pub struct Effects {
 }
 
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the ordered step buffer contiguous without per-effect allocations"
+)]
 pub(crate) enum Transition {
     Effect(Effect),
     Op(StepOp),

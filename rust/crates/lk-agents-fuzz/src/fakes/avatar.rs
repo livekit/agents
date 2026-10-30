@@ -15,6 +15,8 @@
 //! The two rooms are relayed in the order the agent sent things over its data channel: a segment's
 //! chunks as they are written, a `lk.clear_buffer` between them, as a real room delivers them.
 
+type CachedEntries = (u64, HashMap<u64, (Entry, Weak<[u8]>)>);
+
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, OnceLock, Weak},
@@ -74,7 +76,7 @@ enum Entry {
 /// holds those bytes.
 #[derive(Default)]
 struct Frames {
-    entries: Mutex<(u64, HashMap<u64, (Entry, Weak<[u8]>)>)>,
+    entries: Mutex<CachedEntries>,
 }
 
 impl Frames {

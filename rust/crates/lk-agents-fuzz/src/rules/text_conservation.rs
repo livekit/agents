@@ -89,7 +89,7 @@ impl Rule for TextConservation {
                 in_order(&given, &deltas)
             };
             check.expect(
-                &speech,
+                speech,
                 ordered,
                 format!("forwarded {forwarded:?} is not drawn in order from given {given:?}"),
             );
@@ -98,7 +98,7 @@ impl Rule for TextConservation {
             // long as there was a transcript path to forward it down for the whole of its life.
             if live_path && speech.completed_normally() && speech.is_scheduled() && !step_cut {
                 check.expect(
-                    &speech,
+                    speech,
                     forwarded == given,
                     format!("completed speech forwarded {forwarded:?}, was given {given:?}"),
                 );

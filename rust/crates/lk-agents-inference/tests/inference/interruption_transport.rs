@@ -50,6 +50,10 @@ async fn recording_gateway() -> (u16, mpsc::UnboundedReceiver<(String, String)>)
             let tx = tx.clone();
             tokio::spawn(async move {
                 let mut session_id = String::new();
+                #[allow(
+                    clippy::result_large_err,
+                    reason = "The WebSocket handshake callback requires this external response type"
+                )]
                 let record = |req: &Request, resp| {
                     session_id = req
                         .headers()

@@ -65,7 +65,8 @@ async fn decoded_stereo_is_normalized_before_delivery_to_a_mono_input() {
     let mut samples = Vec::new();
     while let Some(frame) = decoder.next().await.unwrap() {
         assert_eq!((frame.sample_rate, frame.num_channels), (24_000, 1));
-        samples.extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+        samples
+            .extend(frame.data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])));
     }
     assert_eq!(samples, vec![150; 480]);
     decoder.close().await.unwrap();
@@ -83,7 +84,12 @@ async fn file_decoding_preserves_audio_and_reports_file_and_codec_failures() {
     while let Some(frame) = decoder.next().await.unwrap() {
         assert_eq!((frame.sample_rate, frame.num_channels), (24_000, 1));
         actual.extend(
-            frame.data.chunks_exact(2).map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]])),
+            frame
+                .data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]])),
         );
     }
     assert_eq!(actual, pcm);
@@ -129,7 +135,8 @@ async fn a_stream_keeps_its_slot_until_cancellation_settles_then_refuses_input()
     input.end_input();
     let mut samples = Vec::new();
     while let Some(frame) = second.next().await.unwrap() {
-        samples.extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+        samples
+            .extend(frame.data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])));
     }
     assert_eq!(samples, vec![7; 480]);
     assert!(matches!(input.push(&[0; 4]), Err(DecoderError::InputClosed)));
@@ -148,7 +155,12 @@ async fn looping_file_backpressure_keeps_its_slot_until_cancelled_decode_settles
     while actual.len() < pcm.len() + 4096 {
         let frame = decoder.next().await.unwrap().unwrap();
         actual.extend(
-            frame.data.chunks_exact(2).map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]])),
+            frame
+                .data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]])),
         );
     }
     assert_eq!(&actual[..pcm.len()], pcm);

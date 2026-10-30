@@ -12,7 +12,7 @@ use tokio::sync::Notify;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::stt::HELD_FRAMES;
 use lk_agents_abi::stt::events::{SpeechEvent, SpeechEventType};
-use lk_agents_abi::stt::stt::{Stt, SttCapabilities, SttSink, SttSource};
+use lk_agents_abi::stt::types::{Stt, SttCapabilities, SttSink, SttSource};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
@@ -34,7 +34,7 @@ impl RetryingStt {
         conn_options: &ApiConnectOptions,
         clock: Arc<dyn Clock>,
     ) -> Arc<dyn Stt> {
-        Arc::new(RetryingStt { inner: stt, options: conn_options.clone(), clock })
+        Arc::new(RetryingStt { inner: stt, options: *conn_options, clock })
     }
 }
 
@@ -231,7 +231,7 @@ impl Stt for RetryingStt {
             };
             let source = RetrySource {
                 stt: Arc::clone(&self.inner),
-                options: self.options.clone(),
+                options: self.options,
                 clock: Arc::clone(&self.clock),
                 label: self.inner.label(),
                 language: language.clone(),

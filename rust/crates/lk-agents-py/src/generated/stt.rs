@@ -13,27 +13,37 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/stt/fallback.rs.
 type FallbackSttImpl = <crate::Selected as super::Implementations>::FallbackStt;
 
-fn _extract_fallback_stt_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "attempt_timeout")
+fn _extract_fallback_stt_new_attempt_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<FallbackSttNewAttemptTimeoutInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "attempt_timeout")
 }
+type FallbackSttNewAttemptTimeoutInput = f64;
 
-fn _extract_fallback_stt_new_max_retry_per_stt(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    crate::python::number_from_py::<u32>(&obj, "max_retry_per_stt")
+fn _extract_fallback_stt_new_max_retry_per_stt(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<FallbackSttNewMaxRetryPerSttInput> {
+    crate::python::number_from_py::<u32>(obj.as_any(), "max_retry_per_stt")
 }
+type FallbackSttNewMaxRetryPerSttInput = u32;
 
-fn _extract_fallback_stt_new_retry_interval(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "retry_interval")
+fn _extract_fallback_stt_new_retry_interval(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<FallbackSttNewRetryIntervalInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "retry_interval")
 }
+type FallbackSttNewRetryIntervalInput = f64;
 
 fn _extract_fallback_stt_stream_start_time_offset(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<f64>> {
+) -> PyResult<FallbackSttStreamStartTimeOffsetInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "start_time_offset")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "start_time_offset")).map(Some)
     }
 }
+type FallbackSttStreamStartTimeOffsetInput = ::std::option::Option<f64>;
 
 /// `stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[pyclass(frozen, name = "FallbackStt", module = "livekit.agents._core")]
@@ -48,9 +58,12 @@ impl FallbackStt {
     fn new(
         py: Python<'_>,
         stts: Bound<'_, PyAny>,
-        #[pyo3(from_py_with = _extract_fallback_stt_new_attempt_timeout)] attempt_timeout: f64,
-        #[pyo3(from_py_with = _extract_fallback_stt_new_max_retry_per_stt)] max_retry_per_stt: u32,
-        #[pyo3(from_py_with = _extract_fallback_stt_new_retry_interval)] retry_interval: f64,
+        #[pyo3(from_py_with = _extract_fallback_stt_new_attempt_timeout)]
+        attempt_timeout: FallbackSttNewAttemptTimeoutInput,
+        #[pyo3(from_py_with = _extract_fallback_stt_new_max_retry_per_stt)]
+        max_retry_per_stt: FallbackSttNewMaxRetryPerSttInput,
+        #[pyo3(from_py_with = _extract_fallback_stt_new_retry_interval)]
+        retry_interval: FallbackSttNewRetryIntervalInput,
         on_availability: Option<Bound<'_, PyAny>>,
     ) -> PyResult<FallbackStt> {
         crate::host::check_pid()?;
@@ -59,15 +72,15 @@ impl FallbackStt {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::stt::SttProxy::from_host(&item)
+                    crate::generated::stt::SttProxy::from_host(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
         let on_availability = on_availability
-            .map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v))
+            .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
         let out = py.detach(|| <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(&env, stts, attempt_timeout, max_retry_per_stt, retry_interval, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
-        Ok(FallbackStt(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(FallbackStt(::std::sync::Arc::new(out)))
     }
 
     /// Which entry most recently served, as a position in the host's list.
@@ -77,7 +90,7 @@ impl FallbackStt {
         let out = py.detach(|| {
             <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::active_index(&self.0)
         });
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// The merged capabilities, not the primary's: a caller must not wait for interim results a
@@ -88,7 +101,7 @@ impl FallbackStt {
         let out = py.detach(|| {
             <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::capabilities(&self.0)
         });
-        Ok(crate::generated::records::stt::stt_capabilities_to_py(py, out)?)
+        crate::generated::records::stt::stt_capabilities_to_py(py, out)
     }
 
     /// Every recovery probe in flight closes its stream, awaited (bounded).
@@ -96,10 +109,10 @@ impl FallbackStt {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out =
+            let () =
                 <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::aclose(&this)
                     .await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
@@ -117,13 +130,13 @@ impl FallbackStt {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::conversions::audio_frame_from_py(&item)
+                    crate::conversions::audio_frame_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
+        let language = language.map(|v| crate::python::str_from_py(v.as_any())).transpose()?;
         let conn_options = conn_options
-            .map(|v| crate::conversions::api_connect_options_from_py(&v))
+            .map(|v| crate::conversions::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -155,13 +168,13 @@ impl FallbackStt {
         py: Python<'py>,
         language: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_fallback_stt_stream_start_time_offset)]
-        start_time_offset: ::std::option::Option<f64>,
+        start_time_offset: FallbackSttStreamStartTimeOffsetInput,
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
+        let language = language.map(|v| crate::python::str_from_py(v.as_any())).transpose()?;
         let conn_options = conn_options
-            .map(|v| crate::conversions::api_connect_options_from_py(&v))
+            .map(|v| crate::conversions::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -220,7 +233,7 @@ pub struct FallbackRecognizeStream(
 impl FallbackRecognizeStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let item = crate::conversions::audio_frame_from_py(&item)?;
+        let item = crate::conversions::audio_frame_from_py(item.as_any())?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(
             |e: ::lk_agents_abi::errors::ProviderError| {
                 <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
@@ -264,19 +277,23 @@ impl FallbackRecognizeStream {
 // Declared in rust/crates/lk-agents-abi/src/stt/inference.rs.
 type InferenceSttImpl = <crate::Selected as super::Implementations>::InferenceStt;
 
-fn _extract_inference_stt_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    crate::python::number_from_py::<u32>(&obj, "sample_rate")
+fn _extract_inference_stt_new_sample_rate(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceSttNewSampleRateInput> {
+    crate::python::number_from_py::<u32>(obj.as_any(), "sample_rate")
 }
+type InferenceSttNewSampleRateInput = u32;
 
 fn _extract_inference_stt_stream_start_time_offset(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<f64>> {
+) -> PyResult<InferenceSttStreamStartTimeOffsetInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "start_time_offset")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "start_time_offset")).map(Some)
     }
 }
+type InferenceSttStreamStartTimeOffsetInput = ::std::option::Option<f64>;
 
 /// The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by
 /// every view (`identified`); each view's connections carry its own job's identification. As the
@@ -295,7 +312,8 @@ impl InferenceStt {
         model: ::std::option::Option<::std::string::String>,
         language: ::std::option::Option<::std::string::String>,
         encoding: ::std::string::String,
-        #[pyo3(from_py_with = _extract_inference_stt_new_sample_rate)] sample_rate: u32,
+        #[pyo3(from_py_with = _extract_inference_stt_new_sample_rate)]
+        sample_rate: InferenceSttNewSampleRateInput,
         base_url: ::std::string::String,
         api_key: ::std::string::String,
         api_secret: ::std::string::String,
@@ -306,12 +324,13 @@ impl InferenceStt {
     ) -> PyResult<InferenceStt> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let extra_kwargs = match crate::python::value_from_py(&extra_kwargs, "extra_kwargs")? {
-            ::serde_json::Value::Object(map) => Ok(map),
-            value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "expected a dict of extra kwargs, got {value}"
-            ))),
-        }?;
+        let extra_kwargs =
+            match crate::python::value_from_py(extra_kwargs.as_any(), "extra_kwargs")? {
+                ::serde_json::Value::Object(map) => Ok(map),
+                value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                    "expected a dict of extra kwargs, got {value}"
+                ))),
+            }?;
         let fallback = fallback
             .map(|v| {
                 v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| {
@@ -323,14 +342,17 @@ impl InferenceStt {
                                     "each fallback entry must be a dict",
                                 ));
                             }
-                            crate::generated::records::inference_stt::fallback_model_from_py(&item)
+                            crate::generated::records::inference_stt::fallback_model_from_py(
+                                item.as_any(),
+                            )
                         })
                         .collect::<PyResult<Vec<_>>>()
                 })
             })
             .transpose()?;
-        let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
-        let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
+        let conn_options = crate::conversions::api_connect_options_from_py(conn_options.as_any())?;
+        let vad =
+            vad.map(|v| crate::generated::vad::VadProxy::from_host(v.as_any())).transpose()?;
         let out = py
             .detach(|| {
                 <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::new(
@@ -351,7 +373,7 @@ impl InferenceStt {
             .map_err(|e: ::lk_agents_abi::errors::ApiError| {
                 <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e)
             })?;
-        Ok(InferenceStt(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(InferenceStt(::std::sync::Arc::new(out)))
     }
 
     /// The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
@@ -359,7 +381,8 @@ impl InferenceStt {
     #[pyo3(signature = (vad = None))]
     fn set_vad(&self, py: Python<'_>, vad: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
+        let vad =
+            vad.map(|v| crate::generated::vad::VadProxy::from_host(v.as_any())).transpose()?;
         py.detach(|| {
             <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::set_vad(
                 &self.0, vad,
@@ -380,13 +403,13 @@ impl InferenceStt {
     ) -> PyResult<InferenceStt> {
         crate::host::check_pid()?;
         let reporter =
-            reporter.map(|v| crate::generated::stt::SttProxy::from_host(&v)).transpose()?;
+            reporter.map(|v| crate::generated::stt::SttProxy::from_host(v.as_any())).transpose()?;
         let out = py.detach(|| {
             <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::identified(
                 &self.0, headers, reporter,
             )
         });
-        Ok(InferenceStt(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(InferenceStt(::std::sync::Arc::new(out)))
     }
 
     /// Read by later streams, and sent to the open ones as a mid-stream `session.update`.
@@ -400,7 +423,7 @@ impl InferenceStt {
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         let extra = extra
-            .map(|v| match crate::python::value_from_py(&v, "extra")? {
+            .map(|v| match crate::python::value_from_py(v.as_any(), "extra")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
                     "expected a dict of extra kwargs, got {value}"
@@ -454,12 +477,12 @@ impl InferenceStt {
         py: Python<'_>,
         language: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_inference_stt_stream_start_time_offset)]
-        start_time_offset: ::std::option::Option<f64>,
+        start_time_offset: InferenceSttStreamStartTimeOffsetInput,
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceSttStream> {
         crate::host::check_pid()?;
         let conn_options = conn_options
-            .map(|v| crate::conversions::api_connect_options_from_py(&v))
+            .map(|v| crate::conversions::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let out = py
             .detach(|| {
@@ -475,7 +498,7 @@ impl InferenceStt {
                     &e,
                 )
             })?;
-        Ok({
+        ::pyo3::PyResult::Ok({
             let (sink, source) = out;
             InferenceSttStream(
                 ::std::boxed::Box::new(sink),
@@ -510,7 +533,7 @@ pub struct InferenceSttStream(
 impl InferenceSttStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let item = crate::conversions::audio_frame_from_py(&item)?;
+        let item = crate::conversions::audio_frame_from_py(item.as_any())?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(
             |e: ::lk_agents_abi::errors::ProviderError| {
                 <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
@@ -561,7 +584,7 @@ impl InferenceSttStream {
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         let extra = extra
-            .map(|v| match crate::python::value_from_py(&v, "extra")? {
+            .map(|v| match crate::python::value_from_py(v.as_any(), "extra")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
                     "expected a dict of extra kwargs, got {value}"
@@ -578,13 +601,14 @@ type SttStreamAdapterImpl = <crate::Selected as super::Implementations>::SttStre
 
 fn _extract_stt_stream_adapter_stream_start_time_offset(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<f64>> {
+) -> PyResult<SttStreamAdapterStreamStartTimeOffsetInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "start_time_offset")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "start_time_offset")).map(Some)
     }
 }
+type SttStreamAdapterStreamStartTimeOffsetInput = ::std::option::Option<f64>;
 
 /// `stt.StreamAdapter`'s engine as the host builds it; the public class stays Python.
 #[pyclass(frozen, name = "SttStreamAdapter", module = "livekit.agents._core")]
@@ -602,14 +626,14 @@ impl SttStreamAdapter {
     ) -> PyResult<SttStreamAdapter> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let stt = crate::generated::stt::SttProxy::from_host(&stt)?;
-        let vad = crate::generated::vad::VadProxy::from_host(&vad)?;
+        let stt = crate::generated::stt::SttProxy::from_host(stt.as_any())?;
+        let vad = crate::generated::vad::VadProxy::from_host(vad.as_any())?;
         let out = py.detach(|| {
             <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::new(
                 &env, stt, vad,
             )
         });
-        Ok(SttStreamAdapter(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(SttStreamAdapter(::std::sync::Arc::new(out)))
     }
 
     /// `_recognize_impl`: the wrapped STT's batch path.
@@ -626,13 +650,13 @@ impl SttStreamAdapter {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::conversions::audio_frame_from_py(&item)
+                    crate::conversions::audio_frame_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
+        let language = language.map(|v| crate::python::str_from_py(v.as_any())).transpose()?;
         let conn_options = conn_options
-            .map(|v| crate::conversions::api_connect_options_from_py(&v))
+            .map(|v| crate::conversions::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -654,13 +678,13 @@ impl SttStreamAdapter {
         py: Python<'py>,
         language: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_stt_stream_adapter_stream_start_time_offset)]
-        start_time_offset: ::std::option::Option<f64>,
+        start_time_offset: SttStreamAdapterStreamStartTimeOffsetInput,
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
+        let language = language.map(|v| crate::python::str_from_py(v.as_any())).transpose()?;
         let conn_options = conn_options
-            .map(|v| crate::conversions::api_connect_options_from_py(&v))
+            .map(|v| crate::conversions::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -709,7 +733,7 @@ pub struct SttAdapterStream(
 impl SttAdapterStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let item = crate::conversions::audio_frame_from_py(&item)?;
+        let item = crate::conversions::audio_frame_from_py(item.as_any())?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(
             |e: ::lk_agents_abi::errors::ProviderError| {
                 <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
@@ -809,7 +833,8 @@ impl SttProxy {
             if v.is_none() {
                 Ok(None)
             } else {
-                (crate::python::number_from_py::<usize>(&v, "Stt._core_instance_id")).map(Some)
+                (crate::python::number_from_py::<usize>(v.as_any(), "Stt._core_instance_id"))
+                    .map(Some)
             }?
         };
         let label = {
@@ -818,18 +843,18 @@ impl SttProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            crate::generated::records::stt::stt_capabilities_from_py(&v)?
+            crate::generated::records::stt::stt_capabilities_from_py(v.as_any())?
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
-            crate::generated::records::types::provider_id_from_py(&v)?
+            crate::generated::records::types::provider_id_from_py(v.as_any())?
         };
         let conn_options = {
             let v = crate::host::read(obj, "_core_conn_options")?;
             if v.is_none() {
                 Ok(None)
             } else {
-                (crate::conversions::api_connect_options_from_py(&v)).map(Some)
+                (crate::conversions::api_connect_options_from_py(v.as_any())).map(Some)
             }?
         };
         Ok(SttProxy {
@@ -995,7 +1020,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                         py,
                         buffer_arg
                             .into_iter()
-                            .map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?))
+                            .map(|x| crate::conversions::audio_frame_to_py(py, x))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -1024,7 +1049,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::stt::speech_event_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::stt::speech_event_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1082,7 +1107,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Stt._core_stream: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::conversions::audio_frame_to_py(py, v)?), |o| Ok(crate::generated::records::stt::speech_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::host::stream::HostStream::duplex(py, o, context, crate::conversions::audio_frame_to_py, |o| crate::generated::records::stt::speech_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

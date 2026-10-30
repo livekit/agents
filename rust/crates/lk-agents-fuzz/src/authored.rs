@@ -8,7 +8,6 @@
 //! happened, so a rule cannot tell an authored recording from a real one. Only the provenance
 //! differs, and that is the point: a counterexample validates the checker, never the runtime.
 //! Nothing outside `rules/` should use this.
-use std::sync::Arc;
 
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{

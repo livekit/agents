@@ -11,7 +11,7 @@
 
 mod emit;
 mod models;
-pub(crate) use emit::emit;
+pub(crate) use emit::{as_result, emit};
 pub use models::{link_legacy, merge, python};
 
 use std::collections::BTreeSet;
@@ -88,7 +88,7 @@ pub(crate) fn fields(body: &RecordBody) -> Vec<&Field> {
             .iter()
             .flat_map(|v| match &v.shape {
                 VariantShape::Unit | VariantShape::Tuple(None) | VariantShape::Native => Vec::new(),
-                VariantShape::Tuple(Some(f)) => vec![f],
+                VariantShape::Tuple(Some(f)) => vec![f.as_ref()],
                 VariantShape::Named(fields) => fields.iter().collect(),
             })
             .collect(),
@@ -269,7 +269,8 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                 false => "::pyo3::types::PyString::new(py, value).into_any()".to_owned(),
             };
             let emit = format!(
-                "        let value = match self {{\n{arms}        }};\n        Ok({value})\n"
+                "        let value = match self {{\n{arms}        }};\n        {}\n",
+                emit::as_result(&value)
             );
             (extract, emit)
         }
@@ -309,12 +310,13 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
 
 /// `STTMetrics` -> `STT_METRICS`: an acronym run stays one word.
 fn cell(class: &str) -> String {
-    let chars: Vec<char> = class.chars().filter(|c| *c != '.').collect();
+    let chars: Vec<char> =
+        class.trim_matches('_').replace("__", "_").chars().filter(|c| *c != '.').collect();
     let mut out = String::new();
     for (i, &c) in chars.iter().enumerate() {
         let lower = |j: usize| chars.get(j).is_some_and(|c| c.is_lowercase());
         let digit_or_lower = i > 0 && (lower(i - 1) || chars[i - 1].is_ascii_digit());
-        if c.is_uppercase() && i > 0 && (digit_or_lower || lower(i + 1)) {
+        if c.is_uppercase() && i > 0 && chars[i - 1] != '_' && (digit_or_lower || lower(i + 1)) {
             out.push('_');
         }
         out.extend(c.to_uppercase());
@@ -360,23 +362,23 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
         let read = match &f.ty {
             // An omittable key: absent (or `NOT_GIVEN`) is not given.
             Ty::Maybe(_) => format!(
-                "match obj.get_item({key:?})? {{ Some(v) => {{ let v = &v; ({})? }}, None => ::lk_agents_abi::Maybe::NotGiven }}",
-                read(&f.ty, "v", &path)?
+                "match obj.get_item({key:?})? {{ Some(v) => ({})?, None => ::lk_agents_abi::Maybe::NotGiven }}",
+                read(&f.ty, "v.as_any()", &path)?
             ),
             // `default = None`: absent, `None` and `NOT_GIVEN` alike hold nothing.
             Ty::Optional(inner) if omitted_none => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => {{ let v = &v; Some(({})?) }}, _ => None }}",
-                read(inner, "v", &path)?
+                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => Some(({})?), _ => None }}",
+                read(inner, "v.as_any()", &path)?
             ),
             // A defaulted key reads absent, `None` and `NOT_GIVEN` alike as its default.
             ty if let Some(default) = &f.default => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => {{ let v = &v; ({})? }}, _ => {} }}",
-                read(ty, "v", &path)?,
+                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => ({})?, _ => {} }}",
+                read(ty, "v.as_any()", &path)?,
                 crate::adapter::rust_literal(default, ty)
             ),
             ty => format!(
-                "{{ let v = &obj.get_item({key:?})?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err({path:?}))?; ({})? }}",
-                read(ty, "v", &path)?
+                "{{ let v = obj.get_item({key:?})?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err({path:?}))?; ({})? }}",
+                read(ty, "v.as_any()", &path)?
             ),
         };
         reads.push_str(&format!(
@@ -563,7 +565,7 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             format!("crate::python::str_from_py({v})")
         }
         Ty::Record(r) => {
-            format!("{v}.extract::<{}>().map_err(::std::convert::Into::<PyErr>::into)", r.rust)
+            format!("{v}.extract::<{}>()", r.rust)
         }
         Ty::Proxy { boxed: true, .. } => {
             return Err(format!(
@@ -647,7 +649,11 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
         if !r.extract {
             continue;
         }
-        let (kind, test) = match &f.ty {
+        let shape = match &f.ty {
+            Ty::Boxed(inner) => inner.as_ref(),
+            ty => ty,
+        };
+        let (kind, test) = match shape {
             Ty::Record(Record { rust: held, host: HostForm::Record { .. }, .. })
                 if literal(held) =>
             {

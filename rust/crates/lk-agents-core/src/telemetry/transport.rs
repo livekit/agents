@@ -30,7 +30,7 @@ impl TraceParent {
                     _ => None,
                 }
             }
-            for (value, pair) in out.iter_mut().zip(text.chunks_exact(2)) {
+            for (value, pair) in out.iter_mut().zip(text.as_chunks::<2>().0) {
                 *value = hex(pair[0])? * 16 + hex(pair[1])?;
             }
             Some(out)

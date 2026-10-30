@@ -44,7 +44,7 @@ impl Samples {
                 _ => None,
             });
             let first_item = ids.next();
-            let last_item = ids.last().or_else(|| first_item.clone());
+            let last_item = ids.next_back().or_else(|| first_item.clone());
             let frames = result.frames.len();
             let step = format!(
                 "{}/{operation}: {frames} frames, items {first_item:?}..{last_item:?}",

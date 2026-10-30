@@ -203,7 +203,7 @@ fn a_say_released_before_its_step_reports_keeps_its_source() {
 /// A session's decision core with no provider or leg, at the zero instant; nothing runs it.
 fn driver() -> Driver {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
-    let config = crate::agent_activity::DriverConfig::new(Default::default(), legs.into());
+    let config = crate::agent_activity::DriverConfig::new(Default::default(), legs);
     let view = Arc::new(SessionView {
         launch_holds: Default::default(),
         config: config.clone(),
@@ -320,7 +320,7 @@ fn a_late_usage_report_never_creates_a_request() {
     let mut out = driver.out();
     let mut report = SpeechEvent::new(SpeechEventType::RecognitionUsage);
     report.recognition_usage =
-        Some(RecognitionUsage { audio_duration: Some(2.0), ..Default::default() });
+        Some(Box::new(RecognitionUsage { audio_duration: Some(2.0), ..Default::default() }));
     driver.on_stt(Ts::ZERO, Tagged { stream: ResourceId(1), item: report }, &mut out);
     driver.settle_step(out);
     assert_eq!(driver.session.usage.snapshot().requests, 2);

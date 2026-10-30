@@ -1,5 +1,7 @@
 //! Track publications, local and remote, and the frame conversion a real `rtc.AudioStream` does.
 
+type SpanObserver = dyn Fn(u64, &str) + Send + Sync;
+
 use lk_agents_abi::errors::{ProviderError, RefRegistry};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::voice::rtc::RtcError;
@@ -58,7 +60,7 @@ pub struct FailingProcessors {
     pub refs: Arc<dyn RefRegistry>,
     /// Told of each failing span, by its processor's host object and label, as the stream hands
     /// the failure that opens it to its reader.
-    pub spans: Arc<dyn Fn(u64, &str) + Send + Sync>,
+    pub spans: Arc<SpanObserver>,
 }
 
 /// Which of a stream's frames a processor rejects, by the frame's position in the stream (the
@@ -354,7 +356,7 @@ const DENOISER: &str = "fake.Denoiser";
 struct Processing {
     processors: Vec<Processor>,
     frames: u32,
-    spans: Arc<dyn Fn(u64, &str) + Send + Sync>,
+    spans: Arc<SpanObserver>,
 }
 
 struct Processor {
@@ -455,7 +457,7 @@ fn convert_frame(
     let src_ch = usize::from(src_ch);
     let channels_n = usize::from(channels);
     let src: Vec<i16> =
-        frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        frame.data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
     let src_n = std::cmp::min(frame.samples_per_channel as usize, src.len() / src_ch);
     if src_n == 0 {
         return frame.clone();

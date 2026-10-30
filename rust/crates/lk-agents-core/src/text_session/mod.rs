@@ -141,7 +141,7 @@ struct PreparedChild {
 }
 
 enum InvocationRelease {
-    Settled(RunResult, Option<Value>, Vec<PendingChildCall>),
+    Settled(Box<RunResult>, Option<Value>, Vec<PendingChildCall>),
     Parked,
 }
 
@@ -227,10 +227,15 @@ impl TextSession {
         };
         let mut scopes = input.available_scopes;
         if input.separate_contexts {
-            scopes.extend(state.frames.values().filter_map(|frame| {
-                (frame.parent.is_some() && frame.context_scope == frame.id.value)
-                    .then(|| frame.context_scope.clone())
-            }));
+            scopes.extend(
+                state
+                    .frames
+                    .values()
+                    .filter(|&frame| {
+                        frame.parent.is_some() && frame.context_scope == frame.id.value
+                    })
+                    .map(|frame| frame.context_scope.clone()),
+            );
         }
         config.validate_state(&state, &scopes)?;
         Ok(Self {
@@ -322,7 +327,7 @@ impl TextSession {
                 match self.invocation.as_mut().unwrap().release.take() {
                     Some(InvocationRelease::Settled(result, output, approvals)) => {
                         self.end_invocation();
-                        self.settled(result, output, approvals, now, &mut effects);
+                        self.settled(*result, output, approvals, now, &mut effects);
                     }
                     Some(InvocationRelease::Parked) => {
                         self.end_invocation();
@@ -374,7 +379,7 @@ impl TextSession {
         );
         let input = RunInput {
             invocation_id: invocation_id.clone(),
-            opening: Opening::Message(message),
+            opening: Opening::Message(Box::new(message)),
             history: frame.history.clone(),
             answer_tool: frame.answer_tool.clone(),
             delegated: self.delegated,
@@ -553,7 +558,7 @@ impl TextSession {
                             result: result.clone(),
                         });
                         self.invocation.as_mut().unwrap().release =
-                            Some(InvocationRelease::Settled(result, output, approvals));
+                            Some(InvocationRelease::Settled(Box::new(result), output, approvals));
                     }
                 },
                 other => effects.push(Effect::Run { invocation_id, effect: other }),

@@ -1,9 +1,6 @@
 //! The host hears exactly one `SpeechDone` per speech, after its `SpeechCreated`, with the
 //! outcome the handle reports; and a handle that is done is announced.
-use lk_agents_voice::{
-    agent_activity::scheduling::SpeechKind,
-    events::SpeechOutcome,
-};
+use lk_agents_voice::{agent_activity::scheduling::SpeechKind, events::SpeechOutcome};
 
 use crate::{
     authored::Authored,
@@ -29,31 +26,51 @@ impl Rule for SpeechDoneOnce {
             // A completion names a speech the host holds a handle for; one for a stranger is a
             // completion attributed to nobody.
             if !announced.is_empty() {
-                check.expect(&speech, speech.is_known(), "SpeechDone for a speech the test never saw");
+                check.expect(
+                    speech,
+                    speech.is_known(),
+                    "SpeechDone for a speech the test never saw",
+                );
             }
             if !speech.is_known() {
                 continue;
             }
 
             // At most one completion per speech.
-            check.expect(&speech, announced.len() <= 1, format!("{} SpeechDone events", announced.len()));
+            check.expect(
+                speech,
+                announced.len() <= 1,
+                format!("{} SpeechDone events", announced.len()),
+            );
 
             match announced.first() {
                 Some((done, outcome)) => {
                     // The host heard the speech exist before it heard it finish.
                     let created = speech.created_at();
-                    check.expect(&speech, created.is_some_and(|created| created < *done), "SpeechDone before SpeechCreated");
+                    check.expect(
+                        speech,
+                        created.is_some_and(|created| created < *done),
+                        "SpeechDone before SpeechCreated",
+                    );
 
                     // The announced outcome is the one the handle itself reports.
                     if let Some(expected) = speech.outcome() {
-                        check.expect(&speech, *outcome == expected, format!("announced {outcome:?}, handle says {expected:?} ({speech:?})"));
+                        check.expect(
+                            speech,
+                            *outcome == expected,
+                            format!("announced {outcome:?}, handle says {expected:?} ({speech:?})"),
+                        );
                     }
                 }
                 None => {
                     // A done handle must reach the host; the driver gets one input of grace.
                     if let Some(done) = speech.done_at() {
                         let told = !r.inputs_view().driver_ran_after(done);
-                        check.expect(&speech, told, format!("handle done since {done:?}, host never told"));
+                        check.expect(
+                            speech,
+                            told,
+                            format!("handle done since {done:?}, host never told"),
+                        );
                     }
                 }
             }

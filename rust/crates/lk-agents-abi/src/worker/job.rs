@@ -1,5 +1,8 @@
 //! The job a process runs (`job.py`): its start fields, the session's view of it and its trace.
 
+/// Dispatch stage timestamps and the durations between them.
+pub type JobTimeline = (Vec<(String, i64)>, Vec<(String, f64)>);
+
 /// The process's one job, shared by the generated host boundary and the IPC wire protocol.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[crate::host(record(module = "worker_ipc", emit, extract))]
@@ -46,5 +49,5 @@ pub trait JobTrace {
         launched_at: f64,
         entrypoint_started_at: f64,
         server_started_at: i64,
-    ) -> (Vec<(String, i64)>, Vec<(String, f64)>);
+    ) -> JobTimeline;
 }

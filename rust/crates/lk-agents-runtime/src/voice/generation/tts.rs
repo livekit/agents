@@ -47,12 +47,12 @@ pub(super) async fn perform_tts_inference(
     text_out: Option<&TextLeg<'_>>,
     mut aligned: Option<&mut Aligned<'_>>,
     playback: &mut SynthesisPlayout<'_>,
-) -> Result<Heard, Lost> {
+) -> Result<Heard, Box<Lost>> {
     let mut state =
         SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
     loop {
         if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
-            return Err(lost);
+            return Err(Box::new(lost));
         }
         // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex open's
         // `Err` is a failed attempt, never a downgrade. What the words leg already closed is fed at
@@ -103,7 +103,7 @@ pub(super) async fn perform_tts_inference(
         };
         let error = match state.failed(error, produced) {
             AttemptFailure::Retry(error) => error,
-            AttemptFailure::Stop(lost) => return Err(lost),
+            AttemptFailure::Stop(lost) => return Err(Box::new(lost)),
         };
         let failed = |e, r| tts.failed(e, r);
         let outcome =
@@ -114,7 +114,7 @@ pub(super) async fn perform_tts_inference(
                 Retried::GiveUp => RetryOutcome::Exhausted,
             };
         if let Some(lost) = state.after_retry(outcome) {
-            return Err(lost);
+            return Err(Box::new(lost));
         }
     }
 }
@@ -191,7 +191,8 @@ async fn synthesize(
             }
             (Ok(heard), true)
         }
-        Err(SourceFailed { error, synchronized, heard }) => {
+        Err(failed) => {
+            let SourceFailed { error, synchronized, heard } = *failed;
             (Err(Failed { error, produced, words, synchronized, heard }), input_done)
         }
     }
@@ -304,10 +305,10 @@ impl Segment for Streaming<'_, '_> {
             a.chunk(&chunk).await;
         }
         // An `is_final` frame ends the segment's audio; a pooled connection never closes.
-        if self.state.frame(chunk.is_final) {
-            if let Some(a) = self.aligned.as_deref_mut() {
-                a.ended(&self.state.words.text).await;
-            }
+        if self.state.frame(chunk.is_final)
+            && let Some(a) = self.aligned.as_deref_mut()
+        {
+            a.ended(&self.state.words.text).await;
         }
         Ok(Next::Frame(chunk.frame))
     }
@@ -369,7 +370,7 @@ impl SynthesisPlayout<'_> {
         shared: &Arc<SessionShared>,
         handle: &SpeechHandle,
         segment: &mut Streaming<'_, '_>,
-    ) -> Result<Heard, SourceFailed> {
+    ) -> Result<Heard, Box<SourceFailed>> {
         let permits = Arc::new(tokio::sync::Semaphore::new(MAX_BUFFERED_TTS_FRAMES));
         let stopped = tokio::sync::Notify::new();
         let tx = &self.tx;
@@ -400,7 +401,7 @@ impl SynthesisPlayout<'_> {
                 Ok(false)
             };
             let result = match admission {
-                Err(error) => Err(SourceFailed::from(error)),
+                Err(error) => Err(Box::new(SourceFailed::from(error))),
                 Ok(true) => {
                     let audio = self.binding.audio();
                     let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());

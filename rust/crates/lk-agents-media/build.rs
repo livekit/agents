@@ -176,14 +176,16 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
 
     let mut args: Vec<String> = vec![format!("--prefix={}", prefix.display())];
     args.extend(CONFIGURE.iter().map(|s| (*s).to_owned()));
+    // Apple Clang still defaults to common symbols. FFmpeg's large tables then make
+    // ld over-align __common beyond the segment limit; use real BSS definitions instead.
+    if std::env::var("TARGET").is_ok_and(|target| target.contains("-apple-")) {
+        args.push("--extra-cflags=-fno-common".into());
+    }
     if !settings::native_debug() {
         args.push("--disable-debug".into());
     }
     // Without nasm configure aborts rather than degrading, so degrade explicitly.
     if which("nasm").is_none() && which("yasm").is_none() {
-        println!(
-            "cargo:warning=neither nasm nor yasm found; building ffmpeg with --disable-x86asm"
-        );
         args.push("--disable-x86asm".into());
     }
 

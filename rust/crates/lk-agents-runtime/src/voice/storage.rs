@@ -56,15 +56,15 @@ impl Runtime {
         };
         let reporter = Arc::new(StorageReporter(self.reports.clone()));
         if let Some(storage) = &self.storage {
-            if let Err(error) = storage.clone().dispatch(command, reporter.clone()) {
-                if let Some(mut event) = event {
-                    match &mut event {
-                        VoiceStorageEvent::Settled { result, .. }
-                        | VoiceStorageEvent::Abandoned { result, .. } => *result = Err(error),
-                        VoiceStorageEvent::LeaseLost { .. } => {}
-                    }
-                    let _ = reporter.push(event);
+            if let Err(error) = storage.clone().dispatch(command, reporter.clone())
+                && let Some(mut event) = event
+            {
+                match &mut event {
+                    VoiceStorageEvent::Settled { result, .. }
+                    | VoiceStorageEvent::Abandoned { result, .. } => *result = Err(error),
+                    VoiceStorageEvent::LeaseLost { .. } => {}
                 }
+                let _ = reporter.push(event);
             }
         } else if let Some(event) = event {
             let _ = reporter.push(event);

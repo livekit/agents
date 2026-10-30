@@ -58,12 +58,11 @@ impl Rule for FirstAudioIsPrompt {
                 seen_since_record.get_or_insert(pushes[next_push]);
                 next_push += 1;
             }
-            if let Step::Playout(PlayoutStep::SinkCalled { speech: Some(speech), call }) = step {
-                if let Some(push) = seen_since_record.take()
-                    && matches!(call, SinkCall::Push { .. })
-                {
-                    first.entry(speech.0).or_insert(push);
-                }
+            if let Step::Playout(PlayoutStep::SinkCalled { speech: Some(speech), call }) = step
+                && let Some(push) = seen_since_record.take()
+                && matches!(call, SinkCall::Push { .. })
+            {
+                first.entry(speech.0).or_insert(push);
             }
         }
         for (speech, (pushed, tag)) in first {

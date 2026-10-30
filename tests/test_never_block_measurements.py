@@ -91,7 +91,7 @@ async def test_report_qualification_refuses_an_unqualified_idle_baseline(
 async def test_invalid_report_limits_preserve_capture_without_starting_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    manifest = json.loads(Path(reports.__file__).with_name("budgets.json").read_text())
+    manifest = json.loads(reports.BUDGETS_PATH.read_text())
     manifest["interfaces"]["session_report"]["limits"]["loop_lag_max_ms_exclusive"] = 50
     budget_path = tmp_path / "budgets.json"
     budget_path.write_text(json.dumps(manifest))
@@ -128,7 +128,7 @@ def test_exceeded_frame_budgets_fail_even_when_average_work_is_fast() -> None:
 
 
 def test_report_qualification_uses_declared_limits_and_sample_count(tmp_path: Path) -> None:
-    manifest = json.loads(Path(reports.__file__).with_name("budgets.json").read_text())
+    manifest = json.loads(reports.BUDGETS_PATH.read_text())
     report = manifest["interfaces"]["session_report"]
     report["workload"]["minimum_observations_per_distribution"] = 2000
     report["limits"]["loop_lag_p999_ms_exclusive"] = 0.25

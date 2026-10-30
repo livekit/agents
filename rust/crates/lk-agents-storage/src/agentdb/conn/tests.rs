@@ -424,7 +424,6 @@ async fn close_settles_all_connection_resources_before_returning() {
             _ = tokio::task::yield_now() => {},
         }
         tokio::join!(conn.aclose(), conn.aclose());
-        drop(cancelled);
     }
     drop(conn);
     assert!(inner.upgrade().is_none(), "no resource task retains the closed connection");

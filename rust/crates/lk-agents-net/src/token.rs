@@ -167,6 +167,30 @@ pub fn observability_bearer(api_key: &str, api_secret: &str) -> Result<String, A
         })
 }
 
+/// The join tokens as the host calls them.
+pub struct JoinTokens;
+
+impl lk_agents_abi::worker::JoinTokens for JoinTokens {
+    fn room_join_token(
+        api_key: String,
+        api_secret: String,
+        identity: String,
+        room: String,
+        agent: bool,
+        ttl: Option<f64>,
+    ) -> Result<String, lk_agents_abi::worker::TokenRefused> {
+        let ttl = ttl
+            .map(|seconds| {
+                Duration::try_from_secs_f64(seconds).map_err(|_| {
+                    lk_agents_abi::worker::TokenRefused("ttl must be a nonnegative number".into())
+                })
+            })
+            .transpose()?;
+        room_join_token(&api_key, &api_secret, &identity, &room, agent, ttl)
+            .map_err(|error| lk_agents_abi::worker::TokenRefused(error.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,29 +296,5 @@ mod tests {
                 Err(TokenError::MissingCredentials)
             ));
         }
-    }
-}
-
-/// The join tokens as the host calls them.
-pub struct JoinTokens;
-
-impl lk_agents_abi::worker::JoinTokens for JoinTokens {
-    fn room_join_token(
-        api_key: String,
-        api_secret: String,
-        identity: String,
-        room: String,
-        agent: bool,
-        ttl: Option<f64>,
-    ) -> Result<String, lk_agents_abi::worker::TokenRefused> {
-        let ttl = ttl
-            .map(|seconds| {
-                Duration::try_from_secs_f64(seconds).map_err(|_| {
-                    lk_agents_abi::worker::TokenRefused("ttl must be a nonnegative number".into())
-                })
-            })
-            .transpose()?;
-        room_join_token(&api_key, &api_secret, &identity, &room, agent, ttl)
-            .map_err(|error| lk_agents_abi::worker::TokenRefused(error.to_string()))
     }
 }

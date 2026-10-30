@@ -193,7 +193,7 @@ impl StreamSource<TurnEvent> for Handler {
                 let mut working = self.handlers.working.lock().unwrap();
                 working.insert(self.invocation, self.task_id.clone());
             }
-            Ok(Some(TurnEvent::Output { output: output.into() }))
+            Ok(Some(TurnEvent::Output { output: Box::new(output.into()) }))
         })
     }
 

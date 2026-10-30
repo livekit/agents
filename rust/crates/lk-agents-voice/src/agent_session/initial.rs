@@ -147,7 +147,7 @@ impl InitialSession {
             preemptive_record_version: 0,
             rt_session: self.rt_session.take(),
             realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
-                self.rt_caps.clone(),
+                self.rt_caps,
             ),
             realtime_players: Default::default(),
             launching: Default::default(),

@@ -103,6 +103,17 @@ pub fn completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
+/// Whether a tool selection is valid for the available tools.
+pub fn retain_tool_choice(has_tools: bool) -> bool {
+    has_tools
+}
+
+pub fn normalize_tool_choice(extra: &mut Map<String, Value>, has_tools: bool) {
+    if !retain_tool_choice(has_tools) {
+        extra.remove("tool_choice");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,16 +191,5 @@ mod tests {
             request_headers(Headers::new(), Some("openai")).get(HEADER_INFERENCE_PROVIDER),
             Some("openai")
         );
-    }
-}
-
-/// Whether a tool selection is valid for the available tools.
-pub fn retain_tool_choice(has_tools: bool) -> bool {
-    has_tools
-}
-
-pub fn normalize_tool_choice(extra: &mut Map<String, Value>, has_tools: bool) {
-    if !retain_tool_choice(has_tools) {
-        extra.remove("tool_choice");
     }
 }

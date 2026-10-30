@@ -191,7 +191,7 @@ pub enum RunUpdate {
     IncompleteCleanup(Vec<String>),
     /// The last update of a run that settled with a result.
     #[host(field = "settled")]
-    Finished(RunSettled),
+    Finished(Box<RunSettled>),
     /// The last update of a run that settled without one.
     #[host(field = "error")]
     Failed(RunError),

@@ -872,6 +872,11 @@ pub enum GenEvent {
     },
 }
 
+/// A local generation failure that cannot be retried.
+pub fn fatal(message: impl Into<String>) -> ProviderError {
+    ProviderError::Local(lk_agents_abi::errors::ApiError::new(message).with_retryable(false))
+}
+
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
@@ -998,9 +1003,4 @@ mod expressive_tests {
         assert!(off.chat_ctx.items.iter().all(|it| it.id() != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID));
         assert!(!texts(&off.chat_ctx).contains("<expr"), "markup stripped when off");
     }
-}
-
-/// A local generation failure that cannot be retried.
-pub fn fatal(message: impl Into<String>) -> ProviderError {
-    ProviderError::Local(lk_agents_abi::errors::ApiError::new(message).with_retryable(false))
 }

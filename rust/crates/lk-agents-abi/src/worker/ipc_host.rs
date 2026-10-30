@@ -106,6 +106,7 @@ pub trait JobSupervisor: Send + Sync + Sized + 'static {
     #[allow(clippy::too_many_arguments)]
     /// `thread`: the runner is a thread of this process, else a process of the host's start
     /// method.
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         host: Arc<dyn JobExecutor>,
@@ -363,6 +364,7 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
     /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
     #[host(new)]
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         #[host(kw)] fake_job: bool,

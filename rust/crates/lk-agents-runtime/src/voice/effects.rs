@@ -139,10 +139,10 @@ impl Runtime {
                 self.keyterms = Some((req, handle));
             }
             E::CancelKeyterms(req) => {
-                if self.keyterms.as_ref().is_some_and(|(pending, _)| *pending == req) {
-                    if let Some((_, task)) = self.keyterms.take() {
-                        self.tasks.cancel(task);
-                    }
+                if self.keyterms.as_ref().is_some_and(|(pending, _)| *pending == req)
+                    && let Some((_, task)) = self.keyterms.take()
+                {
+                    self.tasks.cancel(task);
                 }
             }
             E::ActivateLeg { channel, sink } => {
@@ -175,14 +175,13 @@ impl Runtime {
                 }
             }
             E::Host(event) => {
-                if let Err(event) = self.peer.deliver(event) {
-                    if let HostEvent::Hook(call) = event {
-                        let _ =
-                            self.reports.send(lk_agents_voice::agent_session::Command::HookDone {
-                                id: call.id(),
-                                outcome: lk_agents_voice::agent_session::HookOutcome::Failed,
-                            });
-                    }
+                if let Err(event) = self.peer.deliver(event)
+                    && let HostEvent::Hook(call) = *event
+                {
+                    let _ = self.reports.send(lk_agents_voice::agent_session::Command::HookDone {
+                        id: call.id(),
+                        outcome: lk_agents_voice::agent_session::HookOutcome::Failed,
+                    });
                 }
             }
             E::StorageAbort(speech) => {
@@ -210,10 +209,10 @@ impl Runtime {
                 self.shared.closing.send_replace(true);
             }
             E::SttConversationItem { stt, role, text } => {
-                if let Some(stt) = self.shared.resources.stt(stt) {
-                    if stt.capabilities().chat_context {
-                        stt.push_conversation_item(&role, &text);
-                    }
+                if let Some(stt) = self.shared.resources.stt(stt)
+                    && stt.capabilities().chat_context
+                {
+                    stt.push_conversation_item(&role, &text);
                 }
             }
             E::SpeechStart { speech, mut context, llm, tts, stored } => {

@@ -51,7 +51,7 @@ pub enum WorkerCommand {
     JobStatus { job_id: JobId, status: JobStatus },
 }
 
-/// Each variant carries a named `lk_agents_abi::worker::worker` record: the binding projects it into
+/// Each variant carries a named `lk_agents_abi::worker::types` record: the binding projects it into
 /// the dict the host matches on.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerNotification {
@@ -61,7 +61,7 @@ pub enum WorkerNotification {
     Stopped(WorkerStopped),
 }
 
-pub use lk_agents_abi::worker::worker::{
+pub use lk_agents_abi::worker::types::{
     Snapshot, WorkerDrainFinished, WorkerDrainTimedOut, WorkerRegistered, WorkerStopped,
 };
 
@@ -284,7 +284,7 @@ impl Outbox {
 enum ConnectionEvent {
     Connected,
     Registered(RegisterWorkerResponse),
-    ServerMessage(ServerMessage),
+    ServerMessage(Box<ServerMessage>),
     AvailabilitySent(String),
     EndpointRequest(crate::EndpointStream),
     /// A write, retry timer or cleanup completed.
@@ -719,7 +719,7 @@ impl Worker {
         match event {
             ConnectionEvent::Connected => self.on_connecting(outbox),
             ConnectionEvent::Registered(response) => self.on_registered(response, outbox),
-            ConnectionEvent::ServerMessage(message) => self.on_server(message, outbox),
+            ConnectionEvent::ServerMessage(message) => self.on_server(*message, outbox),
             ConnectionEvent::AvailabilitySent(job_id) => self.on_availability_sent(job_id),
             ConnectionEvent::EndpointRequest(stream) => self.serve_endpoint(stream),
             ConnectionEvent::Progress => {}

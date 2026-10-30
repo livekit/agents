@@ -5,7 +5,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::SentenceSplitter;
 use lk_agents_abi::tts::stream_adapter::SplitterFactory;
-use lk_agents_abi::tts::tts::{SynthesizedAudio, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_abi::tts::types::{SynthesizedAudio, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::utils::audio::AudioFrame;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamSource};
@@ -195,7 +195,7 @@ impl Tts for FakeTts {
         &self,
         _: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
-        Box::pin(async move { Err(lk_agents_abi::tts::tts::no_duplex_path(&self.label())) })
+        Box::pin(async move { Err(lk_agents_abi::tts::types::no_duplex_path(&self.label())) })
     }
 }
 

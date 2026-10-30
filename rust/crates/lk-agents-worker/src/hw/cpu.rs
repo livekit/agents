@@ -91,7 +91,7 @@ impl CpuMonitor {
             Source::Cgroup { path, unit_per_sec, last } => {
                 let usage = match *unit_per_sec {
                     // `cpu.stat` is a key/value file; `cpuacct.usage` is one integer.
-                    u if u == 1e6 => parse_usage_usec(&std::fs::read_to_string(*path).ok()?)?,
+                    1e6 => parse_usage_usec(&std::fs::read_to_string(*path).ok()?)?,
                     _ => read_first_int(path)? as i128,
                 };
                 let now = std::time::Instant::now();

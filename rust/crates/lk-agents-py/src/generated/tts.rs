@@ -12,12 +12,21 @@ use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/tts/markup/bindings.rs.
 type MarkupFunctionsImpl = <crate::Selected as super::Implementations>::MarkupFunctions;
+type MarkupFunctionsChatMessageTextContentOutput = ::std::option::Option<::std::string::String>;
+type MarkupFunctionsChatCtxSummarizePlanOutput = ::std::option::Option<(
+    usize,
+    ::std::vec::Vec<usize>,
+    ::std::string::String,
+    ::std::string::String,
+    f64,
+)>;
 
 fn _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "keep_last_turns")
+) -> PyResult<MarkupFunctionsChatCtxSummarizePlanKeepLastTurnsInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "keep_last_turns")
 }
+type MarkupFunctionsChatCtxSummarizePlanKeepLastTurnsInput = usize;
 
 #[pyfunction]
 #[pyo3(signature = (parts, assistant))]
@@ -25,10 +34,10 @@ pub fn chat_message_text_content(
     py: Python<'_>,
     parts: ::std::vec::Vec<::std::string::String>,
     assistant: bool,
-) -> PyResult<::std::option::Option<::std::string::String>> {
+) -> PyResult<MarkupFunctionsChatMessageTextContentOutput> {
     crate::host::check_pid()?;
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_message_text_content(parts, assistant));
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 #[pyfunction]
@@ -38,7 +47,7 @@ pub fn supported_nonverbals<'py>(
     provider: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::supported_nonverbals(provider));
-    Ok(crate::generated::records::tts::markup_info_to_py(py, out)?)
+    crate::generated::records::tts::markup_info_to_py(py, out)
 }
 
 #[pyfunction]
@@ -48,7 +57,7 @@ pub fn split_all_markup<'py>(
     text: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_all_markup(text));
-    Ok({
+    ::pyo3::PyResult::Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
             py,
@@ -57,11 +66,7 @@ pub fn split_all_markup<'py>(
                 ::pyo3::types::PyList::new(
                     py,
                     x1.into_iter()
-                        .map(|x| {
-                            PyResult::Ok(crate::generated::records::tts::expressive_tag_to_py(
-                                py, x,
-                            )?)
-                        })
+                        .map(|x| crate::generated::records::tts::expressive_tag_to_py(py, x))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -78,7 +83,7 @@ pub fn strip_all_markup(
     text: ::std::string::String,
 ) -> PyResult<::std::string::String> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_all_markup(text));
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 #[pyfunction]
@@ -88,7 +93,7 @@ pub fn strip_expr_markup(
     text: ::std::string::String,
 ) -> PyResult<::std::string::String> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_expr_markup(text));
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 #[pyfunction]
@@ -98,7 +103,7 @@ pub fn split_expr_markup<'py>(
     text: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_expr_markup(text));
-    Ok({
+    ::pyo3::PyResult::Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
             py,
@@ -107,11 +112,7 @@ pub fn split_expr_markup<'py>(
                 ::pyo3::types::PyList::new(
                     py,
                     x1.into_iter()
-                        .map(|x| {
-                            PyResult::Ok(crate::generated::records::tts::expressive_tag_to_py(
-                                py, x,
-                            )?)
-                        })
+                        .map(|x| crate::generated::records::tts::expressive_tag_to_py(py, x))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -134,7 +135,7 @@ pub fn to_xml(
             tag_name, content, attrs,
         )
     });
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 #[pyfunction]
@@ -144,7 +145,7 @@ pub fn chat_history_summary_xml(
     summary: ::std::string::String,
 ) -> PyResult<::std::string::String> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_history_summary_xml(summary));
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 #[pyfunction]
@@ -153,30 +154,23 @@ pub fn chat_ctx_summarize_plan(
     py: Python<'_>,
     items: Bound<'_, PyAny>,
     #[pyo3(from_py_with = _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns)]
-    keep_last_turns: usize,
-) -> PyResult<
-    ::std::option::Option<(
-        usize,
-        ::std::vec::Vec<usize>,
-        ::std::string::String,
-        ::std::string::String,
-        f64,
-    )>,
-> {
+    keep_last_turns: MarkupFunctionsChatCtxSummarizePlanKeepLastTurnsInput,
+) -> PyResult<MarkupFunctionsChatCtxSummarizePlanOutput> {
     let items = items.try_iter().and_then(|items| {
         items
             .map(|item| {
                 let item = item?;
-                crate::generated::records::chat_items::chat_item_from_py(&item)
+                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_ctx_summarize_plan(items, keep_last_turns));
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/markup/bindings.rs.
 type MarkupImpl = <crate::Selected as super::Implementations>::MarkupClass;
+type MarkupClassLlmInstructionsOutput = ::std::option::Option<::std::string::String>;
 
 /// The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write
 /// and how it is normalized and lowered before synthesis.
@@ -195,7 +189,7 @@ impl Markup {
                 provider_key,
             )
         });
-        Ok(Markup(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(Markup(::std::sync::Arc::new(out)))
     }
 
     /// The provider's key into the markup tables, or `""` for no markup.
@@ -206,7 +200,7 @@ impl Markup {
                 &self.0,
             )
         });
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// The instructions teaching the LLM this voice's markup, `None` without markup.
@@ -215,9 +209,11 @@ impl Markup {
         &self,
         py: Python<'_>,
         speech_steering: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<::std::option::Option<::std::string::String>> {
+    ) -> PyResult<MarkupClassLlmInstructionsOutput> {
         let speech_steering = speech_steering
-            .map(|v| crate::generated::records::expressive::speech_steering_options_from_py(&v))
+            .map(|v| {
+                crate::generated::records::expressive::speech_steering_options_from_py(v.as_any())
+            })
             .transpose()?;
         let out = py.detach(|| {
             <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::llm_instructions(
@@ -225,7 +221,7 @@ impl Markup {
                 speech_steering,
             )
         });
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Fix common LLM markup mistakes (e.g. unclosed self-closing tags).
@@ -240,7 +236,7 @@ impl Markup {
                 &self.0, text,
             )
         });
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Lower the framework's markup to the provider's native syntax.
@@ -255,12 +251,15 @@ impl Markup {
                 &self.0, text,
             )
         });
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/markup/bindings.rs.
 type TranscriptMarkupStripperImpl = <crate::Selected as super::Implementations>::TranscriptStripper;
+type TranscriptStripperExpressionAttributeOutput = ::std::option::Option<
+    ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
+>;
 
 /// Stateful, provider-agnostic markup stripper for one transcript segment.
 #[pyclass(name = "TranscriptMarkupStripper", module = "livekit.agents._core")]
@@ -270,42 +269,38 @@ pub struct TranscriptMarkupStripper(pub(crate) TranscriptMarkupStripperImpl);
 impl TranscriptMarkupStripper {
     #[new]
     fn new(py: Python<'_>) -> PyResult<TranscriptMarkupStripper> {
-        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::new());
-        Ok(TranscriptMarkupStripper(out))
+        let out = py.detach(<TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::new);
+        ::pyo3::PyResult::Ok(TranscriptMarkupStripper(out))
     }
 
     #[pyo3(signature = (text))]
     fn push(&mut self, text: ::std::string::String) -> PyResult<::std::string::String> {
         let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::push(&mut self.0, text);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     fn flush(&mut self) -> PyResult<::std::string::String> {
         let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::flush(&mut self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
     fn tags<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0);
-        Ok(::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| PyResult::Ok(crate::generated::records::tts::expressive_tag_to_py(py, x)?))
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any())
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::tts::expressive_tag_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
     }
 
-    fn expression_attribute(
-        &self,
-    ) -> PyResult<
-        ::std::option::Option<
-            ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
-        >,
-    > {
+    fn expression_attribute(&self) -> PyResult<TranscriptStripperExpressionAttributeOutput> {
         let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::expression_attribute(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 }
 
@@ -322,8 +317,8 @@ pub fn tts_adapter_stream<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
-    let provider = crate::generated::tts::TtsProxy::from_host(&provider)?;
-    let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
+    let provider = crate::generated::tts::TtsProxy::from_host(provider.as_any())?;
+    let conn_options = crate::conversions::api_connect_options_from_py(conn_options.as_any())?;
     crate::host::future_into_py(py, async move {
         let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(&env, provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| {
@@ -338,21 +333,33 @@ pub fn tts_adapter_stream<'py>(
 // Declared in rust/crates/lk-agents-abi/src/tts/stream_pacer.rs.
 type SentencePacerImpl = <crate::Selected as super::Implementations>::SentencePacer;
 
-fn _extract_sentence_pacer_new_minimum_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "minimum_audio")
+fn _extract_sentence_pacer_new_minimum_audio(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SentencePacerNewMinimumAudioInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "minimum_audio")
 }
+type SentencePacerNewMinimumAudioInput = f64;
 
-fn _extract_sentence_pacer_new_maximum_text(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "maximum_text")
+fn _extract_sentence_pacer_new_maximum_text(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SentencePacerNewMaximumTextInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "maximum_text")
 }
+type SentencePacerNewMaximumTextInput = usize;
+type SentencePacerPollOutput =
+    (::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>);
 
-fn _extract_sentence_pacer_poll_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "now")
+fn _extract_sentence_pacer_poll_now(obj: &Bound<'_, PyAny>) -> PyResult<SentencePacerPollNowInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "now")
 }
+type SentencePacerPollNowInput = f64;
 
-fn _extract_sentence_pacer_poll_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "audio")
+fn _extract_sentence_pacer_poll_audio(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SentencePacerPollAudioInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "audio")
 }
+type SentencePacerPollAudioInput = f64;
 
 /// Paces a synthesis's sentences: the first at once, the rest in batches once the audio already
 /// synthesized is nearly played.
@@ -365,8 +372,10 @@ impl SentencePacer {
     #[pyo3(signature = (minimum_audio, maximum_text))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_sentence_pacer_new_minimum_audio)] minimum_audio: f64,
-        #[pyo3(from_py_with = _extract_sentence_pacer_new_maximum_text)] maximum_text: usize,
+        #[pyo3(from_py_with = _extract_sentence_pacer_new_minimum_audio)]
+        minimum_audio: SentencePacerNewMinimumAudioInput,
+        #[pyo3(from_py_with = _extract_sentence_pacer_new_maximum_text)]
+        maximum_text: SentencePacerNewMaximumTextInput,
     ) -> PyResult<SentencePacer> {
         crate::host::check_pid()?;
         let out = py.detach(|| {
@@ -375,7 +384,7 @@ impl SentencePacer {
                 maximum_text,
             )
         });
-        Ok(SentencePacer(out))
+        ::pyo3::PyResult::Ok(SentencePacer(out))
     }
 
     #[pyo3(signature = (text))]
@@ -398,17 +407,17 @@ impl SentencePacer {
     #[pyo3(signature = (now, audio))]
     fn poll(
         &mut self,
-        #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: f64,
-        #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)] audio: f64,
-    ) -> PyResult<(::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>)>
-    {
+        #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: SentencePacerPollNowInput,
+        #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)]
+        audio: SentencePacerPollAudioInput,
+    ) -> PyResult<SentencePacerPollOutput> {
         crate::host::check_pid()?;
         let out = <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::poll(
             &mut self.0,
             now,
             audio,
         );
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 }
 
@@ -468,9 +477,7 @@ impl TtsStream {
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     out.map(|value| {
-                        Ok::<_, ::pyo3::PyErr>(
-                            crate::generated::records::tts::synthesized_audio_to_py(py, value)?,
-                        )
+                        crate::generated::records::tts::synthesized_audio_to_py(py, value)
                     })
                     .transpose()?,
                     py,
@@ -483,23 +490,27 @@ impl TtsStream {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out =
+            let () =
                 <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::aclose(&this).await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
 type SynthesisChecksImpl = <crate::Selected as super::Implementations>::SynthesisChecks;
+type SynthesisChecksValidateSynthesisOutput = ::std::option::Option<::std::string::String>;
 
-fn _extract_synthesis_checks_validate_synthesis_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "duration")
+fn _extract_synthesis_checks_validate_synthesis_duration(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SynthesisChecksValidateSynthesisDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "duration")
 }
+type SynthesisChecksValidateSynthesisDurationInput = f64;
 
 fn _extract_synthesis_checks_validate_synthesis_segments(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<(usize, usize)>> {
+) -> PyResult<SynthesisChecksValidateSynthesisSegmentsInput> {
     if obj.is_none() {
         Ok(None)
     } else {
@@ -514,13 +525,14 @@ fn _extract_synthesis_checks_validate_synthesis_segments(
             let item_0 = tuple.get_item(0)?;
             let item_1 = tuple.get_item(1)?;
             Ok((
-                (crate::python::number_from_py::<usize>(&item_0, "segments"))?,
-                (crate::python::number_from_py::<usize>(&item_1, "segments"))?,
+                (crate::python::number_from_py::<usize>(item_0.as_any(), "segments"))?,
+                (crate::python::number_from_py::<usize>(item_1.as_any(), "segments"))?,
             ))
         })())
         .map(Some)
     }
 }
+type SynthesisChecksValidateSynthesisSegmentsInput = ::std::option::Option<(usize, usize)>;
 
 /// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
 /// ``segments`` as ``(expected, actual)``) failed, or ``None``.
@@ -529,16 +541,17 @@ fn _extract_synthesis_checks_validate_synthesis_segments(
 pub fn validate_synthesis(
     py: Python<'_>,
     text: ::std::string::String,
-    #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_duration)] duration: f64,
+    #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_duration)]
+    duration: SynthesisChecksValidateSynthesisDurationInput,
     #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_segments)]
-    segments: ::std::option::Option<(usize, usize)>,
-) -> PyResult<::std::option::Option<::std::string::String>> {
+    segments: SynthesisChecksValidateSynthesisSegmentsInput,
+) -> PyResult<SynthesisChecksValidateSynthesisOutput> {
     let out = py.detach(|| {
         <SynthesisChecksImpl as ::lk_agents_abi::tts::streams::SynthesisChecks>::validate_synthesis(
             &text, duration, segments,
         )
     });
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
@@ -604,7 +617,8 @@ impl TtsProxy {
             if v.is_none() {
                 Ok(None)
             } else {
-                (crate::python::number_from_py::<usize>(&v, "Tts._core_instance_id")).map(Some)
+                (crate::python::number_from_py::<usize>(v.as_any(), "Tts._core_instance_id"))
+                    .map(Some)
             }?
         };
         let label = {
@@ -613,19 +627,19 @@ impl TtsProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            crate::generated::records::tts::tts_capabilities_from_py(&v)?
+            crate::generated::records::tts::tts_capabilities_from_py(v.as_any())?
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
-            crate::generated::records::types::provider_id_from_py(&v)?
+            crate::generated::records::types::provider_id_from_py(v.as_any())?
         };
         let sample_rate = {
             let v = crate::host::read(obj, "_core_sample_rate")?;
-            crate::python::number_from_py::<u32>(&v, "Tts._core_sample_rate")?
+            crate::python::number_from_py::<u32>(v.as_any(), "Tts._core_sample_rate")?
         };
         let num_channels = {
             let v = crate::host::read(obj, "_core_num_channels")?;
-            crate::python::number_from_py::<u16>(&v, "Tts._core_num_channels")?
+            crate::python::number_from_py::<u16>(v.as_any(), "Tts._core_num_channels")?
         };
         let markup_provider = {
             let v = crate::host::read(obj, "_core_markup_provider")?;
@@ -640,7 +654,7 @@ impl TtsProxy {
             if v.is_none() {
                 Ok(None)
             } else {
-                (crate::conversions::api_connect_options_from_py(&v)).map(Some)
+                (crate::conversions::api_connect_options_from_py(v.as_any())).map(Some)
             }?
         };
         Ok(TtsProxy {
@@ -801,7 +815,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Tts._core_synthesize: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::tts::synthesized_audio_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::open(py, o, context, |o| crate::generated::records::tts::synthesized_audio_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -854,7 +868,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Tts._core_stream: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(crate::generated::records::tts::synthesized_audio_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| ::pyo3::IntoPyObjectExt::into_bound_py_any(v, py), |o| crate::generated::records::tts::synthesized_audio_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

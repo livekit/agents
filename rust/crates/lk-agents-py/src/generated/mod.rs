@@ -69,13 +69,13 @@ pub trait Implementations: 'static {
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
-    type ChatRequestView: ::lk_agents_abi::llm::llm::ChatRequestView;
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
     type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
+    type ChatRequestView: ::lk_agents_abi::llm::types::ChatRequestView;
     type FrameReaderInstall: ::lk_agents_abi::media::images::FrameReaderInstall;
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
@@ -182,7 +182,7 @@ pub trait Implementations: 'static {
     type AsgiReceive: ::lk_agents_abi::worker::endpoint_host::AsgiReceive;
     type AsgiSend: ::lk_agents_abi::worker::endpoint_host::AsgiSend;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
-    type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
+    type ServerEnvironment: ::lk_agents_abi::worker::types::ServerEnvironment;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
     type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
     type ProcessPool: ::lk_agents_abi::worker::ipc_host::ProcessPool;
@@ -259,7 +259,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;
     m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;
-    m.add_class::<llm::ChatRequest>()?;
     m.add_class::<llm::McpSession>()?;
     m.add_function(wrap_pyfunction!(llm::resolve_mcp_tool_options, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_raw_schema, m)?)?;
@@ -280,6 +279,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::OpenAIRealtimeModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
+    m.add_class::<llm::ChatRequest>()?;
     m.add_function(wrap_pyfunction!(media::_core_install_frame_reader, m)?)?;
     m.add_function(wrap_pyfunction!(media::encode_image, m)?)?;
     m.add_function(wrap_pyfunction!(media::serialize_image_frame, m)?)?;

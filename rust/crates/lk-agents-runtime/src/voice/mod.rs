@@ -365,7 +365,7 @@ impl Runtime {
                 Event::Forwarder(command) => {
                     for effect in self.forwarder.handle(command) {
                         match effect {
-                            ForwarderEffect::Report(input) => inputs.push(input),
+                            ForwarderEffect::Report(input) => inputs.push(*input),
                             effect => self.perform(vec![effect]),
                         }
                     }
@@ -476,7 +476,7 @@ impl Runtime {
                     resources.release(sink);
                 }
                 ForwarderEffect::Report(input) => {
-                    let _ = self.reports.send(input);
+                    let _ = self.reports.send(*input);
                 }
             }
         }

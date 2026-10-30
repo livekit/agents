@@ -278,11 +278,11 @@ impl ChainRequest {
             },
             ChainEvent::Succeeded { attempt } if matches!(self.phase, Phase::Active(id) if id == attempt) =>
             {
-                if let Some(attempts) = &mut self.attempts {
-                    if let Some(id) = attempts.current() {
-                        attempts.succeeded(id, now);
-                        attempts.closed(id, now, &mut Vec::new());
-                    }
+                if let Some(attempts) = &mut self.attempts
+                    && let Some(id) = attempts.current()
+                {
+                    attempts.succeeded(id, now);
+                    attempts.closed(id, now, &mut Vec::new());
                 }
                 self.phase = Phase::Finished;
                 vec![ChainEffect::Finished(Ok(()))]

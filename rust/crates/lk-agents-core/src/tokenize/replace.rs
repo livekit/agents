@@ -124,6 +124,11 @@ fn char_find(haystack: &str, needle: &str) -> Option<usize> {
     haystack.find(needle).map(|byte| haystack[..byte].chars().count())
 }
 
+/// The paragraphs of `text`.
+pub fn tokenize_paragraphs(text: &str) -> Vec<String> {
+    split_paragraphs(text).into_iter().map(|(paragraph, _, _)| paragraph).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,9 +182,4 @@ mod tests {
         let out = split_paragraphs("x\n\n  a  ");
         assert_eq!(out, vec![("x".to_owned(), 0, 1), ("a".to_owned(), 5, 6)]);
     }
-}
-
-/// The paragraphs of `text`.
-pub fn tokenize_paragraphs(text: &str) -> Vec<String> {
-    split_paragraphs(text).into_iter().map(|(paragraph, _, _)| paragraph).collect()
 }

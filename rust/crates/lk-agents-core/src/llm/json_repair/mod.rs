@@ -119,12 +119,11 @@ impl Parser {
                     let tuple = self.explicit_tuple();
                     self.index += 1;
                     let mut arr = self.array(')');
-                    if !tuple {
-                        if let Value::Array(ref mut a) = arr {
-                            if a.len() == 1 {
-                                arr = a.pop().unwrap();
-                            }
-                        }
+                    if !tuple
+                        && let Value::Array(ref mut a) = arr
+                        && a.len() == 1
+                    {
+                        arr = a.pop().unwrap();
                     }
                     break arr;
                 }
@@ -214,10 +213,10 @@ impl Parser {
         if let Ok(n) = number.parse::<u64>() {
             return n.into();
         }
-        if let Ok(n) = number.parse::<f64>() {
-            if let Some(n) = serde_json::Number::from_f64(n) {
-                return n.into();
-            }
+        if let Ok(n) = number.parse::<f64>()
+            && let Some(n) = serde_json::Number::from_f64(n)
+        {
+            return n.into();
         }
         Value::String(number)
     }
@@ -295,55 +294,55 @@ impl Parser {
                 .in_context(Context::Key, |p| {
                     loop {
                         rollback = p.index;
-                        if p.at(0) == Some('[') && !obj.is_empty() {
-                            if let Some(Value::Array(prev)) = obj.values_mut().last() {
-                                p.index += 1;
-                                if let Value::Array(next) = p.array(']') {
-                                    let lengths: Vec<usize> = prev
+                        if p.at(0) == Some('[')
+                            && !obj.is_empty()
+                            && let Some(Value::Array(prev)) = obj.values_mut().last()
+                        {
+                            p.index += 1;
+                            if let Value::Array(next) = p.array(']') {
+                                let lengths: Vec<usize> = prev
+                                    .iter()
+                                    .filter_map(|v| v.as_array().map(Vec::len))
+                                    .collect();
+                                let width = lengths
+                                    .first()
+                                    .copied()
+                                    .filter(|n| *n > 0 && lengths.iter().all(|x| x == n));
+                                if let Some(width) = width {
+                                    let tail_start = prev
                                         .iter()
-                                        .filter_map(|v| v.as_array().map(Vec::len))
-                                        .collect();
-                                    let width = lengths
-                                        .first()
-                                        .copied()
-                                        .filter(|n| *n > 0 && lengths.iter().all(|x| x == n));
-                                    if let Some(width) = width {
-                                        let tail_start = prev
-                                            .iter()
-                                            .rposition(Value::is_array)
-                                            .map(|i| i + 1)
-                                            .unwrap_or(0);
-                                        let tail = prev.split_off(tail_start);
-                                        if tail.len() % width == 0 {
-                                            prev.extend(
-                                                tail.chunks(width)
-                                                    .map(|c| Value::Array(c.to_vec())),
-                                            );
-                                        } else {
-                                            prev.extend(tail);
-                                        }
-                                        if !next.is_empty() {
-                                            if next.iter().all(Value::is_array) {
-                                                prev.extend(next);
-                                            } else {
-                                                prev.push(Value::Array(next));
-                                            }
-                                        }
+                                        .rposition(Value::is_array)
+                                        .map(|i| i + 1)
+                                        .unwrap_or(0);
+                                    let tail = prev.split_off(tail_start);
+                                    if tail.len() % width == 0 {
+                                        prev.extend(
+                                            tail.chunks(width).map(|c| Value::Array(c.to_vec())),
+                                        );
                                     } else {
-                                        if next.len() == 1 && next[0].is_array() {
-                                            prev.extend(next[0].as_array().unwrap().clone());
-                                        } else {
+                                        prev.extend(tail);
+                                    }
+                                    if !next.is_empty() {
+                                        if next.iter().all(Value::is_array) {
                                             prev.extend(next);
+                                        } else {
+                                            prev.push(Value::Array(next));
                                         }
                                     }
+                                } else {
+                                    if next.len() == 1 && next[0].is_array() {
+                                        prev.extend(next[0].as_array().unwrap().clone());
+                                    } else {
+                                        prev.extend(next);
+                                    }
                                 }
-                                p.ws();
-                                if p.at(0) == Some(',') {
-                                    p.index += 1;
-                                }
-                                p.ws();
-                                continue;
                             }
+                            p.ws();
+                            if p.at(0) == Some(',') {
+                                p.index += 1;
+                            }
+                            p.ws();
+                            continue;
                         }
                         let key = p.string();
                         if key == empty() {
@@ -432,10 +431,10 @@ impl Parser {
             if self.at(0) == Some(',') {
                 self.index += 1;
                 self.ws();
-                if self.at(0).is_some_and(quote) {
-                    if let Value::Object(add) = self.object() {
-                        obj.extend(add);
-                    }
+                if self.at(0).is_some_and(quote)
+                    && let Value::Object(add) = self.object()
+                {
+                    obj.extend(add);
                 }
             }
         }

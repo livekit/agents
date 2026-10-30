@@ -195,13 +195,12 @@ pub fn usage_records(ev: &AgentMetrics) -> Vec<OtelRecord> {
         AgentMetrics::RealtimeModel(m) => Some((m.acquire_time, m.connection_reused)),
         _ => None,
     };
-    if let Some((Some(acquire_time), reused)) = conn {
-        if acquire_time > 0.0 {
-            let mut conn_attrs = model_attrs(ev.metadata());
-            conn_attrs
-                .push(("connection_reused", if reused { "true" } else { "false" }.to_owned()));
-            out.push(OtelRecord::histogram(CONNECTION_ACQUIRE_TIME, acquire_time, conn_attrs));
-        }
+    if let Some((Some(acquire_time), reused)) = conn
+        && acquire_time > 0.0
+    {
+        let mut conn_attrs = model_attrs(ev.metadata());
+        conn_attrs.push(("connection_reused", if reused { "true" } else { "false" }.to_owned()));
+        out.push(OtelRecord::histogram(CONNECTION_ACQUIRE_TIME, acquire_time, conn_attrs));
     }
 
     out

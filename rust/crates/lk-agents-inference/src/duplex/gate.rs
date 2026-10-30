@@ -25,7 +25,9 @@ pub fn rms(frame: &AudioFrame) -> f64 {
     }
     let sum: f64 = frame
         .data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| {
             let s = f64::from(i16::from_le_bytes([b[0], b[1]]));
             s * s

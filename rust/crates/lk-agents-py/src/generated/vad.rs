@@ -13,65 +13,89 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/vad/inference.rs.
 type InferenceVadImpl = <crate::Selected as super::Implementations>::InferenceVad;
 
-fn _extract_inference_vad_new_min_speech_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "min_speech_duration")
+fn _extract_inference_vad_new_min_speech_duration(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceVadNewMinSpeechDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
 }
+type InferenceVadNewMinSpeechDurationInput = f64;
 
-fn _extract_inference_vad_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "min_silence_duration")
+fn _extract_inference_vad_new_min_silence_duration(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceVadNewMinSilenceDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
 }
+type InferenceVadNewMinSilenceDurationInput = f64;
 
-fn _extract_inference_vad_new_prefix_padding_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
+fn _extract_inference_vad_new_prefix_padding_duration(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceVadNewPrefixPaddingDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
 }
+type InferenceVadNewPrefixPaddingDurationInput = f64;
 
-fn _extract_inference_vad_new_max_buffered_speech(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "max_buffered_speech")
+fn _extract_inference_vad_new_max_buffered_speech(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceVadNewMaxBufferedSpeechInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
 }
+type InferenceVadNewMaxBufferedSpeechInput = f64;
 
-fn _extract_inference_vad_new_activation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "activation_threshold")
+fn _extract_inference_vad_new_activation_threshold(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceVadNewActivationThresholdInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "activation_threshold")
 }
+type InferenceVadNewActivationThresholdInput = f64;
 
-fn _extract_inference_vad_new_deactivation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "deactivation_threshold")
+fn _extract_inference_vad_new_deactivation_threshold(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<InferenceVadNewDeactivationThresholdInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
 }
+type InferenceVadNewDeactivationThresholdInput = f64;
 
 fn _extract_inference_vad_update_options_min_speech_duration(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "min_speech_duration")
+) -> PyResult<InferenceVadUpdateOptionsMinSpeechDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
 }
+type InferenceVadUpdateOptionsMinSpeechDurationInput = f64;
 
 fn _extract_inference_vad_update_options_min_silence_duration(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "min_silence_duration")
+) -> PyResult<InferenceVadUpdateOptionsMinSilenceDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
 }
+type InferenceVadUpdateOptionsMinSilenceDurationInput = f64;
 
 fn _extract_inference_vad_update_options_prefix_padding_duration(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
+) -> PyResult<InferenceVadUpdateOptionsPrefixPaddingDurationInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
 }
+type InferenceVadUpdateOptionsPrefixPaddingDurationInput = f64;
 
 fn _extract_inference_vad_update_options_max_buffered_speech(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "max_buffered_speech")
+) -> PyResult<InferenceVadUpdateOptionsMaxBufferedSpeechInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
 }
+type InferenceVadUpdateOptionsMaxBufferedSpeechInput = f64;
 
 fn _extract_inference_vad_update_options_activation_threshold(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "activation_threshold")
+) -> PyResult<InferenceVadUpdateOptionsActivationThresholdInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "activation_threshold")
 }
+type InferenceVadUpdateOptionsActivationThresholdInput = f64;
 
 fn _extract_inference_vad_update_options_deactivation_threshold(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "deactivation_threshold")
+) -> PyResult<InferenceVadUpdateOptionsDeactivationThresholdInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
 }
+type InferenceVadUpdateOptionsDeactivationThresholdInput = f64;
 
 /// The Silero VAD behind `inference.VAD`.
 #[pyclass(frozen, name = "InferenceVad", module = "livekit.agents._core")]
@@ -84,20 +108,21 @@ impl InferenceVad {
     fn new(
         py: Python<'_>,
         model_factory: Bound<'_, PyAny>,
-        #[pyo3(from_py_with = _extract_inference_vad_new_min_speech_duration)] min_speech_duration: f64,
+        #[pyo3(from_py_with = _extract_inference_vad_new_min_speech_duration)] min_speech_duration: InferenceVadNewMinSpeechDurationInput,
         #[pyo3(from_py_with = _extract_inference_vad_new_min_silence_duration)]
-        min_silence_duration: f64,
+        min_silence_duration: InferenceVadNewMinSilenceDurationInput,
         #[pyo3(from_py_with = _extract_inference_vad_new_prefix_padding_duration)]
-        prefix_padding_duration: f64,
-        #[pyo3(from_py_with = _extract_inference_vad_new_max_buffered_speech)] max_buffered_speech: f64,
+        prefix_padding_duration: InferenceVadNewPrefixPaddingDurationInput,
+        #[pyo3(from_py_with = _extract_inference_vad_new_max_buffered_speech)] max_buffered_speech: InferenceVadNewMaxBufferedSpeechInput,
         #[pyo3(from_py_with = _extract_inference_vad_new_activation_threshold)]
-        activation_threshold: f64,
+        activation_threshold: InferenceVadNewActivationThresholdInput,
         #[pyo3(from_py_with = _extract_inference_vad_new_deactivation_threshold)]
-        deactivation_threshold: f64,
+        deactivation_threshold: InferenceVadNewDeactivationThresholdInput,
     ) -> PyResult<InferenceVad> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let model_factory = crate::generated::vad::VadModelsProxy::from_host(&model_factory)?;
+        let model_factory =
+            crate::generated::vad::VadModelsProxy::from_host(model_factory.as_any())?;
         let out = py.detach(|| {
             <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(
                 &env,
@@ -110,7 +135,7 @@ impl InferenceVad {
                 deactivation_threshold,
             )
         });
-        Ok(InferenceVad(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(InferenceVad(::std::sync::Arc::new(out)))
     }
 
     /// Every option, applied by each running stream before its next frame.
@@ -119,17 +144,17 @@ impl InferenceVad {
         &self,
         py: Python<'_>,
         #[pyo3(from_py_with = _extract_inference_vad_update_options_min_speech_duration)]
-        min_speech_duration: f64,
+        min_speech_duration: InferenceVadUpdateOptionsMinSpeechDurationInput,
         #[pyo3(from_py_with = _extract_inference_vad_update_options_min_silence_duration)]
-        min_silence_duration: f64,
+        min_silence_duration: InferenceVadUpdateOptionsMinSilenceDurationInput,
         #[pyo3(from_py_with = _extract_inference_vad_update_options_prefix_padding_duration)]
-        prefix_padding_duration: f64,
+        prefix_padding_duration: InferenceVadUpdateOptionsPrefixPaddingDurationInput,
         #[pyo3(from_py_with = _extract_inference_vad_update_options_max_buffered_speech)]
-        max_buffered_speech: f64,
+        max_buffered_speech: InferenceVadUpdateOptionsMaxBufferedSpeechInput,
         #[pyo3(from_py_with = _extract_inference_vad_update_options_activation_threshold)]
-        activation_threshold: f64,
+        activation_threshold: InferenceVadUpdateOptionsActivationThresholdInput,
         #[pyo3(from_py_with = _extract_inference_vad_update_options_deactivation_threshold)]
-        deactivation_threshold: f64,
+        deactivation_threshold: InferenceVadUpdateOptionsDeactivationThresholdInput,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         py.detach(|| {
@@ -158,7 +183,7 @@ impl InferenceVad {
                     &e,
                 )
             })?;
-        Ok({
+        ::pyo3::PyResult::Ok({
             let (sink, source) = out;
             InferenceVadStream(
                 ::std::boxed::Box::new(sink),
@@ -193,7 +218,7 @@ pub struct InferenceVadStream(
 impl InferenceVadStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let item = crate::conversions::audio_frame_from_py(&item)?;
+        let item = crate::conversions::audio_frame_from_py(item.as_any())?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(
             |e: ::lk_agents_abi::errors::ProviderError| {
                 <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
@@ -307,11 +332,12 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (crate::generated::vad::VadModelProxy::from_host(&o)).map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
+            let out =
+                (crate::generated::vad::VadModelProxy::from_host(o.as_any())).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
             Ok(out)
         })
     }
@@ -390,8 +416,8 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                 }
             };
             let o = out.bind(py);
-            let out =
-                (crate::python::number_from_py::<f64>(&o, "VadModel.predict")).map_err(|e| {
+            let out = (crate::python::number_from_py::<f64>(o.as_any(), "VadModel.predict"))
+                .map_err(|e| {
                     <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
                         py, &e,
                     )
@@ -417,7 +443,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                 }
             };
             let o = out.bind(py);
-            let out = ({
+            let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
             })
@@ -426,7 +452,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                     py, &e,
                 )
             })?;
-            Ok(out)
+            Ok(())
         })
     }
 }
@@ -487,11 +513,11 @@ impl VadProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            crate::generated::records::vad::vad_capabilities_from_py(&v)?
+            crate::generated::records::vad::vad_capabilities_from_py(v.as_any())?
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
-            crate::generated::records::types::provider_id_from_py(&v)?
+            crate::generated::records::types::provider_id_from_py(v.as_any())?
         };
         Ok(VadProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -572,7 +598,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::conversions::audio_frame_to_py(py, v)?), |o| Ok(crate::generated::records::vad::vad_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::duplex(py, o, context, crate::conversions::audio_frame_to_py, |o| crate::generated::records::vad::vad_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

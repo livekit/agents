@@ -350,7 +350,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
     assert!(llm.contains("#[pyo3(signature = (model, *, extra = None))]"), "{llm}");
     assert!(
         llm.contains("extra: Option<Bound<'_, PyAny>>")
-            && llm.contains("value_from_py(&v, \"extra\")"),
+            && llm.contains("value_from_py(v.as_any(), \"extra\")"),
         "{llm}"
     );
     assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e))?"), "{llm}");
@@ -491,7 +491,7 @@ fn declared_proxies_call_the_host_in_their_context() {
         "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
         "::lk_agents_runtime::host::notify(&self.notifier, \"Callbacks.abort\", at, &[], false, ::std::boxed::Box::new(move |py| {",
         "Ok((host.bind(py).getattr(\"abort\")?",
-        "let host = crate::generated::llm::CallbacksProxy::from_host(&host)?;",
+        "let host = crate::generated::llm::CallbacksProxy::from_host(host.as_any())?;",
         "native::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");
@@ -537,7 +537,7 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         "\"Callbacks.count\", &self.context, &[], ::std::boxed::Box::new(move |py| {",
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
-        "crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::llm::chat::Chunk>()?)",
+        "crate::host::stream::HostStream::open(py, o, context, |o| o.extract::<::lk_agents_abi::llm::chat::Chunk>()",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");
     }
@@ -956,7 +956,7 @@ fn an_optional_proxy_is_absence_or_the_host_object_behind_its_proxy() {
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
-        llm.contains("if o.is_none() { Ok(None) } else { (crate::generated::llm::CallbacksProxy::from_host(&o)).map(Some) }"),
+        llm.contains("if o.is_none() { Ok(None) } else { (crate::generated::llm::CallbacksProxy::from_host(o.as_any())).map(Some) }"),
         "{llm}"
     );
 }
@@ -997,7 +997,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     // A host object handed over to be owned (a writer the core later closes by value).
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")
-            && llm.contains("crate::generated::llm::CallbacksProxy::owned(&")
+            && llm.contains("crate::generated::llm::CallbacksProxy::owned(o.as_any()")
             && llm.contains("pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>>"),
         "{llm}"
     );
@@ -1097,7 +1097,7 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let decls = read(&source).expect("string enum with its native diagnostic resolves");
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
-    assert!(llm.contains("let kind = crate::python::str_from_py(&kind)?;"), "{llm}");
+    assert!(llm.contains("let kind = crate::python::str_from_py(kind.as_any())?;"), "{llm}");
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
 }

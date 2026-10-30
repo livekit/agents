@@ -390,6 +390,12 @@ pub struct MarkdownFilter {
     at_line_start: bool,
 }
 
+impl Default for MarkdownFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MarkdownFilter {
     /// At line start, as the reference's stream begins.
     pub fn new() -> Self {

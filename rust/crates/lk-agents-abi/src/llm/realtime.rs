@@ -167,7 +167,7 @@ pub struct GenerationDone {
     pub status: GenerationStatus,
     /// Not reported by a host session: it reports usage through its own metrics events.
     #[host(skip)]
-    pub usage: crate::usage::TokenUsage,
+    pub usage: Box<crate::usage::TokenUsage>,
 }
 
 /// A generation the server started by itself (`generation_created` with `user_initiated=False`):

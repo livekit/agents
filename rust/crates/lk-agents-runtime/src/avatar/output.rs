@@ -325,12 +325,12 @@ impl Inner {
         self.closing.spawn(&*self.spawner, "avatar_stream_close", async move {
             let writer =
                 std::mem::replace(&mut *segment.writer.lock().await, SegmentWriter::Closed);
-            if let SegmentWriter::Open(writer) = writer {
-                if let Err(error) = writer.close().await {
-                    outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
-                    log::error!(target: LOG, error = error.to_string().as_str();
+            if let SegmentWriter::Open(writer) = writer
+                && let Err(error) = writer.close().await
+            {
+                outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
+                log::error!(target: LOG, error = error.to_string().as_str();
                         "failed to close avatar audio stream");
-                }
             }
         });
     }
@@ -398,6 +398,10 @@ fn observe_close(closed: Closed) -> Closed {
 }
 
 impl DataStreamAudioOutput {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the operation’s existing explicit arguments"
+    )]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         destination_identity: String,
@@ -474,13 +478,13 @@ impl AudioOutput for DataStreamAudioOutput {
                     .current_segment()
                     .ok_or(IoError::PlaybackSegmentUnavailable)?;
                 let key = state.core.admit(key).map_err(output_error)?;
-                let segment = Arc::clone(state.writers.entry(key).or_insert_with(|| {
+
+                Arc::clone(state.writers.entry(key).or_insert_with(|| {
                     Arc::new(Segment {
                         key,
                         writer: tokio::sync::Mutex::new(SegmentWriter::Unopened),
                     })
-                }));
-                segment
+                }))
             };
             // The task retains the writer even if the capture caller is interrupted.
             let (tx, rx) = tokio::sync::oneshot::channel();

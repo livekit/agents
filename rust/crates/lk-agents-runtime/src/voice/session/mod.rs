@@ -115,7 +115,7 @@ const CLOSE_TICK_BUDGET: u32 = 30_000;
 enum Stage {
     Ready(Box<Ready>),
     Opening(Option<Arc<dyn SessionHosting>>),
-    Running(Running),
+    Running(Box<Running>),
     Closed(Option<Arc<dyn SessionHosting>>),
 }
 
@@ -337,7 +337,7 @@ impl VoiceSession {
                 let mut stage = stage.lock();
                 match stage.lifecycle().opened() {
                     OpenAction::InstallRunning => {
-                        *stage = Stage::Running(Running {
+                        *stage = Stage::Running(Box::new(Running {
                             api,
                             calls,
                             keyterms,
@@ -350,7 +350,7 @@ impl VoiceSession {
                             speech_ids,
                             tts_adapter,
                             stt_adapter,
-                        });
+                        }));
                     }
                     OpenAction::Begin => {
                         unreachable!("startup completion installs running resources")

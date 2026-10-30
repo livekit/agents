@@ -295,12 +295,13 @@ async fn simulate(seed: u64, messages: usize) -> Record {
                     .collect();
                 if !started.is_empty() {
                     let task_id = &started[rng.usize(0..started.len())];
-                    let mut ledger = world.ledger.lock().unwrap();
-                    ledger.client_canceled.insert(task_id.clone());
-                    if replying {
-                        *ledger.injected.entry("ReplyCanceled").or_default() += 1;
+                    {
+                        let mut ledger = world.ledger.lock().unwrap();
+                        ledger.client_canceled.insert(task_id.clone());
+                        if replying {
+                            *ledger.injected.entry("ReplyCanceled").or_default() += 1;
+                        }
                     }
-                    drop(ledger);
                     let _ = client.lane(LANE).cancel_task(task_id, Default::default()).await;
                 }
             }

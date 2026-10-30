@@ -372,7 +372,7 @@ mod tests {
             ApiConnectOptions { max_retry: 3, read_timeout: Some(1.0), ..Default::default() };
         for kind in [RequestKind::Llm, RequestKind::TtsStream, RequestKind::SttStream] {
             for delivered in [false, true] {
-                let mut operation = ProviderAttempts::new(kind, options.clone(), 0).unwrap();
+                let mut operation = ProviderAttempts::new(kind, options, 0).unwrap();
                 assert_eq!(operation.ready(0), Ok(true));
                 operation.expect_response(0);
                 let error = operation.ready(at(1)).unwrap_err();

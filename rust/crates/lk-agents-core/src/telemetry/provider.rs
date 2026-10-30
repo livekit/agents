@@ -119,7 +119,7 @@ impl LlmMetricState {
         }
         self.request_id.clone_from(&chunk.id);
         if chunk.usage.is_some() {
-            self.usage.clone_from(&chunk.usage);
+            self.usage = chunk.usage.as_deref().cloned();
         }
         first
     }
@@ -328,7 +328,10 @@ mod tests {
         let stamp = ChoiceDelta { extra: Some(Default::default()), ..ChoiceDelta::default() };
         assert!(!fold.observe(&chunk("req-1", Some(stamp)), || unreachable!("not a response")));
         let usage = TokenUsage { input_tokens: 11, output_tokens: 7, ..Default::default() };
-        fold.observe(&LlmChunk { usage: Some(usage), ..chunk("req-1", None) }, || unreachable!());
+        fold.observe(
+            &LlmChunk { usage: Some(Box::new(usage)), ..chunk("req-1", None) },
+            || unreachable!(),
+        );
         let record = fold.finish(false, || (3.0, context())).expect("chunks arrived");
         assert_eq!(
             (record.ttft, record.tokens.output_tokens, record.tokens.total_tokens()),

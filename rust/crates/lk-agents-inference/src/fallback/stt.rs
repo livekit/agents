@@ -32,12 +32,14 @@ use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next};
 // The live input tee
 // ---------------------------------------------------------------------------------------------
 
+type InputProbe = (u64, Arc<dyn StreamSink<AudioFrame>>);
+
 /// Fans the audio-in leg out to the serving stream and every probe. `end` is recorded so a stream
 /// installed by a later failover still gets it (the reference's hole at `stt:363-365`).
 /// Sinks are called with no lock held: a host STT's sink takes the GIL.
 pub struct InputTee {
     main: Mutex<Option<Arc<dyn StreamSink<AudioFrame>>>>,
-    probes: Mutex<Vec<(u64, Arc<dyn StreamSink<AudioFrame>>)>>,
+    probes: Mutex<Vec<InputProbe>>,
     next_id: AtomicU64,
     /// Replayed into the next serving stream; taken before `main`.
     preroll: Mutex<Preroll>,

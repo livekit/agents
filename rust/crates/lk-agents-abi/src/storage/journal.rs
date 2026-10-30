@@ -19,7 +19,7 @@ pub enum JournalEvent {
     Usage(#[serde(deserialize_with = "stored_usage")] crate::usage::Usage),
     /// An item entered the history.
     ConversationItemAdded {
-        item: crate::livekit_protocol::agent::chat_context::ChatItem,
+        item: Box<crate::livekit_protocol::agent::chat_context::ChatItem>,
     },
     ToolExecutionUpdated(ToolExecution),
     Error {
@@ -165,7 +165,7 @@ mod tests {
             ),
             (JournalEvent::Usage(usage), "usage"),
             (
-                JournalEvent::ConversationItemAdded { item: Default::default() },
+                JournalEvent::ConversationItemAdded { item: Box::default() },
                 "conversation_item_added",
             ),
             (JournalEvent::ToolExecutionUpdated(tool), "tool_execution_updated"),

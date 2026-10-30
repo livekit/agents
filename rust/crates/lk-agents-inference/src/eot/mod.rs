@@ -7,7 +7,6 @@
 
 mod cloud;
 mod detector;
-mod eot;
 mod local;
 pub mod options;
 mod session;
@@ -16,6 +15,8 @@ mod shell;
 /// The stream driver a session and the host's `TurnDetector.stream()` use.
 mod stream;
 mod transport;
+#[path = "eot.rs"]
+mod types;
 
 // `ClientMessage`/`ServerMessage` from the shared protocol crate, aliased as `proto`.
 use livekit_protocol::agent as proto;
@@ -25,9 +26,6 @@ mod tests;
 
 pub use cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID, HeaderProvider};
 pub use detector::AudioEot;
-pub use eot::{
-    CancelReason, DEFAULT_PREDICTION_TIMEOUT, DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning,
-};
 pub use local::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CLIENT_BUFFER_SECONDS, LocalEotModel, LocalTransport,
 };
@@ -38,3 +36,6 @@ pub use session::{
 pub use shell::{MountedTransport, PROVIDER, PredictionChannel, SinkEvent};
 pub use stream::{DetectorStream, EotStream, MetricsCallback, TransportFactory};
 pub use transport::{EotTransport, PredictionListener};
+pub use types::{
+    CancelReason, DEFAULT_PREDICTION_TIMEOUT, DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning,
+};

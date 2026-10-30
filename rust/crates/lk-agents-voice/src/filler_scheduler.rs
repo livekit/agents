@@ -68,10 +68,10 @@ impl FillerScheduler {
         if delay < 0.0 || delay.is_nan() {
             return Err(FillerError::NegativeDelay);
         }
-        if let Some(i) = interval {
-            if i < 0.0 || i.is_nan() {
-                return Err(FillerError::NegativeInterval);
-            }
+        if let Some(i) = interval
+            && (i < 0.0 || i.is_nan())
+        {
+            return Err(FillerError::NegativeInterval);
         }
         Ok(FillerScheduler {
             delay: Duration::from_secs_f64(delay),

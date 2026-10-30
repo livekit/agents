@@ -1,7 +1,7 @@
 # Never-block measurements
 
 Run qualification captures from the repository root. Each workload uses a 1 ms absolute-deadline
-heartbeat and the frame-derived limits in `budgets.json`. Use `--check` to fail a breached gate.
+heartbeat and the frame-derived limits in [the shared budgets](../../rust/bench-budgets.json). Use `--check` to fail a breached gate.
 Failed workloads preserve the previous output file.
 
 ```bash
@@ -14,16 +14,11 @@ PYTHONPATH=livekit-agents-next:. uv run --no-sync python scripts/bench/media.py 
 # Real native images, 32 Ogg streams and ten-second recording bursts (run from rust/)
 cargo test -p lk-agents-runtime --test media_measurements --features media-images,media-ffmpeg \
   -- --ignored --nocapture
-
-# Direct audio data-plane steps at 1/8/32 instances
-cargo build --manifest-path rust/Cargo.toml -p lk-agents-bench-steps --release --locked
-rust/target/release/lk-agents-bench-steps --check > bench-steps.json
 ```
 
 - Report captures replace the final network destination, retaining native policy, bounded preparation
   and SDK emission. They record at least 1,000 idle/workload heartbeats, capacity refusals, SDK stages,
   event-loop callback wall/thread CPU, and overlapping GC. `--check` requires complete reports and
   sufficient samples, with passing idle/workload scheduling and SDK/event-loop CPU gates.
-- `lk-agents-bench-steps` measures 10/20 ms media frames and 48-to-16 kHz resampling with wall and thread CPU clocks.
 
 Keep captures outside the repository; compare runs on equivalent hardware and CPU quotas.

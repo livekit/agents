@@ -112,7 +112,9 @@ mod tests {
     fn each_mode_decides_against_the_in_flight_set() {
         use DuplicateMode::*;
         let busy = [("a", true)];
-        let cases: &[(DuplicateMode, Option<bool>, &[(&str, bool)], (&str, Option<Value>))] = &[
+        type Case<'a> =
+            (DuplicateMode, Option<bool>, &'a [(&'a str, bool)], (&'a str, Option<Value>));
+        let cases: &[Case<'_>] = &[
             (Allow, None, &[("a", false)], ("proceed", None)),
             (Reject, None, &[], ("proceed", None)),
             (Replace, None, &[], ("proceed", None)),

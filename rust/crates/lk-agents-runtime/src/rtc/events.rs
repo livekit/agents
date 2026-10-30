@@ -1,5 +1,7 @@
 //! Bounded room observations and admitted SDK streams, using the shared source lifecycle.
 
+type RpcClosure = dyn Fn(&str, &str) -> String + Send + Sync;
+
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -308,7 +310,7 @@ impl ports::TextStreamSender for TextStreamSender {
 }
 
 /// An RPC method's handler: `(caller_identity, payload)` to the response payload.
-pub struct RpcHandler(Box<dyn Fn(&str, &str) -> String + Send + Sync>);
+pub struct RpcHandler(Box<RpcClosure>);
 
 impl RpcHandler {
     pub fn new(callback: impl Fn(&str, &str) -> String + Send + Sync + 'static) -> Arc<Self> {

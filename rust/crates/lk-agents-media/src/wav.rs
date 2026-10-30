@@ -442,7 +442,8 @@ pub(crate) mod tests {
         data_first.extend_from_slice(b"WAVEdata");
         data_first.extend_from_slice(&8u32.to_le_bytes());
         data_first.extend_from_slice(&[0u8; 8]);
-        let cases: [(Vec<u8>, fn(&CodecError) -> bool); 6] = [
+        type ErrorPredicate = fn(&CodecError) -> bool;
+        let cases: [(Vec<u8>, ErrorPredicate); 6] = [
             (b"ID3\x04\x00\x00\x00\x00\x00\x00mp3 data here".to_vec(), |e| {
                 matches!(e, CodecError::MissingRiffWave(_))
             }),

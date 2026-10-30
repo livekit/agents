@@ -500,10 +500,10 @@ impl SessionTrace {
                 }
             }
             SessionEvent::AgentStateChanged { old, new } => {
-                if *old == AgentState::Speaking {
-                    if let Some((open, _)) = self.agent_speaking.take() {
-                        self.end(open, now, out);
-                    }
+                if *old == AgentState::Speaking
+                    && let Some((open, _)) = self.agent_speaking.take()
+                {
+                    self.end(open, now, out);
                 }
                 if *new == AgentState::Speaking {
                     // The speech holding the floor, else the newest one still open.
@@ -663,10 +663,10 @@ impl SessionTrace {
         outcome: SpeechOutcome,
         out: &mut Vec<SessionEvent>,
     ) {
-        if self.agent_speaking.as_ref().is_some_and(|(_, s)| *s == Some(speech)) {
-            if let Some((open, _)) = self.agent_speaking.take() {
-                self.end(open, now, out);
-            }
+        if self.agent_speaking.as_ref().is_some_and(|(_, s)| *s == Some(speech))
+            && let Some((open, _)) = self.agent_speaking.take()
+        {
+            self.end(open, now, out);
         }
         if self.tools.values().any(|t| t.speech == speech) {
             if let Some(turn) = self.turns.get_mut(&speech) {

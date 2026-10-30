@@ -13,9 +13,12 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
 type ApiErrorFunctionsImpl = <crate::Selected as super::Implementations>::ApiErrorFunctions;
 
-fn _extract_api_error_functions_http_error_message_status(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    crate::python::number_from_py::<i64>(&obj, "status")
+fn _extract_api_error_functions_http_error_message_status(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ApiErrorFunctionsHttpErrorMessageStatusInput> {
+    crate::python::number_from_py::<i64>(obj.as_any(), "status")
 }
+type ApiErrorFunctionsHttpErrorMessageStatusInput = i64;
 
 /// The message of an `APIStatusError` built from an HTTP status: the message and the reason
 /// when the message adds detail, else just the reason.
@@ -24,7 +27,8 @@ fn _extract_api_error_functions_http_error_message_status(obj: &Bound<'_, PyAny>
 pub fn http_error_display(
     py: Python<'_>,
     message: ::std::string::String,
-    #[pyo3(from_py_with = _extract_api_error_functions_http_error_message_status)] status: i64,
+    #[pyo3(from_py_with = _extract_api_error_functions_http_error_message_status)]
+    status: ApiErrorFunctionsHttpErrorMessageStatusInput,
     reason: ::std::option::Option<::std::string::String>,
 ) -> PyResult<::std::string::String> {
     let out = py.detach(|| {
@@ -32,7 +36,7 @@ pub fn http_error_display(
             &message, status, reason,
         )
     });
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 impl crate::python::HostException for ::lk_agents_abi::errors::ApiError {

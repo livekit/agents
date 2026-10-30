@@ -37,7 +37,7 @@ def test_media_qualification_requires_complete_work_and_active_observations(tmp_
     assert not budget.qualified(stalled, healthy, True, 10)
     assert not budget.qualified(healthy, stalled, True, 10)
 
-    manifest = json.loads(Path(media.__file__).with_name("budgets.json").read_text())
+    manifest = json.loads(media.BUDGETS_PATH.read_text())
     manifest["interfaces"]["media"]["limits"]["loop_lag_max_ms_exclusive"] = 50.0
     path = tmp_path / "budgets.json"
     path.write_text(json.dumps(manifest))

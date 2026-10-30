@@ -120,7 +120,7 @@ pub enum Happening {
     },
     /// An item the session created, or the person's committed turn, now in the conversation.
     ItemAdded {
-        item: ChatItem,
+        item: Box<ChatItem>,
         previous: Option<String>,
     },
     SpeechStarted {
@@ -448,7 +448,7 @@ impl Server {
         self.items.insert(at, held);
         let lag = self.answer_lag(now);
         let previous = at.checked_sub(1).map(|p| self.items[p].id.clone());
-        self.put(later(now, lag), Happening::ItemAdded { item: item.clone(), previous });
+        self.put(later(now, lag), Happening::ItemAdded { item: Box::new(item.clone()), previous });
     }
 
     pub fn delete(&mut self, id: &str) {
@@ -729,7 +729,7 @@ impl Server {
         let user = message(&item, Role::User);
         self.items.push(Item::of(&user));
         self.last_user = Some(item.clone());
-        self.put(later(now, 1), Happening::ItemAdded { item: user, previous });
+        self.put(later(now, 1), Happening::ItemAdded { item: Box::new(user), previous });
         let spoken: Vec<&str> = USER_TURNS.iter().copied().filter(|t| !t.is_empty()).collect();
         let text = spoken[self.rng.usize(0..spoken.len())];
         let lag = self.delay(&TRANSCRIPTION_AFTER_COMMITTED);

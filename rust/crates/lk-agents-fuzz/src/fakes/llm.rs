@@ -156,10 +156,10 @@ pub(super) fn deliver(
             };
             let usage = LlmChunk {
                 id: response_id,
-                usage: Some(lk_agents_abi::usage::TokenUsage {
+                usage: Some(Box::new(lk_agents_abi::usage::TokenUsage {
                     output_tokens: COMPLETION_TOKENS,
                     ..Default::default()
-                }),
+                })),
                 ..Default::default()
             };
             sender.send(Ok(finish)).is_ok() && sender.send(Ok(usage)).is_ok()

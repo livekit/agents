@@ -30,9 +30,9 @@ impl VoiceAgent {
     ) -> PyResult<VoiceAgent> {
         crate::host::check_pid()?;
         let definition =
-            crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
-        let host = crate::generated::agent::AgentCallbacksProxy::from_host(&host)?;
-        let host_context = crate::conversions::host_ref_from_py(&host_context)?;
+            crate::generated::records::agent_run::agent_definition_from_py(definition.as_any())?;
+        let host = crate::generated::agent::AgentCallbacksProxy::from_host(host.as_any())?;
+        let host_context = crate::conversions::host_ref_from_py(host_context.as_any())?;
         let out = py.detach(|| {
             <VoiceAgentImpl as ::lk_agents_abi::agent::VoiceAgent>::new(
                 definition,
@@ -40,7 +40,7 @@ impl VoiceAgent {
                 host_context,
             )
         });
-        Ok(VoiceAgent(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(VoiceAgent(::std::sync::Arc::new(out)))
     }
 }
 
@@ -59,31 +59,43 @@ inventory::submit! {
 // Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
 type RunEventsImpl = <crate::Selected as super::Implementations>::RunEvents;
 
-fn _extract_run_events_at_index(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    crate::python::number_from_py::<i64>(&obj, "index")
+fn _extract_run_events_at_index(obj: &Bound<'_, PyAny>) -> PyResult<RunEventsAtIndexInput> {
+    crate::python::number_from_py::<i64>(obj.as_any(), "index")
 }
+type RunEventsAtIndexInput = i64;
+type RunEventsSkipNextEventIfOutput = ::std::option::Option<usize>;
 
-fn _extract_run_events_skip_next_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "count")
+fn _extract_run_events_skip_next_count(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<RunEventsSkipNextCountInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "count")
 }
+type RunEventsSkipNextCountInput = usize;
 
-fn _extract_run_events_contains_start(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "start")
+fn _extract_run_events_contains_start(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<RunEventsContainsStartInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "start")
 }
+type RunEventsContainsStartInput = usize;
 
-fn _extract_run_events_contains_stop(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "stop")
+fn _extract_run_events_contains_stop(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<RunEventsContainsStopInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "stop")
 }
+type RunEventsContainsStopInput = usize;
 
 fn _extract_run_events_failure_index(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<usize>> {
+) -> PyResult<RunEventsFailureIndexInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<usize>(&obj, "index")).map(Some)
+        (crate::python::number_from_py::<usize>(obj.as_any(), "index")).map(Some)
     }
 }
+type RunEventsFailureIndexInput = ::std::option::Option<usize>;
 
 /// The observed events (items) of one invocation and the position `next_event` reads from. Each call
 /// returns the index of the event it matched.
@@ -100,29 +112,29 @@ impl RunEvents {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::chat_items::chat_item_from_py(&item)
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
         let out = py.detach(|| {
             <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::new(events)
         });
-        Ok(RunEvents(out))
+        ::pyo3::PyResult::Ok(RunEvents(out))
     }
 
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[pyo3(signature = (index, expected))]
     fn at(
         &self,
-        #[pyo3(from_py_with = _extract_run_events_at_index)] index: i64,
+        #[pyo3(from_py_with = _extract_run_events_at_index)] index: RunEventsAtIndexInput,
         expected: Option<Bound<'_, PyAny>>,
     ) -> PyResult<usize> {
         crate::host::check_pid()?;
         let expected = expected
-            .map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v))
+            .map(|v| crate::generated::records::agent_run::event_expectation_from_py(v.as_any()))
             .transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as crate::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Advances to the next event of `expected`'s kind, or the next event when `None`.
@@ -130,10 +142,10 @@ impl RunEvents {
     fn next_event(&mut self, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
         crate::host::check_pid()?;
         let expected = expected
-            .map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v))
+            .map(|v| crate::generated::records::agent_run::event_expectation_from_py(v.as_any()))
             .transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::next_event(&mut self.0, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as crate::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Advances past the next event only if it meets `expected`.
@@ -141,21 +153,23 @@ impl RunEvents {
     fn skip_next_event_if(
         &mut self,
         expected: Bound<'_, PyAny>,
-    ) -> PyResult<::std::option::Option<usize>> {
+    ) -> PyResult<RunEventsSkipNextEventIfOutput> {
         crate::host::check_pid()?;
-        let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
+        let expected =
+            crate::generated::records::agent_run::event_expectation_from_py(expected.as_any())?;
         let out =
             <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next_event_if(
                 &mut self.0,
                 expected,
             );
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (count))]
     fn skip_next(
         &mut self,
-        #[pyo3(from_py_with = _extract_run_events_skip_next_count)] count: usize,
+        #[pyo3(from_py_with = _extract_run_events_skip_next_count)]
+        count: RunEventsSkipNextCountInput,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next(&mut self.0, count).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as crate::python::HostException>::to_py_err(&e))?;
@@ -172,14 +186,16 @@ impl RunEvents {
     #[pyo3(signature = (start, stop, expected))]
     fn contains(
         &self,
-        #[pyo3(from_py_with = _extract_run_events_contains_start)] start: usize,
-        #[pyo3(from_py_with = _extract_run_events_contains_stop)] stop: usize,
+        #[pyo3(from_py_with = _extract_run_events_contains_start)]
+        start: RunEventsContainsStartInput,
+        #[pyo3(from_py_with = _extract_run_events_contains_stop)] stop: RunEventsContainsStopInput,
         expected: Bound<'_, PyAny>,
     ) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
+        let expected =
+            crate::generated::records::agent_run::event_expectation_from_py(expected.as_any())?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as crate::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// The message of a failure about the event at `index`, or the current one: `message` and
@@ -188,24 +204,25 @@ impl RunEvents {
     fn failure(
         &self,
         message: ::std::string::String,
-        #[pyo3(from_py_with = _extract_run_events_failure_index)] index: ::std::option::Option<
-            usize,
-        >,
+        #[pyo3(from_py_with = _extract_run_events_failure_index)] index: RunEventsFailureIndexInput,
     ) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::failure(
             &self.0, message, index,
         );
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
 type AgentRunnerImpl = <crate::Selected as super::Implementations>::AgentRunner;
 
-fn _extract_agent_runner_progress_operation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "operation")
+fn _extract_agent_runner_progress_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AgentRunnerProgressOperationInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "operation")
 }
+type AgentRunnerProgressOperationInput = u64;
 
 /// Runs invocations of one agent definition: each `run` streams its updates, then its settled
 /// result; closing the stream cancels the invocation, whose work still settles.
@@ -226,20 +243,20 @@ impl AgentRunner {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let definition =
-            crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
-        let llm = crate::generated::llm::LlmProxy::from_host(&llm)?;
-        let host = crate::generated::agent::AgentCallbacksProxy::from_host(&host)?;
+            crate::generated::records::agent_run::agent_definition_from_py(definition.as_any())?;
+        let llm = crate::generated::llm::LlmProxy::from_host(llm.as_any())?;
+        let host = crate::generated::agent::AgentCallbacksProxy::from_host(host.as_any())?;
         let out = py.detach(|| <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(&env, definition, llm, host)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
-        Ok(AgentRunner(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(AgentRunner(::std::sync::Arc::new(out)))
     }
 
     /// Starts one invocation; nothing runs until the first pull.
     #[pyo3(signature = (request))]
     fn run(&self, py: Python<'_>, request: Bound<'_, PyAny>) -> PyResult<AgentRunUpdates> {
         crate::host::check_pid()?;
-        let request = crate::generated::records::agent_run::run_request_from_py(&request)?;
+        let request = crate::generated::records::agent_run::run_request_from_py(request.as_any())?;
         let out = py.detach(|| <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
-        Ok(AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource::new(
+        ::pyo3::PyResult::Ok(AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource::new(
             ::std::boxed::Box::new(out),
         )))
     }
@@ -253,7 +270,7 @@ impl AgentRunner {
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::usage(&self.0, &invocation_id)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
-        Ok(crate::generated::records::usage::usage_to_py(py, out)?)
+        crate::generated::records::usage::usage_to_py(py, out)
     }
 
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
@@ -264,7 +281,8 @@ impl AgentRunner {
         &self,
         py: Python<'_>,
         invocation_id: ::std::string::String,
-        #[pyo3(from_py_with = _extract_agent_runner_progress_operation)] operation: u64,
+        #[pyo3(from_py_with = _extract_agent_runner_progress_operation)]
+        operation: AgentRunnerProgressOperationInput,
         message: ::std::string::String,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
@@ -480,7 +498,9 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     items
                         .map(|item| {
                             let item = item?;
-                            crate::generated::records::agent_run::function_tool_info_from_py(&item)
+                            crate::generated::records::agent_run::function_tool_info_from_py(
+                                item.as_any(),
+                            )
                         })
                         .collect::<PyResult<Vec<_>>>()
                 }))
@@ -537,7 +557,14 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::agent_run::prepared_arguments_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::agent_run::prepared_arguments_from_py(
+                    o.as_any(),
+                ))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(Ok(out))
             })
         })
@@ -580,7 +607,14 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::agent_run::read_back_answer_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::agent_run::read_back_answer_from_py(
+                    o.as_any(),
+                ))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -637,8 +671,13 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     let item_0 = tuple.get_item(0)?;
                     let item_1 = tuple.get_item(1)?;
                     Ok((
-                        (crate::generated::records::tool_report::tool_report_from_py(&item_0))?,
-                        (match crate::python::value_from_py(&item_1, "AgentCallbacks.run_tool")? {
+                        (crate::generated::records::tool_report::tool_report_from_py(
+                            item_0.as_any(),
+                        ))?,
+                        (match crate::python::value_from_py(
+                            item_1.as_any(),
+                            "AgentCallbacks.run_tool",
+                        )? {
                             ::serde_json::Value::Object(map) => Ok(map),
                             _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                                 "AgentCallbacks.run_tool",
@@ -700,7 +739,14 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::agent_run::validated_output_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::agent_run::validated_output_from_py(
+                    o.as_any(),
+                ))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })

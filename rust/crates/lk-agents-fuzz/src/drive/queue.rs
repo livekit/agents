@@ -69,7 +69,7 @@ impl Policy {
 }
 
 /// The policy's own random stream off the schedule seed: the bytes `policy`.
-const POLICY_STREAM: u64 = 0x0070_6f6c_6963_79;
+const POLICY_STREAM: u64 = 0x0000_706f_6c69_6379;
 
 /// The pool of the driver's ready tasks, as a process of the scheduler (bridged tasks count from
 /// one).
@@ -77,7 +77,7 @@ const POOL: u64 = u64::MAX;
 
 /// What runs next.
 pub enum Next {
-    Event(Event),
+    Event(Box<Event>),
     /// The microphone's frames that arrived since the last step, in order.
     Frames(Vec<AudioFrame>),
     /// One turn for the driver's ready tasks.
@@ -178,7 +178,7 @@ fn label(event: &Event) -> &'static str {
 }
 
 enum Item {
-    Event(Event),
+    Event(Box<Event>),
     Frames(Vec<AudioFrame>),
 }
 
@@ -237,7 +237,7 @@ impl Queue {
 
     pub fn push(&mut self, event: Event) {
         let kind = label(&event);
-        let arrival = self.sched.push(Source::of(&event), Item::Event(event));
+        let arrival = self.sched.push(Source::of(&event), Item::Event(Box::new(event)));
         self.trail.lock().unwrap().pending.insert(arrival, kind);
     }
 
@@ -289,7 +289,7 @@ impl Queue {
         let (mut frames, mut events) = (Vec::new(), Vec::new());
         for item in self.sched.drain() {
             match item {
-                Item::Event(event) => events.push(event),
+                Item::Event(event) => events.push(*event),
                 Item::Frames(batch) => frames.extend(batch),
             }
         }
@@ -359,6 +359,12 @@ struct Slot {
     ready: bool,
     /// The tokio task's own waker, as its last poll left it.
     outer: Option<Waker>,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Gate {
@@ -525,10 +531,13 @@ mod tests {
 
     fn name(next: &Next) -> String {
         match next {
-            Next::Event(Event::Input(Input::Host(Sent {
-                command: Command::SetStaticKeyterms(names),
-                ..
-            }))) => names[0].clone(),
+            Next::Event(event) => match event.as_ref() {
+                Event::Input(Input::Host(Sent {
+                    command: Command::SetStaticKeyterms(names),
+                    ..
+                })) => names[0].clone(),
+                _ => unreachable!("only the program's events are queued"),
+            },
             Next::Frames(frames) => {
                 let ids: Vec<String> =
                     frames.iter().map(|f| format!("f{}", f.samples_per_channel)).collect();
@@ -536,7 +545,6 @@ mod tests {
             }
             Next::Tasks => "pool".into(),
             Next::Task(id) => format!("task{id}"),
-            Next::Event(_) => unreachable!("only the program's events are queued"),
         }
     }
 

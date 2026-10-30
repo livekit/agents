@@ -49,7 +49,7 @@ impl Rule for PlaybackRequiresAuthorization {
 
             // Its first audio reaches the sink only after the turn authorized this very speech.
             check.expect(
-                &speech,
+                speech,
                 authorized.is_some_and(|a| a < push),
                 format!(
                     "speculative speech pushed audio at seq {} but was authorized at {authorized:?}",

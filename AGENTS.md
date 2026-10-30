@@ -209,8 +209,7 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-cli       # Host-neutral launcher: clap, JSON logs, remote CLI and process shutdown
 ├── lk-agents-runtime   # The I/O layer of voice and text: executors, room I/O, drivers, HostInvoker
 ├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
-├── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
-└── lk-agents-bench-steps  # Voice data-plane step measurements (compiled in the launch gate)
+└── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
 rust/ai_slop/           # Build tools: lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen
                         # (declarations IR, markers, generation); only their generated output is reviewed
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
@@ -256,8 +255,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
   `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
-  crates `-> net`, `fuzz` and
-  `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
+  crates `-> net`, `fuzz -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
   executors over faked ports, the fake room among them) and `fuzz -> storage` (the A2A DST runs
   real storage) are allowed composition edges.
   `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the

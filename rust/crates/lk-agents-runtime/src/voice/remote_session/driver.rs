@@ -342,6 +342,32 @@ async fn handle_request(
     }
 }
 
+impl lk_agents_abi::worker::remote_session::SessionHosting for RemoteSessionLink {
+    fn forward(&self, event: &lk_agents_abi::voice::events::HostWire) {
+        RemoteSessionLink::forward(self, event);
+    }
+
+    fn forward_usage(&self, usage: &lk_agents_abi::usage::Usage) {
+        RemoteSessionLink::forward_usage(self, usage);
+    }
+
+    fn forward_error(&self, message: String) {
+        RemoteSessionLink::forward_error(self, message);
+    }
+
+    fn forward_tools_executed(&self, event: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
+        RemoteSessionLink::forward_tools_executed(self, event);
+    }
+
+    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(RemoteSessionLink::start(self))
+    }
+
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(RemoteSessionLink::aclose(self))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::sync::Notify;
@@ -737,31 +763,5 @@ mod tests {
             .collect();
         assert_ne!(ids[0], ids[1]);
         assert!(ids.iter().all(|i| i.starts_with("req_") && i.len() == 15), "{ids:?}");
-    }
-}
-
-impl lk_agents_abi::worker::remote_session::SessionHosting for RemoteSessionLink {
-    fn forward(&self, event: &lk_agents_abi::voice::events::HostWire) {
-        RemoteSessionLink::forward(self, event);
-    }
-
-    fn forward_usage(&self, usage: &lk_agents_abi::usage::Usage) {
-        RemoteSessionLink::forward_usage(self, usage);
-    }
-
-    fn forward_error(&self, message: String) {
-        RemoteSessionLink::forward_error(self, message);
-    }
-
-    fn forward_tools_executed(&self, event: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
-        RemoteSessionLink::forward_tools_executed(self, event);
-    }
-
-    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
-        Box::pin(RemoteSessionLink::start(self))
-    }
-
-    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(RemoteSessionLink::aclose(self))
     }
 }

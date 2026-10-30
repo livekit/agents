@@ -21,7 +21,7 @@ pub fn parse_cli<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let out = py.detach(|| <CliImpl as ::lk_agents_abi::cli::Cli>::parse_cli(argv));
-    Ok(crate::generated::records::cli::cli_parse_result_to_py(py, out)?)
+    crate::generated::records::cli::cli_parse_result_to_py(py, out)
 }
 
 /// One structured JSON line, including host-formatted exceptions and stack traces.
@@ -31,9 +31,9 @@ pub fn format_log_record(
     py: Python<'_>,
     record: Bound<'_, PyAny>,
 ) -> PyResult<::std::string::String> {
-    let record = crate::generated::records::cli::log_record_from_py(&record)?;
+    let record = crate::generated::records::cli::log_record_from_py(record.as_any())?;
     let out = py.detach(|| <CliImpl as ::lk_agents_abi::cli::Cli>::format_log_record(record));
-    Ok(out)
+    ::pyo3::PyResult::Ok(out)
 }
 
 /// The development launcher connection.
@@ -49,26 +49,32 @@ pub fn dev_channel<'py>(
     server: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let server = crate::generated::cli::DevServerProxy::from_host(&server)?;
+    let server = crate::generated::cli::DevServerProxy::from_host(server.as_any())?;
     crate::host::future_into_py(py, async move {
-        let out = <CliImpl as ::lk_agents_abi::cli::Cli>::dev_channel(
+        let () = <CliImpl as ::lk_agents_abi::cli::Cli>::dev_channel(
             cli_addr, agent_name, url, api_key, api_secret, server,
         )
         .await;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
     })
 }
 
 // Declared in rust/crates/lk-agents-abi/src/cli.rs.
 type ShutdownImpl = <crate::Selected as super::Implementations>::CliShutdown;
 
-fn _extract_cli_shutdown_new_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "timeout")
+fn _extract_cli_shutdown_new_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<CliShutdownNewTimeoutInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "timeout")
 }
+type CliShutdownNewTimeoutInput = f64;
 
-fn _extract_cli_shutdown_new_drain_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "drain_timeout")
+fn _extract_cli_shutdown_new_drain_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<CliShutdownNewDrainTimeoutInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "drain_timeout")
 }
+type CliShutdownNewDrainTimeoutInput = f64;
 
 /// Native enforcement of the process's one shutdown deadline.
 #[pyclass(frozen, name = "Shutdown", module = "livekit.agents._core")]
@@ -80,8 +86,10 @@ impl Shutdown {
     #[pyo3(signature = (timeout, drain_timeout))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_cli_shutdown_new_timeout)] timeout: f64,
-        #[pyo3(from_py_with = _extract_cli_shutdown_new_drain_timeout)] drain_timeout: f64,
+        #[pyo3(from_py_with = _extract_cli_shutdown_new_timeout)]
+        timeout: CliShutdownNewTimeoutInput,
+        #[pyo3(from_py_with = _extract_cli_shutdown_new_drain_timeout)]
+        drain_timeout: CliShutdownNewDrainTimeoutInput,
     ) -> PyResult<Shutdown> {
         crate::host::check_pid()?;
         let out = py
@@ -91,7 +99,7 @@ impl Shutdown {
             .map_err(|e: ::lk_agents_abi::cli::CliError| {
                 <::lk_agents_abi::cli::CliError as crate::python::HostException>::to_py_err(&e)
             })?;
-        Ok(Shutdown(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(Shutdown(::std::sync::Arc::new(out)))
     }
 
     /// Own process termination signals. Fails if another launcher is already listening.
@@ -109,8 +117,8 @@ impl Shutdown {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::wait(&this).await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            let () = <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::wait(&this).await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
@@ -118,7 +126,7 @@ impl Shutdown {
     fn begin(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
         let out = py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::begin(&self.0));
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Seconds left until the deadline, or the configured budget before shutdown begins.
@@ -126,7 +134,7 @@ impl Shutdown {
         crate::host::check_pid()?;
         let out =
             py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::remaining(&self.0));
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Drain time remaining while reserving the configured cleanup budget.
@@ -135,7 +143,7 @@ impl Shutdown {
         let out = py.detach(|| {
             <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::drain_remaining(&self.0)
         });
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Disarm only after host cleanup and event-loop closure finish.
@@ -253,28 +261,26 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                             let item_6 = tuple.get_item(6)?;
                             let item_7 = tuple.get_item(7)?;
                             Ok((
-                                ({
-                                    if item_0.is_instance_of::<::pyo3::types::PyBytes>()
-                                        || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
-                                        || item_0.is_instance_of::<::pyo3::types::PyMemoryView>()
-                                    {
-                                        crate::python::owned_bytes(
-                                            &item_0,
-                                            "DevServer._core_running_jobs",
-                                        )
-                                    } else {
-                                        item_0.try_iter().and_then(|items| {
-                                            items
-                                                .map(|item| {
-                                                    let item = item?;
-                                                    crate::python::number_from_py::<u8>(
-                                                        &item,
-                                                        "DevServer._core_running_jobs",
-                                                    )
-                                                })
-                                                .collect::<PyResult<Vec<_>>>()
-                                        })
-                                    }
+                                (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
+                                    || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
+                                    || item_0.is_instance_of::<::pyo3::types::PyMemoryView>()
+                                {
+                                    crate::python::owned_bytes(
+                                        item_0.as_any(),
+                                        "DevServer._core_running_jobs",
+                                    )
+                                } else {
+                                    item_0.try_iter().and_then(|items| {
+                                        items
+                                            .map(|item| {
+                                                let item = item?;
+                                                crate::python::number_from_py::<u8>(
+                                                    item.as_any(),
+                                                    "DevServer._core_running_jobs",
+                                                )
+                                            })
+                                            .collect::<PyResult<Vec<_>>>()
+                                    })
                                 })?,
                                 (item_1.extract::<::std::string::String>())?,
                                 (item_2.extract::<::std::string::String>())?,
@@ -337,7 +343,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                     }
                 };
                 let o = out.bind(py);
-                let out = ({
+                let () = ({
                     let _ = o;
                     ::pyo3::PyResult::Ok(())
                 })
@@ -346,7 +352,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                         py, &e,
                     )
                 })?;
-                Ok(out)
+                Ok(())
             })
         })
     }

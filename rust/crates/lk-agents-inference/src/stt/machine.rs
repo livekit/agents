@@ -131,10 +131,10 @@ impl TranscriptMachine {
                 kind: SpeechEventType::RecognitionUsage,
                 request_id: request_id.clone(),
                 alternatives: Vec::new(),
-                recognition_usage: Some(RecognitionUsage {
+                recognition_usage: Some(Box::new(RecognitionUsage {
                     audio_duration: Some(self.speech_duration),
                     ..Default::default()
-                }),
+                })),
                 speech_start_time: None,
                 created_at: None,
                 speech_end_time: None,

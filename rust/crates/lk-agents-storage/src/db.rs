@@ -530,7 +530,7 @@ pub(crate) async fn commit(
 #[derive(Debug, Clone, PartialEq)]
 pub enum Resolution {
     /// The run's `run_ended` is there: it committed, making `version`, with `task` read back.
-    Committed(Committed),
+    Committed(Box<Committed>),
     /// Not committed, and the fence still holds: sending the same commit again is safe.
     NotApplied,
     /// Not committed, and the lane moved on without it: its staged writes are absent.
@@ -573,7 +573,7 @@ fn resolution(
         // the version this run's commit made, not the lane's now: others may have committed
         // since
         let version = fence.map_or(version, |f| f.version + 1);
-        return Resolution::Committed(Committed { version, task });
+        return Resolution::Committed(Box::new(Committed { version, task }));
     }
     match fence {
         // an append-only batch that did not land can be sent again
@@ -764,7 +764,7 @@ mod tests {
     #[test]
     fn a_lost_commit_resolves_by_its_run_ended_and_the_fence() {
         let f = fence();
-        let committed = Resolution::Committed(Committed { version: 4, task: None });
+        let committed = Resolution::Committed(Box::new(Committed { version: 4, task: None }));
         assert_eq!(resolve(Some(&f), true, lane(4, None)), committed);
         // found by the storage DST: the lane moved on after the lost commit; the run still
         // reports the version its own commit made

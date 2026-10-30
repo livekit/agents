@@ -150,7 +150,8 @@ impl Turn {
                     if result.is_err() {
                         self.close_handler(&mut call).await;
                     }
-                    effects = machine.handle(Event::Completed { id, result }, elapsed());
+                    effects = machine
+                        .handle(Event::Completed { id, result: Box::new(result) }, elapsed());
                 }
                 Some(Effect::Finished(answer)) => {
                     let now = elapsed();
@@ -319,14 +320,8 @@ impl Turn {
             }
             Operation::Commit { answer_task, keep_lease, drained_id } => {
                 let run = call.run()?;
-                let committed = run
-                    .commit(CommitOptions {
-                        answer_task,
-                        keep_lease,
-                        drained_id,
-                        ..Default::default()
-                    })
-                    .await?;
+                let committed =
+                    run.commit(CommitOptions { answer_task, keep_lease, drained_id }).await?;
                 let run_id = run.run_id.clone();
                 if keep_lease {
                     call.lease = run.lease().cloned();
@@ -420,7 +415,7 @@ impl Turn {
                         }
                     }
                     Some(TurnEvent::Output { output }) => {
-                        let out = HandlerOutput::try_from(output)?;
+                        let out = HandlerOutput::try_from(*output)?;
                         if let Some(err) = &out.error {
                             log::error!(target: "livekit.agents", lane = self.lane.as_str(); "the a2a_session handler raised; the task fails: {err}");
                         }

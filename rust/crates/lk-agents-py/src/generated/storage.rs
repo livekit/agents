@@ -13,57 +13,65 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
 type StorageImpl = <crate::Selected as super::Implementations>::Storage;
 
-fn _extract_storage_new_lease_ttl(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+fn _extract_storage_new_lease_ttl(obj: &Bound<'_, PyAny>) -> PyResult<StorageNewLeaseTtlInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "lease_ttl")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "lease_ttl")).map(Some)
     }
 }
+type StorageNewLeaseTtlInput = ::std::option::Option<f64>;
 
 fn _extract_storage_new_renew_interval(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<f64>> {
+) -> PyResult<StorageNewRenewIntervalInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "renew_interval")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "renew_interval")).map(Some)
     }
 }
+type StorageNewRenewIntervalInput = ::std::option::Option<f64>;
 
-fn _extract_storage_create_thread_idle_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    crate::python::number_from_py::<i64>(&obj, "idle_ttl_seconds")
+fn _extract_storage_create_thread_idle_ttl_seconds(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<StorageCreateThreadIdleTtlSecondsInput> {
+    crate::python::number_from_py::<i64>(obj.as_any(), "idle_ttl_seconds")
 }
+type StorageCreateThreadIdleTtlSecondsInput = i64;
 
 fn _extract_storage_list_threads_limit(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<u32>> {
+) -> PyResult<StorageListThreadsLimitInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<u32>(&obj, "limit")).map(Some)
+        (crate::python::number_from_py::<u32>(obj.as_any(), "limit")).map(Some)
     }
 }
+type StorageListThreadsLimitInput = ::std::option::Option<u32>;
 
 fn _extract_storage_update_thread_idle_ttl_seconds(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<i64>> {
+) -> PyResult<StorageUpdateThreadIdleTtlSecondsInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<i64>(&obj, "idle_ttl_seconds")).map(Some)
+        (crate::python::number_from_py::<i64>(obj.as_any(), "idle_ttl_seconds")).map(Some)
     }
 }
+type StorageUpdateThreadIdleTtlSecondsInput = ::std::option::Option<i64>;
 
 fn _extract_storage_get_thread_items_limit(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<u32>> {
+) -> PyResult<StorageGetThreadItemsLimitInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<u32>(&obj, "limit")).map(Some)
+        (crate::python::number_from_py::<u32>(obj.as_any(), "limit")).map(Some)
     }
 }
+type StorageGetThreadItemsLimitInput = ::std::option::Option<u32>;
 
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
@@ -87,7 +95,7 @@ impl Storage {
                     items
                         .map(|item| {
                             let item = item?;
-                            crate::generated::records::chat_items::chat_item_from_py(&item)
+                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
                         })
                         .collect::<PyResult<Vec<_>>>()
                 })
@@ -127,11 +135,9 @@ impl Storage {
         url: ::std::option::Option<::std::string::String>,
         api_key: ::std::option::Option<::std::string::String>,
         api_secret: ::std::option::Option<::std::string::String>,
-        #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: ::std::option::Option<
-            f64,
-        >,
+        #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: StorageNewLeaseTtlInput,
         #[pyo3(from_py_with = _extract_storage_new_renew_interval)]
-        renew_interval: ::std::option::Option<f64>,
+        renew_interval: StorageNewRenewIntervalInput,
     ) -> PyResult<Storage> {
         crate::host::check_pid()?;
         let env = crate::process::env();
@@ -152,7 +158,7 @@ impl Storage {
                     &e,
                 )
             })?;
-        Ok(Storage(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(Storage(::std::sync::Arc::new(out)))
     }
 
     /// The absolute local directory, or the public API agentstore is reached through.
@@ -161,7 +167,7 @@ impl Storage {
         crate::host::check_pid()?;
         let out =
             py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::location(&self.0));
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// A new `AT_` thread, returned once its metadata and database exist.
@@ -174,7 +180,7 @@ impl Storage {
             ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
         >,
         #[pyo3(from_py_with = _extract_storage_create_thread_idle_ttl_seconds)]
-        idle_ttl_seconds: i64,
+        idle_ttl_seconds: StorageCreateThreadIdleTtlSecondsInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -235,9 +241,8 @@ impl Storage {
         py: Python<'py>,
         scope: ::std::string::String,
         before: ::std::option::Option<::std::string::String>,
-        #[pyo3(from_py_with = _extract_storage_list_threads_limit)] limit: ::std::option::Option<
-            u32,
-        >,
+        #[pyo3(from_py_with = _extract_storage_list_threads_limit)]
+        limit: StorageListThreadsLimitInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -271,7 +276,7 @@ impl Storage {
             ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
         >,
         #[pyo3(from_py_with = _extract_storage_update_thread_idle_ttl_seconds)]
-        idle_ttl_seconds: ::std::option::Option<i64>,
+        idle_ttl_seconds: StorageUpdateThreadIdleTtlSecondsInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -307,7 +312,7 @@ impl Storage {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::delete_thread(
+            let () = <StorageImpl as ::lk_agents_abi::storage::Storage>::delete_thread(
                 &this, thread_id,
             )
             .await
@@ -316,7 +321,7 @@ impl Storage {
                     &e,
                 )
             })?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
@@ -329,7 +334,7 @@ impl Storage {
         agent: ::std::option::Option<::std::string::String>,
         after: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_storage_get_thread_items_limit)]
-        limit: ::std::option::Option<u32>,
+        limit: StorageGetThreadItemsLimitInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -362,7 +367,7 @@ impl Storage {
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let status = status
-            .map(|v| crate::generated::records::storage_class::task_state_from_py(&v))
+            .map(|v| crate::generated::records::storage_class::task_state_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -381,11 +386,7 @@ impl Storage {
                         py,
                         out.into_iter()
                             .map(|x| {
-                                PyResult::Ok(
-                                    crate::generated::records::storage_class::thread_task_to_py(
-                                        py, x,
-                                    )?,
-                                )
+                                crate::generated::records::storage_class::thread_task_to_py(py, x)
                             })
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
@@ -468,12 +469,13 @@ impl Storage {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::storage_context::context_scope_from_py(&item)
+                    crate::generated::records::storage_context::context_scope_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let routing_state =
-            routing_state.map(|v| crate::python::value_from_py(&v, "routing_state")).transpose()?;
+        let routing_state = routing_state
+            .map(|v| crate::python::value_from_py(v.as_any(), "routing_state"))
+            .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_turn_store(
@@ -504,8 +506,8 @@ impl Storage {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::aclose(&this).await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            let () = <StorageImpl as ::lk_agents_abi::storage::Storage>::aclose(&this).await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 }
@@ -525,9 +527,12 @@ inventory::submit! {
 // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
 type CoreContextActivationImpl = <crate::Selected as super::Implementations>::ContextActivation;
 
-fn _extract_context_activation_save_revision(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    crate::python::number_from_py::<i64>(&obj, "revision")
+fn _extract_context_activation_save_revision(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ContextActivationSaveRevisionInput> {
+    crate::python::number_from_py::<i64>(obj.as_any(), "revision")
 }
+type ContextActivationSaveRevisionInput = i64;
 
 /// Activation state and revision/schema decisions. Application type validation stays in the host.
 #[pyclass(frozen, name = "_core_ContextActivation", module = "livekit.agents._core")]
@@ -548,14 +553,15 @@ impl CoreContextActivation {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::storage_context::context_scope_from_py(&item)
+                    crate::generated::records::storage_context::context_scope_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let routing_state =
-            routing_state.map(|v| crate::python::value_from_py(&v, "routing_state")).transpose()?;
+        let routing_state = routing_state
+            .map(|v| crate::python::value_from_py(v.as_any(), "routing_state"))
+            .transpose()?;
         let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::new(scopes, routing_state, read_only)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::python::HostException>::to_py_err(&e))?;
-        Ok(CoreContextActivation(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(CoreContextActivation(::std::sync::Arc::new(out)))
     }
 
     /// Check manifests before restoring values or accepting defaults for absent fields.
@@ -572,7 +578,7 @@ impl CoreContextActivation {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::storage_context::context_field_from_py(&item)
+                    crate::generated::records::storage_context::context_field_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
@@ -596,7 +602,8 @@ impl CoreContextActivation {
         py: Python<'py>,
         scope_id: ::std::string::String,
         identity: ::std::string::String,
-        #[pyo3(from_py_with = _extract_context_activation_save_revision)] revision: i64,
+        #[pyo3(from_py_with = _extract_context_activation_save_revision)]
+        revision: ContextActivationSaveRevisionInput,
         fields: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
@@ -604,7 +611,7 @@ impl CoreContextActivation {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::storage_context::context_field_from_py(&item)
+                    crate::generated::records::storage_context::context_field_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
@@ -625,19 +632,17 @@ impl CoreContextActivation {
     fn writes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::writes(&self.0));
-        Ok(::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| {
-                    PyResult::Ok(
-                        crate::generated::records::storage_context::context_scope_write_to_py(
-                            py, x,
-                        )?,
-                    )
-                })
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any())
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| {
+                        crate::generated::records::storage_context::context_scope_write_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
     }
 
     /// The application statements managed transactions staged for the turn's commit.
@@ -645,17 +650,15 @@ impl CoreContextActivation {
     fn statements<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::statements(&self.0));
-        Ok(::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| {
-                    PyResult::Ok(crate::generated::records::storage_context::app_statement_to_py(
-                        py, x,
-                    )?)
-                })
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any())
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::storage_context::app_statement_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
     }
 
     /// Application SQL (docs/context.md#application-records-and-transactions): `independent`
@@ -715,15 +718,15 @@ impl CoreAppTransaction {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::python::value_from_py(&item, "params")
+                    crate::python::value_from_py(item.as_any(), "params")
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::execute(&this, sql, params)
+            let () = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::execute(&this, sql, params)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
@@ -740,7 +743,7 @@ impl CoreAppTransaction {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::python::value_from_py(&item, "params")
+                    crate::python::value_from_py(item.as_any(), "params")
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
@@ -754,13 +757,11 @@ impl CoreAppTransaction {
                         py,
                         out.into_iter()
                             .map(|x| {
-                                PyResult::Ok(
+                                ::pyo3::PyResult::Ok(
                                     ::pyo3::types::PyList::new(
                                         py,
                                         x.into_iter()
-                                            .map(|x| {
-                                                PyResult::Ok(crate::python::value_to_py(py, &x)?)
-                                            })
+                                            .map(|x| crate::python::value_to_py(py, &x))
                                             .collect::<PyResult<Vec<_>>>()?,
                                     )?
                                     .into_any(),
@@ -780,9 +781,9 @@ impl CoreAppTransaction {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::commit(&this, )
+            let () = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::commit(&this, )
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
@@ -819,24 +820,19 @@ impl CoreVoiceStore {
                 &self.0,
             )
         });
-        Ok(out
-            .map(|value| {
-                Ok::<_, ::pyo3::PyErr>(
-                    ::pyo3::types::PyList::new(
-                        py,
-                        value
-                            .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(
-                                    crate::generated::records::chat_items::chat_item_to_py(py, x)?,
-                                )
-                            })
-                            .collect::<PyResult<Vec<_>>>()?,
-                    )?
-                    .into_any(),
-                )
-            })
-            .transpose()?)
+        out.map(|value| {
+            ::pyo3::PyResult::Ok(
+                ::pyo3::types::PyList::new(
+                    py,
+                    value
+                        .into_iter()
+                        .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                        .collect::<PyResult<Vec<_>>>()?,
+                )?
+                .into_any(),
+            )
+        })
+        .transpose()
     }
 
     #[getter]
@@ -845,14 +841,14 @@ impl CoreVoiceStore {
         let out = py.detach(|| {
             <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::activation(&self.0)
         });
-        Ok(super::storage::CoreContextActivation(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(super::storage::CoreContextActivation(::std::sync::Arc::new(out)))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::aclose(
+            let () = <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::aclose(
                 &this,
             )
             .await
@@ -861,7 +857,7 @@ impl CoreVoiceStore {
                     &e,
                 )
             })?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 }

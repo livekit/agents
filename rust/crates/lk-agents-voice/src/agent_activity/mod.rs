@@ -409,7 +409,8 @@ impl Driver {
                     transcription,
                 });
             }
-            ActivityCommand::UpdateModels { stt, vad, llm, tts } => {
+            ActivityCommand::UpdateModels(models) => {
+                let crate::agent_session::ModelUpdate { stt, vad, llm, tts } = *models;
                 self.update_models(stt, vad, llm, tts, out)
             }
             ActivityCommand::UpdateChatCtx(items) => {

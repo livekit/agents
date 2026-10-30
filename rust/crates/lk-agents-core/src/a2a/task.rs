@@ -36,7 +36,7 @@ use turn::{Step, Turning};
 pub enum Event {
     Start,
     Wake,
-    Completed { id: u64, result: Result<Completion, StorageError> },
+    Completed { id: u64, result: Box<Result<Completion, StorageError>> },
 }
 
 #[derive(Debug)]
@@ -500,7 +500,7 @@ impl TaskMachine {
             },
             Event::Completed { id, result } if self.pending == Some(id) => {
                 self.pending = None;
-                match result {
+                match *result {
                     Ok(completion) => self.complete(completion, now),
                     Err(error) => self.fail(error, now),
                 }
@@ -512,7 +512,7 @@ impl TaskMachine {
             Ok(None) => Vec::new(),
             Err(Finish::Answer(answer)) => {
                 self.phase = Phase::Finished;
-                vec![Effect::Finished(Ok(answer))]
+                vec![Effect::Finished(Ok(*answer))]
             }
             Err(Finish::Error(error)) => {
                 self.phase = Phase::Finished;
@@ -762,7 +762,11 @@ impl TaskMachine {
             (Phase::Receipt, Completion::Task(Some(row))) => {
                 self.task_id = row.task_id.clone();
                 if answered(&row) {
-                    return Err(Finish::Answer(Answer::row(row.task_id.clone(), Some(row), None)));
+                    return Err(Finish::Answer(Box::new(Answer::row(
+                        row.task_id.clone(),
+                        Some(row),
+                        None,
+                    ))));
                 }
                 self.observe()
             }
@@ -867,12 +871,12 @@ impl TaskMachine {
                 Completion::Committed { task, run_id },
             ) => {
                 let (task_id, output) = self.answer.take().unwrap_or_default();
-                return Err(Finish::Answer(Answer {
+                return Err(Finish::Answer(Box::new(Answer {
                     output,
                     answered_by: Some(task_id.clone()),
                     run_id: Some(run_id),
                     ..Answer::row(task_id, task, Some("not-written"))
-                }));
+                })));
             }
             (Phase::FailRun, Completion::Done) => self.fail_run(),
             (Phase::RunFailed, Completion::Done) => match self.ended.take() {
@@ -900,11 +904,17 @@ impl TaskMachine {
             }
             (Phase::Answer { reason }, Completion::Task(task)) => {
                 let answer = Answer::row(self.answering(), task, reason);
-                return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
+                return Err(Finish::Answer(Box::new(Answer {
+                    run_id: self.run_id.take(),
+                    ..answer
+                })));
             }
             (Phase::Observe, Completion::Task(Some(row))) if answered(&row) => {
                 let answer = Answer::row(row.task_id.clone(), Some(row), Some("not-written"));
-                return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
+                return Err(Finish::Answer(Box::new(Answer {
+                    run_id: self.run_id.take(),
+                    ..answer
+                })));
             }
             (Phase::Observe, Completion::Task(row)) => {
                 // timed on this machine's clock, not the row's: the database's may disagree.
@@ -1100,7 +1110,10 @@ impl TaskMachine {
             (Phase::Answer { reason }, _) => {
                 // the answer's row is unreadable: the task as this worker left it
                 let answer = Answer::row(self.answering(), None, reason);
-                return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
+                return Err(Finish::Answer(Box::new(Answer {
+                    run_id: self.run_id.take(),
+                    ..answer
+                })));
             }
             // a commit: the turn's, a drain's, or the close of a run with nothing of its own
             (Phase::Run { step: RunStep::Commit, .. } | Phase::Closing(_), _) => {
@@ -1139,6 +1152,6 @@ fn answered(row: &TaskRow) -> bool {
 
 /// How a step ends the machine.
 enum Finish {
-    Answer(Answer),
+    Answer(Box<Answer>),
     Error(StorageError),
 }

@@ -61,7 +61,7 @@ enum Link {
     /// An attempt in flight, opening at `opens_at`.
     Connecting { generation: u64, started: Ts, opens_at: Ts },
     /// A connection, and the server behind it until the socket drops (`None`).
-    Open { generation: u64, server: Option<Server> },
+    Open { generation: u64, server: Option<Box<Server>> },
     /// The pump ended: no event comes after the ones already told.
     Over,
 }
@@ -288,7 +288,7 @@ impl Sim {
                 }
                 Link::Open { generation, ref server } => {
                     let lost = server.is_none();
-                    let server_due = server.as_ref().and_then(Server::next_due);
+                    let server_due = server.as_deref().and_then(Server::next_due);
                     let deadline = self.machine.next_deadline().into_iter().chain(policy).min();
                     // The pump's biased order: the deadline, the close, the socket, the commands,
                     // the context work.
@@ -367,7 +367,7 @@ impl Sim {
             .with_tool_calls(self.setup.tool_calls)
             .with_ids(format!("{}c", self.connections));
         server.connect(now);
-        self.link = Link::Open { generation, server: Some(server) };
+        self.link = Link::Open { generation, server: Some(Box::new(server)) };
         self.audio = batches();
         let metrics = self.machine.connection_metrics(now, now.saturating_duration_since(started));
         self.events.push((now, metrics));

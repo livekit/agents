@@ -2,7 +2,7 @@ use super::*;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::server_host::ServerHost;
-use lk_agents_abi::worker::worker::ProcessStartOptions;
+use lk_agents_abi::worker::types::ProcessStartOptions;
 
 use crate::RunningJobInfo;
 

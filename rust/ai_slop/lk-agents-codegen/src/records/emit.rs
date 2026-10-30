@@ -29,7 +29,7 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
                 items.join(", ")
             )
         }
-        Ty::Boxed(t) => emit(t, &format!("(*{x})"))?,
+        Ty::Boxed(t) => format!("{{ let value = *{x}; {} }}", emit(t, "value")?),
         Ty::Json => format!("crate::python::value_to_py(py, &{x})?"),
         Ty::JsonObject => format!("crate::python::extra_to_py(py, &{x})?.into_any()"),
         Ty::Optional(t) => format!(
@@ -40,8 +40,8 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             format!("::pyo3::types::PyBytes::new(py, &{x}).into_any()")
         }
         Ty::List(t) => format!(
-            "::pyo3::types::PyList::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
-            emit(t, "x")?
+            "::pyo3::types::PyList::new(py, {x}.into_iter().map(|x| {}).collect::<PyResult<Vec<_>>>()?)?.into_any()",
+            as_result(&emit(t, "x")?)
         ),
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => format!(
             "{{ let d = ::pyo3::types::PyDict::new(py); for (k, x) in {x} {{ d.set_item({}, {})?; }} d.into_any() }}",
@@ -49,8 +49,8 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             emit(t, "x")?
         ),
         Ty::Set(t) => format!(
-            "::pyo3::types::PyFrozenSet::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
-            emit(t, "x")?
+            "::pyo3::types::PyFrozenSet::new(py, {x}.into_iter().map(|x| {}).collect::<PyResult<Vec<_>>>()?)?.into_any()",
+            as_result(&emit(t, "x")?)
         ),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?")
@@ -74,4 +74,9 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         }
         other => return Err(format!("`{}` is not a record field", other.rust())),
     })
+}
+
+/// Return an emitted host value, retaining a fallible call directly when possible.
+pub(crate) fn as_result(value: &str) -> String {
+    value.strip_suffix('?').map_or_else(|| format!("::pyo3::PyResult::Ok({value})"), str::to_owned)
 }

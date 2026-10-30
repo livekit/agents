@@ -23,6 +23,8 @@
 //! turns one input into what the product sees, [`collect`] writes down what became true, and
 //! [`finish`] releases what a run owes and reports what it found. This file holds what they
 //! share: the setup, the simulation, and the run itself.
+type HostJournal = Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>>;
+
 use lk_agents_runtime::voice::SpeechHandle;
 use lk_agents_runtime::voice::session::Timebase;
 use std::{
@@ -722,7 +724,7 @@ pub struct Run {
     /// Host events the probe stamped as the session's drain handed them over.
     /// What the host received, with the live handle of a speech it was told of, taken as the
     /// event was delivered (the session lets it go once nothing names it).
-    host: Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>>,
+    host: HostJournal,
     /// Set by the observer when it stopped a step for journaling without bound at one instant.
     livelock: Arc<Mutex<Option<String>>>,
     pending: BTreeMap<u32, Pending>,

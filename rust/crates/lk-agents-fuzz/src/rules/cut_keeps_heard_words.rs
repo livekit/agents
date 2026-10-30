@@ -111,7 +111,7 @@ impl Rule for CutKeepsHeardWords {
             let Some(remembered) = remembered.filter(|_| !open && played) else { continue };
             let (remembered, heard) = (squash(&remembered), squash(&heard));
             check.expect(
-                &speech,
+                speech,
                 remembered == heard,
                 format!("remembered {remembered:?}, heard {heard:?}"),
             );

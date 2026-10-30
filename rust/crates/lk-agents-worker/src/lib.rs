@@ -27,7 +27,7 @@ pub use config::{
     WORKER_PROTOCOL_VERSION, WorkerConfig,
 };
 pub use hw::{CpuMonitor, CpuMonitorKind};
-pub use lk_agents_abi::worker::worker::{
+pub use lk_agents_abi::worker::types::{
     AcceptArguments, JobDecision, JobInfo, JobRequest, RunningJobInfo, WorkerDrainFinished,
     WorkerDrainTimedOut, WorkerPermissions, WorkerRegistered, WorkerStopped,
 };

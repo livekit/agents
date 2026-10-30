@@ -137,14 +137,13 @@ impl Coverage {
         if items.iter().any(|item| {
             let name = item.path().to_token_stream().to_string().replace(' ', "");
             name == format!("clippy::{lint}") || name == "clippy::restriction"
-        }) {
-            if *level != Some(LintLevel::Forbidden) {
-                *level = Some(match kind.as_str() {
-                    "allow" | "expect" | "warn" => LintLevel::Permitted,
-                    "forbid" => LintLevel::Forbidden,
-                    _ => LintLevel::Denied,
-                });
-            }
+        }) && *level != Some(LintLevel::Forbidden)
+        {
+            *level = Some(match kind.as_str() {
+                "allow" | "expect" | "warn" => LintLevel::Permitted,
+                "forbid" => LintLevel::Forbidden,
+                _ => LintLevel::Denied,
+            });
         }
     }
 
@@ -359,12 +358,12 @@ pub(super) fn coverage_root(path: &str) -> Result<std::path::PathBuf, Box<dyn st
             });
         }
         for directory in ["tests", "examples"] {
-            if let Ok(relative) = target.strip_prefix(package.join(directory)) {
-                if relative.components().count() > 1 {
-                    return Err(
-                        format!("{path}: nested source requires its compiler target root").into()
-                    );
-                }
+            if let Ok(relative) = target.strip_prefix(package.join(directory))
+                && relative.components().count() > 1
+            {
+                return Err(
+                    format!("{path}: nested source requires its compiler target root").into()
+                );
             }
         }
     }

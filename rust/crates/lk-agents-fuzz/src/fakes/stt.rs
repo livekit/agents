@@ -174,10 +174,10 @@ pub(super) fn deliver(
     let mut ev = SpeechEvent::new(kind);
     if kind == T::RecognitionUsage {
         // The audio the stream has heard so far, as the providers bill it.
-        ev.recognition_usage = Some(lk_agents_abi::RecognitionUsage {
+        ev.recognition_usage = Some(Box::new(lk_agents_abi::RecognitionUsage {
             audio_duration: Some(clock.seconds(clock.now)),
             ..Default::default()
-        });
+        }));
     }
     if let Some(text) = text {
         let mut data = lk_agents_abi::SpeechData::new("en", text.clone());

@@ -313,7 +313,7 @@ impl ParticipantTranscriptionOutput {
                 if writer.admission.drained() {
                     break;
                 }
-                writer.admission.next()
+                writer.admission.pop_batch()
             };
             let Some(batch) = next else {
                 changed.await;

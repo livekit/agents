@@ -53,6 +53,11 @@ pub trait StreamBuffer: Send + Sync + Sized + 'static {
     fn close(&self);
     #[host(call, name = "__len__")]
     fn len(&self) -> usize;
+    /// Whether the pipe has no buffered bytes.
+    #[host(call)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     #[host(call)]
     fn read(&self, #[host(default = -1)] size: isize) -> Vec<u8>;
 }

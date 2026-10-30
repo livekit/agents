@@ -172,7 +172,8 @@ mod tests {
     #[test]
     fn a_completed_receipt_supersedes_the_question_and_continues_only_its_context() {
         let question = question("first");
-        let mut interaction = for_call(identity("answer"), &[question.clone()]).unwrap();
+        let mut interaction =
+            for_call(identity("answer"), std::slice::from_ref(&question)).unwrap();
         interaction.message("Acme".into(), "answer".into(), None, "", None, false, None).unwrap();
         interaction
             .update(&TaskUpdate {

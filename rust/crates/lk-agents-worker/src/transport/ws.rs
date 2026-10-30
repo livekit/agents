@@ -114,6 +114,7 @@ impl WorkerStream for WsStream {
                 Some(Err(e)) => return Err(TransportError::Io(e.to_string())),
                 Some(Ok(Message::Binary(b))) => {
                     return protocol::decode(&b)
+                        .map(Box::new)
                         .map(TransportEvent::ServerMessage)
                         .map_err(|e| TransportError::Protocol(e.to_string()));
                 }

@@ -166,7 +166,7 @@ impl Config {
 /// A server event and what delivering it means to the server's own bookkeeping.
 #[derive(Clone, Debug)]
 enum Body {
-    Event(Incoming),
+    Event(Box<Incoming>),
     /// An audio delta, built when it is delivered: its PCM names the generation that carries it.
     Audio {
         item: String,
@@ -418,7 +418,7 @@ impl Server {
         let (&key, _) = self.pending.iter().next().filter(|((t, _), _)| *t <= now)?;
         let Pending { resp, body } = self.pending.remove(&key).expect("just seen");
         let mut event = match body {
-            Body::Event(event) => event,
+            Body::Event(event) => *event,
             Body::Audio { item, chunk } => {
                 let r = resp.map(|r| &mut self.responses[r as usize]);
                 let source = r.as_ref().and_then(|r| r.source).unwrap_or(0);
@@ -725,7 +725,7 @@ impl Server {
                 ..TokenUsage::default()
             },
         };
-        self.put_body(t, Some(r), Body::Event(Incoming::ResponseDone(done)));
+        self.put_body(t, Some(r), Body::Event(Box::new(Incoming::ResponseDone(done))));
     }
 
     /// Stop a response at `t`: what was still to come is withdrawn, and it closes as `status`.
@@ -735,17 +735,17 @@ impl Server {
         // deltas arriving after a cancel): the message's opening and its deltas due before `t`.
         let streams = |p: &Pending| match &p.body {
             Body::Audio { .. } => true,
-            Body::Event(
+            Body::Event(event) => match event.as_ref() {
                 Incoming::AudioTranscriptDelta { .. }
                 | Incoming::TextDelta { .. }
                 | Incoming::ContentPartAdded { .. }
                 | Incoming::OutputItemAdded { .. }
-                | Incoming::ItemAdded { .. },
-            ) => true,
-            Body::Event(Incoming::Unhandled { event_type }) => {
-                event_type == "response.function_call_arguments.delta"
-            }
-            Body::Event(_) => false,
+                | Incoming::ItemAdded { .. } => true,
+                Incoming::Unhandled { event_type } => {
+                    event_type == "response.function_call_arguments.delta"
+                }
+                _ => false,
+            },
         };
         let (mut opened, mut called) = (false, false);
         let withdrawn: Vec<(Ts, u64)> = self
@@ -755,9 +755,9 @@ impl Server {
                 if p.resp != Some(r) {
                     return false;
                 }
-                let created = matches!(&p.body, Body::Event(Incoming::ResponseCreated { .. }));
+                let created = matches!(&p.body, Body::Event(event) if matches!(event.as_ref(), Incoming::ResponseCreated { .. }));
                 let kept = (*due < t && streams(p)) || (keep_created && created);
-                if kept && let Body::Event(Incoming::OutputItemAdded { item_type, .. }) = &p.body {
+                if kept && let Body::Event(event) = &p.body && let Incoming::OutputItemAdded { item_type, .. } = event.as_ref() {
                     opened |= item_type == "message";
                     called |= item_type == "function_call";
                 }
@@ -831,7 +831,7 @@ impl Server {
     }
 
     fn put(&mut self, t: Ts, resp: Option<u32>, event: Incoming) {
-        self.put_body(t, resp, Body::Event(event));
+        self.put_body(t, resp, Body::Event(Box::new(event)));
     }
 
     fn put_body(&mut self, t: Ts, resp: Option<u32>, body: Body) {

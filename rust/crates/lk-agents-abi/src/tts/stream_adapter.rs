@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::errors::ProviderError;
-use crate::tts::tts::Tts;
+use crate::tts::types::Tts;
 
 /// No default implementation on purpose: segmentation boundaries are audible, and the reference's
 /// default is blingfire's, not a hand-rolled punctuation splitter.

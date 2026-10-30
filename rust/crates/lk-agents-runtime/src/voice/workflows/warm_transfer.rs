@@ -4,12 +4,14 @@
 //! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
 //! makes the LiveKit and Twilio requests.
 
+use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
+use lk_agents_abi::voice::workflows::InstructionsArg;
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
-use lk_agents_abi::voice::workflows::{InstructionsArg, SipParticipantRequest, TwilioDial};
+use lk_agents_abi::voice::workflows::{SipParticipantRequest, TwilioDial};
 use lk_agents_abi::{Clock, HostRef, Spawner, SpawnerExt};
 use lk_agents_net::task::{TaskId, TaskSet};
 use serde_json::Value;
@@ -28,7 +30,6 @@ use lk_agents_voice::workflows::warm_transfer::{
     TransferTool, TransferToolEffect, ends_merged_call, human_agent_room_name, transfer_tools,
 };
 
-use lk_agents_abi::Maybe;
 use lk_agents_net::env::ProcessEnv;
 pub use lk_agents_voice::workflows::warm_transfer::TransferConfig;
 
@@ -272,10 +273,8 @@ impl TransferRun {
         };
         let close = effects.close_human.is_some();
         self.perform(effects);
-        if close {
-            if let Err(err) = host.disconnect_human().await {
-                log::debug!(target: LOG, "leaving the human agent's room failed: {err}");
-            }
+        if close && let Err(err) = host.disconnect_human().await {
+            log::debug!(target: LOG, "leaving the human agent's room failed: {err}");
         }
     }
 
@@ -515,6 +514,76 @@ async fn twilio_originate(
     };
     guard.call = None;
     Ok(())
+}
+
+pub struct WarmTransfer(Arc<TransferRun>);
+
+impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransfer {
+    type Env = ProcessEnv;
+
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
+    fn new(
+        env: &ProcessEnv,
+        sip_call_to: Option<String>,
+        sip_trunk_id: Maybe<Option<String>>,
+        has_sip_connection: bool,
+        sip_number: Maybe<String>,
+        sip_headers: Option<BTreeMap<String, String>>,
+        dtmf: Option<String>,
+        ringing_timeout: Option<f64>,
+        instructions: Maybe<InstructionsArg>,
+        conversation: Option<Vec<(String, String)>>,
+        env_sip_trunk: Option<String>,
+        env_sip_number: String,
+        twilio: Option<TwilioDial>,
+    ) -> Result<Self, WarmTransferRefused> {
+        let plan = TransferPlan::resolve(TransferConfig {
+            sip_call_to,
+            sip_trunk_id,
+            has_sip_connection,
+            sip_number,
+            sip_headers,
+            dtmf,
+            ringing_timeout,
+            instructions,
+            conversation,
+            env_sip_trunk,
+            env_sip_number,
+            twilio,
+        })?;
+        let spawner = (env.spawner)().map_err(HostError::new)?;
+        Ok(Self(Arc::new(TransferRun::new(plan, env.clock.clone(), spawner))))
+    }
+
+    fn instructions(&self) -> String {
+        self.0.instructions()
+    }
+    fn tools(&self) -> Vec<BTreeMap<String, serde_json::Value>> {
+        self.0.tools()
+    }
+
+    async fn run(
+        &self,
+        host: Arc<dyn lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
+        caller: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
+    ) -> Result<String, TransferFailed> {
+        self.0
+            .run(
+                host,
+                caller.rtc().ok_or_else(|| {
+                    HostError::new("warm transfer requires a connected caller RTC room")
+                })?,
+            )
+            .await
+    }
+
+    async fn call_tool(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+    ) -> Result<(), TransferFailed> {
+        self.0.call_tool(name, arguments).await
+    }
 }
 
 #[cfg(test)]
@@ -770,74 +839,5 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(*host.call_statuses.lock(), ["canceled"]);
-    }
-}
-
-pub struct WarmTransfer(Arc<TransferRun>);
-
-impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransfer {
-    type Env = ProcessEnv;
-
-    fn new(
-        env: &ProcessEnv,
-        sip_call_to: Option<String>,
-        sip_trunk_id: Maybe<Option<String>>,
-        has_sip_connection: bool,
-        sip_number: Maybe<String>,
-        sip_headers: Option<BTreeMap<String, String>>,
-        dtmf: Option<String>,
-        ringing_timeout: Option<f64>,
-        instructions: Maybe<InstructionsArg>,
-        conversation: Option<Vec<(String, String)>>,
-        env_sip_trunk: Option<String>,
-        env_sip_number: String,
-        twilio: Option<TwilioDial>,
-    ) -> Result<Self, WarmTransferRefused> {
-        let plan = TransferPlan::resolve(TransferConfig {
-            sip_call_to,
-            sip_trunk_id,
-            has_sip_connection,
-            sip_number,
-            sip_headers,
-            dtmf,
-            ringing_timeout,
-            instructions,
-            conversation,
-            env_sip_trunk,
-            env_sip_number,
-            twilio,
-        })?;
-        let spawner = (env.spawner)().map_err(HostError::new)?;
-        Ok(Self(Arc::new(TransferRun::new(plan, env.clock.clone(), spawner))))
-    }
-
-    fn instructions(&self) -> String {
-        self.0.instructions()
-    }
-    fn tools(&self) -> Vec<BTreeMap<String, serde_json::Value>> {
-        self.0.tools()
-    }
-
-    async fn run(
-        &self,
-        host: Arc<dyn lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
-        caller: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
-    ) -> Result<String, TransferFailed> {
-        self.0
-            .run(
-                host,
-                caller.rtc().ok_or_else(|| {
-                    HostError::new("warm transfer requires a connected caller RTC room")
-                })?,
-            )
-            .await
-    }
-
-    async fn call_tool(
-        &self,
-        name: String,
-        arguments: serde_json::Value,
-    ) -> Result<(), TransferFailed> {
-        self.0.call_tool(name, arguments).await
     }
 }

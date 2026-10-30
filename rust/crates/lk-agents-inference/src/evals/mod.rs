@@ -218,7 +218,7 @@ async fn first_call(
             arguments = Some(call.arguments);
         }
     }
-    Ok((arguments, usage))
+    Ok((arguments, usage.map(|usage| *usage)))
 }
 
 /// The pure rules the host's evaluation types read.

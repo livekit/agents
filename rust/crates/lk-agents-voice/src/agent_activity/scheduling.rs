@@ -697,6 +697,10 @@ impl Driver {
     /// `_schedule_speech`. Every speech is born here: announced (`SpeechCreated`), recorded
     /// (`ReplyCreated`), then queued, held as the preemptive generation, or refused: journalled,
     /// interrupted (forced) and `false`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the operation’s existing explicit arguments"
+    )]
     pub(crate) fn schedule_speech(
         &mut self,
         now: Ts,

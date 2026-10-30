@@ -240,7 +240,7 @@ async fn a_stale_commit_is_a_version_conflict(backend: Backend) {
     assert_eq!(fresh.commit(CommitOptions::default()).await.unwrap().version, 1);
 
     stale.history.push(message("i9", ChatRole::Assistant, "late"));
-    let err = stale.commit(CommitOptions::default()).await.err().expect("fenced out");
+    let err = stale.commit(CommitOptions::default()).await.expect_err("fenced out");
     assert!(matches!(err, StorageError::VersionConflict { expected: 0, .. }), "{err}");
     assert_eq!(s1.lane(LANE).history().await.unwrap().len(), 1, "the loser wrote nothing");
     fx.cleanup(&[&s1, &s2]).await;
@@ -734,7 +734,7 @@ async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written(
 
     stale.history.push(message("i9", ChatRole::Assistant, "late"));
     faults.fail_next_commit(lk_agents_storage::testing::CommitFault::LoseAckBefore);
-    let err = stale.commit(CommitOptions::default()).await.err().expect("rejected");
+    let err = stale.commit(CommitOptions::default()).await.expect_err("rejected");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(s1.lane(LANE).history().await.unwrap().is_empty());
     fx.cleanup(&[&s1, &s2]).await;

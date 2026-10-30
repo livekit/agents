@@ -2,6 +2,8 @@
 //! frames into the bounded queue the session reads, and retires the streams voice retires.
 
 use crate::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
+type PublicationSnapshot = (Vec<Publication>, Vec<Arc<dyn TrackPublication>>);
+
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
 use lk_agents_abi::voice::rtc::{
@@ -121,9 +123,7 @@ impl<T> Readers<T> {
 }
 
 /// The participant's publications as voice reads them, with the SDK handles to open.
-fn publications(
-    participant: &dyn RemoteParticipant,
-) -> Result<(Vec<Publication>, Vec<Arc<dyn TrackPublication>>)> {
+fn publications(participant: &dyn RemoteParticipant) -> Result<PublicationSnapshot> {
     let handles = participant.track_publications()?;
     let listed = handles
         .iter()

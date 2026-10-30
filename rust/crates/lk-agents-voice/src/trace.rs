@@ -889,7 +889,7 @@ impl Step {
                 | SpeechStep::FloorArmed { .. }
                 | SpeechStep::FloorReleased
                 | SpeechStep::IdleHoldReleased { .. }
-                | SpeechStep::SchedulingPaused { .. }
+                | SpeechStep::SchedulingPaused
                 | SpeechStep::SchedulingPauseSettled
                 | SpeechStep::SchedulingPauseRefused { .. }
                 | SpeechStep::AuthorizationPaused

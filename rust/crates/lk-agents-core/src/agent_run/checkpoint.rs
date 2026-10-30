@@ -10,7 +10,7 @@ pub(super) struct Pending {
 
 enum Next {
     Request { purpose: Purpose, dynamic: Option<String> },
-    Finish(RunResult),
+    Finish(Box<RunResult>),
 }
 
 impl AgentRun {
@@ -30,7 +30,7 @@ impl AgentRun {
     }
 
     pub(super) fn checkpoint_finish(&mut self, result: RunResult, effects: &mut Vec<Effect>) {
-        self.checkpoint(Next::Finish(result), effects);
+        self.checkpoint(Next::Finish(Box::new(result)), effects);
     }
 
     fn checkpoint(&mut self, next: Next, effects: &mut Vec<Effect>) {
@@ -66,7 +66,7 @@ impl AgentRun {
                     }
                     self.start_request(purpose, dynamic, now, effects)
                 }
-                Next::Finish(result) => self.finish_now(Ok(result), effects),
+                Next::Finish(result) => self.finish_now(Ok(*result), effects),
             },
             Ok(true) => self.complete_interrupted(effects),
             Err(error) => self.finish_now(Err(RunError::Host(error)), effects),

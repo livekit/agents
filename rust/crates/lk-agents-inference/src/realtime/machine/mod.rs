@@ -350,12 +350,10 @@ impl RealtimeMachine {
         if self.closing || generation != self.connection_generation {
             return;
         }
-        if self.pending_replies.contains(req_id) {
-            if let Some(timeout) = self.response_timeout {
-                self.reply_deadlines
-                    .entry(req_id.to_owned())
-                    .or_insert(now.saturating_add(timeout));
-            }
+        if self.pending_replies.contains(req_id)
+            && let Some(timeout) = self.response_timeout
+        {
+            self.reply_deadlines.entry(req_id.to_owned()).or_insert(now.saturating_add(timeout));
         }
         if is_say && (self.pending_replies.contains(req_id) || self.discarded.contains(req_id)) {
             if !self.say_tags.iter().any(|id| id == req_id) {
@@ -950,7 +948,7 @@ impl RealtimeMachine {
         step.events.push(Event::GenerationDone(GenerationDone {
             response_id,
             status: GenerationStatus::Cancelled,
-            usage: TokenUsage::default(),
+            usage: Box::default(),
         }));
         step
     }

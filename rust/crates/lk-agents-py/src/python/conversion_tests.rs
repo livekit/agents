@@ -90,7 +90,7 @@ broken_dict = BrokenDict(field=1, value='')
             item_or(&obj, "Record", "field", |v| v.extract::<u32>(), || 7).unwrap_err(),
         ] {
             assert!(err.value(py).is(&failure));
-            assert!(err.cause(py).unwrap().value(py).is(&m.getattr("cause").unwrap()));
+            assert!(err.cause(py).unwrap().value(py).is(m.getattr("cause").unwrap()));
         }
         let err = item_or(
             &m.getattr("broken_dict").unwrap(),
@@ -100,8 +100,8 @@ broken_dict = BrokenDict(field=1, value='')
             || 7,
         )
         .unwrap_err();
-        assert!(err.value(py).is(&m.getattr("key_failure").unwrap()));
-        assert!(err.cause(py).unwrap().value(py).is(&m.getattr("cause").unwrap()));
+        assert!(err.value(py).is(m.getattr("key_failure").unwrap()));
+        assert!(err.cause(py).unwrap().value(py).is(m.getattr("cause").unwrap()));
         let missing = PyDict::new(py);
         assert_eq!(item_or(&missing, "Record", "field", |v| v.extract::<u32>(), || 7).unwrap(), 7);
         let obj = module(py, "class Empty: pass\nempty = Empty()\n").getattr("empty").unwrap();
@@ -285,7 +285,7 @@ broken = Broken()
             || 7,
         )
         .unwrap_err();
-        assert!(err.value(py).is(&obj.getattr("failure").unwrap()));
+        assert!(err.value(py).is(obj.getattr("failure").unwrap()));
     });
 }
 

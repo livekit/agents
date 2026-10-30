@@ -73,7 +73,7 @@ impl Rule for ProviderFailureIsAccounted {
             let closing = internal.error_close_requested_after(sent.at);
 
             check.expect(
-                &speech,
+                speech,
                 retried || surfaced || abandoned || closing,
                 format!(
                     "a model failure on {chat:?} for speech {id} was neither retried, surfaced nor \

@@ -177,8 +177,7 @@ impl<B: Backend> FallbackChain<B> {
         let labels = entries.iter().map(|b| b.label()).collect();
         let status: Vec<Status> = entries
             .iter()
-            .enumerate()
-            .map(|(_, backend)| Status {
+            .map(|backend| Status {
                 resource: backend.resource_id(),
                 closed: false,
                 recovery: [None, None],

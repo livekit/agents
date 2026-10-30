@@ -14,7 +14,7 @@ use crate::protocol::{
     ServerMessage, WorkerMessage,
 };
 use crate::{AcceptArguments, HostError, JobDecision, JobId, JobRequest, RunningJobInfo};
-use lk_agents_abi::worker::worker::{WorkerDrainFinished, WorkerDrainTimedOut, WorkerRegistered};
+use lk_agents_abi::worker::types::{WorkerDrainFinished, WorkerDrainTimedOut, WorkerRegistered};
 
 /// One offered job's place while it is decided, assigned and launched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

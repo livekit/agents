@@ -943,6 +943,10 @@ impl Driver {
     }
 
     /// `generate_reply()` on a realtime session. `user_input` is pushed as an item first.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the operation’s existing explicit arguments"
+    )]
     pub(crate) fn realtime_reply(
         &mut self,
         now: Ts,

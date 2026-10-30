@@ -370,9 +370,9 @@ async fn a_gateway_error_frame_fails_the_stream() {
 #[tokio::test]
 async fn tts_update_options_merges_the_extra_kwargs() {
     let tts = tts(Arc::new(FakeWs::new(vec![])));
-    tts.update_options(None, None, None, Some(&map(&[("add_timestamps", json!(true))]).into()));
+    tts.update_options(None, None, None, Some(&map(&[("add_timestamps", json!(true))])));
     assert!(tts.aligned_transcript());
-    tts.update_options(None, Some("bob"), None, Some(&map(&[("speed", json!(1.2))]).into()));
+    tts.update_options(None, Some("bob"), None, Some(&map(&[("speed", json!(1.2))])));
     assert!(tts.aligned_transcript(), "the earlier flag survived the merge");
 }
 

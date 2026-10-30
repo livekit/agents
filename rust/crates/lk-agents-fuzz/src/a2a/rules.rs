@@ -173,12 +173,15 @@ pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
             ),
         })
     });
-    let working = record.ledger.left_working.iter().filter_map(|(commit, task_id)| {
-        (!record.ledger.answered_working.contains(task_id)).then(|| Violation {
+    let working = record
+        .ledger
+        .left_working
+        .iter()
+        .filter(|&(_commit, task_id)| !record.ledger.answered_working.contains(task_id))
+        .map(|(commit, task_id)| Violation {
             subject: "Run",
             text: format!("commit {commit}: left {task_id} working"),
-        })
-    });
+        });
     overwritten.chain(unsettled).chain(working).collect()
 }
 
@@ -491,7 +494,7 @@ mod tests {
         row.status = TaskState::InputRequired;
         row.internal = None;
         let continued = Some(row.task_id.clone());
-        let reply = r.requests.iter_mut().next().unwrap();
+        let reply = r.requests.first_mut().unwrap();
         r.ledger.asked.extend(continued.clone());
         reply.continues = continued;
         r.ledger.client_canceled.insert(reply.task_id.clone());

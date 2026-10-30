@@ -22,7 +22,6 @@ pub fn hosting(
         None => Arc::new(room::RoomTransport::new(
             config.room.expect("a remote room session has an RTC attachment"),
             time.clock(),
-            spawner.clone(),
         )) as Arc<dyn SessionTransport>,
     };
     Arc::new(driver::RemoteSessionLink::new(
@@ -42,7 +41,7 @@ pub fn reply<'a>(
     Box::pin(async move {
         let Some(plan) = plan_request(request) else { return Ok(None) };
         let answer = match plan {
-            RequestPlan::Reply(answer) => answer,
+            RequestPlan::Reply(answer) => *answer,
             RequestPlan::ChatHistory => SessionReply::ChatHistory(port.chat_history().await?),
             RequestPlan::AgentInfo => SessionReply::AgentInfo(port.agent_info().await?),
             RequestPlan::RunInput(text) => SessionReply::RunInput(port.run_input(text).await?),

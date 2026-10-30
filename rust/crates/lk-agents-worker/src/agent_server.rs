@@ -16,7 +16,7 @@ use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::server_host::{
     EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
 };
-use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
+use lk_agents_abi::worker::types::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::endpoint::host::{Endpoints, NativeStream};

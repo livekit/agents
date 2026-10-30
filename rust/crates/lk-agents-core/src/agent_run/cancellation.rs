@@ -105,7 +105,7 @@ impl AgentRun {
                 owed.render = None
             }
             Event::LlmChunk { request, chunk } if owed.request == Some(request) => {
-                if let Some(usage) = &chunk.usage {
+                if let Some(usage) = chunk.usage.as_deref() {
                     self.ledger.report(request.0, usage.into());
                 }
             }

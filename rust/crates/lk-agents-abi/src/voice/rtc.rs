@@ -1,6 +1,10 @@
 //! Values exchanged through the RTC capability boundary. Opaque video references keep frame
 //! resources owned by the host.
 
+/// Connection, disconnect, participant, track-source and audio-feature wire names.
+pub type RtcWireNames =
+    (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
@@ -263,8 +267,7 @@ wire_i32!(AudioTrackFeature, "AudioTrackFeature");
 /// Each `ALL` array's names, indexed by wire value, for the host adapter's reads of SDK ints:
 /// `(connection states, disconnect reasons, participant kinds, track sources, audio features)`.
 #[crate::host(export(pid = false))]
-pub fn rtc_wire_names()
--> (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+pub fn rtc_wire_names() -> RtcWireNames {
     (
         ConnectionState::ALL.iter().map(|v| v.as_str()).collect(),
         DisconnectReason::ALL.iter().map(|v| v.as_str()).collect(),

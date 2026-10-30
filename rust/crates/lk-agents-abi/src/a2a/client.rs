@@ -109,7 +109,7 @@ pub trait MessageContent: Send + Sync + Sized + 'static {
 #[crate::host(record(module = "a2a_client", extract, transparent))]
 pub enum MessageInput {
     Text(String),
-    Message(Message),
+    Message(Box<Message>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -17,6 +17,6 @@ type LoggingImpl = <crate::Selected as super::Implementations>::Logging;
 /// it at their boundaries; the interpreter's exit calls it.
 #[pyfunction]
 pub fn flush_logs(py: Python<'_>) -> PyResult<()> {
-    py.detach(|| <LoggingImpl as ::lk_agents_abi::invoke::Logging>::flush_logs());
+    py.detach(<LoggingImpl as ::lk_agents_abi::invoke::Logging>::flush_logs);
     Ok(())
 }

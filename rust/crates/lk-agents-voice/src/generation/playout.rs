@@ -364,7 +364,7 @@ pub enum FinishEffect {
     Accept(PlaybackFinished),
     Cut(String),
     Confirm,
-    Complete(Result<crate::transcription::Heard, SourceFailed>),
+    Complete(Result<crate::transcription::Heard, Box<SourceFailed>>),
 }
 
 pub enum SegmentFinish {
@@ -439,11 +439,11 @@ impl SegmentFinish {
                 None => FinishEffect::Complete(Ok(heard)),
             },
             (Self::Confirming { error, synchronized }, FinishEvent::Confirmed) => {
-                FinishEffect::Complete(Err(SourceFailed {
+                FinishEffect::Complete(Err(Box::new(SourceFailed {
                     error,
                     synchronized,
                     heard: Some(playout.heard(String::new(), Completion::Unconfirmed)),
-                }))
+                })))
             }
             _ => panic!("playout completion does not match its requested operation"),
         }
@@ -583,9 +583,12 @@ impl SegmentFlow {
 }
 
 /// A source with no destination still drains until its boundary, end, failure or interruption.
-pub fn drained(end: SegmentEnd, text: String) -> Result<crate::transcription::Heard, SourceFailed> {
+pub fn drained(
+    end: SegmentEnd,
+    text: String,
+) -> Result<crate::transcription::Heard, Box<SourceFailed>> {
     match end {
-        SegmentEnd::Provider(error) => Err(error.into()),
+        SegmentEnd::Provider(error) => Err(Box::new(error.into())),
         SegmentEnd::Audio | SegmentEnd::Cut => Ok(crate::transcription::Heard {
             text,
             complete: matches!(end, SegmentEnd::Audio),

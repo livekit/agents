@@ -11,7 +11,7 @@ use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::{
     SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
-use lk_agents_abi::tts::tts::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};

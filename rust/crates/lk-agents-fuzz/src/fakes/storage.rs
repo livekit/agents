@@ -93,7 +93,7 @@ impl VoiceStorage for FakeVoiceStorage {
             if lost {
                 return Err(StorageError::LeaseLost("the voice lane lease was lost".into()));
             }
-            if turn % self.text_turn_every == 0 {
+            if turn.is_multiple_of(self.text_turn_every) {
                 text_turn(&mut local, turn, what);
             }
             Ok(local)

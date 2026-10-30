@@ -254,7 +254,31 @@ fn expand_host(
     if !item_attrs(&parsed).iter().any(lk_agents_bindgen::is_host) {
         strip(&mut parsed);
     }
+    if let I::Trait(trait_) = &mut parsed {
+        send_futures(trait_);
+    }
     quote::quote!(#parsed #extra)
+}
+
+/// Host operations may cross executor threads. Keep the declaration's async syntax,
+/// but make the returned future's contract explicit in the compiled Rust trait.
+fn send_futures(trait_: &mut syn::ItemTrait) {
+    for item in &mut trait_.items {
+        let syn::TraitItem::Fn(method) = item else { continue };
+        if method.sig.asyncness.take().is_none() {
+            continue;
+        }
+        let output = match &method.sig.output {
+            syn::ReturnType::Default => syn::parse_quote!(()),
+            syn::ReturnType::Type(_, ty) => *ty.clone(),
+        };
+        method.sig.output = syn::parse_quote!(
+            -> impl ::core::future::Future<Output = #output> + Send
+        );
+        if let Some(body) = method.default.take() {
+            method.default = Some(syn::parse_quote!({ async move #body }));
+        }
+    }
 }
 
 fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
@@ -581,19 +605,18 @@ mod tests {
     // Catches: a trait method's `#[host(soon = ..)]`, a parameter's `#[host(lenient)]` or a config
     // field's `#[host(kwarg(..))]` reaching rustc (an unknown attribute there is a hard error), or
     // the strip taking an unrelated attribute with it.
-    // Catches: a declared proxy expanding to anything but itself, an undeclared one accepted, or a
+    // Catches: a declared proxy emitting host bindings, an undeclared one accepted, or a
     // raised refusal given a `host_kind` it has no table for.
     #[test]
-    fn declared_proxies_and_refusals_expand_to_nothing() {
+    fn declared_proxies_emit_only_traits_and_refusals_no_host_kind() {
         let out = super::expand_host(
             quote!(proxy(host = "a.B")),
             quote! { pub trait T { #[host(await)] async fn f(&self, #[host(context)] a: &A) -> Result<(), E>; #[host(notify)] fn g(&self, #[host(context)] a: &A); } },
         )
         .to_string();
-        assert!(
-            !out.contains("impl") && !out.contains("host") && out.contains("async fn f"),
-            "{out}"
-        );
+        let file: syn::File = syn::parse_str(&out).unwrap();
+        assert!(matches!(file.items.as_slice(), [syn::Item::Trait(_)]), "{out}");
+        assert!(!out.contains("host"), "{out}");
         let out = super::expand_host(
             quote!(proxy(host = "a.B")),
             quote! { pub trait T { fn f(&self); } },
@@ -667,5 +690,23 @@ mod tests {
         )
         .to_string();
         assert!(out.contains("compile_error") && out.contains("two variants"), "{out}");
+    }
+    #[test]
+    fn declared_async_operations_have_send_futures() {
+        let output = super::expand_host(
+            quote!(class),
+            quote! { pub trait Api: Send + Sync { #[host(await)] async fn ping(&self) -> u32 { 9 } } },
+        );
+        let file: syn::File = syn::parse2(output).unwrap();
+        let syn::Item::Trait(trait_) = &file.items[0] else { panic!("a trait") };
+        let syn::TraitItem::Fn(method) = &trait_.items[0] else { panic!("a method") };
+        assert!(method.sig.asyncness.is_none());
+        let syn::ReturnType::Type(_, ty) = &method.sig.output else { panic!("a return type") };
+        let syn::Type::ImplTrait(future) = ty.as_ref() else { panic!("a future contract") };
+        assert!(future.bounds.iter().any(|bound| matches!(bound, syn::TypeParamBound::Trait(bound) if bound.path.is_ident("Send"))));
+        assert!(matches!(
+            method.default.as_ref().unwrap().stmts.last(),
+            Some(syn::Stmt::Expr(syn::Expr::Async(_), None))
+        ));
     }
 }

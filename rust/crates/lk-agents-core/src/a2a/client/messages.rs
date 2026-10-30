@@ -23,7 +23,7 @@ pub fn message_to_wire(
             received_at: None,
             raw: None,
         },
-        MessageInput::Message(message) => message,
+        MessageInput::Message(message) => *message,
     };
     let role = match input.role.as_str() {
         "user" => a2a::Role::User,

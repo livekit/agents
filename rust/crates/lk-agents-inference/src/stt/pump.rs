@@ -244,6 +244,10 @@ impl Pump {
         })
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the operation’s existing explicit arguments"
+    )]
     async fn send_loop(
         sender: Arc<dyn WsSender>,
         audio_rx: &mut mpsc::Receiver<SinkCmd>,
@@ -421,7 +425,8 @@ impl Pump {
                     }
                     let effects = {
                         let mut machine = machine.lock();
-                        let effects = machine.handle(SttEvent::Message(incoming), clock.now());
+                        let effects =
+                            machine.handle(SttEvent::Message(Box::new(incoming)), clock.now());
                         deferred
                             .speaking
                             .store(machine.is_speaking(), std::sync::atomic::Ordering::SeqCst);

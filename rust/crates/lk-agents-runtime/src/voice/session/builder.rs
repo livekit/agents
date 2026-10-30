@@ -2,6 +2,9 @@
 //! its providers, legs and options. The [`SessionExecutor`] opens the streams and runs the tasks
 //! that feed them.
 
+/// A realtime session and its registered resource identity.
+pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
+
 use super::calls::Calls;
 use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
@@ -94,10 +97,7 @@ pub trait SessionExecutor: Send {
         resources: &'a Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<(Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId), DriverError>,
-    >;
+    ) -> lk_agents_abi::BoxFuture<'a, Result<RealtimeLeg, DriverError>>;
 
     /// Takes the started cores over.
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner>;

@@ -514,7 +514,7 @@ impl RealtimeMachine {
         step.events.push(Event::GenerationDone(GenerationDone {
             response_id: done.response_id.clone(),
             status: done.status,
-            usage: done.usage,
+            usage: Box::new(done.usage),
         }));
         step.events.extend(metrics);
 

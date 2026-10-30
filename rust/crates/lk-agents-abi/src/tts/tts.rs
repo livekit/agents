@@ -65,7 +65,7 @@ pub struct SynthesizedAudio {
     pub delta_text: String,
     /// Token usage the provider reported for the segment, on its final frame
     #[host(default = None)]
-    pub usage: Option<crate::usage::TokenUsage>,
+    pub usage: Option<Box<crate::usage::TokenUsage>>,
     /// Characters the provider billed for the segment, on its final frame
     #[host(default = None)]
     pub characters_count: Option<u64>,

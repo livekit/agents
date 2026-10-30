@@ -147,7 +147,7 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
         sql: "INSERT INTO notes (body) VALUES ('late')".into(),
         params: Vec::new(),
     }];
-    let err = stale.commit(CommitOptions::default()).await.err().expect("fenced out");
+    let err = stale.commit(CommitOptions::default()).await.expect_err("fenced out");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(notes(&direct).await.is_empty(), "the loser's application SQL wrote nothing");
     fixture.cleanup(&[&s1, &s2]).await;

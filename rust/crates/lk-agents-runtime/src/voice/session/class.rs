@@ -280,7 +280,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     ) -> Result<(), SessionRefused> {
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
-        self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })
+        self.send(ActivityCommand::UpdateModels(Box::new(
+            lk_agents_voice::agent_session::ModelUpdate { stt, vad, llm, tts },
+        )))
     }
 
     fn update_agent(
@@ -428,7 +430,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         if patch == AgentSessionOptions::default() {
             return Ok(());
         }
-        Ok(self.send(TurnCommand::Configure(patch))?)
+        Ok(self.send(TurnCommand::Configure(Box::new(patch)))?)
     }
 
     fn override_options(&self, update: UpdateKwargs) -> Result<u64, CommandRefused> {
@@ -439,7 +441,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             ));
         };
         let id = session_options.next_layer_id();
-        self.send(TurnCommand::Override(OverrideLayer { id, options }))?;
+        self.send(TurnCommand::Override(Box::new(OverrideLayer { id, options })))?;
         Ok(id)
     }
 

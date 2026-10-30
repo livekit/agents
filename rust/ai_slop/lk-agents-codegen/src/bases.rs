@@ -84,13 +84,11 @@ pub fn parse(path: &str, text: &str, proxies: &[&Proxy]) -> Result<Bases, String
     Ok(Bases { module, sources: vec![path.to_owned()], body: body.to_owned(), imports, paths })
 }
 
+type ParsedHeader<'a> = (Vec<(String, String)>, &'a str);
+
 /// The imports the file opens with, and the rest. An import from the module itself is the file's
 /// alone: the generated module defines those records above the classes.
-fn split<'t>(
-    path: &str,
-    text: &'t str,
-    module: &str,
-) -> Result<(Vec<(String, String)>, &'t str), String> {
+fn split<'t>(path: &str, text: &'t str, module: &str) -> Result<ParsedHeader<'t>, String> {
     let own = format!(".{module}");
     let mut imports: Vec<(String, String)> = Vec::new();
     let mut lines = text.split_inclusive('\n');

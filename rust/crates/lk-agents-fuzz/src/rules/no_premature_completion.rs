@@ -58,7 +58,7 @@ impl Rule for NoPrematureCompletion {
                 .stream_ended_at(stream)
                 .is_some_and(|closed| speech.done_at().is_none_or(|done| closed <= done));
             check.expect(
-                &speech,
+                speech,
                 !(normal && !ended_first),
                 format!("completed normally while stream {stream} was still open"),
             );

@@ -81,7 +81,12 @@ pub use lk_agents_core::agent_run::CallId;
 pub enum ToolGo {
     /// The call starts as `item` (stamped and admitted) with its `first` move; hosted by the
     /// reply's agent unless it names a tool the request did not offer.
-    Start { call: CallId, item: Box<FunctionCall>, host: Option<HostedTool>, first: Box<ToolGo> },
+    Start {
+        call: CallId,
+        item: Box<FunctionCall>,
+        host: Option<Box<HostedTool>>,
+        first: Box<ToolGo>,
+    },
     /// Bind and validate these arguments (the framework's parse, with the schema's defaults).
     Prepare { call: CallId, arguments: serde_json::Map<String, serde_json::Value> },
     /// Render the read-back of the prepared arguments.
@@ -704,7 +709,7 @@ pub enum NextStep {
     Done,
     /// InterruptByAudioActivity-in; finished tools are still in [`StepDecision::commit`].
     Interrupted,
-    Reply(ReplyRequest),
+    Reply(Box<ReplyRequest>),
 }
 
 /// Something the driver should log; a core crate has no logger.
@@ -759,10 +764,10 @@ fn next_of(
     previous_user_metrics: Option<MetricsReport>,
 ) -> NextStep {
     if reply {
-        NextStep::Reply(ReplyRequest {
+        NextStep::Reply(Box::new(ReplyRequest {
             tool_choice: if forbid_tools { ToolChoice::Forbidden } else { ToolChoice::Auto },
             previous_user_metrics,
-        })
+        }))
     } else {
         NextStep::Done
     }

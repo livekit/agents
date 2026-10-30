@@ -133,9 +133,9 @@ impl Run {
         let args = VoiceSessionArgs {
             instructions: Some(setup.instructions.clone()),
             agent: OPENING_AGENT.into(),
-            stt: stt,
+            stt,
             vad: setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
-            llm: llm,
+            llm,
             realtime: setup.realtime.map(|server| {
                 let vad = server.turn_detection.then_some(if server.semantic {
                     fakes::RealtimeVad::Semantic
@@ -166,7 +166,7 @@ impl Run {
                 fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
                     as Arc<dyn Realtime>
             }),
-            tts: tts,
+            tts,
             on_event: Some(Arc::new(WireSink)),
             agent_use_tts_aligned_transcript: setup.agent_aligned_transcript,
             turn_detector: setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
@@ -247,7 +247,7 @@ impl Run {
         registry.attach_session(api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
-        let host: Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>> = Arc::default();
+        let host: super::HostJournal = Arc::default();
         let livelock: Arc<Mutex<Option<String>>> = Arc::default();
         let (runtime_tx, runtime_rx) = oneshot::channel();
         {

@@ -45,10 +45,10 @@ pub fn directory(
         writable(path)?;
         return Ok(path.to_owned());
     }
-    if let Some(path) = preferred.filter(|path| path.is_absolute()) {
-        if writable(path).is_ok() {
-            return Ok(path.to_owned());
-        }
+    if let Some(path) = preferred.filter(|path| path.is_absolute())
+        && writable(path).is_ok()
+    {
+        return Ok(path.to_owned());
     }
     writable(fallback)?;
     Ok(fallback.to_owned())

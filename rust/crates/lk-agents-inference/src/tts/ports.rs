@@ -1,9 +1,9 @@
 //! Native synthesis constructor services selected by the voice/text runtime.
 
+use lk_agents_abi::inference::fallback::TtsFallbackModel;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::inference::fallback::TtsFallbackModel;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{ApiConnectOptions, Tts};
@@ -17,6 +17,7 @@ impl InferenceTts for GatewayTts {
     type Stream = TtsStream;
     type Env = ProcessEnv;
 
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
     fn new(
         env: &ProcessEnv,
         model: String,

@@ -30,7 +30,11 @@ impl Rule for TranscriptFollowsAudio {
         id: "transcript_follows_audio",
         guarantee: "A synchronised transcript shows no word before the segment has played up to where the word's audio starts, except the rest of a segment the sink reported finished whole.",
         examples: &[shown_as_played, rest_shown_at_the_end],
-        counterexamples: &[shown_ahead_of_the_voice, shown_ahead_then_cut, shown_whole_with_no_finish],
+        counterexamples: &[
+            shown_ahead_of_the_voice,
+            shown_ahead_then_cut,
+            shown_whole_with_no_finish,
+        ],
         probe: None,
     };
 
@@ -44,7 +48,7 @@ impl Rule for TranscriptFollowsAudio {
             let judge = |check: &mut Check, ahead: &mut Vec<(String, f64, f64)>, reached: f64| {
                 for (text, start, played) in ahead.drain(..) {
                     check.expect(
-                        &speech,
+                        speech,
                         start <= reached + EPSILON,
                         format!(
                             "{text:?} was shown with {played:.3}s of its segment played, its audio \
@@ -63,7 +67,7 @@ impl Rule for TranscriptFollowsAudio {
                         if *start > played + EPSILON {
                             ahead.push((text.clone(), *start, played));
                         } else {
-                            check.expect(&speech, true, "");
+                            check.expect(speech, true, "");
                         }
                     }
                     // The segment played on: what was shown ahead was not its end. (A start is

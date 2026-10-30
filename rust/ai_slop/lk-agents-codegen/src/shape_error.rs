@@ -69,7 +69,7 @@ pub fn convert(
         ))
     } else {
         Ok(format!(
-            "match crate::python::value_from_py(&{value}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), value => Err({exception}::new_err(format!({message:?}))) }}",
+            "match crate::python::value_from_py({value}.as_any(), {path})? {{ ::serde_json::Value::Object(map) => Ok(map), value => Err({exception}::new_err(format!({message:?}))) }}",
             message = policy.message,
         ))
     }

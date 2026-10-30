@@ -6,7 +6,7 @@ cargo_runner="${CARGO_RUNNER:-cargo}"
 
 case "${1:-}" in
     "")
-        cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+        (cd rust && cargo fmt -- --check)
         python3 -u rust/architecture/check.py
         ;;
     --tests)

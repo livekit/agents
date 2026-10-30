@@ -202,10 +202,10 @@ impl Driver {
                     return;
                 }
                 let update = match result {
-                    Ok(turn) => TextSessionUpdate::Finished(TextSessionSettled {
+                    Ok(turn) => TextSessionUpdate::Finished(Box::new(TextSessionSettled {
                         turn,
                         output: self.output.take(),
-                    }),
+                    })),
                     Err(error) => TextSessionUpdate::Failed(error),
                 };
                 let _ = self.updates.send(Ok(update)).await;

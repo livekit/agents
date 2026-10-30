@@ -117,7 +117,9 @@ impl Shared {
         if samples.is_empty() {
             return Ok(());
         }
-        if format.num_channels == 0 || samples.len() % usize::from(format.num_channels) != 0 {
+        if format.num_channels == 0
+            || !samples.len().is_multiple_of(usize::from(format.num_channels))
+        {
             return Err(DecoderError::InvalidLimits);
         }
         loop {
@@ -227,7 +229,7 @@ impl AudioDecoder {
             || sample_rate.is_some_and(|rate| {
                 !(limits.format.min_sample_rate..=limits.format.max_sample_rate).contains(&rate)
             })
-            || limits.output_chunk_samples % usize::from(num_channels) != 0
+            || !limits.output_chunk_samples.is_multiple_of(usize::from(num_channels))
         {
             return Err(DecoderError::InvalidLimits);
         }

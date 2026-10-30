@@ -52,6 +52,7 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 
     #[host(await)]
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     async fn chat(
         &self,
         chat_ctx_host: crate::HostRef,

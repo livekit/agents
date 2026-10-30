@@ -55,7 +55,6 @@ tools and host RTC objects.
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
 | `lk-agents-codegen` | Python models, stubs, provider bases, forwarders and architecture checks |
 | `lk-agents-fuzz` | Deterministic simulation of the sans-I/O crates and behavioral contracts, running the runtime's real executors over faked SDK and provider ports |
-| `lk-agents-bench-steps` | Direct step measurements of the voice data plane; compiled in the launch gate, measured explicitly on qualified hardware |
 
 ```text
 lk-agents-py -> lk-agents-runtime, lk-agents-abi
@@ -68,7 +67,7 @@ lk-agents-net -> lk-agents-core
 lk-agents-net -> lk-agents-media (the worker pool primitive)
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
-fuzz, bench-steps -> sans-I/O crates + lk-agents-abi
+fuzz -> sans-I/O crates + lk-agents-abi
 lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-storage (real storage under the A2A DST)
 ```
 
@@ -1205,7 +1204,7 @@ tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 is `py -> runtime -> sans-I/O and async I/O crates -> abi` (including the launcher: `runtime -> cli -> worker/net/abi`), with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
 `net -> core`, `py -> abi`, async I/O crates `-> net`,
-`fuzz` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`, and
+`fuzz -> sans-I/O crates + abi`, `fuzz -> runtime`, and
 `fuzz -> storage` (the A2A DST runs real storage) described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz

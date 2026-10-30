@@ -72,6 +72,17 @@ pub fn resampling_plan(entry_rates: &[u32], requested: Option<u32>) -> (u32, Vec
     (target, entry_rates.iter().map(|&r| r != target).collect())
 }
 
+/// A backend's identity: its host object's, else the retained native allocation (alive for the
+/// chain's lifetime, shared by clones), so rebinding options never adds a backend.
+pub(crate) fn backend_resource<T: ?Sized>(
+    provider: &T,
+    host_instance: Option<usize>,
+) -> lk_agents_abi::resources::ResourceId {
+    let instance =
+        host_instance.unwrap_or_else(|| std::ptr::from_ref(provider).cast::<()>() as usize);
+    lk_agents_abi::resources::ResourceId(instance as u64)
+}
+
 #[cfg(test)]
 mod resampling_tests {
     use super::resampling_plan;
@@ -85,15 +96,4 @@ mod resampling_tests {
         assert_eq!(resampling_plan(&[24_000, 16_000], Some(48_000)), (48_000, vec![true, true]));
         assert_eq!(resampling_plan(&[22_050], None), (22_050, vec![false]));
     }
-}
-
-/// A backend's identity: its host object's, else the retained native allocation (alive for the
-/// chain's lifetime, shared by clones), so rebinding options never adds a backend.
-pub(crate) fn backend_resource<T: ?Sized>(
-    provider: &T,
-    host_instance: Option<usize>,
-) -> lk_agents_abi::resources::ResourceId {
-    let instance =
-        host_instance.unwrap_or_else(|| std::ptr::from_ref(provider).cast::<()>() as usize);
-    lk_agents_abi::resources::ResourceId(instance as u64)
 }

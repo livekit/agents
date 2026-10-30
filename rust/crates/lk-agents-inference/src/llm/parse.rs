@@ -236,7 +236,7 @@ pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
         id: chunk.id.clone(),
         delta: None,
         // OpenAI's prompt tokens include the cached ones; its schema reports no cache writes.
-        usage: Some(TokenUsage {
+        usage: Some(Box::new(TokenUsage {
             input_tokens: n(usage.prompt_tokens).unwrap_or(0),
             output_tokens: n(usage.completion_tokens).unwrap_or(0),
             cache_read_tokens: n(usage
@@ -248,7 +248,7 @@ pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
                 .as_ref()
                 .and_then(|d| d.reasoning_tokens)),
             ..TokenUsage::default()
-        }),
+        })),
         ..Default::default()
     })
 }

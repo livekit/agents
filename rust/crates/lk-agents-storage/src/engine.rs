@@ -755,7 +755,7 @@ impl Run {
         loop {
             let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
             match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
-                Ok(Resolution::Committed(committed)) => return Ok(committed),
+                Ok(Resolution::Committed(committed)) => return Ok(*committed),
                 Ok(Resolution::Rejected) => {
                     return Err(StorageError::VersionConflict {
                         lane: self.lane.name().to_owned(),

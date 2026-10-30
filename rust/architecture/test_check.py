@@ -140,7 +140,6 @@ class DependencyContracts(unittest.TestCase):
     def test_direction_allows_only_the_documented_graph(self):
         for crate, target in (
             ("lk-agents-net", "lk-agents-voice"),
-            ("lk-agents-bench-steps", "lk-agents-inference"),
             ("lk-agents-media", "lk-agents-core"),
         ):
             with self.subTest(edge=f"{crate} -> {target}"):
@@ -361,6 +360,7 @@ class PathContracts(unittest.TestCase):
             (runtime / "inner.rs").write_text("")
             (runtime / "lib.rs").write_text(
                 '#[path = "inner.rs"]\nmod inner;\n'
+                '#[path = "../build/cache.rs"]\nmod cache;\n'
                 '#[path = "../../lk-agents-worker/src/python.rs"]\nmod python;\n'
                 '#[cfg_attr(feature = "x", path = "../../lk-agents-worker/src/python.rs")]\nmod other;\n'
             )
@@ -566,9 +566,9 @@ class WarningContracts(unittest.TestCase):
                 warning_violations(records, self.NAMES)
 
     @patch("check.WARNING_CLEAN", {"lk-agents-core"})
-    def test_clippy_diagnostics_do_not_change_the_compiler_warning_baseline(self):
+    def test_clippy_and_compiler_warnings_both_fail_the_workspace_gate(self):
         records = self.transcript("lk-agents-core")
         records[0]["message"]["code"] = {"code": "clippy::disallowed_methods"}
-        self.assertEqual(warning_violations(records, self.NAMES), [])
+        self.assertEqual(warning_violations(records, self.NAMES), ["lk-agents-core"])
         records[0]["message"]["code"] = {"code": "unused_imports"}
         self.assertEqual(warning_violations(records, self.NAMES), ["lk-agents-core"])

@@ -492,7 +492,9 @@ impl Run {
                     Some(update) => api.update_turn_options(update).is_ok(),
                     // No host call: `update_options` takes endpointing and detection only.
                     None => api
-                        .send(TurnCommand::Configure(patch(*knob, *mode, *ms, *on, *words)))
+                        .send(TurnCommand::Configure(Box::new(patch(
+                            *knob, *mode, *ms, *on, *words,
+                        ))))
                         .is_ok(),
                 }
             }

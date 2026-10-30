@@ -147,10 +147,6 @@ struct Opener {
 }
 
 impl Opener {
-    fn deadline(&self) -> Ts {
-        self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)
-    }
-
     /// One invocation of a node that reads a stream and emits into the leg below: `deliver` takes
     /// each item it yields until the leg refuses one, `done` runs once it has ended. Cancelled, it
     /// stops reading and closes the node's output under the teardown deadline.
@@ -778,11 +774,8 @@ impl<T: Send + 'static> StreamSource<T> for Final<T> {
 }
 
 fn duplex<I, T: Send + 'static>(
-    opened: Result<
-        (Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn StreamSource<T>>),
-        ProviderError,
-    >,
-) -> Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn StreamSource<T>>), ProviderError> {
+    opened: Result<lk_agents_abi::StreamPair<I, T>, ProviderError>,
+) -> Result<lk_agents_abi::StreamPair<I, T>, ProviderError> {
     let (sink, source) = opened.map_err(final_error)?;
     Ok((sink, Box::new(Final(source))))
 }

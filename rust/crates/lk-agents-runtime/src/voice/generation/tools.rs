@@ -68,7 +68,7 @@ impl ToolStep {
                 host.invocation.speech = Some(handle.object());
                 host
             });
-            let call = HostedCall { shared: &shared, speech, host };
+            let call = HostedCall { shared: &shared, speech, host: host.map(|host| *host) };
             let (execution, outcome) = call.run(*item, *first, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();

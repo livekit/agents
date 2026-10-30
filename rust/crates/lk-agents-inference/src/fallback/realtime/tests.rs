@@ -198,9 +198,8 @@ async fn cancellation_case(failed_open: bool) {
     }
     let mut error = fatal();
     if !failed_open && let Event::Error(e) = &mut error {
-        e.provider_error = Some(
-            lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None, None).into(),
-        );
+        e.provider_error =
+            Some(lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None, None));
     }
     let primary = scripted(vec![error]);
     let backup: Arc<dyn Realtime> =

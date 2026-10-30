@@ -45,7 +45,7 @@ pub struct CollectedResponse {
     #[host(default_factory = "list")]
     pub tool_calls: Vec<FunctionToolCall>,
     #[host(default = None)]
-    pub usage: Option<TokenUsage>,
+    pub usage: Option<Box<TokenUsage>>,
     /// Provider-specific extra data accumulated across chunks
     /// (e.g., xAI encrypted reasoning, Google thought signatures).
     #[host(default_factory = "dict")]
@@ -67,7 +67,7 @@ pub struct LlmChunk {
     #[host(default = None)]
     pub delta: Option<ChoiceDelta>,
     #[host(default = None)]
-    pub usage: Option<TokenUsage>,
+    pub usage: Option<Box<TokenUsage>>,
     /// `FlushSentinel`: finish the current TTS segment at this point in the stream.
     ///
     /// Only an `Agent.llm_node` override produces one; never crosses as a field.
@@ -110,7 +110,7 @@ mod tests {
 
         let usage_only = LlmChunk {
             id: "c1".into(),
-            usage: Some(TokenUsage { output_tokens: 42, ..Default::default() }),
+            usage: Some(Box::new(TokenUsage { output_tokens: 42, ..Default::default() })),
             ..Default::default()
         };
         assert!(!usage_only.has_response());

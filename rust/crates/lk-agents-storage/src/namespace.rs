@@ -35,7 +35,7 @@ use lk_agents_abi::storage::context::ContextScope;
 enum Config {
     Memory { lease: LeaseTiming },
     Local { directory: PathBuf, lease: LeaseTiming },
-    Cloud(AgentDbStorage),
+    Cloud(Arc<AgentDbStorage>),
 }
 
 enum Backend {
@@ -78,7 +78,7 @@ impl Namespace {
                         log::info!("local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
-                    Config::Cloud(storage) => Backend::Cloud(Arc::new(storage.clone())),
+                    Config::Cloud(storage) => Backend::Cloud(Arc::clone(storage)),
                 })
             })
             .await
@@ -202,7 +202,7 @@ async fn local_tasks(
                 task_id: row.task_id,
                 thread_id: thread_id.to_owned(),
                 name: row.name,
-                status: row.status.into(),
+                status: row.status,
                 updated_at: row.updated_at / 1000,
             });
         }
@@ -252,7 +252,11 @@ impl HostStorageClass for Namespace {
             (None, Some(url), Some(key), Some(secret)) => {
                 let mut opts = AgentDbOptions::new(&url);
                 opts.lease = lease;
-                Config::Cloud(AgentDbStorage::new(opts, TokenMinter::new(key, secret)?, env)?)
+                Config::Cloud(Arc::new(AgentDbStorage::new(
+                    opts,
+                    TokenMinter::new(key, secret)?,
+                    env,
+                )?))
             }
             _ => {
                 return Err(StorageError::Invalid(

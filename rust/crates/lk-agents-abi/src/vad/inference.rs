@@ -28,7 +28,7 @@ pub trait VadModel: Send + Sync {
 }
 
 /// The Silero VAD behind `inference.VAD`.
-#[crate::host(class(name = "InferenceVad", native = crate::vad::vad::Vad))]
+#[crate::host(class(name = "InferenceVad", native = crate::vad::types::Vad))]
 pub trait InferenceVad: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]

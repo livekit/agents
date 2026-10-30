@@ -130,7 +130,7 @@ fn after(start: Ts, seconds: Option<f64>) -> Option<Ts> {
 /// A finite, non-negative duration within the connection policy's supported range.
 /// Zero remains an armed limit; callers reject `None` rather than disabling a timeout.
 pub fn duration_from_seconds(seconds: f64) -> Option<Duration> {
-    (seconds.is_finite() && seconds >= 0.0 && seconds <= MAX_SECONDS)
+    (seconds.is_finite() && (0.0..=MAX_SECONDS).contains(&seconds))
         .then(|| Duration::from_secs_f64(seconds))
 }
 

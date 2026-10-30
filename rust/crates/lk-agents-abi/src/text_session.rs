@@ -233,7 +233,7 @@ pub enum TextSessionUpdate {
     #[host(field = "pending")]
     IncompleteCleanup(Vec<String>),
     #[host(field = "settled")]
-    Finished(TextSessionSettled),
+    Finished(Box<TextSessionSettled>),
     #[host(field = "error")]
     Failed(TextSessionError),
 }

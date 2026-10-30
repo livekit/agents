@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::errors::HostError;
 use crate::worker::endpoint_host::{AsgiApplication, EndpointService};
 use crate::worker::ipc_host::WorkerError;
-use crate::worker::worker::{ProcessStartOptions, RunningJobInfo, ServerOptions};
+use crate::worker::types::{ProcessStartOptions, RunningJobInfo, ServerOptions};
 
 /// Preserve the native configuration identity shared by a server and its options surface.
 #[crate::host(native(refused = "expected a native ServerConfig"))]

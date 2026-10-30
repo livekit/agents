@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_output_length_is_the_ratio_whatever_the_chunking() {
         let input: Vec<i16> = (0..480).map(|i| (i * 10) as i16).collect();
-        let whole = run(48_000, 16_000, 1, &[input.clone()]);
+        let whole = run(48_000, 16_000, 1, std::slice::from_ref(&input));
         let chunked: Vec<Vec<i16>> = input.chunks(20).map(<[i16]>::to_vec).collect();
         let pieces = run(48_000, 16_000, 1, &chunked);
         assert_eq!(whole.len(), 160);

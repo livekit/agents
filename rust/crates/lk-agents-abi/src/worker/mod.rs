@@ -5,7 +5,8 @@ pub mod endpoint_host;
 pub mod ipc;
 pub mod job;
 pub mod remote_session;
-pub mod worker;
+#[path = "worker.rs"]
+pub mod types;
 
 pub mod ipc_host;
 

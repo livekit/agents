@@ -58,14 +58,14 @@ impl Rule for AlignedTranscriptFollowsTts {
                 .collect();
             for (text, start) in &forwarded {
                 check.expect(
-                    &speech,
+                    speech,
                     setup.aligned || start.is_none(),
                     format!("{text:?} was forwarded with the voice's stamp, the option being off"),
                 );
                 // An adapted voice's stamps are the adapter's, one per sentence.
                 let Some(start) = start.filter(|_| !setup.adapted) else { continue };
                 check.expect(
-                    &speech,
+                    speech,
                     stamped.iter().any(|(_, w, t)| w == text && (t - start).abs() <= EPSILON),
                     format!(
                         "{text:?} was forwarded stamped {start:.4}s, which the voice never sent"
@@ -85,7 +85,7 @@ impl Rule for AlignedTranscriptFollowsTts {
                 let unstamped: Vec<&str> =
                     forwarded.iter().filter(|(_, s)| s.is_none()).map(|(t, _)| *t).collect();
                 check.expect(
-                    &speech,
+                    speech,
                     unstamped.is_empty(),
                     format!("the option on, forwarded the model's {unstamped:?}"),
                 );
@@ -93,7 +93,8 @@ impl Rule for AlignedTranscriptFollowsTts {
 
             if setup.synchronized && forwarded.iter().all(|(_, s)| s.is_some()) {
                 // Segment by segment: each synthesis is stamped from its own start.
-                let mut segments: Vec<(Vec<(&str, Option<f64>)>, Vec<Shown<'_>>)> = Vec::new();
+                type Segment<'a> = (Vec<(&'a str, Option<f64>)>, Vec<Shown<'a>>);
+                let mut segments: Vec<Segment<'_>> = Vec::new();
                 for (at, step) in trace.steps() {
                     match step {
                         Step::Generation(GenerationStep::TtsRequested { .. }) => {

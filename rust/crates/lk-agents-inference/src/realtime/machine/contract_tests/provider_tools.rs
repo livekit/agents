@@ -22,7 +22,7 @@ fn provider(payload: Value) -> ToolSpec {
         description: String::new(),
         json_schema: Value::Null,
         flags: ToolFlags::default(),
-        provider_tool: Some(lk_agents_abi::llm::llm::ProviderToolDeclaration {
+        provider_tool: Some(lk_agents_abi::llm::types::ProviderToolDeclaration {
             provider: Some("xai".into()),
             payload,
         }),

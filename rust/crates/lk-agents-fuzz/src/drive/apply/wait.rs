@@ -168,7 +168,7 @@ impl Run {
             let ready = gate.as_ref().map(|gate| gate.ready()).unwrap_or_default();
             match self.queue.next(tasks_runnable(), &ready) {
                 Some(Next::Event(event)) => {
-                    session.deliver(event);
+                    session.deliver(*event);
                     self.poll_session();
                     continue;
                 }

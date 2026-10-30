@@ -171,7 +171,7 @@ fn rgb_from_frame(frame: RgbaFrame<'_>) -> Result<RgbImage, MediaError> {
     }
 
     let mut rgb = Vec::with_capacity(pixels * 3);
-    for px in data.chunks_exact(4) {
+    for px in data.as_chunks::<4>().0 {
         rgb.extend_from_slice(&px[..3]);
     }
     Ok(RgbImage::from_raw(width, height, rgb).expect("rgb buffer is width * height * 3"))

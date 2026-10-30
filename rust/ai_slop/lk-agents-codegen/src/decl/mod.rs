@@ -182,7 +182,7 @@ pub enum Route {
 pub enum VariantShape {
     Unit,
     /// `Variant(T)`: one field, named by `#[host(field = "..")]`; `None` when it is `skip`ped.
-    Tuple(Option<Field>),
+    Tuple(Option<Box<Field>>),
     Named(Vec<Field>),
     /// `#[host(native)]`: a variant only native code produces or takes; it never crosses (no
     /// model, never read, emitting it raises).

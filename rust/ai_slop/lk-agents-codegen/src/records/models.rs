@@ -300,10 +300,12 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
     for v in variants {
         let Some(route) = &v.route else { continue };
         let at = format!("{}: {}::{}", r.source, r.rust, v.rust_name);
-        let VariantShape::Tuple(Some(Field {
-            ty: Ty::Record(Record { host: HostForm::Record { module, name }, .. }),
-            ..
-        })) = &v.shape
+        let VariantShape::Tuple(Some(field)) = &v.shape else {
+            return Err(format!("{at}: a routed member is a declared record"));
+        };
+        let Field {
+            ty: Ty::Record(Record { host: HostForm::Record { module, name }, .. }), ..
+        } = field.as_ref()
         else {
             return Err(format!("{at}: a routed member is a declared record"));
         };
@@ -393,7 +395,7 @@ fn model(
             .iter()
             .flat_map(|v| match &v.shape {
                 VariantShape::Named(fs) => fs.iter().collect(),
-                VariantShape::Tuple(Some(f)) => vec![f],
+                VariantShape::Tuple(Some(f)) => vec![f.as_ref()],
                 _ => Vec::new(),
             })
             .collect(),
@@ -701,7 +703,7 @@ fn model(
                 let fields: Vec<&Field> = match &v.shape {
                     VariantShape::Native => continue,
                     VariantShape::Unit | VariantShape::Tuple(None) => Vec::new(),
-                    VariantShape::Tuple(Some(f)) => vec![f],
+                    VariantShape::Tuple(Some(f)) => vec![f.as_ref()],
                     VariantShape::Named(fs) => fs.iter().collect(),
                 };
                 s.push_str(&class(&v.name, &v.doc, &fields, "", typing));

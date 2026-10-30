@@ -6,8 +6,8 @@ pub fn poisoning_locks() {
 }
 
 pub async fn tokio_blocking_pool(handle: tokio::runtime::Handle) {
-    let _ = tokio::task::spawn_blocking(|| ());
-    let _ = handle.spawn_blocking(|| ());
+    drop(tokio::task::spawn_blocking(|| ()));
+    drop(handle.spawn_blocking(|| ()));
     tokio::task::block_in_place(|| ());
     let _ = tokio::net::lookup_host("localhost:80").await;
     let _ = tokio::fs::read_to_string("fixture").await;

@@ -10,6 +10,9 @@
 //!
 //! Every noun and question here is taken from a guarantee sentence. Stamps are ordered, so "the
 //! speech was created before it was announced done" is `created < done` and nothing else.
+/// The audio generations retained by one realtime socket at an observation.
+pub type HeldRealtimeAudio = (Observed, u32, Vec<(u32, u64)>);
+
 use std::collections::BTreeSet;
 
 use lk_agents_abi::voice::events::CloseReason;

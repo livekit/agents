@@ -199,7 +199,7 @@ async fn recording_close_deadline_keeps_stalled_worker_owned_until_settlement() 
         Err(RecordingFailure::IncompleteCleanup)
     );
     assert!(
-        matches!(media_pool.try_spawn(JobClass::Image, || ()), Err(_)),
+        media_pool.try_spawn(JobClass::Image, || ()).is_err(),
         "deadline cannot release a live worker permit"
     );
     release.send(()).unwrap();
@@ -329,7 +329,9 @@ async fn finalization_preserves_the_input_resamplers_tail() {
         recorder.finish(0.01).await.unwrap();
         let bytes = bytes.lock();
         let left = bytes[..bytes.len() - PCM_ENCODER_TRAILER.len()]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
             .collect::<Vec<_>>();
         assert_eq!(left.len(), expected.len());
@@ -343,7 +345,9 @@ async fn finalization_preserves_the_input_resamplers_tail() {
         }
         assert!(
             bytes[..bytes.len() - PCM_ENCODER_TRAILER.len()]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|sample| sample[2..] == [0, 0]),
             "input must remain on the left channel"
         );

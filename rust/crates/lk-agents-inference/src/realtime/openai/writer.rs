@@ -88,6 +88,10 @@ impl Encoder {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Each argument supplies one writer runtime dependency"
+)]
 pub(super) async fn run(
     mut effects: mpsc::Receiver<Vec<Outgoing>>,
     sender: Arc<dyn WsSender>,

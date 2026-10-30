@@ -80,6 +80,10 @@ impl Crate {
         krate
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Each argument describes one module being discovered"
+    )]
     fn add(
         &mut self,
         root: &Path,
@@ -136,7 +140,25 @@ impl Crate {
                     )?;
                 }
                 None => {
-                    let (child_file, child_dir) = locate(root, &dir, &file, &name)?;
+                    let (child_file, child_dir) = match module_path(&m.attrs)? {
+                        Some(path) => {
+                            let path = Path::new(&file)
+                                .parent()
+                                .expect("a source file has a directory")
+                                .join(path);
+                            let children = if path.file_name().is_some_and(|name| name == "mod.rs")
+                            {
+                                path.parent().unwrap().to_path_buf()
+                            } else {
+                                path.with_extension("")
+                            };
+                            (
+                                path.to_string_lossy().into_owned(),
+                                children.to_string_lossy().into_owned(),
+                            )
+                        }
+                        None => locate(root, &dir, &file, &name)?,
+                    };
                     let text = std::fs::read_to_string(root.join(&child_file))
                         .map_err(|e| format!("{child_file}: {e}"))?;
                     let parsed =
@@ -348,6 +370,18 @@ fn item_vis(item: &syn::Item) -> &syn::Visibility {
     }
 }
 
+fn module_path(attrs: &[syn::Attribute]) -> Result<Option<String>, String> {
+    let Some(attr) = attrs.iter().find(|attr| attr.path().is_ident("path")) else {
+        return Ok(None);
+    };
+    if let syn::Meta::NameValue(value) = &attr.meta
+        && let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(path), .. }) = &value.value
+    {
+        return Ok(Some(path.value()));
+    }
+    Err("a module's #[path] is a string literal".into())
+}
+
 fn test_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| {
         a.path().is_ident("cfg") && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test")
@@ -403,4 +437,30 @@ fn locate(root: &Path, dir: &str, file: &str, name: &str) -> Result<(String, Str
         }
     }
     Err(format!("{file}: `mod {name};` has no file under {dir}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn follows_explicit_module_paths_without_renaming_the_source() {
+        let krate = Crate::from_files(
+            "abi",
+            &[
+                ("lib.rs", "pub mod outer;"),
+                ("outer/mod.rs", "#[path = \"legacy.rs\"] pub mod types;"),
+                ("outer/legacy.rs", "pub struct Value;"),
+            ],
+        )
+        .unwrap();
+        let path: syn::Path = syn::parse_quote!(crate::outer::types::Value);
+        let Found::Item { module, item } = krate.resolve(0, &path).unwrap() else {
+            panic!("a declared type")
+        };
+        assert_eq!(krate.modules[module].file, "c/src/outer/legacy.rs");
+        assert!(
+            matches!(&krate.modules[module].items[item], syn::Item::Struct(item) if item.ident == "Value")
+        );
+    }
 }

@@ -1,13 +1,12 @@
 //! The room's `lk.agent.session` byte streams as a [`SessionTransport`] (`RoomSessionTransport`):
 //! one message per stream, read in the order the streams opened, written one stream at a time.
 
-use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT};
 use prost::Message as _;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -20,15 +19,12 @@ pub struct RoomTransport(Arc<Inner>);
 
 struct Inner {
     room: Arc<dyn RtcRoom>,
-    spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     state: Mutex<State>,
     /// The streams the topic delivers; only the receive loop reads.
     incoming: AsyncMutex<Option<Receiver<ByteStream>>>,
     /// One stream at a time: concurrent writers interleave on the same topic.
     sending: AsyncMutex<()>,
-    /// Sends that nobody awaits; each ends on its own.
-    tasks: Arc<TaskSet>,
 }
 
 #[derive(Default)]
@@ -38,15 +34,13 @@ struct State {
 }
 
 impl RoomTransport {
-    pub fn new(room: Arc<dyn RtcRoom>, clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(room: Arc<dyn RtcRoom>, clock: Arc<dyn Clock>) -> Self {
         RoomTransport(Arc::new(Inner {
             room,
             clock,
-            spawner,
             state: Mutex::default(),
             incoming: AsyncMutex::new(None),
             sending: AsyncMutex::new(()),
-            tasks: Arc::default(),
         }))
     }
 }
@@ -173,12 +167,11 @@ impl SessionTransport for RoomTransport {
                 std::mem::take(&mut state.registered)
             };
             // The handler's sender goes with it, which ends a receive waiting on the next stream.
-            if registered {
-                if let Err(error) =
+            if registered
+                && let Err(error) =
                     self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
-                {
-                    log::error!(target: LOG, "room session handler cleanup failed: {error}");
-                }
+            {
+                log::error!(target: LOG, "room session handler cleanup failed: {error}");
             }
             if let Ok(mut incoming) = self.0.incoming.try_lock() {
                 let source = incoming.take();

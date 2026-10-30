@@ -86,7 +86,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     handle: &SpeechHandle,
     out: Option<&dyn AudioOutput>,
     segment: &mut S,
-) -> Result<Heard, SourceFailed> {
+) -> Result<Heard, Box<SourceFailed>> {
     let Some(out) = out else {
         let mut flow = SegmentFlow::new(false, segment.stop_at_boundary());
         let mut effect = FlowEffect::CheckInterruption;

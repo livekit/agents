@@ -354,7 +354,10 @@ impl Driver {
     /// Silent before any audio or with no STT leg.
     pub(crate) fn flush_stt_with_silence(&self, seconds: f64, out: &mut Out) {
         let heard = self.input.first_input_at.is_some();
-        if !heard || !(seconds > 0.0) || !self.input.sinks.contains_key(&AudioChannel::Stt) {
+        if !heard
+            || seconds.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+            || !self.input.sinks.contains_key(&AudioChannel::Stt)
+        {
             return;
         }
         // `ceil`, so at least the asked duration is flushed.

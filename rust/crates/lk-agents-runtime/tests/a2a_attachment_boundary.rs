@@ -55,10 +55,10 @@ impl TurnHost for Host {
                 );
             }
             let event = TurnEvent::Output {
-                output: HandlerOutput {
+                output: Box::new(HandlerOutput {
                     output: Some(json!("received references")),
                     ..Default::default()
-                },
+                }),
             };
             Ok((
                 Box::new(Sink) as Box<dyn StreamSink<_>>,

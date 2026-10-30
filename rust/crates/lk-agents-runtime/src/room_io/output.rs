@@ -654,13 +654,12 @@ impl AudioOutput for ParticipantAudioOutput {
             st.source.clone()
         };
         self.shared.wake.notify_waiters();
-        if let Some(src) = src {
-            if let Some((report, _)) = self
+        if let Some(src) = src
+            && let Some((report, _)) = self
                 .shared
                 .source_result(src.as_ref(), self.shared.clear_source(src.as_ref(), false))
-            {
-                self.shared.report(report);
-            }
+        {
+            self.shared.report(report);
         }
     }
 

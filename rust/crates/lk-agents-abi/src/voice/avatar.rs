@@ -1,6 +1,10 @@
 //! The avatar's host contracts: its audio receiver, video generator and media, and what the
 //! receiver tells its host.
 
+/// A clear epoch, segment boundary, playback segment and optional audio frame.
+pub type AudioReceiverObservation =
+    (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>);
+
 use crate::errors::ProviderError;
 use crate::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 use crate::voice::io::AvatarPlaybackSegment;
@@ -23,15 +27,7 @@ pub trait AvatarAudioReceiver: Send + Sync {
     /// One observation: receiver clear epoch, whether this first frame opened a segment,
     /// and the frame (None at EOF). The receiver stamps it before crossing the async boundary.
     #[host(await, name = "_core_next_audio")]
-    fn next_audio(
-        &self,
-    ) -> crate::BoxFuture<
-        '_,
-        Result<
-            (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>),
-            ProviderError,
-        >,
-    >;
+    fn next_audio(&self) -> crate::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>>;
     #[host(await, name = "_core_notify_playback_started")]
     fn notify_playback_started(
         &self,

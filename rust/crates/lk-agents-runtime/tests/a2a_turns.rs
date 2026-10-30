@@ -280,7 +280,7 @@ impl TurnHost for Fake {
                 let out = fake
                     .run(ctx, &mut checkpoints)
                     .await
-                    .map(|out| TurnEvent::Output { output: out.into() });
+                    .map(|out| TurnEvent::Output { output: Box::new(out.into()) });
                 let _ = events.send(out);
             });
             Ok((

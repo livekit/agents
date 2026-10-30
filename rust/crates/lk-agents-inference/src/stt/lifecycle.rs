@@ -17,7 +17,7 @@ pub enum SttEvent {
     Start,
     AudioWritten(f64),
     InputEof,
-    Message(Incoming),
+    Message(Box<Incoming>),
     ServerEof,
     Wake,
 }
@@ -109,6 +109,7 @@ impl SttProtocol {
                 vec![SttEffect::SttFinalize { stream_id: self.stream_id }]
             }
             SttEvent::Message(message) => {
+                let message = *message;
                 let quiet = match &message {
                     Incoming::SessionClosed => {
                         return self.fail("STT session closed before transcript completion");
@@ -166,7 +167,7 @@ mod tests {
             || SttProtocol::new(1, ResourceId(2), "r".into(), None, Duration::from_secs(5), None);
         let final_transcript = || {
             let text = r#"{"type":"final_transcript","transcript":"hello"}"#;
-            SttEvent::Message(super::super::wire::decode(text).unwrap())
+            SttEvent::Message(Box::new(super::super::wire::decode(text).unwrap()))
         };
 
         let mut stream = make();
@@ -186,7 +187,7 @@ mod tests {
         let mut stream = make();
         stream.handle(SttEvent::InputEof, now);
         assert_eq!(
-            stream.handle(SttEvent::Message(Incoming::SessionFinalized), now),
+            stream.handle(SttEvent::Message(Box::new(Incoming::SessionFinalized)), now),
             vec![SttEffect::Finished(Ok(()))]
         );
 

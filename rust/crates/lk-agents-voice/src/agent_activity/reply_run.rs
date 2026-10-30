@@ -222,7 +222,7 @@ impl Driver {
         let speeches: Vec<SpeechId> =
             self.activity.tools.replies.keys().copied().filter(|s| Some(*s) != from).collect();
         for speech in speeches {
-            self.reply_event(speech, Event::Recorded { item: item.clone() }, out);
+            self.reply_event(speech, Event::Recorded { item: Box::new(item.clone()) }, out);
         }
     }
 

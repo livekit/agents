@@ -198,7 +198,7 @@ impl Socket {
                 st.events.push_back(Event::GenerationDone(GenerationDone {
                     response_id: g.id.clone(),
                     status,
-                    usage,
+                    usage: Box::new(usage),
                 }));
                 st.events.push_back(metrics);
                 if status == GenerationStatus::Failed {
@@ -212,7 +212,7 @@ impl Socket {
                 }
             }
             Happening::ItemAdded { item, previous } => {
-                remote_added(st, stamped(item, self.clock.wall()), previous);
+                remote_added(st, stamped(*item, self.clock.wall()), previous);
             }
             Happening::SpeechStarted { item } => {
                 st.speech_started.insert(item, self.wall_secs());
@@ -407,7 +407,7 @@ pub(super) fn cancelled(response_id: String) -> Event {
     Event::GenerationDone(GenerationDone {
         response_id,
         status: GenerationStatus::Cancelled,
-        usage: TokenUsage::default(),
+        usage: Box::default(),
     })
 }
 

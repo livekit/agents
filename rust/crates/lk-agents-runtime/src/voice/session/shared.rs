@@ -16,10 +16,12 @@ use lk_agents_voice::trace::Step;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+type JournalObserver = dyn FnMut(&Step) + Send;
+
 /// Where the driver's steps go: to the observer the simulation or a test installed, or nowhere.
 /// Production installs none, so a session keeps no record of its steps.
 #[derive(Clone, Default)]
-pub struct Journal(Option<Arc<Mutex<dyn FnMut(&Step) + Send>>>);
+pub struct Journal(Option<Arc<Mutex<JournalObserver>>>);
 
 impl std::fmt::Debug for Journal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -157,8 +159,8 @@ impl PeerHandle {
     }
 
     /// A host event to the host's drain; handed back when the drain has gone.
-    pub fn deliver(&self, event: HostEvent) -> Result<(), HostEvent> {
-        self.events.send(event).map_err(|refused| refused.0)
+    pub fn deliver(&self, event: HostEvent) -> Result<(), Box<HostEvent>> {
+        self.events.send(event).map_err(|refused| Box::new(refused.0))
     }
 
     /// A tap to every watcher.

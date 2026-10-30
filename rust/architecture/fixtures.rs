@@ -33,7 +33,7 @@ pub fn optional_native() {
     let _ = std::thread::Builder::new().spawn(|| {});
 }
 pub fn through_handle(handle: &tokio::runtime::Handle) {
-    let _ = handle.spawn(async {});
+    drop(handle.spawn(async {}));
 }
 pub async fn tasks() {
     tokio::spawn(async {});

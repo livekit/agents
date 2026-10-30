@@ -112,16 +112,16 @@ async fn ipc_protocol_failure_after_native_exit_keeps_the_original_cause() {
 // pending.
 #[tokio::test(start_paused = true)]
 async fn start_job_admission_ack_correlates_acceptance_and_rejects_duplicate_work() {
-    let (sup, _host, mut child) = setup(short(60.0));
-    ready(&sup, &mut child).await;
+    let (sup, _host, child) = setup(short(60.0));
+    ready(&sup, &child).await;
     let first = sup.clone();
     let started = tokio::spawn(async move { first.start_job(job()).await });
-    let ToChild::StartJob { request_id, .. } = recv_skipping_pings(&mut child).await else {
+    let ToChild::StartJob { request_id, .. } = recv_skipping_pings(&child).await else {
         panic!("no start-job request")
     };
     assert!(!started.is_finished(), "writing a request does not establish admission");
     assert!(matches!(sup.start_job(job()).await, Err(StartJobError::AlreadyRunning)));
-    write(&mut child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
+    write(&child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
     assert!(started.await.unwrap().is_ok());
 }
 
@@ -166,10 +166,10 @@ async fn a_version_refusal_queued_before_exit_keeps_its_typed_cause() {
 #[tokio::test(start_paused = true)]
 async fn child_initiated_shutdown_uses_the_exit_deadline_instead_of_health_pings() {
     let opts = SupervisorOptions { ping_interval: 0.25, ping_timeout: 0.5, ..short(2.0) };
-    let (sup, host, mut child) = setup(opts);
-    ready(&sup, &mut child).await;
+    let (sup, host, child) = setup(opts);
+    ready(&sup, &child).await;
     sup.supervise().await;
-    write(&mut child, &ToParent::ShuttingDown).await.unwrap();
+    write(&child, &ToParent::ShuttingDown).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     settle().await;
     assert_eq!(host.kills.load(Ordering::SeqCst), 0, "governed by close_timeout, not the pings");
@@ -182,15 +182,15 @@ async fn child_initiated_shutdown_uses_the_exit_deadline_instead_of_health_pings
 #[tokio::test(start_paused = true)]
 async fn memory_warnings_include_the_job_baseline() {
     let opts = SupervisorOptions { memory_warn_mb: 500.0, ..short(60.0) };
-    let (sup, host, mut child) = setup(opts);
+    let (sup, host, child) = setup(opts);
     host.samples.lock().extend([Some(100.0), Some(600.04)]);
-    ready(&sup, &mut child).await;
+    ready(&sup, &child).await;
     let first = sup.clone();
     let started = tokio::spawn(async move { first.start_job(job()).await });
-    let ToChild::StartJob { request_id, .. } = recv_skipping_pings(&mut child).await else {
+    let ToChild::StartJob { request_id, .. } = recv_skipping_pings(&child).await else {
         panic!("no start-job request")
     };
-    write(&mut child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
+    write(&child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
     started.await.unwrap().unwrap();
     sup.supervise().await;
     let warning = "process memory usage is above the warning threshold (advisory only, the process will not be stopped)";
@@ -230,21 +230,21 @@ async fn invalid_job_protobuf_and_timestamps_are_refused_at_the_launch_boundary(
     invalid.launched_at = 0.0;
     assert!(validate(&invalid).is_ok());
 
-    let (sup, _host, mut child) = setup(short(60.0));
-    ready(&sup, &mut child).await;
+    let (sup, _host, child) = setup(short(60.0));
+    ready(&sup, &child).await;
     let refused = sup.start_job(StartJob { job: vec![0xff], ..job() }).await;
     assert!(matches!(refused, Err(StartJobError::InvalidFields(_))));
-    assert_eq!(next_within(&mut child, Duration::from_secs(1)).await, None);
+    assert_eq!(next_within(&child, Duration::from_secs(1)).await, None);
 }
 
 // Catches: a job sent to a child that has not answered `Ready`.
 #[tokio::test(start_paused = true)]
 async fn work_is_refused_until_a_compatible_ready_reply() {
-    let (sup, _host, mut child) = setup(short(60.0));
+    let (sup, _host, child) = setup(short(60.0));
     let _init = waits(&sup).await;
-    assert_eq!(recv(&mut child).await, ToChild::Hello(hello()));
+    assert_eq!(recv(&child).await, ToChild::Hello(hello()));
     assert!(matches!(sup.start_job(job()).await, Err(StartJobError::NotReady)));
-    assert_eq!(next_within(&mut child, Duration::from_millis(500)).await, None);
+    assert_eq!(next_within(&child, Duration::from_millis(500)).await, None);
 }
 
 // Catches: a child that refused the protocol version still given a job.
@@ -265,10 +265,10 @@ async fn no_job_is_accepted_after_a_version_refusal() {
 #[tokio::test(start_paused = true)]
 async fn memory_sampling_stops_when_the_runner_has_no_footprint() {
     let opts = SupervisorOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..short(60.0) };
-    let (sup, host, mut child) = setup(opts);
+    let (sup, host, child) = setup(opts);
     // A retry would read the second sample and warn.
     host.samples.lock().extend([None, Some(600.0)]);
-    ready(&sup, &mut child).await;
+    ready(&sup, &child).await;
     sup.supervise().await;
     let drain = tokio::spawn(async move { while child.recv().await.is_ok() {} });
     tokio::time::sleep(Duration::from_secs(30)).await;

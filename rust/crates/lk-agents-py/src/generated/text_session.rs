@@ -13,13 +13,19 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
 type TextSessionRunnerImpl = <crate::Selected as super::Implementations>::TextSessionRunner;
 
-fn _extract_text_session_runner_new_max_depth(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "max_depth")
+fn _extract_text_session_runner_new_max_depth(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<TextSessionRunnerNewMaxDepthInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "max_depth")
 }
+type TextSessionRunnerNewMaxDepthInput = usize;
 
-fn _extract_text_session_runner_progress_operation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "operation")
+fn _extract_text_session_runner_progress_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<TextSessionRunnerProgressOperationInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "operation")
 }
+type TextSessionRunnerProgressOperationInput = u64;
 
 #[pyclass(frozen, name = "TextSessionRunner", module = "livekit.agents._core")]
 pub struct TextSessionRunner(pub(crate) ::std::sync::Arc<TextSessionRunnerImpl>);
@@ -32,7 +38,8 @@ impl TextSessionRunner {
         py: Python<'_>,
         root_agent: ::std::string::String,
         agents: Bound<'_, PyAny>,
-        #[pyo3(from_py_with = _extract_text_session_runner_new_max_depth)] max_depth: usize,
+        #[pyo3(from_py_with = _extract_text_session_runner_new_max_depth)]
+        max_depth: TextSessionRunnerNewMaxDepthInput,
     ) -> PyResult<TextSessionRunner> {
         crate::host::check_pid()?;
         let env = crate::process::env();
@@ -40,23 +47,26 @@ impl TextSessionRunner {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::text_session::text_session_agent_from_py(&item)
+                    crate::generated::records::text_session::text_session_agent_from_py(
+                        item.as_any(),
+                    )
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
         let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(&env, root_agent, agents, max_depth)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
-        Ok(TextSessionRunner(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(TextSessionRunner(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (request))]
     fn run(&self, py: Python<'_>, request: Bound<'_, PyAny>) -> PyResult<TextSessionUpdates> {
         crate::host::check_pid()?;
-        let request =
-            crate::generated::records::text_session::text_session_request_from_py(&request)?;
+        let request = crate::generated::records::text_session::text_session_request_from_py(
+            request.as_any(),
+        )?;
         let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(&self.0, request)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
-        Ok(TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource::new(
-            ::std::boxed::Box::new(out),
-        )))
+        ::pyo3::PyResult::Ok(TextSessionUpdates(
+            ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out)),
+        ))
     }
 
     /// The latest usage snapshot of the turn, across its local invocations; never advances it.
@@ -68,15 +78,16 @@ impl TextSessionRunner {
                 &self.0,
             )
         });
-        Ok(crate::generated::records::usage::usage_to_py(py, out)?)
+        crate::generated::records::usage::usage_to_py(py, out)
     }
 
     /// Acknowledge selected presentation before the child can release its parent.
     #[pyo3(signature = (delivery))]
     fn release(&self, py: Python<'_>, delivery: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let delivery =
-            crate::generated::records::text_session::text_session_delivery_from_py(&delivery)?;
+        let delivery = crate::generated::records::text_session::text_session_delivery_from_py(
+            delivery.as_any(),
+        )?;
         py.detach(|| {
             <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::release(
                 &self.0, delivery,
@@ -93,7 +104,8 @@ impl TextSessionRunner {
         &self,
         py: Python<'_>,
         invocation_id: ::std::string::String,
-        #[pyo3(from_py_with = _extract_text_session_runner_progress_operation)] operation: u64,
+        #[pyo3(from_py_with = _extract_text_session_runner_progress_operation)]
+        operation: TextSessionRunnerProgressOperationInput,
         message: ::std::string::String,
     ) -> PyResult<()> {
         crate::host::check_pid()?;

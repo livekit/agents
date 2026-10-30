@@ -47,27 +47,6 @@ pub fn resolve_api_secret(
     Ok(secret)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: `inference.filter(non_empty).or(livekit)` (an empty inference key must shadow), or
-    // an explicit empty string treated as "not given".
-    #[test]
-    fn explicit_then_inference_then_general_and_empty_counts_as_set() {
-        for (explicit, inference, general, want) in [
-            (None, Some(""), Some("general"), ""),
-            (None, None, Some("general"), "general"),
-            (None, Some("specific"), Some("general"), "specific"),
-            (None, None, None, ""),
-            (Some(""), Some("specific"), Some("general"), ""),
-            (Some("mine"), Some("specific"), None, "mine"),
-        ] {
-            assert_eq!(resolve_credential(explicit, inference, general), want);
-        }
-    }
-}
-
 /// The two ladders as the host calls them.
 pub struct Credentials;
 
@@ -86,5 +65,26 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
         server: Option<String>,
     ) -> String {
         resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: `inference.filter(non_empty).or(livekit)` (an empty inference key must shadow), or
+    // an explicit empty string treated as "not given".
+    #[test]
+    fn explicit_then_inference_then_general_and_empty_counts_as_set() {
+        for (explicit, inference, general, want) in [
+            (None, Some(""), Some("general"), ""),
+            (None, None, Some("general"), "general"),
+            (None, Some("specific"), Some("general"), "specific"),
+            (None, None, None, ""),
+            (Some(""), Some("specific"), Some("general"), ""),
+            (Some("mine"), Some("specific"), None, "mine"),
+        ] {
+            assert_eq!(resolve_credential(explicit, inference, general), want);
+        }
     }
 }

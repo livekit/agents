@@ -6,6 +6,9 @@
 pub mod assertions;
 pub mod run;
 
+/// A tool result and the host metadata collected while it ran.
+pub type ToolCompletion = (ToolReport, Map<String, Value>);
+
 use serde_json::{Map, Value};
 
 use crate::errors::HostError;
@@ -227,7 +230,7 @@ pub trait AgentCallbacks: Send + Sync {
         &'a self,
         #[host(context)] invocation: &'a Invocation,
         prepared: &'a HostRef,
-    ) -> crate::BoxFuture<'a, Result<(ToolReport, Map<String, Value>), HostError>>;
+    ) -> crate::BoxFuture<'a, Result<ToolCompletion, HostError>>;
 
     /// The output type, validators and output function on a candidate.
     #[host(await)]

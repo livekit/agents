@@ -304,9 +304,9 @@ pub enum TurnCommand {
     Clear,
     /// Unnamed leaves keep their answer; a changed endpointing replaces the model (a running
     /// countdown keeps its deadline); `turn_detection=None` arrives as `Some(Auto)`.
-    Configure(crate::agent_activity::options::AgentSessionOptions),
+    Configure(Box<crate::agent_activity::options::AgentSessionOptions>),
     /// `override_options(..)`: a layer over the base until its `ReleaseOverride`.
-    Override(crate::agent_activity::options::OverrideLayer),
+    Override(Box<crate::agent_activity::options::OverrideLayer>),
     /// The `override_options` block ended, however it ended.
     ReleaseOverride(u64),
     /// `AMD._on_end_of_turn`, from `Origin::Amd`: while the detector holds a machine verdict under
@@ -513,6 +513,15 @@ pub enum IoKind {
     Transcription,
 }
 
+/// Providers replaced together by one session update.
+#[derive(Debug)]
+pub struct ModelUpdate {
+    pub stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+    pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
+    pub llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+    pub tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
+}
+
 /// Scheduling pauses are the driver's own, never a command.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum ActivityCommand {
@@ -545,12 +554,7 @@ pub enum ActivityCommand {
     SetTranscriptionOutput(Option<lk_agents_abi::resources::TextOutputRef>),
     /// **Not a handoff**: only the providers change; the streaming legs reopen as a handoff reopens
     /// them.
-    UpdateModels {
-        stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
-        vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
-        llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
-        tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
-    },
+    UpdateModels(Box<ModelUpdate>),
     /// Runs the driving agent's `on_exit` (once per agent), then pauses scheduling until the speech
     /// in flight finishes, tools included. A second joins. Refused only if the pause is lifted or
     /// the loop ends.
@@ -635,15 +639,18 @@ impl Command {
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::SetVideoInput(Some(input))) => vec![input.id],
             Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
-            Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
-                handed(stt, |r| r.id),
-                handed(vad, |r| r.id),
-                handed(llm, |r| r.id),
-                handed(tts, |r| r.id),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
+            Command::Activity(ActivityCommand::UpdateModels(models)) => {
+                let ModelUpdate { stt, vad, llm, tts } = models.as_ref();
+                [
+                    handed(stt, |r| r.id),
+                    handed(vad, |r| r.id),
+                    handed(llm, |r| r.id),
+                    handed(tts, |r| r.id),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
             _ => Vec::new(),
         }
     }

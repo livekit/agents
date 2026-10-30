@@ -12,7 +12,7 @@ use super::{AgentRun, Effect, Next, Phase, StepId};
 pub enum Opening {
     /// Direct runs and TextSession: the incoming message, answered against the history, and every
     /// request planned here.
-    Message(ChatMessage),
+    Message(Box<ChatMessage>),
     /// VoiceSession: the coordinator owns the record and plans each request
     /// ([`Effect::PlanRequest`]), and decides each step's continuation ([`Effect::StepSettled`]).
     /// `approval_answers`: the read-backs the person's latest message answered.

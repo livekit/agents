@@ -64,7 +64,7 @@ struct Stream(std::collections::VecDeque<Result<ServerMessage, TransportError>>)
 impl WorkerStream for Stream {
     async fn recv(&mut self) -> Result<TransportEvent, TransportError> {
         match self.0.pop_front() {
-            Some(message) => message.map(TransportEvent::ServerMessage),
+            Some(message) => message.map(Box::new).map(TransportEvent::ServerMessage),
             // An exhausted script means the peer went quiet, like a real idle socket; `Closed`
             // would make every test look like a drop.
             None => std::future::pending().await,
@@ -396,6 +396,7 @@ impl WorkerStream for ChannelStream {
             .recv()
             .await
             .unwrap_or_else(|| Err(TransportError::Closed("peer ended".into())))
+            .map(Box::new)
             .map(TransportEvent::ServerMessage)
     }
 }

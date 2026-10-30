@@ -141,14 +141,14 @@ pub fn summarize_plan(items: &[ChatItem], keep_last_turns: usize) -> Option<Summ
         let mut msg_count = 0;
         let mut filled = false;
         for i in (0..items.len()).rev() {
-            if let ChatItem::Message(m) = &items[i] {
-                if matches!(m.role, Role::User | Role::Assistant) {
-                    msg_count += 1;
-                    if msg_count >= msg_budget {
-                        split_idx = i;
-                        filled = true;
-                        break;
-                    }
+            if let ChatItem::Message(m) = &items[i]
+                && matches!(m.role, Role::User | Role::Assistant)
+            {
+                msg_count += 1;
+                if msg_count >= msg_budget {
+                    split_idx = i;
+                    filled = true;
+                    break;
                 }
             }
         }

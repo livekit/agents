@@ -284,14 +284,14 @@ pub fn session_records(
         .saturating_add(tagger.tags.len())
         .saturating_sub(policy::SDK_PENDING_RECORDS)
         .saturating_add(before - out.len());
-    if omitted > 0 {
-        if let Some(record) = out.first_mut() {
-            record
-                .attributes
-                .as_object_mut()
-                .expect("report attributes are objects")
-                .insert("lk.telemetry.omitted_report_entries".into(), omitted.into());
-        }
+    if omitted > 0
+        && let Some(record) = out.first_mut()
+    {
+        record
+            .attributes
+            .as_object_mut()
+            .expect("report attributes are objects")
+            .insert("lk.telemetry.omitted_report_entries".into(), omitted.into());
     }
     out
 }

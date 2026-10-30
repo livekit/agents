@@ -92,19 +92,18 @@ async fn serve_dev_channel(
         .await
         .map_err(io)?;
     let Ok(first) = recv(&mut stream).await else { return Ok(()) };
-    if let Some(Message::GetRunningJobsResponse(kept)) = first {
-        if !kept.jobs.is_empty() {
-            log::info!(target: LOG, "reloading {} job(s)", kept.jobs.len());
-            let mut jobs = Vec::with_capacity(kept.jobs.len());
-            for mut job in kept.jobs {
-                job.token =
-                    lk_agents_net::token::extend_job_token(&job.token, &api_key, &api_secret)
-                        .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
-                job.url = url.clone();
-                jobs.push(from_proto(job));
-            }
-            server.reload_jobs(jobs).await?;
+    if let Some(Message::GetRunningJobsResponse(kept)) = first
+        && !kept.jobs.is_empty()
+    {
+        log::info!(target: LOG, "reloading {} job(s)", kept.jobs.len());
+        let mut jobs = Vec::with_capacity(kept.jobs.len());
+        for mut job in kept.jobs {
+            job.token = lk_agents_net::token::extend_job_token(&job.token, &api_key, &api_secret)
+                .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
+            job.url = url.clone();
+            jobs.push(from_proto(job));
         }
+        server.reload_jobs(jobs).await?;
     }
     // Asked before the CLI restarts this process: what runs now, to resume after the reload.
     while let Ok(message) = recv(&mut stream).await {

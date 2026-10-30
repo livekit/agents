@@ -31,7 +31,8 @@ fn short_livekit_metadata_survives_send_without_framework_semantics() {
         application: Some(application.clone()),
         ..Default::default()
     });
-    let wire = message_to_wire(MessageInput::Message(input), "generated-id".into()).unwrap();
+    let wire =
+        message_to_wire(MessageInput::Message(Box::new(input)), "generated-id".into()).unwrap();
     let received = lk_agents_core::a2a::Message::from_a2a(&wire, 0.0, None).unwrap();
     assert_eq!(received.channel, "chat");
     let mut decoded = message_from_wire(wire);
@@ -47,5 +48,7 @@ fn short_livekit_metadata_survives_send_without_framework_semantics() {
         ),
         ..Default::default()
     });
-    assert!(message_to_wire(MessageInput::Message(colliding), "other-id".into()).is_err());
+    assert!(
+        message_to_wire(MessageInput::Message(Box::new(colliding)), "other-id".into()).is_err()
+    );
 }

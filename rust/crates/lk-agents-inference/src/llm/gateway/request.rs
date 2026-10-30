@@ -174,7 +174,7 @@ mod tests {
                 description: String::new(),
                 json_schema: Value::Null,
                 flags: Default::default(),
-                provider_tool: Some(lk_agents_abi::llm::llm::ProviderToolDeclaration {
+                provider_tool: Some(lk_agents_abi::llm::types::ProviderToolDeclaration {
                     provider: family.map(str::to_owned),
                     payload: json!({"type": "web_search"}),
                 }),

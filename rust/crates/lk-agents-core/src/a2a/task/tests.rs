@@ -71,7 +71,7 @@ fn question() -> TaskRow {
 
 fn at(m: &mut TaskMachine, now: Duration, result: Result<Completion, StorageError>) -> Vec<Effect> {
     let id = m.pending.unwrap();
-    m.handle(Event::Completed { id, result }, now)
+    m.handle(Event::Completed { id, result: Box::new(result) }, now)
 }
 
 fn operation(effects: Vec<Effect>) -> Operation {
@@ -375,8 +375,11 @@ fn stale_operation_completion_cannot_admit_replacement_work() {
     let issued = m.handle(Event::Start, Duration::ZERO);
     assert_eq!(issued.len(), 1);
     assert!(
-        m.handle(Event::Completed { id: 0, result: Ok(Completion::Task(None)) }, Duration::ZERO)
-            .is_empty()
+        m.handle(
+            Event::Completed { id: 0, result: Box::new(Ok(Completion::Task(None))) },
+            Duration::ZERO
+        )
+        .is_empty()
     );
     assert!(matches!(step(&mut m, Completion::Task(None)), Operation::Submit(_)));
 }

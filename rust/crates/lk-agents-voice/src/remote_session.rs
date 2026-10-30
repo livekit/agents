@@ -227,7 +227,7 @@ pub fn session_event(
         }),
         W::AgentFalseInterruption(ev) => WireEvent::AgentFalseInterruption(ev.clone()),
         W::ItemAdded(ev) if matches!(ev.item, ChatItem::Message(_) | ChatItem::AgentHandoff(_)) => {
-            WireEvent::ConversationItemAdded(ev.clone())
+            WireEvent::ConversationItemAdded(Box::new(ev.clone()))
         }
         W::Error(ev) => WireEvent::Error(ErrorWire { message: ev.error.to_string() }),
         W::ToolExecutionUpdated(ev) => WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire {
@@ -356,7 +356,7 @@ pub enum SessionReply {
 
 /// One requested port operation, or an answer that needs no session operation.
 pub enum RequestPlan<'a> {
-    Reply(SessionReply),
+    Reply(Box<SessionReply>),
     ChatHistory,
     AgentInfo,
     RunInput(&'a str),
@@ -372,12 +372,12 @@ pub enum RequestPlan<'a> {
 pub fn plan_request(request: &proto::SessionRequest) -> Option<RequestPlan<'_>> {
     use proto::session_request::Request;
     Some(match request.request.as_ref()? {
-        Request::Ping(_) => RequestPlan::Reply(SessionReply::Pong),
+        Request::Ping(_) => RequestPlan::Reply(Box::new(SessionReply::Pong)),
         Request::GetChatHistory(_) => RequestPlan::ChatHistory,
         Request::GetAgentInfo(_) => RequestPlan::AgentInfo,
-        Request::RunInput(input) if input.text.is_empty() => RequestPlan::Reply(
+        Request::RunInput(input) if input.text.is_empty() => RequestPlan::Reply(Box::new(
             SessionReply::RunInput((None, Some("empty run_input text".to_owned()))),
-        ),
+        )),
         Request::RunInput(input) => RequestPlan::RunInput(&input.text),
         Request::GetSessionState(_) => RequestPlan::SessionState,
         Request::GetRtcStats(_) => RequestPlan::RtcStats,

@@ -3,6 +3,8 @@
 //! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
 //! processes and the user's callbacks.
 
+type SetupOutcome = Result<(Option<String>, Option<f32>), String>;
+
 use crate::agent_server::ServerCallbacks;
 use crate::{Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
@@ -650,7 +652,7 @@ async fn pending_worker(
 
 #[derive(Default)]
 struct Resources {
-    setup: Option<lk_agents_net::blocking_io::Job<Result<(Option<String>, Option<f32>), String>>>,
+    setup: Option<lk_agents_net::blocking_io::Job<SetupOutcome>>,
     worker: Option<WorkerClient>,
     connection: Option<OwnedTask<Result<(), String>>>,
     load: Option<OwnedTask<Result<(), String>>>,

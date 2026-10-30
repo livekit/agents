@@ -72,8 +72,8 @@ fn merge_scope(header: &str, extra: &str) -> Result<String, String> {
                     true => render(&statement.module, &statement.names),
                     false => vec![format!("import {}", statement.module)],
                 };
-                let section = ours.iter().filter(|s| s.key().0 == key.0);
-                let at = match (section.clone().find(|s| s.key() > key), section.last()) {
+                let mut section = ours.iter().filter(|s| s.key().0 == key.0);
+                let at = match (section.clone().find(|s| s.key() > key), section.next_back()) {
                     (Some(after), _) => after.lines.start,
                     (None, Some(last)) => last.lines.end,
                     // A section of its own: before the next one, else after the last.

@@ -344,7 +344,7 @@ impl Resolver<'_> {
                     let default = literal_default(&at, &entries)?;
                     check_default(&at, &ty, default.as_ref())?;
                     check_record_field(&at, &ty, dirs)?;
-                    VariantShape::Tuple(Some(Field {
+                    VariantShape::Tuple(Some(Box::new(Field {
                         rust_name: field,
                         ty,
                         default,
@@ -356,7 +356,7 @@ impl Resolver<'_> {
                         annotation: None,
                         rename: None,
                         doc: Vec::new(),
-                    }))
+                    })))
                 }
             }
         };

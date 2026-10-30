@@ -111,15 +111,15 @@ impl Rule for SpeechErrorIsInjected {
                         segment.attachment, segment.segment,
                     )) && internal.steps().iter().any(|(due_at, step)| {
                     matches!(step, Step::Playout(PlayoutStep::FinishDue { speech: due_speech, at })
-                            if due_speech == lost_speech
-                                && due_at <= lost_at
-                                && at.saturating_duration_since(lk_agents_abi::Ts::ZERO).as_millis()
-                                    <= u128::from(lost_at.at_ms)
-                                && !r.sink().iter().any(|(receipt_at, sink)| {
-                                    matches!(sink, Sink::ConsoleReceipt)
-                                        && due_at < receipt_at
-                                        && receipt_at <= lost_at
-                                }))
+                    if due_speech == lost_speech
+                        && due_at <= lost_at
+                        && at.saturating_duration_since(lk_agents_abi::Ts::ZERO).as_millis()
+                            <= u128::from(lost_at.at_ms)
+                        && !r.sink().iter().any(|(receipt_at, sink)| {
+                            matches!(sink, Sink::ConsoleReceipt)
+                                && due_at < receipt_at
+                                && receipt_at <= lost_at
+                        }))
                 })
             });
             let output_refused = internal.steps().iter().any(|(_, step)| {
@@ -137,7 +137,7 @@ impl Rule for SpeechErrorIsInjected {
                 || missing_playback
                 || output_refused;
             check.expect(
-                &speech,
+                speech,
                 accounted,
                 format!(
                     "speech failed with {error} but no failure was sent to its requests {requests:?}"

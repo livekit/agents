@@ -56,13 +56,15 @@ impl McpTransport for Peer {
                 }
                 ClientRequest::ListToolsRequest(request) => {
                     let second = request.params.and_then(|p| p.cursor).as_deref() == Some("second");
-                    let mut page = ListToolsResult::default();
-                    page.tools = vec![Tool::new(
-                        if second { "second" } else { "first" },
-                        "test tool",
-                        serde_json::Map::new(),
-                    )];
-                    page.next_cursor = (!second).then(|| "second".into());
+                    let page = ListToolsResult {
+                        tools: vec![Tool::new(
+                            if second { "second" } else { "first" },
+                            "test tool",
+                            serde_json::Map::new(),
+                        )],
+                        next_cursor: (!second).then(|| "second".into()),
+                        ..Default::default()
+                    };
                     ServerResult::ListToolsResult(page)
                 }
                 ClientRequest::CallToolRequest(request) => {

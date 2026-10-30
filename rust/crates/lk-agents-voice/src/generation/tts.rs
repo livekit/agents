@@ -340,7 +340,7 @@ enum LossText {
 }
 
 pub enum LossEvent {
-    Failed { lost: Lost, aligned: Option<AlignedTranscript> },
+    Failed { lost: Box<Lost>, aligned: Option<AlignedTranscript> },
     Drained(Visible),
 }
 
@@ -357,6 +357,7 @@ impl SynthesisLoss {
     pub fn handle(&mut self, event: LossEvent) -> Vec<LossEffect> {
         match event {
             LossEvent::Failed { lost, aligned } => {
+                let lost = *lost;
                 if let Some(error) = lost.failure {
                     return vec![LossEffect::Fail(error)];
                 }

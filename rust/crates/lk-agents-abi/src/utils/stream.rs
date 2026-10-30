@@ -1,6 +1,9 @@
 //! The duplex split. Never fuse the halves: dropping a Rust future does not cancel the host's
 //! `__anext__`, which stays parked in a `tee` generator and poisons the stream (`tts/tts.py:543`).
 
+/// The input and output halves of one bidirectional stream.
+pub type StreamPair<I, O> = (Box<dyn StreamSink<I>>, Box<dyn StreamSource<O>>);
+
 use std::future::Future;
 use std::time::Duration;
 

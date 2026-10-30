@@ -15,8 +15,8 @@ use lk_agents_voice::{
     agent_session::effects::{GateCause, GateOp, Timer},
     events::{SessionEvent, SpeechOutcome},
     trace::{
-        CoreStep, GenerationStep, InterruptCause, InterruptStep, RealtimeStep, PlayoutStep, RoomEventKind, RoomStep, SinkCall,
-        SpeechStep, Step, TimerName, TurnStep,
+        CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, RealtimeStep,
+        RoomEventKind, RoomStep, SinkCall, SpeechStep, Step, TimerName, TurnStep,
     },
 };
 
@@ -212,7 +212,10 @@ fn person_acted(r: &Recording, from: u64, to: u64) -> bool {
                 | Input::SttInterim { .. }
                 | Input::SttPreflight { .. }
                 | Input::SttFinal { .. }
-                | Input::RealtimeEvent { event: RtEvent::SpeechStarted | RtEvent::SpeechStopped, .. }
+                | Input::RealtimeEvent {
+                    event: RtEvent::SpeechStarted | RtEvent::SpeechStopped,
+                    ..
+                }
                 | Input::Room { event: RoomIn::Chat }
                 | Input::Dtmf { .. }
                 | Input::CommitUserTurn { .. }
@@ -234,9 +237,10 @@ const ANNOUNCE_MS: u64 = 2_000;
 /// `interrupt()`) reaches the server after it made the reply, as [`host_cut`]'s interrupt does.
 fn onset_cancel(r: &Recording, created: u64, to: u64) -> bool {
     let from = created.saturating_sub(ANNOUNCE_MS);
-    r.applied().iter().filter(|a| a.accepted && from <= a.at.at_ms && a.at.at_ms <= to).any(|a| {
-        matches!(a.input, Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. })
-    })
+    r.applied()
+        .iter()
+        .filter(|a| a.accepted && from <= a.at.at_ms && a.at.at_ms <= to)
+        .any(|a| matches!(a.input, Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. }))
 }
 
 /// Whether the client sent the realtime server a `response.cancel` around a reply's life: one
@@ -291,9 +295,10 @@ fn last_quiet(journal: &[&(Observed, Step)]) -> Option<u64> {
 fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     let before = |a: &Observed| a.at_ms <= deadline;
     let open = |kind: Kind| {
-        r.opened().iter().filter(|o| o.kind == kind && before(&o.at)).any(|o| {
-            !r.closed().iter().any(|(c, k, n)| *k == kind && *n == o.nth && before(c))
-        })
+        r.opened()
+            .iter()
+            .filter(|o| o.kind == kind && before(&o.at))
+            .any(|o| !r.closed().iter().any(|(c, k, n)| *k == kind && *n == o.nth && before(c)))
     };
     if OWED.iter().any(|k| open(*k)) {
         return Some("owed by the case");
@@ -331,7 +336,8 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
         return Some("the voice's first audio");
     }
     let journal: Vec<&(Observed, Step)> = r.journal().iter().filter(|(a, _)| before(a)).collect();
-    let last = |pick: &dyn Fn(&Step) -> Option<bool>| journal.iter().filter_map(|(_, s)| pick(s)).last();
+    let last =
+        |pick: &dyn Fn(&Step) -> Option<bool>| journal.iter().filter_map(|(_, s)| pick(s)).last();
     let held = last(&|s| match s {
         Step::Speech(SpeechStep::AuthorizationPaused) => Some(true),
         Step::Speech(SpeechStep::AuthorizationResumed) => Some(false),
@@ -357,9 +363,9 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     }
     // The agent's voice on the room's track, with nobody in the room: it plays once someone
     // subscribes (`_subscribed_fut`), as the reference's does.
-    let room_track = journal.iter().any(|(_, s)| {
-        matches!(s, Step::Room(RoomStep::Event(RoomEventKind::LocalTrackPublished)))
-    });
+    let room_track = journal
+        .iter()
+        .any(|(_, s)| matches!(s, Step::Room(RoomStep::Event(RoomEventKind::LocalTrackPublished))));
     let present = journal.iter().fold(0i64, |n, (_, s)| match s {
         Step::Room(RoomStep::Event(RoomEventKind::ParticipantConnected)) => n + 1,
         Step::Room(RoomStep::Event(RoomEventKind::ParticipantDisconnected)) => n - 1,
@@ -398,7 +404,8 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     for (_, s) in &journal {
         match s {
             Step::Core(CoreStep::TimerArmed {
-                timer: TimerName::Session(Timer::RealtimeRequest(key)), ..
+                timer: TimerName::Session(Timer::RealtimeRequest(key)),
+                ..
             }) => {
                 asked.insert(*key);
             }
@@ -423,7 +430,9 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
         return Some("the floor held by the developer");
     }
     let speaking = last(&|s| match s {
-        Step::Emitted(SessionEvent::UserStateChanged { new, .. }) => Some(*new == UserState::Speaking),
+        Step::Emitted(SessionEvent::UserStateChanged { new, .. }) => {
+            Some(*new == UserState::Speaking)
+        }
         _ => None,
     });
     if speaking == Some(true) {
@@ -479,9 +488,10 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     }
     // The person stopped, and their turn's end is still being decided (seed 99458).
     let endpointing = last(&|s| match s {
-        Step::Core(CoreStep::TimerArmed { timer: TimerName::Session(Timer::EndpointingDelay), .. }) => {
-            Some(true)
-        }
+        Step::Core(CoreStep::TimerArmed {
+            timer: TimerName::Session(Timer::EndpointingDelay),
+            ..
+        }) => Some(true),
         Step::Core(
             CoreStep::TimerCancelled(TimerName::Session(Timer::EndpointingDelay))
             | CoreStep::TimerFired(TimerName::Session(Timer::EndpointingDelay), _),
@@ -499,7 +509,7 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
             Step::Emitted(SessionEvent::FloorChanged { holder }) => Some(holder.map(|h| h.0)),
             _ => None,
         })
-        .last()
+        .next_back()
         .flatten();
     if let Some(other) = holder.filter(|h| *h != speech) {
         let paused = last(&|s| match s {

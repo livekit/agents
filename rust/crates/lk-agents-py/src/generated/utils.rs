@@ -13,31 +13,44 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/utils/byte_stream.rs.
 type AudioByteStreamImpl = <crate::Selected as super::Implementations>::AudioByteStream;
 
-fn _extract_audio_byte_stream_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    crate::python::number_from_py::<u32>(&obj, "sample_rate")
+fn _extract_audio_byte_stream_new_sample_rate(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AudioByteStreamNewSampleRateInput> {
+    crate::python::number_from_py::<u32>(obj.as_any(), "sample_rate")
 }
+type AudioByteStreamNewSampleRateInput = u32;
 
-fn _extract_audio_byte_stream_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
-    crate::python::number_from_py::<u16>(&obj, "num_channels")
+fn _extract_audio_byte_stream_new_num_channels(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AudioByteStreamNewNumChannelsInput> {
+    crate::python::number_from_py::<u16>(obj.as_any(), "num_channels")
 }
+type AudioByteStreamNewNumChannelsInput = u16;
 
 fn _extract_audio_byte_stream_new_samples_per_channel(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<u32>> {
+) -> PyResult<AudioByteStreamNewSamplesPerChannelInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<u32>(&obj, "samples_per_channel")).map(Some)
+        (crate::python::number_from_py::<u32>(obj.as_any(), "samples_per_channel")).map(Some)
     }
 }
+type AudioByteStreamNewSamplesPerChannelInput = ::std::option::Option<u32>;
 
-fn _extract_audio_byte_stream_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
+fn _extract_audio_byte_stream_push_data(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AudioByteStreamPushDataInput> {
     crate::python::pcm_bytes(obj, "data")
 }
+type AudioByteStreamPushDataInput = ::std::vec::Vec<u8>;
 
-fn _extract_audio_byte_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
+fn _extract_audio_byte_stream_write_data(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AudioByteStreamWriteDataInput> {
     crate::python::pcm_bytes(obj, "data")
 }
+type AudioByteStreamWriteDataInput = ::std::vec::Vec<u8>;
 
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
 /// the target) to cut TTS time-to-first-audio.
@@ -51,10 +64,12 @@ impl AudioByteStream {
     #[pyo3(signature = (sample_rate, num_channels, samples_per_channel = None, progressive = false))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_audio_byte_stream_new_sample_rate)] sample_rate: u32,
-        #[pyo3(from_py_with = _extract_audio_byte_stream_new_num_channels)] num_channels: u16,
+        #[pyo3(from_py_with = _extract_audio_byte_stream_new_sample_rate)]
+        sample_rate: AudioByteStreamNewSampleRateInput,
+        #[pyo3(from_py_with = _extract_audio_byte_stream_new_num_channels)]
+        num_channels: AudioByteStreamNewNumChannelsInput,
         #[pyo3(from_py_with = _extract_audio_byte_stream_new_samples_per_channel)]
-        samples_per_channel: ::std::option::Option<u32>,
+        samples_per_channel: AudioByteStreamNewSamplesPerChannelInput,
         progressive: bool,
     ) -> PyResult<AudioByteStream> {
         let out = py.detach(|| {
@@ -65,7 +80,7 @@ impl AudioByteStream {
                 progressive,
             )
         });
-        Ok(AudioByteStream(out))
+        ::pyo3::PyResult::Ok(AudioByteStream(out))
     }
 
     /// Buffer ``data`` and emit every whole frame it completes.
@@ -73,20 +88,23 @@ impl AudioByteStream {
     fn push<'py>(
         &mut self,
         py: Python<'py>,
-        #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)] data: ::std::vec::Vec<u8>,
+        #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)]
+        data: AudioByteStreamPushDataInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         let out =
             <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::push(
                 &mut self.0,
                 data,
             );
-        Ok(::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?))
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any())
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::conversions::audio_frame_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
     }
 
     /// Public alias of ``push`` in the reference.
@@ -94,20 +112,23 @@ impl AudioByteStream {
     fn write<'py>(
         &mut self,
         py: Python<'py>,
-        #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)] data: ::std::vec::Vec<u8>,
+        #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)]
+        data: AudioByteStreamWriteDataInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         let out =
             <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::write(
                 &mut self.0,
                 data,
             );
-        Ok(::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?))
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any())
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::conversions::audio_frame_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
     }
 
     /// Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
@@ -117,20 +138,22 @@ impl AudioByteStream {
             <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::flush(
                 &mut self.0,
             );
-        Ok(::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?))
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any())
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::conversions::audio_frame_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
     }
 
     /// Seconds of audio waiting for the next frame.
     #[getter]
     fn buffered_duration(&self) -> PyResult<f64> {
         let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::buffered_duration(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// Restart progressive sizing, keeping the buffered audio: after a mid-stream flush, the
@@ -155,51 +178,76 @@ type ConnectionPoolStateImpl = <crate::Selected as super::Implementations>::Conn
 
 fn _extract_connection_pool_state_new_maximum_age(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<f64>> {
+) -> PyResult<ConnectionPoolStateNewMaximumAgeInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "maximum_age")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "maximum_age")).map(Some)
     }
 }
+type ConnectionPoolStateNewMaximumAgeInput = ::std::option::Option<f64>;
 
-fn _extract_connection_pool_state_connected_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "id")
+fn _extract_connection_pool_state_connected_id(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStateConnectedIdInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "id")
 }
+type ConnectionPoolStateConnectedIdInput = u64;
 
-fn _extract_connection_pool_state_connected_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "now")
+fn _extract_connection_pool_state_connected_now(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStateConnectedNowInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "now")
 }
+type ConnectionPoolStateConnectedNowInput = f64;
 
-fn _extract_connection_pool_state_connected_generation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "generation")
+fn _extract_connection_pool_state_connected_generation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStateConnectedGenerationInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "generation")
 }
+type ConnectionPoolStateConnectedGenerationInput = u64;
 
 fn _extract_connection_pool_state_connected_acquire_time(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<f64>> {
+) -> PyResult<ConnectionPoolStateConnectedAcquireTimeInput> {
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(&obj, "acquire_time")).map(Some)
+        (crate::python::number_from_py::<f64>(obj.as_any(), "acquire_time")).map(Some)
     }
 }
+type ConnectionPoolStateConnectedAcquireTimeInput = ::std::option::Option<f64>;
+type ConnectionPoolStateGetOutput = ::std::option::Option<u64>;
 
-fn _extract_connection_pool_state_get_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "now")
+fn _extract_connection_pool_state_get_now(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStateGetNowInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "now")
 }
+type ConnectionPoolStateGetNowInput = f64;
 
-fn _extract_connection_pool_state_put_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "id")
+fn _extract_connection_pool_state_put_id(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStatePutIdInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "id")
 }
+type ConnectionPoolStatePutIdInput = u64;
 
-fn _extract_connection_pool_state_remove_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "id")
+fn _extract_connection_pool_state_remove_id(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStateRemoveIdInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "id")
 }
+type ConnectionPoolStateRemoveIdInput = u64;
+type ConnectionPoolStateNextClosingOutput = ::std::option::Option<u64>;
 
-fn _extract_connection_pool_state_closed_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    crate::python::number_from_py::<u64>(&obj, "id")
+fn _extract_connection_pool_state_closed_id(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ConnectionPoolStateClosedIdInput> {
+    crate::python::number_from_py::<u64>(obj.as_any(), "id")
 }
+type ConnectionPoolStateClosedIdInput = u64;
 
 #[pyclass(name = "ConnectionPoolState", module = "livekit.agents._core")]
 pub struct ConnectionPoolState(pub(crate) ConnectionPoolStateImpl);
@@ -211,61 +259,66 @@ impl ConnectionPoolState {
     fn new(
         py: Python<'_>,
         #[pyo3(from_py_with = _extract_connection_pool_state_new_maximum_age)]
-        maximum_age: ::std::option::Option<f64>,
+        maximum_age: ConnectionPoolStateNewMaximumAgeInput,
         refresh_on_get: bool,
     ) -> PyResult<ConnectionPoolState> {
         let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::new(maximum_age, refresh_on_get));
-        Ok(ConnectionPoolState(out))
+        ::pyo3::PyResult::Ok(ConnectionPoolState(out))
     }
 
     #[getter]
     fn generation(&self) -> PyResult<u64> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::generation(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
     fn last_acquire_time(&self) -> PyResult<f64> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_acquire_time(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
     fn last_connection_reused(&self) -> PyResult<bool> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_connection_reused(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (id, now, generation, acquire_time))]
     fn connected(
         &mut self,
-        #[pyo3(from_py_with = _extract_connection_pool_state_connected_id)] id: u64,
-        #[pyo3(from_py_with = _extract_connection_pool_state_connected_now)] now: f64,
-        #[pyo3(from_py_with = _extract_connection_pool_state_connected_generation)] generation: u64,
-        #[pyo3(from_py_with = _extract_connection_pool_state_connected_acquire_time)] acquire_time: ::std::option::Option<f64>,
+        #[pyo3(from_py_with = _extract_connection_pool_state_connected_id)]
+        id: ConnectionPoolStateConnectedIdInput,
+        #[pyo3(from_py_with = _extract_connection_pool_state_connected_now)]
+        now: ConnectionPoolStateConnectedNowInput,
+        #[pyo3(from_py_with = _extract_connection_pool_state_connected_generation)]
+        generation: ConnectionPoolStateConnectedGenerationInput,
+        #[pyo3(from_py_with = _extract_connection_pool_state_connected_acquire_time)] acquire_time: ConnectionPoolStateConnectedAcquireTimeInput,
     ) -> PyResult<bool> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::connected(&mut self.0, id, now, generation, acquire_time);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     fn empty(&self) -> PyResult<bool> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::empty(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (now))]
     fn get(
         &mut self,
-        #[pyo3(from_py_with = _extract_connection_pool_state_get_now)] now: f64,
-    ) -> PyResult<::std::option::Option<u64>> {
+        #[pyo3(from_py_with = _extract_connection_pool_state_get_now)]
+        now: ConnectionPoolStateGetNowInput,
+    ) -> PyResult<ConnectionPoolStateGetOutput> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::get(&mut self.0, now);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (id))]
     fn put(
         &mut self,
-        #[pyo3(from_py_with = _extract_connection_pool_state_put_id)] id: u64,
+        #[pyo3(from_py_with = _extract_connection_pool_state_put_id)]
+        id: ConnectionPoolStatePutIdInput,
     ) -> PyResult<()> {
         <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::put(&mut self.0, id);
         Ok(())
@@ -274,7 +327,8 @@ impl ConnectionPoolState {
     #[pyo3(signature = (id))]
     fn remove(
         &mut self,
-        #[pyo3(from_py_with = _extract_connection_pool_state_remove_id)] id: u64,
+        #[pyo3(from_py_with = _extract_connection_pool_state_remove_id)]
+        id: ConnectionPoolStateRemoveIdInput,
     ) -> PyResult<()> {
         <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::remove(&mut self.0, id);
         Ok(())
@@ -290,15 +344,16 @@ impl ConnectionPoolState {
         Ok(())
     }
 
-    fn next_closing(&self) -> PyResult<::std::option::Option<u64>> {
+    fn next_closing(&self) -> PyResult<ConnectionPoolStateNextClosingOutput> {
         let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::next_closing(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (id))]
     fn closed(
         &mut self,
-        #[pyo3(from_py_with = _extract_connection_pool_state_closed_id)] id: u64,
+        #[pyo3(from_py_with = _extract_connection_pool_state_closed_id)]
+        id: ConnectionPoolStateClosedIdInput,
     ) -> PyResult<()> {
         <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::closed(&mut self.0, id);
         Ok(())
@@ -308,17 +363,23 @@ impl ConnectionPoolState {
 // Declared in rust/crates/lk-agents-abi/src/utils/filters.rs.
 type ExpFilterImpl = <crate::Selected as super::Implementations>::ExpFilter;
 
-fn _extract_exp_filter_new_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "alpha")
+fn _extract_exp_filter_new_alpha(obj: &Bound<'_, PyAny>) -> PyResult<ExpFilterNewAlphaInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "alpha")
 }
+type ExpFilterNewAlphaInput = f64;
 
-fn _extract_exp_filter_apply_exp(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "exp")
+fn _extract_exp_filter_apply_exp(obj: &Bound<'_, PyAny>) -> PyResult<ExpFilterApplyExpInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "exp")
 }
+type ExpFilterApplyExpInput = f64;
+type ExpFilterValueOutput = ::std::option::Option<f64>;
 
-fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "alpha")
+fn _extract_exp_filter_update_base_alpha(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ExpFilterUpdateBaseAlphaInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "alpha")
 }
+type ExpFilterUpdateBaseAlphaInput = f64;
 
 #[pyclass(subclass, name = "ExpFilter", module = "livekit.agents.utils.exp_filter")]
 pub struct ExpFilter(pub(crate) ExpFilterImpl);
@@ -329,17 +390,17 @@ impl ExpFilter {
     #[pyo3(signature = (alpha, max_val = crate::conversions::Omittable::NOT_GIVEN, min_val = crate::conversions::Omittable::NOT_GIVEN, initial = crate::conversions::Omittable::NOT_GIVEN))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_exp_filter_new_alpha)] alpha: f64,
+        #[pyo3(from_py_with = _extract_exp_filter_new_alpha)] alpha: ExpFilterNewAlphaInput,
         max_val: crate::conversions::Omittable<'_>,
         min_val: crate::conversions::Omittable<'_>,
         initial: crate::conversions::Omittable<'_>,
     ) -> PyResult<ExpFilter> {
         let max_val =
-            max_val.map(|value| crate::python::number_from_py::<f64>(&value, "max_val"))?;
+            max_val.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "max_val"))?;
         let min_val =
-            min_val.map(|value| crate::python::number_from_py::<f64>(&value, "min_val"))?;
+            min_val.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "min_val"))?;
         let initial =
-            initial.map(|value| crate::python::number_from_py::<f64>(&value, "initial"))?;
+            initial.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "initial"))?;
         let out = py
             .detach(|| {
                 <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::new(
@@ -349,7 +410,7 @@ impl ExpFilter {
             .map_err(|e: ::lk_agents_abi::FilterError| {
                 <::lk_agents_abi::FilterError as crate::python::HostException>::to_py_err(&e)
             })?;
-        Ok(ExpFilter(out))
+        ::pyo3::PyResult::Ok(ExpFilter(out))
     }
 
     #[pyo3(signature = (alpha = crate::conversions::Omittable::NOT_GIVEN, initial = crate::conversions::Omittable::NOT_GIVEN, min_val = crate::conversions::Omittable::NOT_GIVEN, max_val = crate::conversions::Omittable::NOT_GIVEN))]
@@ -360,13 +421,14 @@ impl ExpFilter {
         min_val: crate::conversions::Omittable<'_>,
         max_val: crate::conversions::Omittable<'_>,
     ) -> PyResult<()> {
-        let alpha = alpha.map(|value| crate::python::number_from_py::<f64>(&value, "alpha"))?;
+        let alpha =
+            alpha.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "alpha"))?;
         let initial =
-            initial.map(|value| crate::python::number_from_py::<f64>(&value, "initial"))?;
+            initial.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "initial"))?;
         let min_val =
-            min_val.map(|value| crate::python::number_from_py::<f64>(&value, "min_val"))?;
+            min_val.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "min_val"))?;
         let max_val =
-            max_val.map(|value| crate::python::number_from_py::<f64>(&value, "max_val"))?;
+            max_val.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "max_val"))?;
         <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -374,10 +436,11 @@ impl ExpFilter {
     #[pyo3(signature = (exp, sample = crate::conversions::Omittable::NOT_GIVEN))]
     fn apply(
         &mut self,
-        #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64,
+        #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: ExpFilterApplyExpInput,
         sample: crate::conversions::Omittable<'_>,
     ) -> PyResult<f64> {
-        let sample = sample.map(|value| crate::python::number_from_py::<f64>(&value, "sample"))?;
+        let sample =
+            sample.map(|value| crate::python::number_from_py::<f64>(value.as_any(), "sample"))?;
         let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::apply(
             &mut self.0,
             exp,
@@ -386,19 +449,20 @@ impl ExpFilter {
         .map_err(|e: ::lk_agents_abi::FilterError| {
             <::lk_agents_abi::FilterError as crate::python::HostException>::to_py_err(&e)
         })?;
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
-    fn value(&self) -> PyResult<::std::option::Option<f64>> {
+    fn value(&self) -> PyResult<ExpFilterValueOutput> {
         let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::value(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (alpha))]
     fn update_base(
         &mut self,
-        #[pyo3(from_py_with = _extract_exp_filter_update_base_alpha)] alpha: f64,
+        #[pyo3(from_py_with = _extract_exp_filter_update_base_alpha)]
+        alpha: ExpFilterUpdateBaseAlphaInput,
     ) -> PyResult<()> {
         <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::update_base(
             &mut self.0,
@@ -411,13 +475,19 @@ impl ExpFilter {
 // Declared in rust/crates/lk-agents-abi/src/utils/filters.rs.
 type MovingAverageImpl = <crate::Selected as super::Implementations>::MovingAverage;
 
-fn _extract_moving_average_new_window_size(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    crate::python::number_from_py::<usize>(&obj, "window_size")
+fn _extract_moving_average_new_window_size(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<MovingAverageNewWindowSizeInput> {
+    crate::python::number_from_py::<usize>(obj.as_any(), "window_size")
 }
+type MovingAverageNewWindowSizeInput = usize;
 
-fn _extract_moving_average_add_sample_sample(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    crate::python::number_from_py::<f64>(&obj, "sample")
+fn _extract_moving_average_add_sample_sample(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<MovingAverageAddSampleSampleInput> {
+    crate::python::number_from_py::<f64>(obj.as_any(), "sample")
 }
+type MovingAverageAddSampleSampleInput = f64;
 
 #[pyclass(subclass, name = "MovingAverage", module = "livekit.agents.utils.moving_average")]
 pub struct MovingAverage(pub(crate) MovingAverageImpl);
@@ -428,18 +498,20 @@ impl MovingAverage {
     #[pyo3(signature = (window_size))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_moving_average_new_window_size)] window_size: usize,
+        #[pyo3(from_py_with = _extract_moving_average_new_window_size)]
+        window_size: MovingAverageNewWindowSizeInput,
     ) -> PyResult<MovingAverage> {
         let out = py.detach(|| {
             <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::new(window_size)
         });
-        Ok(MovingAverage(out))
+        ::pyo3::PyResult::Ok(MovingAverage(out))
     }
 
     #[pyo3(signature = (sample))]
     fn add_sample(
         &mut self,
-        #[pyo3(from_py_with = _extract_moving_average_add_sample_sample)] sample: f64,
+        #[pyo3(from_py_with = _extract_moving_average_add_sample_sample)]
+        sample: MovingAverageAddSampleSampleInput,
     ) -> PyResult<()> {
         <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::add_sample(
             &mut self.0,
@@ -451,7 +523,7 @@ impl MovingAverage {
     fn get_avg(&self) -> PyResult<f64> {
         let out =
             <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::get_avg(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 
     fn reset(&mut self) -> PyResult<()> {
@@ -462,7 +534,7 @@ impl MovingAverage {
     fn size(&self) -> PyResult<usize> {
         let out =
             <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::size(&self.0);
-        Ok(out)
+        ::pyo3::PyResult::Ok(out)
     }
 }
 

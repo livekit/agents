@@ -148,7 +148,7 @@ pub(super) fn open(
     clock: Arc<dyn Clock>,
     media_pool: MediaPool,
     runtime: tokio::runtime::Handle,
-) -> Result<(Box<dyn StreamSink<AudioFrame>>, Box<dyn StreamSource<VadOutput>>), ProviderError> {
+) -> Result<lk_agents_abi::StreamPair<AudioFrame, VadOutput>, ProviderError> {
     let (sender, mut input) = mpsc::channel(INPUT_CAPACITY);
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
     let state = Arc::new(InputState {

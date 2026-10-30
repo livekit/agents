@@ -592,7 +592,8 @@ pub fn decode(ev: &Value) -> Incoming {
 /// The `if/elif` chain of `_recv_task`, as a total function.
 pub fn decode_at(ev: &Value, created_at: SystemTime) -> Result<Incoming, DecodeError> {
     let ty = required_string(ev, "type").map_err(|cause| DecodeError::at(ev, cause))?;
-    let decoded = (|| -> Result<Incoming, String> {
+
+    (|| -> Result<Incoming, String> {
         Ok(match ty.as_str() {
             "input_audio_buffer.speech_started" => {
                 Incoming::SpeechStarted { item_id: s(ev, "item_id") }
@@ -713,8 +714,7 @@ pub fn decode_at(ev: &Value, created_at: SystemTime) -> Result<Incoming, DecodeE
             other => Incoming::Unhandled { event_type: other.to_owned() },
         })
     })()
-    .map_err(|cause| DecodeError::at(ev, cause));
-    decoded
+    .map_err(|cause| DecodeError::at(ev, cause))
 }
 
 /// An `AudioDelta`'s PCM as an [`AudioFrame`](lk_agents_abi::AudioFrame) at the session rate.

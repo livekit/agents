@@ -138,7 +138,7 @@ pub struct SpeechEvent {
     #[host(default_factory = "list")]
     pub alternatives: Vec<SpeechData>,
     #[host(default = None)]
-    pub recognition_usage: Option<RecognitionUsage>,
+    pub recognition_usage: Option<Box<RecognitionUsage>>,
     /// server-reported wall-clock time of speech onset, when the provider sends
     /// a separate speech-start signal carrying onset timing.
     #[host(default = None)]

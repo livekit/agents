@@ -44,7 +44,7 @@ pub enum ForwarderEffect {
     /// Ending, not dropping: dropping a host stream doesn't close it.
     EndInput(ResourceId),
     /// An input for the decision core, through the queue.
-    Report(Input),
+    Report(Box<Input>),
 }
 
 /// The counters the close journals, answered to [`ForwarderCommand::ReportCensus`].
@@ -148,7 +148,7 @@ impl AudioForwarder {
                     })
                     .collect();
                 if !silenced.is_empty() {
-                    effects.push(ForwarderEffect::Report(Input::GateSilenced(silenced)));
+                    effects.push(ForwarderEffect::Report(Box::new(Input::GateSilenced(silenced))));
                 }
                 self.discard = discard;
             }
@@ -174,7 +174,7 @@ impl AudioForwarder {
                     })
                     .collect();
                 let census = InputCensus { channels, input: self.input_shape };
-                effects.push(ForwarderEffect::Report(Input::InputCensus(census)));
+                effects.push(ForwarderEffect::Report(Box::new(Input::InputCensus(census))));
             }
         }
         effects
@@ -196,7 +196,7 @@ impl AudioForwarder {
             return effects;
         }
         if !std::mem::replace(&mut self.input_started, true) {
-            effects.push(ForwarderEffect::Report(Input::InputStarted { at: now }));
+            effects.push(ForwarderEffect::Report(Box::new(Input::InputStarted { at: now })));
         }
         self.input_shape = Some((FrameShape::of(&frame), self.conversion.frame_shape()));
         // `Raw` channels: the source frame; the substitute has the room frame's shape.
@@ -309,8 +309,12 @@ fn mono(frame: &AudioFrame) -> AudioFrame {
     let mut bytes = Vec::with_capacity(frame.data.len() / ch);
     // Sum in i32: a wrapping i16 add turns a loud stereo frame into white noise.
     for group in frame.data.chunks_exact(2 * ch) {
-        let sum: i32 =
-            group.chunks_exact(2).map(|b| i32::from(i16::from_le_bytes([b[0], b[1]]))).sum();
+        let sum: i32 = group
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i32::from(i16::from_le_bytes([b[0], b[1]])))
+            .sum();
         bytes.extend_from_slice(&((sum / ch as i32) as i16).to_le_bytes());
     }
     let spc = (bytes.len() / 2) as u32;

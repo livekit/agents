@@ -91,7 +91,7 @@ impl Driver {
             agent,
             RunInput {
                 invocation_id: "run_1".into(),
-                opening: Opening::Message(user("msg_1", message)),
+                opening: Opening::Message(Box::new(user("msg_1", message))),
                 history,
                 answer_tool: None,
                 delegated: false,
@@ -249,7 +249,7 @@ pub(super) fn chunk(
             tool_calls,
             extra: None,
         }),
-        usage,
+        usage: usage.map(Box::new),
         flush: false,
         node_text: false,
     }

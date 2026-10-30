@@ -101,7 +101,7 @@ async fn measure<F: Future>(name: &str, workload: Value, future: F) -> F::Output
 #[ignore = "real native workload; records host-dependent measurements"]
 async fn media_never_block_measurements() {
     let manifest: Value =
-        serde_json::from_str(include_str!("../../../../scripts/bench/budgets.json")).unwrap();
+        serde_json::from_str(include_str!("../../../bench-budgets.json")).unwrap();
     println!(
         "MEDIA_PROFILE {}",
         json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH,

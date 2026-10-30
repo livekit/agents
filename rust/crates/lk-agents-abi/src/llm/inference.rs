@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::errors::ApiError;
-use crate::llm::llm::{Llm, ToolChoice, ToolSpec};
+use crate::llm::types::{Llm, ToolChoice, ToolSpec};
 use crate::utils::stream::StreamSource;
 use crate::{ApiConnectOptions, ChatItem, Extra, LlmChunk};
 

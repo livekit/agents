@@ -12,7 +12,7 @@ use lk_agents_abi::agent::{
 };
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
-use lk_agents_runtime::voice::speech_handle::{Requests, SpeechHandle};
+use lk_agents_runtime::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport, VoiceAgentFrame};
 use tokio::sync::oneshot;
 
@@ -358,7 +358,7 @@ impl FakeTools {
             }
             Ok(Body::AwaitOwnSpeech(answer)) => {
                 let origin = format!("tool:{}", call.call_id);
-                let _ = HostSpeech::wait_for_playout(&*handle, Some(origin)).await;
+                let _ = HostSpeech::wait_for_playout(handle, Some(origin)).await;
                 answer
             }
             Err(_) => ToolOutcome::Cancelled,
@@ -411,7 +411,8 @@ mod tests {
     use super::*;
     use lk_agents_runtime::net::task::TokioSpawner;
     use lk_agents_runtime::voice::session::Timebase;
-    use lk_agents_runtime::voice::session::Tx;
+    use lk_agents_runtime::voice::speech_handle::Requests;
+
     use lk_agents_voice::agent_activity::scheduling::SpeechId;
     use lk_agents_voice::tool_executor::HostedTool;
 

@@ -16,29 +16,29 @@ pub mod _retry {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/types/retry.rs.
-    static _CORE__RETRY_DECISION_STOP: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static CORE_RETRY_DECISION_STOP: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
-    static _CORE__RETRY_DECISION_RAISE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static CORE_RETRY_DECISION_RAISE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
-    static _CORE__RETRY_DECISION_EXHAUSTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static CORE_RETRY_DECISION_EXHAUSTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
-    static _CORE__RETRY_DECISION_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static CORE_RETRY_DECISION_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn _core_retry_decision_to_py<'py>(
+    pub fn core_retry_decision_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::types::retry::RetryDecision,
     ) -> PyResult<Bound<'py, PyAny>> {
         match value {
             ::lk_agents_abi::types::retry::RetryDecision::Stop => crate::host::call(
-                _CORE__RETRY_DECISION_STOP
+                CORE_RETRY_DECISION_STOP
                     .import(py, "livekit.agents._generated._retry", "_core_RetryDecisionStop")?
                     .as_any(),
                 (),
                 None,
             ),
             ::lk_agents_abi::types::retry::RetryDecision::Raise => crate::host::call(
-                _CORE__RETRY_DECISION_RAISE
+                CORE_RETRY_DECISION_RAISE
                     .import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRaise")?
                     .as_any(),
                 (),
@@ -51,7 +51,7 @@ pub mod _retry {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
                 )?;
                 crate::host::call(
-                    _CORE__RETRY_DECISION_EXHAUSTED
+                    CORE_RETRY_DECISION_EXHAUSTED
                         .import(
                             py,
                             "livekit.agents._generated._retry",
@@ -66,7 +66,7 @@ pub mod _retry {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay, py)?)?;
                 crate::host::call(
-                    _CORE__RETRY_DECISION_RETRY
+                    CORE_RETRY_DECISION_RETRY
                         .import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRetry")?
                         .as_any(),
                     (),
@@ -147,7 +147,7 @@ pub mod a2a_auth {
                 py,
                 thread_ids
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -193,7 +193,7 @@ pub mod a2a_auth {
             ::lk_agents_abi::a2a::auth::AuthOperation::Write => "write",
             ::lk_agents_abi::a2a::auth::AuthOperation::Delete => "delete",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/auth.rs.
@@ -219,7 +219,7 @@ pub mod a2a_auth {
             ::lk_agents_abi::a2a::auth::PrincipalKind::Project => "project",
             ::lk_agents_abi::a2a::auth::PrincipalKind::Grant => "grant",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/auth.rs.
@@ -604,25 +604,23 @@ pub mod a2a_client {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        ({
-                            if v.is_instance_of::<::pyo3::types::PyBytes>()
-                                || v.is_instance_of::<::pyo3::types::PyByteArray>()
-                                || v.is_instance_of::<::pyo3::types::PyMemoryView>()
-                            {
-                                crate::python::owned_bytes(&v, "FilePart.data")
-                            } else {
-                                v.try_iter().and_then(|items| {
-                                    items
-                                        .map(|item| {
-                                            let item = item?;
-                                            crate::python::number_from_py::<u8>(
-                                                &item,
-                                                "FilePart.data",
-                                            )
-                                        })
-                                        .collect::<PyResult<Vec<_>>>()
-                                })
-                            }
+                        (if v.is_instance_of::<::pyo3::types::PyBytes>()
+                            || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                            || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                        {
+                            crate::python::owned_bytes(v.as_any(), "FilePart.data")
+                        } else {
+                            v.try_iter().and_then(|items| {
+                                items
+                                    .map(|item| {
+                                        let item = item?;
+                                        crate::python::number_from_py::<u8>(
+                                            item.as_any(),
+                                            "FilePart.data",
+                                        )
+                                    })
+                                    .collect::<PyResult<Vec<_>>>()
+                            })
                         })
                         .map(Some)
                     }
@@ -863,11 +861,7 @@ pub mod a2a_client {
                 py,
                 parts
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::a2a_client::message_part_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::a2a_client::message_part_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -954,7 +948,8 @@ pub mod a2a_client {
                 .bind(obj.py()),
         )? {
             return Ok(::lk_agents_abi::a2a::client::MessageInput::Message(
-                crate::generated::records::a2a_client::message_from_py(obj)?,
+                (crate::generated::records::a2a_client::message_from_py(obj))
+                    .map(::std::boxed::Box::new)?,
             ));
         }
         Err(super::not_a(obj, "MessageInput"))
@@ -1056,11 +1051,7 @@ pub mod a2a_client {
                 py,
                 parts
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::a2a_client::message_part_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::a2a_client::message_part_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -1153,9 +1144,7 @@ pub mod a2a_client {
                 py,
                 artifacts
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::a2a_client::artifact_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::a2a_client::artifact_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -1194,7 +1183,7 @@ pub mod a2a_client {
                 py,
                 extensions
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -1473,7 +1462,7 @@ pub mod agent_nodes {
                 py,
                 timed_transcript
                     .into_iter()
-                    .map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?))
+                    .map(|x| crate::conversions::timed_string_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -1560,9 +1549,7 @@ pub mod agent_run {
                 py,
                 history
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -1861,9 +1848,7 @@ pub mod agent_run {
                         py,
                         fnc_calls_json
                             .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -1900,9 +1885,7 @@ pub mod agent_run {
                         py,
                         fnc_calls_json
                             .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -1931,9 +1914,7 @@ pub mod agent_run {
                         py,
                         call_ids
                             .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -1958,9 +1939,7 @@ pub mod agent_run {
                         py,
                         call_ids
                             .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -2286,9 +2265,7 @@ pub mod agent_run {
                 py,
                 new_messages
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -2299,9 +2276,7 @@ pub mod agent_run {
                 py,
                 all_messages
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -2662,7 +2637,7 @@ pub mod agent_run {
             ::lk_agents_abi::agent::run::ToolResultStatus::Failed => "failed",
             ::lk_agents_abi::agent::run::ToolResultStatus::Cancelled => "cancelled",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
@@ -2801,9 +2776,7 @@ pub mod agent_run {
                         py,
                         pending
                             .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -2822,10 +2795,10 @@ pub mod agent_run {
             }
             ::lk_agents_abi::agent::run::RunUpdate::Finished(settled) => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "settled",
-                    crate::generated::records::agent_run::run_settled_to_py(py, settled)?,
-                )?;
+                kwargs.set_item("settled", {
+                    let value = *settled;
+                    crate::generated::records::agent_run::run_settled_to_py(py, value)?
+                })?;
                 crate::host::call(
                     RUN_UPDATE_FINISHED
                         .import(py, "livekit.agents._generated.agent_run", "RunUpdateFinished")?
@@ -2888,11 +2861,11 @@ pub mod amd {
             ::lk_agents_abi::voice::amd::AmdCategory::MachineUnavailable => "machine-unavailable",
             ::lk_agents_abi::voice::amd::AmdCategory::Uncertain => "uncertain",
         };
-        Ok(crate::host::call(
+        crate::host::call(
             AMD_CATEGORY.import(py, "livekit.agents._generated.amd", "AMDCategory")?.as_any(),
             (value,),
             None,
-        )?)
+        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
@@ -3020,7 +2993,7 @@ pub mod amd {
                 py,
                 evaluated_llm_models
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -3031,7 +3004,7 @@ pub mod amd {
                 py,
                 evaluated_stt_models
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -3079,76 +3052,59 @@ pub mod amd {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::amd::AmdDetectionOptions {
             human_speech_threshold: match obj.get_item("human_speech_threshold")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "DetectionOptions.human_speech_threshold",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "DetectionOptions.human_speech_threshold",
+                    ))?,
+                ),
                 _ => None,
             },
             human_silence_threshold: match obj.get_item("human_silence_threshold")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "DetectionOptions.human_silence_threshold",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "DetectionOptions.human_silence_threshold",
+                    ))?,
+                ),
                 _ => None,
             },
             machine_silence_threshold: match obj.get_item("machine_silence_threshold")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "DetectionOptions.machine_silence_threshold",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "DetectionOptions.machine_silence_threshold",
+                    ))?,
+                ),
                 _ => None,
             },
             no_speech_threshold: match obj.get_item("no_speech_threshold")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "DetectionOptions.no_speech_threshold",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "DetectionOptions.no_speech_threshold",
+                    ))?,
+                ),
                 _ => None,
             },
             timeout: match obj.get_item("timeout")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "DetectionOptions.timeout"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(v.as_any(), "DetectionOptions.timeout"))?,
+                ),
                 _ => None,
             },
             max_endpointing_delay: match obj.get_item("max_endpointing_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "DetectionOptions.max_endpointing_delay",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "DetectionOptions.max_endpointing_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             prompt: match obj.get_item("prompt")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },
@@ -3178,47 +3134,43 @@ pub mod amd {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::amd::AmdConfigKwargs {
             detection: {
-                let v = &obj.get_item("detection")?.ok_or_else(|| {
+                let v = obj.get_item("detection")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.detection")
                 })?;
-                (crate::generated::records::amd::detection_options_from_py(v))?
+                (crate::generated::records::amd::detection_options_from_py(v.as_any()))?
             },
             max_endpointing_delay: match obj.get_item("max_endpointing_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "AMDConfig.max_endpointing_delay",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "AMDConfig.max_endpointing_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             source: match obj.get_item("source")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::amd::transcript_source_from_py(v))?)
+                    Some((crate::generated::records::amd::transcript_source_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
             wait_until_finished: {
-                let v = &obj.get_item("wait_until_finished")?.ok_or_else(|| {
+                let v = obj.get_item("wait_until_finished")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.wait_until_finished")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             interrupt_on_machine: {
-                let v = &obj.get_item("interrupt_on_machine")?.ok_or_else(|| {
+                let v = obj.get_item("interrupt_on_machine")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.interrupt_on_machine")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             ivr_detection: {
-                let v = &obj.get_item("ivr_detection")?.ok_or_else(|| {
+                let v = obj.get_item("ivr_detection")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.ivr_detection")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
         })
     }
@@ -3429,7 +3381,7 @@ pub mod background_audio_wire {
         )?)? {
             return Ok(::lk_agents_abi::voice::background_audio::SoundSource::Stream(
                 crate::python::attr_with(obj, "SoundSourceStream", "stream", |v| {
-                    crate::generated::voice::FrameStreamProxy::from_host(&v)
+                    crate::generated::voice::FrameStreamProxy::from_host(v.as_any())
                 })?,
             ));
         }
@@ -3499,7 +3451,7 @@ pub mod chat_items {
             ::lk_agents_abi::Role::User => "user",
             ::lk_agents_abi::Role::Assistant => "assistant",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
@@ -3527,7 +3479,7 @@ pub mod chat_items {
             ::lk_agents_abi::InferenceDetail::High => "high",
             ::lk_agents_abi::InferenceDetail::Low => "low",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
@@ -3766,15 +3718,13 @@ pub mod chat_items {
         Ok(::lk_agents_abi::MetricsMetadata {
             model_name: match obj.get_item("model_name")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },
             model_provider: match obj.get_item("model_provider")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },
@@ -3804,153 +3754,140 @@ pub mod chat_items {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::MetricsReport {
             started_speaking_at: match obj.get_item("started_speaking_at")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "MetricsReport.started_speaking_at",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.started_speaking_at",
+                    ))?,
+                ),
                 _ => None,
             },
             stopped_speaking_at: match obj.get_item("stopped_speaking_at")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "MetricsReport.stopped_speaking_at",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.stopped_speaking_at",
+                    ))?,
+                ),
                 _ => None,
             },
             transcription_delay: match obj.get_item("transcription_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "MetricsReport.transcription_delay",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.transcription_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             end_of_turn_delay: match obj.get_item("end_of_turn_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "MetricsReport.end_of_turn_delay",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.end_of_turn_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             on_user_turn_completed_delay: match obj.get_item("on_user_turn_completed_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "MetricsReport.on_user_turn_completed_delay",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.on_user_turn_completed_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             llm_node_ttft: match obj.get_item("llm_node_ttft")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "MetricsReport.llm_node_ttft"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.llm_node_ttft",
+                    ))?,
+                ),
                 _ => None,
             },
             llm_node_tps: match obj.get_item("llm_node_tps")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "MetricsReport.llm_node_tps"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.llm_node_tps",
+                    ))?,
+                ),
                 _ => None,
             },
             llm_node_ttfs: match obj.get_item("llm_node_ttfs")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "MetricsReport.llm_node_ttfs"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.llm_node_ttfs",
+                    ))?,
+                ),
                 _ => None,
             },
             tts_node_ttfb: match obj.get_item("tts_node_ttfb")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "MetricsReport.tts_node_ttfb"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.tts_node_ttfb",
+                    ))?,
+                ),
                 _ => None,
             },
             playback_latency: match obj.get_item("playback_latency")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "MetricsReport.playback_latency",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.playback_latency",
+                    ))?,
+                ),
                 _ => None,
             },
             e2e_latency: match obj.get_item("e2e_latency")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "MetricsReport.e2e_latency"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "MetricsReport.e2e_latency",
+                    ))?,
+                ),
                 _ => None,
             },
             provider_request_ids: match obj.get_item("provider_request_ids")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (if v.is_instance_of::<::pyo3::types::PyList>()
-                            || v.is_instance_of::<::pyo3::types::PyTuple>()
-                        {
-                            v.try_iter()?
-                                .map(|item| {
-                                    let item = &item?;
-                                    item.extract::<::std::string::String>()
-                                })
-                                .collect::<PyResult<Vec<_>>>()
-                        } else {
-                            Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "MetricsReport.provider_request_ids: expected a list or tuple",
-                            ))
-                        })?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (if v.as_any().is_instance_of::<::pyo3::types::PyList>()
+                        || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.as_any()
+                            .try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                item.extract::<::std::string::String>()
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "MetricsReport.provider_request_ids: expected a list or tuple",
+                        ))
+                    })?,
+                ),
                 _ => None,
             },
             llm_metadata: match obj.get_item("llm_metadata")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::chat_items::metrics_metadata_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::chat_items::metrics_metadata_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             tts_metadata: match obj.get_item("tts_metadata")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::chat_items::metrics_metadata_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::chat_items::metrics_metadata_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             stt_metadata: match obj.get_item("stt_metadata")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::chat_items::metrics_metadata_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::chat_items::metrics_metadata_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
         })
@@ -4029,7 +3966,7 @@ pub mod chat_items {
                 ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -4153,11 +4090,7 @@ pub mod chat_items {
                 py,
                 content
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_content_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_content_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -4548,7 +4481,7 @@ pub mod chat_items {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -4561,7 +4494,7 @@ pub mod chat_items {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -5483,7 +5416,7 @@ pub mod events {
             ::lk_agents_abi::voice::events::UserState::Listening => "listening",
             ::lk_agents_abi::voice::events::UserState::Away => "away",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
@@ -5515,7 +5448,7 @@ pub mod events {
             ::lk_agents_abi::voice::events::AgentState::Thinking => "thinking",
             ::lk_agents_abi::voice::events::AgentState::Speaking => "speaking",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
@@ -5696,11 +5629,11 @@ pub mod events {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    static __AGENT_BACKCHANNEL_OPPORTUNITY_EVENT: ::pyo3::sync::PyOnceLock<
+    static AGENT_BACKCHANNEL_OPPORTUNITY_EVENT: ::pyo3::sync::PyOnceLock<
         Py<::pyo3::types::PyType>,
     > = ::pyo3::sync::PyOnceLock::new();
 
-    pub fn __agent_backchannel_opportunity_event_to_py<'py>(
+    pub fn agent_backchannel_opportunity_event_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::voice::events::AgentBackchannelOpportunityEvent,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -5734,7 +5667,7 @@ pub mod events {
             },
         )?;
         crate::host::call(
-            __AGENT_BACKCHANNEL_OPPORTUNITY_EVENT
+            AGENT_BACKCHANNEL_OPPORTUNITY_EVENT
                 .import(
                     py,
                     "livekit.agents._generated.events",
@@ -5835,7 +5768,7 @@ pub mod events {
                 py,
                 update_ids
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -5925,11 +5858,11 @@ pub mod events {
             ::lk_agents_abi::voice::events::CloseReason::UserInitiated => "user_initiated",
             ::lk_agents_abi::voice::events::CloseReason::TaskCompleted => "task_completed",
         };
-        Ok(crate::host::call(
+        crate::host::call(
             CLOSE_REASON.import(py, "livekit.agents._generated.events", "CloseReason")?.as_any(),
             (value,),
             None,
-        )?)
+        )
     }
 }
 
@@ -5963,50 +5896,43 @@ pub mod expressive {
         Ok(::lk_agents_abi::tts::markup::NonverbalOptions {
             laughing: match obj.get_item("laughing")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             breathing: match obj.get_item("breathing")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             sighing: match obj.get_item("sighing")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             crying: match obj.get_item("crying")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             vocalizing: match obj.get_item("vocalizing")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             mouth_sounds: match obj.get_item("mouth_sounds")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             reflex_sounds: match obj.get_item("reflex_sounds")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
@@ -6036,22 +5962,19 @@ pub mod expressive {
         Ok(::lk_agents_abi::tts::markup::SpeechSteering {
             disfluencies: match obj.get_item("disfluencies")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             nonverbal_sounds: match obj.get_item("nonverbal_sounds")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::expressive::nonverbal_sounds_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::expressive::nonverbal_sounds_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             pace: match obj.get_item("pace")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::expressive::pace_from_py(v))?)
+                    Some((crate::generated::records::expressive::pace_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
@@ -6066,27 +5989,22 @@ pub mod expressive {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::session_options::ExpressiveConfig {
             speech_steering: match obj.get_item("speech_steering")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::generated::records::expressive::speech_steering_options_from_py(
-                            v,
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::expressive::speech_steering_options_from_py(
+                        v.as_any(),
+                    ))?,
+                ),
                 _ => None,
             },
             tts_instructions_template: match obj.get_item("tts_instructions_template")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::conversions::instructions_from_py(v))?)
+                    Some((crate::conversions::instructions_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
             tts_instructions_append: match obj.get_item("tts_instructions_append")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },
@@ -6105,23 +6023,20 @@ pub mod inference_stt {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::inference::fallback::SttFallbackModel {
             model: {
-                let v = &obj.get_item("model")?.ok_or_else(|| {
+                let v = obj.get_item("model")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             extra_kwargs: match obj.get_item("extra_kwargs")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (match crate::python::value_from_py(v, "FallbackModel.extra_kwargs")? {
-                            ::serde_json::Value::Object(map) => Ok(map),
-                            _ => Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "FallbackModel.extra_kwargs: expected a dict",
-                            )),
-                        })?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (match crate::python::value_from_py(v.as_any(), "FallbackModel.extra_kwargs")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "FallbackModel.extra_kwargs: expected a dict",
+                        )),
+                    })?,
+                ),
                 _ => None,
             },
         })
@@ -6152,30 +6067,26 @@ pub mod inference_tts {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::inference::fallback::TtsFallbackModel {
             model: {
-                let v = &obj.get_item("model")?.ok_or_else(|| {
+                let v = obj.get_item("model")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("FallbackModel.model")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             voice: match obj.get_item("voice")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    (v.extract::<::std::string::String>())?
+                    (v.as_any().extract::<::std::string::String>())?
                 }
                 _ => "".to_owned(),
             },
             extra_kwargs: match obj.get_item("extra_kwargs")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (match crate::python::value_from_py(v, "FallbackModel.extra_kwargs")? {
-                            ::serde_json::Value::Object(map) => Ok(map),
-                            _ => Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "FallbackModel.extra_kwargs: expected a dict",
-                            )),
-                        })?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (match crate::python::value_from_py(v.as_any(), "FallbackModel.extra_kwargs")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "FallbackModel.extra_kwargs: expected a dict",
+                        )),
+                    })?,
+                ),
                 _ => None,
             },
         })
@@ -6311,59 +6222,47 @@ pub mod keyterms {
         Ok(::lk_agents_abi::turn::keyterms::KeytermDetectionConfig {
             enabled: match obj.get_item("enabled")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             llm: match obj.get_item("llm")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::conversions::detection_llm_from_py(v))?)
+                    Some((crate::conversions::detection_llm_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
             turn_interval: match obj.get_item("turn_interval")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<u32>(
-                            v,
-                            "KeytermDetectionOptions.turn_interval",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<u32>(
+                        v.as_any(),
+                        "KeytermDetectionOptions.turn_interval",
+                    ))?,
+                ),
                 _ => None,
             },
             max_keyterms: match obj.get_item("max_keyterms")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<usize>(
-                            v,
-                            "KeytermDetectionOptions.max_keyterms",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<usize>(
+                        v.as_any(),
+                        "KeytermDetectionOptions.max_keyterms",
+                    ))?,
+                ),
                 _ => None,
             },
             instructions: match obj.get_item("instructions")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },
             timeout: match obj.get_item("timeout")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "KeytermDetectionOptions.timeout",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "KeytermDetectionOptions.timeout",
+                    ))?,
+                ),
                 _ => None,
             },
         })
@@ -6429,42 +6328,36 @@ pub mod keyterms {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::turn::keyterms::SttContextConfig {
             keyterms: match obj.get_item("keyterms")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (if v.is_instance_of::<::pyo3::types::PyList>()
-                            || v.is_instance_of::<::pyo3::types::PyTuple>()
-                        {
-                            v.try_iter()?
-                                .map(|item| {
-                                    let item = &item?;
-                                    item.extract::<::std::string::String>()
-                                })
-                                .collect::<PyResult<Vec<_>>>()
-                        } else {
-                            Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "STTContextOptions.keyterms: expected a list or tuple",
-                            ))
-                        })?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (if v.as_any().is_instance_of::<::pyo3::types::PyList>()
+                        || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.as_any()
+                            .try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                item.extract::<::std::string::String>()
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "STTContextOptions.keyterms: expected a list or tuple",
+                        ))
+                    })?,
+                ),
                 _ => None,
             },
             keyterm_detection: match obj.get_item("keyterm_detection")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::generated::records::keyterms::keyterm_detection_options_from_py(
-                            v,
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::keyterms::keyterm_detection_options_from_py(
+                        v.as_any(),
+                    ))?,
+                ),
                 _ => None,
             },
             forward_chat_context: match obj.get_item("forward_chat_context")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
@@ -6627,11 +6520,7 @@ pub mod llm {
                 py,
                 tool_calls
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::llm::function_tool_call_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::llm::function_tool_call_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -6678,7 +6567,9 @@ pub mod llm {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::records::usage::token_usage_from_py(v)).map(Some)
+                    ((crate::generated::records::usage::token_usage_from_py(v))
+                        .map(::std::boxed::Box::new))
+                    .map(Some)
                 }
             })?,
             flush: ::std::default::Default::default(),
@@ -6704,7 +6595,10 @@ pub mod llm {
             "usage",
             match usage {
                 None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)?,
+                Some(x) => {
+                    let value = *x;
+                    crate::generated::records::usage::token_usage_to_py(py, value)?
+                }
             },
         )?;
         crate::host::call(
@@ -6747,25 +6641,23 @@ pub mod llm {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    ({
-                        if v.is_instance_of::<::pyo3::types::PyBytes>()
-                            || v.is_instance_of::<::pyo3::types::PyByteArray>()
-                            || v.is_instance_of::<::pyo3::types::PyMemoryView>()
-                        {
-                            crate::python::owned_bytes(&v, "SerializedImage.data_bytes")
-                        } else {
-                            v.try_iter().and_then(|items| {
-                                items
-                                    .map(|item| {
-                                        let item = item?;
-                                        crate::python::number_from_py::<u8>(
-                                            &item,
-                                            "SerializedImage.data_bytes",
-                                        )
-                                    })
-                                    .collect::<PyResult<Vec<_>>>()
-                            })
-                        }
+                    (if v.is_instance_of::<::pyo3::types::PyBytes>()
+                        || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                        || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                    {
+                        crate::python::owned_bytes(v.as_any(), "SerializedImage.data_bytes")
+                    } else {
+                        v.try_iter().and_then(|items| {
+                            items
+                                .map(|item| {
+                                    let item = item?;
+                                    crate::python::number_from_py::<u8>(
+                                        item.as_any(),
+                                        "SerializedImage.data_bytes",
+                                    )
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        })
                     })
                     .map(Some)
                 }
@@ -6856,37 +6748,32 @@ pub mod mcp {
         Ok(::lk_agents_abi::llm::mcp::McpToolOptionsPatch {
             flags: match obj.get_item("flags")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::conversions::tool_flag_from_py(v))?)
+                    Some((crate::conversions::tool_flag_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
             on_duplicate: match obj.get_item("on_duplicate")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::tool_context::duplicate_mode_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::tool_context::duplicate_mode_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             duplicate_scope: match obj.get_item("duplicate_scope")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::tool_context::duplicate_scope_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::tool_context::duplicate_scope_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             report_progress: match obj.get_item("report_progress")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             retries: match obj.get_item("retries")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<u32>(v, "MCPToolOptions.retries"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<u32>(v.as_any(), "MCPToolOptions.retries"))?,
+                ),
                 _ => None,
             },
         })
@@ -10216,7 +10103,7 @@ pub mod rtc_wire {
                 py,
                 destination_identities
                     .into_iter()
-                    .map(|x| PyResult::Ok(crate::python::str_to_py(py, &x)))
+                    .map(|x| ::pyo3::PyResult::Ok(crate::python::str_to_py(py, &x)))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -10299,11 +10186,7 @@ pub mod rtc_wire {
                 segments
                     .into_iter()
                     .map(|x| {
-                        PyResult::Ok(
-                            crate::generated::records::rtc_wire::transcription_segment_to_py(
-                                py, x,
-                            )?,
-                        )
+                        crate::generated::records::rtc_wire::transcription_segment_to_py(py, x)
                     })
                     .collect::<PyResult<Vec<_>>>()?,
             )?
@@ -10426,45 +10309,42 @@ pub mod session_options {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::session_options::SessionKwargs {
             turn_handling: match obj.get_item("turn_handling")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::turn_handling_options_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::turn_handling_options_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             stt_context_options: {
-                let v = &obj.get_item("stt_context_options")?.ok_or_else(|| {
+                let v = obj.get_item("stt_context_options")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.stt_context_options")
                 })?;
-                (crate::conversions::host_value_from_py(v))?
+                (crate::conversions::host_value_from_py(v.as_any()))?
             },
             max_tool_steps: {
-                let v = &obj.get_item("max_tool_steps")?.ok_or_else(|| {
+                let v = obj.get_item("max_tool_steps")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.max_tool_steps")
                 })?;
-                (crate::python::number_from_py::<i64>(v, "SessionKwargs.max_tool_steps"))?
+                (crate::python::number_from_py::<i64>(v.as_any(), "SessionKwargs.max_tool_steps"))?
             },
             use_tts_aligned_transcript: match obj.get_item("use_tts_aligned_transcript")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (v.extract::<bool>()).map(::lk_agents_abi::Maybe::Given)
+                        (v.as_any().extract::<bool>()).map(::lk_agents_abi::Maybe::Given)
                     })?
                 }
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
             tts_text_transforms: match obj.get_item("tts_text_transforms")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
-                            (crate::conversions::text_transform_set_from_py(v)).map(Some)
+                            (crate::conversions::text_transform_set_from_py(v.as_any())).map(Some)
                         })
                         .map(::lk_agents_abi::Maybe::Given)
                     })?
@@ -10472,33 +10352,32 @@ pub mod session_options {
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
             min_consecutive_speech_delay: {
-                let v = &obj.get_item("min_consecutive_speech_delay")?.ok_or_else(|| {
+                let v = obj.get_item("min_consecutive_speech_delay")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err(
                         "SessionKwargs.min_consecutive_speech_delay",
                     )
                 })?;
                 (crate::python::number_from_py::<f64>(
-                    v,
+                    v.as_any(),
                     "SessionKwargs.min_consecutive_speech_delay",
                 ))?
             },
             expressive: {
-                let v = &obj.get_item("expressive")?.ok_or_else(|| {
+                let v = obj.get_item("expressive")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.expressive")
                 })?;
-                (crate::conversions::expressive_from_py(v))?
+                (crate::conversions::expressive_from_py(v.as_any()))?
             },
             aec_warmup_duration: match obj.get_item("aec_warmup_duration")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
                             (crate::python::number_from_py::<f64>(
-                                v,
+                                v.as_any(),
                                 "SessionKwargs.aec_warmup_duration",
                             ))
                             .map(Some)
@@ -10509,49 +10388,55 @@ pub mod session_options {
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
             ivr_detection: {
-                let v = &obj.get_item("ivr_detection")?.ok_or_else(|| {
+                let v = obj.get_item("ivr_detection")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.ivr_detection")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             user_away_timeout: {
-                let v = &obj.get_item("user_away_timeout")?.ok_or_else(|| {
+                let v = obj.get_item("user_away_timeout")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.user_away_timeout")
                 })?;
-                (if v.is_none() {
+                (if v.as_any().is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::number_from_py::<f64>(v, "SessionKwargs.user_away_timeout"))
-                        .map(Some)
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "SessionKwargs.user_away_timeout",
+                    ))
+                    .map(Some)
                 })?
             },
             transcription_timeout: {
-                let v = &obj.get_item("transcription_timeout")?.ok_or_else(|| {
+                let v = obj.get_item("transcription_timeout")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.transcription_timeout")
                 })?;
-                (if v.is_none() {
+                (if v.as_any().is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::number_from_py::<f64>(v, "SessionKwargs.transcription_timeout"))
-                        .map(Some)
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "SessionKwargs.transcription_timeout",
+                    ))
+                    .map(Some)
                 })?
             },
             session_close_transcript_timeout: {
-                let v = &obj.get_item("session_close_transcript_timeout")?.ok_or_else(|| {
+                let v = obj.get_item("session_close_transcript_timeout")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err(
                         "SessionKwargs.session_close_transcript_timeout",
                     )
                 })?;
                 (crate::python::number_from_py::<f64>(
-                    v,
+                    v.as_any(),
                     "SessionKwargs.session_close_transcript_timeout",
                 ))?
             },
             conn_options: {
-                let v = &obj.get_item("conn_options")?.ok_or_else(|| {
+                let v = obj.get_item("conn_options")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.conn_options")
                 })?;
-                (crate::conversions::session_conn_options_from_py(v))?
+                (crate::conversions::session_conn_options_from_py(v.as_any()))?
             },
         })
     }
@@ -10564,19 +10449,17 @@ pub mod session_options {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::session_options::UpdateKwargs {
             endpointing_opts: match obj.get_item("endpointing_opts")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::endpointing_options_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::endpointing_options_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             turn_detection: match obj.get_item("turn_detection")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (crate::conversions::turn_detection_kwarg_from_py(v))
+                        (crate::conversions::turn_detection_kwarg_from_py(v.as_any()))
                             .map(::lk_agents_abi::Maybe::Given)
                     })?
                 }
@@ -10584,67 +10467,59 @@ pub mod session_options {
             },
             expressive: match obj.get_item("expressive")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (crate::conversions::expressive_from_py(v))
+                        (crate::conversions::expressive_from_py(v.as_any()))
                             .map(::lk_agents_abi::Maybe::Given)
                     })?
                 }
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
             keyterms: match obj.get_item("keyterms")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (if v.is_instance_of::<::pyo3::types::PyList>()
-                            || v.is_instance_of::<::pyo3::types::PyTuple>()
-                        {
-                            v.try_iter()?
-                                .map(|item| {
-                                    let item = &item?;
-                                    item.extract::<::std::string::String>()
-                                })
-                                .collect::<PyResult<Vec<_>>>()
-                        } else {
-                            Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "UpdateKwargs.keyterms: expected a list or tuple",
-                            ))
-                        })?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (if v.as_any().is_instance_of::<::pyo3::types::PyList>()
+                        || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.as_any()
+                            .try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                item.extract::<::std::string::String>()
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "UpdateKwargs.keyterms: expected a list or tuple",
+                        ))
+                    })?,
+                ),
                 _ => None,
             },
             interruption: match obj.get_item("interruption")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::interruption_options_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::interruption_options_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             min_consecutive_speech_delay: match obj.get_item("min_consecutive_speech_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "UpdateKwargs.min_consecutive_speech_delay",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "UpdateKwargs.min_consecutive_speech_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             tts_text_transforms: match obj.get_item("tts_text_transforms")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
-                            (crate::conversions::text_transform_set_from_py(v)).map(Some)
+                            (crate::conversions::text_transform_set_from_py(v.as_any())).map(Some)
                         })
                         .map(::lk_agents_abi::Maybe::Given)
                     })?
@@ -10662,74 +10537,75 @@ pub mod session_options {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::session_options::SessionLegs {
             stt: {
-                let v = &obj
+                let v = obj
                     .get_item("stt")?
                     .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.stt"))?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             vad: {
-                let v = &obj
+                let v = obj
                     .get_item("vad")?
                     .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.vad"))?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             using_default_vad: {
-                let v = &obj.get_item("using_default_vad")?.ok_or_else(|| {
+                let v = obj.get_item("using_default_vad")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.using_default_vad")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             llm: {
-                let v = &obj
+                let v = obj
                     .get_item("llm")?
                     .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.llm"))?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             tts: {
-                let v = &obj
+                let v = obj
                     .get_item("tts")?
                     .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.tts"))?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             realtime: {
-                let v = &obj.get_item("realtime")?.ok_or_else(|| {
+                let v = obj.get_item("realtime")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.realtime")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             detector: {
-                let v = &obj.get_item("detector")?.ok_or_else(|| {
+                let v = obj.get_item("detector")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.detector")
                 })?;
-                (if v.is_none() {
+                (if v.as_any().is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::records::session_options::detector_kind_from_py(v)).map(Some)
+                    (crate::generated::records::session_options::detector_kind_from_py(v.as_any()))
+                        .map(Some)
                 })?
             },
             adaptive_detector: {
-                let v = &obj.get_item("adaptive_detector")?.ok_or_else(|| {
+                let v = obj.get_item("adaptive_detector")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.adaptive_detector")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             audio_enabled: {
-                let v = &obj.get_item("audio_enabled")?.ok_or_else(|| {
+                let v = obj.get_item("audio_enabled")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_enabled")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             audio_output: {
-                let v = &obj.get_item("audio_output")?.ok_or_else(|| {
+                let v = obj.get_item("audio_output")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_output")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
             sink_can_pause: {
-                let v = &obj.get_item("sink_can_pause")?.ok_or_else(|| {
+                let v = obj.get_item("sink_can_pause")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.sink_can_pause")
                 })?;
-                (v.extract::<bool>())?
+                (v.as_any().extract::<bool>())?
             },
         })
     }
@@ -10985,7 +10861,7 @@ pub mod session_options {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -11671,11 +11547,7 @@ pub mod session_wire {
                 py,
                 events
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::session_wire::span_event_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::session_wire::span_event_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -11686,11 +11558,7 @@ pub mod session_wire {
                 py,
                 metrics
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::session_wire::span_metric_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::session_wire::span_metric_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -11767,7 +11635,7 @@ pub mod session_wire {
                 py,
                 items
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -11932,9 +11800,7 @@ pub mod session_wire {
                 py,
                 items
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -11983,9 +11849,7 @@ pub mod session_wire {
                 crate::generated::records::events::eot_prediction_event_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::AgentBackchannelOpportunity(x) => {
-                crate::generated::records::events::__agent_backchannel_opportunity_event_to_py(
-                    py, x,
-                )?
+                crate::generated::records::events::agent_backchannel_opportunity_event_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::PreemptiveGeneration(x) => {
                 crate::generated::records::session_wire::preemptive_generation_event_to_py(py, x)?
@@ -12263,11 +12127,7 @@ pub mod storage_class {
                 py,
                 threads
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::storage_class::thread_info_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::storage_class::thread_info_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -12322,11 +12182,7 @@ pub mod storage_class {
                 py,
                 items
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::storage_class::thread_item_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::storage_class::thread_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -12409,7 +12265,7 @@ pub mod storage_class {
             ::lk_agents_abi::storage::TaskState::Canceled => "canceled",
             ::lk_agents_abi::storage::TaskState::Rejected => "rejected",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -12496,11 +12352,7 @@ pub mod storage_class {
                 py,
                 streams
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::storage_class::stream_info_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::storage_class::stream_info_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -12584,7 +12436,7 @@ pub mod storage_class {
                 py,
                 history
                     .into_iter()
-                    .map(|x| PyResult::Ok(crate::python::value_to_py(py, &x)?))
+                    .map(|x| crate::python::value_to_py(py, &x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -12596,7 +12448,7 @@ pub mod storage_class {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(crate::python::value_to_py(py, &x)?))
+                        .map(|x| crate::python::value_to_py(py, &x))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -12697,11 +12549,7 @@ pub mod storage_class {
                 py,
                 tasks
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::storage_class::task_record_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::storage_class::task_record_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -12932,7 +12780,7 @@ pub mod storage_context {
                 py,
                 fields
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -13028,11 +12876,7 @@ pub mod storage_context {
                 manifests
                     .into_iter()
                     .map(|x| {
-                        PyResult::Ok(
-                            crate::generated::records::storage_context::context_manifest_to_py(
-                                py, x,
-                            )?,
-                        )
+                        crate::generated::records::storage_context::context_manifest_to_py(py, x)
                     })
                     .collect::<PyResult<Vec<_>>>()?,
             )?
@@ -13150,7 +12994,7 @@ pub mod storage_context {
                 py,
                 params
                     .into_iter()
-                    .map(|x| PyResult::Ok(crate::python::value_to_py(py, &x)?))
+                    .map(|x| crate::python::value_to_py(py, &x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -13315,7 +13159,7 @@ pub mod storage_options {
             ::lk_agents_abi::a2a::options::Policy::Concurrent => "concurrent",
             ::lk_agents_abi::a2a::options::Policy::Reject => "reject",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/options.rs.
@@ -13474,9 +13318,7 @@ pub mod storage_turn {
                 py,
                 batch
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::a2a_client::message_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::a2a_client::message_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -13487,11 +13329,7 @@ pub mod storage_turn {
                 py,
                 history
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::storage_class::item_row_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::storage_class::item_row_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -13513,11 +13351,7 @@ pub mod storage_turn {
                 py,
                 context_scopes
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(
-                            crate::generated::records::storage_context::context_scope_to_py(py, x)?,
-                        )
-                    })
+                    .map(|x| crate::generated::records::storage_context::context_scope_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -13530,11 +13364,7 @@ pub mod storage_turn {
                 py,
                 tasks
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::storage_class::task_record_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::storage_class::task_record_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -13826,7 +13656,7 @@ pub mod storage_turn {
             ::lk_agents_abi::a2a::turn::Verdict::Continue => "continue",
             ::lk_agents_abi::a2a::turn::Verdict::Yield => "yield",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
@@ -13857,7 +13687,8 @@ pub mod storage_turn {
         )?)? {
             return Ok(::lk_agents_abi::a2a::turn::TurnEvent::Output {
                 output: crate::python::attr_with(obj, "Output", "output", |v| {
-                    crate::generated::records::storage_turn::handler_output_from_py(v)
+                    (crate::generated::records::storage_turn::handler_output_from_py(v))
+                        .map(::std::boxed::Box::new)
                 })?,
             });
         }
@@ -13991,13 +13822,13 @@ pub mod stt {
             ::lk_agents_abi::SpeechEventType::RecognitionUsage => "recognition_usage",
             ::lk_agents_abi::SpeechEventType::EndOfSpeech => "end_of_speech",
         };
-        Ok(crate::host::call(
+        crate::host::call(
             SPEECH_EVENT_TYPE
                 .import(py, "livekit.agents._generated.stt", "SpeechEventType")?
                 .as_any(),
             (value,),
             None,
-        )?)
+        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
@@ -14207,7 +14038,7 @@ pub mod stt {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?))
+                        .map(|x| crate::conversions::timed_string_to_py(py, x))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -14220,7 +14051,7 @@ pub mod stt {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(crate::python::str_to_py(py, &x)))
+                        .map(|x| ::pyo3::PyResult::Ok(crate::python::str_to_py(py, &x)))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -14233,7 +14064,7 @@ pub mod stt {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -14246,7 +14077,7 @@ pub mod stt {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(crate::python::str_to_py(py, &x)))
+                        .map(|x| ::pyo3::PyResult::Ok(crate::python::str_to_py(py, &x)))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -14259,7 +14090,7 @@ pub mod stt {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -14382,7 +14213,9 @@ pub mod stt {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::records::stt::recognition_usage_from_py(v)).map(Some)
+                        ((crate::generated::records::stt::recognition_usage_from_py(v))
+                            .map(::std::boxed::Box::new))
+                        .map(Some)
                     }
                 },
             )?,
@@ -14446,9 +14279,7 @@ pub mod stt {
                 py,
                 alternatives
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::stt::speech_data_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::stt::speech_data_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -14457,7 +14288,10 @@ pub mod stt {
             "recognition_usage",
             match recognition_usage {
                 None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::stt::recognition_usage_to_py(py, x)?,
+                Some(x) => {
+                    let value = *x;
+                    crate::generated::records::stt::recognition_usage_to_py(py, value)?
+                }
             },
         )?;
         kwargs.set_item(
@@ -14629,7 +14463,7 @@ pub mod telemetry {
             ::lk_agents_abi::telemetry::policy::TelemetryRecordKind::Scope => "scope",
             ::lk_agents_abi::telemetry::policy::TelemetryRecordKind::Value => "value",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
@@ -14661,7 +14495,7 @@ pub mod telemetry {
             ::lk_agents_abi::telemetry::policy::TelemetryExportAction::Capacity => "capacity",
             ::lk_agents_abi::telemetry::policy::TelemetryExportAction::Disabled => "disabled",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
@@ -14763,7 +14597,7 @@ pub mod telemetry {
             ::lk_agents_abi::Outcome::Success => "success",
             ::lk_agents_abi::Outcome::Fail => "fail",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
@@ -15038,7 +14872,7 @@ pub mod telemetry {
                 py,
                 events
                     .into_iter()
-                    .map(|x| PyResult::Ok(crate::python::value_to_py(py, &x)?))
+                    .map(|x| crate::python::value_to_py(py, &x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -15586,9 +15420,7 @@ pub mod text_session {
                 py,
                 history
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -15612,11 +15444,7 @@ pub mod text_session {
                 pending_calls
                     .into_iter()
                     .map(|x| {
-                        PyResult::Ok(
-                            crate::generated::records::text_session::pending_child_call_to_py(
-                                py, x,
-                            )?,
-                        )
+                        crate::generated::records::text_session::pending_child_call_to_py(py, x)
                     })
                     .collect::<PyResult<Vec<_>>>()?,
             )?
@@ -15635,11 +15463,7 @@ pub mod text_session {
                 py,
                 visible_dialogue
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::chat_items::chat_message_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::chat_items::chat_message_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -15650,7 +15474,7 @@ pub mod text_session {
                 py,
                 starting_history_ids
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -15661,7 +15485,7 @@ pub mod text_session {
                 py,
                 transferred_message_ids
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -15781,11 +15605,7 @@ pub mod text_session {
                 py,
                 ancestors
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::text_session::frame_id_to_py(
-                            py, x,
-                        )?)
-                    })
+                    .map(|x| crate::generated::records::text_session::frame_id_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -15833,7 +15653,7 @@ pub mod text_session {
             ::lk_agents_abi::text_session::ChatHistory::Fresh => "fresh",
             ::lk_agents_abi::text_session::ChatHistory::Fork => "fork",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -16154,10 +15974,10 @@ pub mod text_session {
                 crate::generated::records::agent_run::agent_definition_from_py(v)
             })?,
             llm: crate::python::attr_with(obj, "TextSessionAgent", "llm", |v| {
-                crate::generated::llm::LlmProxy::from_host(&v)
+                crate::generated::llm::LlmProxy::from_host(v.as_any())
             })?,
             host: crate::python::attr_with(obj, "TextSessionAgent", "host", |v| {
-                crate::generated::agent::AgentCallbacksProxy::from_host(&v)
+                crate::generated::agent::AgentCallbacksProxy::from_host(v.as_any())
             })?,
             output_type_explicit: crate::python::attr_with(
                 obj,
@@ -16403,9 +16223,7 @@ pub mod text_session {
                         py,
                         pending
                             .into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -16424,12 +16242,10 @@ pub mod text_session {
             }
             ::lk_agents_abi::text_session::TextSessionUpdate::Finished(settled) => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "settled",
-                    crate::generated::records::text_session::text_session_settled_to_py(
-                        py, settled,
-                    )?,
-                )?;
+                kwargs.set_item("settled", {
+                    let value = *settled;
+                    crate::generated::records::text_session::text_session_settled_to_py(py, value)?
+                })?;
                 crate::host::call(
                     TEXT_SESSION_UPDATE_FINISHED
                         .import(
@@ -16529,8 +16345,14 @@ pub mod tokenizer {
                     let item_2 = tuple.get_item(2)?;
                     Ok((
                         (item_0.extract::<::std::string::String>())?,
-                        (crate::python::number_from_py::<usize>(&item_1, "TokenizerToken.Span"))?,
-                        (crate::python::number_from_py::<usize>(&item_2, "TokenizerToken.Span"))?,
+                        (crate::python::number_from_py::<usize>(
+                            item_1.as_any(),
+                            "TokenizerToken.Span",
+                        ))?,
+                        (crate::python::number_from_py::<usize>(
+                            item_2.as_any(),
+                            "TokenizerToken.Span",
+                        ))?,
                     ))
                 })()?,
             ));
@@ -16569,7 +16391,7 @@ pub mod tool_context {
             ::lk_agents_abi::llm::mcp::DuplicateMode::Replace => "replace",
             ::lk_agents_abi::llm::mcp::DuplicateMode::Confirm => "confirm",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs.
@@ -16595,7 +16417,7 @@ pub mod tool_context {
             ::lk_agents_abi::llm::mcp::DuplicateScope::Name => "name",
             ::lk_agents_abi::llm::mcp::DuplicateScope::NameAndArgs => "name_and_args",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs.
@@ -17082,7 +16904,7 @@ pub mod tool_report {
             ::lk_agents_abi::llm::tool_executor::Approval::Asked => "asked",
             ::lk_agents_abi::llm::tool_executor::Approval::Granted => "granted",
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
@@ -17197,9 +17019,7 @@ pub mod tts {
                     ::pyo3::types::PyList::new(
                         py,
                         x.into_iter()
-                            .map(|x| {
-                                PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)
-                            })
+                            .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -17263,30 +17083,32 @@ pub mod turn {
         Ok(::lk_agents_abi::voice::session_options::EndpointingKwargs {
             mode: match obj.get_item("mode")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::endpointing_mode_from_py(v))?)
+                    Some((crate::generated::records::turn::endpointing_mode_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
             min_delay: match obj.get_item("min_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "EndpointingOptions.min_delay"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "EndpointingOptions.min_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             max_delay: match obj.get_item("max_delay")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "EndpointingOptions.max_delay"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "EndpointingOptions.max_delay",
+                    ))?,
+                ),
                 _ => None,
             },
             alpha: match obj.get_item("alpha")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::python::number_from_py::<f64>(v, "EndpointingOptions.alpha"))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(v.as_any(), "EndpointingOptions.alpha"))?,
+                ),
                 _ => None,
             },
         })
@@ -17301,15 +17123,13 @@ pub mod turn {
         Ok(::lk_agents_abi::voice::session_options::InterruptionKwargs {
             enabled: match obj.get_item("enabled")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             mode: match obj.get_item("mode")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::interruption_mode_from_py(v))?)
+                    Some((crate::generated::records::turn::interruption_mode_from_py(v.as_any()))?)
                 }
                 _ => None,
             },
@@ -17317,50 +17137,44 @@ pub mod turn {
                 .get_item("discard_audio_if_uninterruptible")?
             {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             min_duration: match obj.get_item("min_duration")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "InterruptionOptions.min_duration",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "InterruptionOptions.min_duration",
+                    ))?,
+                ),
                 _ => None,
             },
             min_words: match obj.get_item("min_words")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<i64>(v, "InterruptionOptions.min_words"))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<i64>(
+                        v.as_any(),
+                        "InterruptionOptions.min_words",
+                    ))?,
+                ),
                 _ => None,
             },
             resume_false_interruption: match obj.get_item("resume_false_interruption")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             false_interruption_timeout: match obj.get_item("false_interruption_timeout")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
                             (crate::python::number_from_py::<f64>(
-                                v,
+                                v.as_any(),
                                 "InterruptionOptions.false_interruption_timeout",
                             ))
                             .map(Some)
@@ -17372,14 +17186,13 @@ pub mod turn {
             },
             backchannel_boundary: match obj.get_item("backchannel_boundary")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
-                            (crate::conversions::backchannel_boundary_from_py(v)).map(Some)
+                            (crate::conversions::backchannel_boundary_from_py(v.as_any())).map(Some)
                         })
                         .map(::lk_agents_abi::Maybe::Given)
                     })?
@@ -17398,40 +17211,32 @@ pub mod turn {
         Ok(::lk_agents_abi::voice::session_options::PreemptiveKwargs {
             enabled: match obj.get_item("enabled")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             preemptive_tts: match obj.get_item("preemptive_tts")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<bool>())?)
+                    Some((v.as_any().extract::<bool>())?)
                 }
                 _ => None,
             },
             max_speech_duration: match obj.get_item("max_speech_duration")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<f64>(
-                            v,
-                            "PreemptiveGenerationOptions.max_speech_duration",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<f64>(
+                        v.as_any(),
+                        "PreemptiveGenerationOptions.max_speech_duration",
+                    ))?,
+                ),
                 _ => None,
             },
             max_retries: match obj.get_item("max_retries")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::python::number_from_py::<i64>(
-                            v,
-                            "PreemptiveGenerationOptions.max_retries",
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::python::number_from_py::<i64>(
+                        v.as_any(),
+                        "PreemptiveGenerationOptions.max_retries",
+                    ))?,
+                ),
                 _ => None,
             },
         })
@@ -17446,15 +17251,14 @@ pub mod turn {
         Ok(::lk_agents_abi::voice::session_options::UserTurnLimitKwargs {
             max_words: match obj.get_item("max_words")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
                             (crate::python::number_from_py::<i64>(
-                                v,
+                                v.as_any(),
                                 "UserTurnLimitOptions.max_words",
                             ))
                             .map(Some)
@@ -17466,15 +17270,14 @@ pub mod turn {
             },
             max_duration: match obj.get_item("max_duration")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (if v.is_none() {
+                        (if v.as_any().is_none() {
                             Ok(None)
                         } else {
                             (crate::python::number_from_py::<f64>(
-                                v,
+                                v.as_any(),
                                 "UserTurnLimitOptions.max_duration",
                             ))
                             .map(Some)
@@ -17496,46 +17299,39 @@ pub mod turn {
         Ok(::lk_agents_abi::voice::session_options::TurnHandlingKwargs {
             turn_detection: match obj.get_item("turn_detection")? {
                 Some(v) => {
-                    let v = &v;
-                    (if crate::python::is_not_given(v)? {
+                    (if crate::python::is_not_given(v.as_any())? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (crate::conversions::turn_detection_kwarg_from_py(v))
+                        (crate::conversions::turn_detection_kwarg_from_py(v.as_any()))
                             .map(::lk_agents_abi::Maybe::Given)
                     })?
                 }
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
             endpointing: match obj.get_item("endpointing")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::endpointing_options_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::endpointing_options_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             interruption: match obj.get_item("interruption")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::interruption_options_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::interruption_options_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
             preemptive_generation: match obj.get_item("preemptive_generation")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some(
-                        (crate::generated::records::turn::preemptive_generation_options_from_py(
-                            v,
-                        ))?,
-                    )
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::preemptive_generation_options_from_py(
+                        v.as_any(),
+                    ))?,
+                ),
                 _ => None,
             },
             user_turn_limit: match obj.get_item("user_turn_limit")? {
-                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((crate::generated::records::turn::user_turn_limit_options_from_py(v))?)
-                }
+                Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => Some(
+                    (crate::generated::records::turn::user_turn_limit_options_from_py(v.as_any()))?,
+                ),
                 _ => None,
             },
         })
@@ -17572,7 +17368,7 @@ pub mod turn_events {
                 "turn-detector-v1-mini"
             }
         };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/tokenize/language/eot_thresholds.rs.
@@ -17767,22 +17563,22 @@ pub mod types {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::ProviderId {
             label: {
-                let v = &obj
+                let v = obj
                     .get_item("label")?
                     .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("ProviderId.label"))?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             model: {
-                let v = &obj
+                let v = obj
                     .get_item("model")?
                     .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("ProviderId.model"))?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             provider: {
-                let v = &obj.get_item("provider")?.ok_or_else(|| {
+                let v = obj.get_item("provider")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("ProviderId.provider")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
         })
     }
@@ -18778,9 +18574,7 @@ pub mod usage {
                 py,
                 models
                     .into_iter()
-                    .map(|x| {
-                        PyResult::Ok(crate::generated::records::usage::model_usage_to_py(py, x)?)
-                    })
+                    .map(|x| crate::generated::records::usage::model_usage_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -18834,11 +18628,11 @@ pub mod vad {
             ::lk_agents_abi::VadEventType::InferenceDone => "inference_done",
             ::lk_agents_abi::VadEventType::EndOfSpeech => "end_of_speech",
         };
-        Ok(crate::host::call(
+        crate::host::call(
             VAD_EVENT_TYPE.import(py, "livekit.agents._generated.vad", "VADEventType")?.as_any(),
             (value,),
             None,
-        )?)
+        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/vad/events.rs.
@@ -18885,7 +18679,7 @@ pub mod vad {
                 py,
                 frames
                     .into_iter()
-                    .map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?))
+                    .map(|x| crate::conversions::audio_frame_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -18970,7 +18764,8 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::agent::HostInstructionsProxy::from_host(&v)).map(Some)
+                        (crate::generated::agent::HostInstructionsProxy::from_host(v.as_any()))
+                            .map(Some)
                     }
                 },
             )?,
@@ -19013,14 +18808,13 @@ pub mod voice_session {
                 }
             })?,
             voice_agent: crate::python::attr_with(obj, "UpdateAgentArgs", "voice_agent", |v| {
-                crate::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(
-                    || {
+                crate::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(v.as_any())
+                    .ok_or_else(|| {
                         ::pyo3::exceptions::PyTypeError::new_err(concat!(
                             "UpdateAgentArgs.voice_agent",
                             ": expected an agent's voice frame (`_core.VoiceAgent`)"
                         ))
-                    },
-                )
+                    })
             })?,
             chat_ctx: crate::python::attr_with(obj, "UpdateAgentArgs", "chat_ctx", |v| {
                 if v.is_none() {
@@ -19050,7 +18844,7 @@ pub mod voice_session {
                     (if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::llm::LlmProxy::from_host(&v)).map(Some)
+                        (crate::generated::llm::LlmProxy::from_host(v.as_any())).map(Some)
                     })
                     .map(::lk_agents_abi::Maybe::Given)
                 }
@@ -19062,7 +18856,7 @@ pub mod voice_session {
                     (if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::tts::TtsProxy::from_host(&v)).map(Some)
+                        (crate::generated::tts::TtsProxy::from_host(v.as_any())).map(Some)
                     })
                     .map(::lk_agents_abi::Maybe::Given)
                 }
@@ -19074,7 +18868,7 @@ pub mod voice_session {
                     (if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::stt::SttProxy::from_host(&v)).map(Some)
+                        (crate::generated::stt::SttProxy::from_host(v.as_any())).map(Some)
                     })
                     .map(::lk_agents_abi::Maybe::Given)
                 }
@@ -19086,7 +18880,7 @@ pub mod voice_session {
                     (if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::vad::VadProxy::from_host(&v)).map(Some)
+                        (crate::generated::vad::VadProxy::from_host(v.as_any())).map(Some)
                     })
                     .map(::lk_agents_abi::Maybe::Given)
                 }
@@ -19137,13 +18931,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "UpdateAgentArgs.llm_node",
-                                ": expected the session's nodes (`_core.AgentNodes`)"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "UpdateAgentArgs.llm_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19151,13 +18947,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "UpdateAgentArgs.tts_node",
-                                ": expected the session's nodes (`_core.AgentNodes`)"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "UpdateAgentArgs.tts_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19165,13 +18963,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "UpdateAgentArgs.stt_node",
-                                ": expected the session's nodes (`_core.AgentNodes`)"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "UpdateAgentArgs.stt_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19184,7 +18984,7 @@ pub mod voice_session {
                         Ok(None)
                     } else {
                         (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
-                            &v,
+                            v.as_any(),
                         )
                         .ok_or_else(|| {
                             ::pyo3::exceptions::PyTypeError::new_err(concat!(
@@ -19205,7 +19005,7 @@ pub mod voice_session {
                         Ok(None)
                     } else {
                         (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
-                            &v,
+                            v.as_any(),
                         )
                         .ok_or_else(|| {
                             ::pyo3::exceptions::PyTypeError::new_err(concat!(
@@ -19251,7 +19051,8 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::agent::HostInstructionsProxy::from_host(&v)).map(Some)
+                        (crate::generated::agent::HostInstructionsProxy::from_host(v.as_any()))
+                            .map(Some)
                     }
                 },
             )?,
@@ -19290,13 +19091,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.storage",
-                                ": expected a native voice storage manager"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "VoiceSessionArgs.storage",
+                            ": expected a native voice storage manager"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19304,33 +19107,35 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::stt::SttProxy::from_host(&v)).map(Some)
+                    (crate::generated::stt::SttProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             vad: crate::python::attr_with(obj, "VoiceSessionArgs", "vad", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::vad::VadProxy::from_host(&v)).map(Some)
+                    (crate::generated::vad::VadProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             llm: crate::python::attr_with(obj, "VoiceSessionArgs", "llm", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::llm::LlmProxy::from_host(&v)).map(Some)
+                    (crate::generated::llm::LlmProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             realtime: crate::python::attr_with(obj, "VoiceSessionArgs", "realtime", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::Realtime>(&v).ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "VoiceSessionArgs.realtime",
-                            ": expected OpenAIRealtimeModel"
-                        ))
-                    }))
+                    (crate::python::native::<dyn ::lk_agents_abi::Realtime>(v.as_any()).ok_or_else(
+                        || {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "VoiceSessionArgs.realtime",
+                                ": expected OpenAIRealtimeModel"
+                            ))
+                        },
+                    ))
                     .map(Some)
                 }
             })?,
@@ -19338,21 +19143,21 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::tts::TtsProxy::from_host(&v)).map(Some)
+                    (crate::generated::tts::TtsProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             on_event: crate::python::attr_with(obj, "VoiceSessionArgs", "on_event", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::voice::SessionEventsProxy::from_host(&v)).map(Some)
+                    (crate::generated::voice::SessionEventsProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             hooks: crate::python::attr_with(obj, "VoiceSessionArgs", "hooks", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::voice::SessionHooksProxy::from_host(&v)).map(Some)
+                    (crate::generated::voice::SessionHooksProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             agent_turn_handling: crate::python::attr_with(
@@ -19398,7 +19203,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::turn::EotDetectorProxy::from_host(&v)).map(Some)
+                        (crate::generated::turn::EotDetectorProxy::from_host(v.as_any())).map(Some)
                     }
                 },
             )?,
@@ -19410,7 +19215,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::python::native::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.interruption_detector", ": interruption_detector must be an `inference.AdaptiveInterruptionDetector`")))).map(Some)
+                        (crate::python::native::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.interruption_detector", ": interruption_detector must be an `inference.AdaptiveInterruptionDetector`")))).map(Some)
                     }
                 },
             )?,
@@ -19454,7 +19259,7 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v)
+                    (crate::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(v.as_any())
                         .ok_or_else(|| {
                             ::pyo3::exceptions::PyTypeError::new_err(concat!(
                                 "VoiceSessionArgs.voice_agent",
@@ -19473,7 +19278,7 @@ pub mod voice_session {
                         Ok(None)
                     } else {
                         (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
-                            &v,
+                            v.as_any(),
                         )
                         .ok_or_else(|| {
                             ::pyo3::exceptions::PyTypeError::new_err(concat!(
@@ -19494,7 +19299,7 @@ pub mod voice_session {
                         Ok(None)
                     } else {
                         (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
-                            &v,
+                            v.as_any(),
                         )
                         .ok_or_else(|| {
                             ::pyo3::exceptions::PyTypeError::new_err(concat!(
@@ -19510,13 +19315,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.llm_node",
-                                ": expected the session's nodes (`_core.AgentNodes`)"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "VoiceSessionArgs.llm_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19524,13 +19331,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.tts_node",
-                                ": expected the session's nodes (`_core.AgentNodes`)"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "VoiceSessionArgs.tts_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19538,13 +19347,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.stt_node",
-                                ": expected the session's nodes (`_core.AgentNodes`)"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "VoiceSessionArgs.stt_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19556,7 +19367,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::voice::AudioInputProxy::from_host(&v)).map(Some)
+                        (crate::generated::voice::AudioInputProxy::from_host(v.as_any())).map(Some)
                     }
                 },
             )?,
@@ -19568,7 +19379,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::voice::AudioOutputProxy::from_host(&v)).map(Some)
+                        (crate::generated::voice::AudioOutputProxy::from_host(v.as_any())).map(Some)
                     }
                 },
             )?,
@@ -19580,7 +19391,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::voice::VideoInputProxy::from_host(&v)).map(Some)
+                        (crate::generated::voice::VideoInputProxy::from_host(v.as_any())).map(Some)
                     }
                 },
             )?,
@@ -19604,11 +19415,11 @@ pub mod voice_session {
                             let item_1 = tuple.get_item(1)?;
                             Ok((
                                 (crate::python::number_from_py::<f64>(
-                                    &item_0,
+                                    item_0.as_any(),
                                     "VoiceSessionArgs.video_sampler",
                                 ))?,
                                 (crate::python::number_from_py::<f64>(
-                                    &item_1,
+                                    item_1.as_any(),
                                     "VoiceSessionArgs.video_sampler",
                                 ))?,
                             ))
@@ -19631,7 +19442,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::voice::TextOutputProxy::from_host(&v)).map(Some)
+                        (crate::generated::voice::TextOutputProxy::from_host(v.as_any())).map(Some)
                     }
                 },
             )?,
@@ -19671,7 +19482,7 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::llm::LlmProxy::from_host(&v)).map(Some)
+                    (crate::generated::llm::LlmProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
             keyterm_tools: crate::python::attr_with(
@@ -19714,7 +19525,8 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::worker::SessionPortProxy::from_host(&v)).map(Some)
+                        (crate::generated::worker::SessionPortProxy::from_host(v.as_any()))
+                            .map(Some)
                     }
                 },
             )?,
@@ -19722,13 +19534,15 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::python::native::<dyn ::lk_agents_abi::voice::console::ConsolePort>(&v)
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.console",
-                                ": expected a native ConsoleIo"
-                            ))
-                        }))
+                    (crate::python::native::<dyn ::lk_agents_abi::voice::console::ConsolePort>(
+                        v.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "VoiceSessionArgs.console",
+                            ": expected a native ConsoleIo"
+                        ))
+                    }))
                     .map(Some)
                 }
             })?,
@@ -19736,7 +19550,7 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::worker::SessionJobProxy::from_host(&v)).map(Some)
+                    (crate::generated::worker::SessionJobProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
         })
@@ -19894,7 +19708,7 @@ pub mod worker_endpoint {
                 headers
                     .into_iter()
                     .map(|x| {
-                        PyResult::Ok({
+                        ::pyo3::PyResult::Ok({
                             let (x0, x1) = x;
                             ::pyo3::types::PyTuple::new(
                                 py,
@@ -19933,7 +19747,7 @@ pub mod worker_endpoint {
                 py,
                 subprotocols
                     .into_iter()
-                    .map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?))
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -20110,55 +19924,49 @@ pub mod worker_endpoint {
                                     let item_0 = tuple.get_item(0)?;
                                     let item_1 = tuple.get_item(1)?;
                                     Ok((
-                                        ({
-                                            if item_0.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::python::owned_bytes(
-                                                    &item_0,
-                                                    "AsgiSentResponseStart.headers",
-                                                )
-                                            } else {
-                                                item_0.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::python::number_from_py::<u8>(
-                                                                &item,
-                                                                "AsgiSentResponseStart.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            }
+                                        (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
+                                            || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
+                                            || item_0
+                                                .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                        {
+                                            crate::python::owned_bytes(
+                                                item_0.as_any(),
+                                                "AsgiSentResponseStart.headers",
+                                            )
+                                        } else {
+                                            item_0.try_iter().and_then(|items| {
+                                                items
+                                                    .map(|item| {
+                                                        let item = item?;
+                                                        crate::python::number_from_py::<u8>(
+                                                            item.as_any(),
+                                                            "AsgiSentResponseStart.headers",
+                                                        )
+                                                    })
+                                                    .collect::<PyResult<Vec<_>>>()
+                                            })
                                         })?,
-                                        ({
-                                            if item_1.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::python::owned_bytes(
-                                                    &item_1,
-                                                    "AsgiSentResponseStart.headers",
-                                                )
-                                            } else {
-                                                item_1.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::python::number_from_py::<u8>(
-                                                                &item,
-                                                                "AsgiSentResponseStart.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            }
+                                        (if item_1.is_instance_of::<::pyo3::types::PyBytes>()
+                                            || item_1.is_instance_of::<::pyo3::types::PyByteArray>()
+                                            || item_1
+                                                .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                        {
+                                            crate::python::owned_bytes(
+                                                item_1.as_any(),
+                                                "AsgiSentResponseStart.headers",
+                                            )
+                                        } else {
+                                            item_1.try_iter().and_then(|items| {
+                                                items
+                                                    .map(|item| {
+                                                        let item = item?;
+                                                        crate::python::number_from_py::<u8>(
+                                                            item.as_any(),
+                                                            "AsgiSentResponseStart.headers",
+                                                        )
+                                                    })
+                                                    .collect::<PyResult<Vec<_>>>()
+                                            })
                                         })?,
                                     ))
                                 })()
@@ -20183,14 +19991,14 @@ pub mod worker_endpoint {
                         || v.is_instance_of::<::pyo3::types::PyByteArray>()
                         || v.is_instance_of::<::pyo3::types::PyMemoryView>()
                     {
-                        crate::python::owned_bytes(&v, "AsgiSentResponseBody.body")
+                        crate::python::owned_bytes(v.as_any(), "AsgiSentResponseBody.body")
                     } else {
                         v.try_iter().and_then(|items| {
                             items
                                 .map(|item| {
                                     let item = item?;
                                     crate::python::number_from_py::<u8>(
-                                        &item,
+                                        item.as_any(),
                                         "AsgiSentResponseBody.body",
                                     )
                                 })
@@ -20251,55 +20059,49 @@ pub mod worker_endpoint {
                                     let item_0 = tuple.get_item(0)?;
                                     let item_1 = tuple.get_item(1)?;
                                     Ok((
-                                        ({
-                                            if item_0.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::python::owned_bytes(
-                                                    &item_0,
-                                                    "AsgiSentWsAccept.headers",
-                                                )
-                                            } else {
-                                                item_0.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::python::number_from_py::<u8>(
-                                                                &item,
-                                                                "AsgiSentWsAccept.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            }
+                                        (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
+                                            || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
+                                            || item_0
+                                                .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                        {
+                                            crate::python::owned_bytes(
+                                                item_0.as_any(),
+                                                "AsgiSentWsAccept.headers",
+                                            )
+                                        } else {
+                                            item_0.try_iter().and_then(|items| {
+                                                items
+                                                    .map(|item| {
+                                                        let item = item?;
+                                                        crate::python::number_from_py::<u8>(
+                                                            item.as_any(),
+                                                            "AsgiSentWsAccept.headers",
+                                                        )
+                                                    })
+                                                    .collect::<PyResult<Vec<_>>>()
+                                            })
                                         })?,
-                                        ({
-                                            if item_1.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::python::owned_bytes(
-                                                    &item_1,
-                                                    "AsgiSentWsAccept.headers",
-                                                )
-                                            } else {
-                                                item_1.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::python::number_from_py::<u8>(
-                                                                &item,
-                                                                "AsgiSentWsAccept.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            }
+                                        (if item_1.is_instance_of::<::pyo3::types::PyBytes>()
+                                            || item_1.is_instance_of::<::pyo3::types::PyByteArray>()
+                                            || item_1
+                                                .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                        {
+                                            crate::python::owned_bytes(
+                                                item_1.as_any(),
+                                                "AsgiSentWsAccept.headers",
+                                            )
+                                        } else {
+                                            item_1.try_iter().and_then(|items| {
+                                                items
+                                                    .map(|item| {
+                                                        let item = item?;
+                                                        crate::python::number_from_py::<u8>(
+                                                            item.as_any(),
+                                                            "AsgiSentWsAccept.headers",
+                                                        )
+                                                    })
+                                                    .collect::<PyResult<Vec<_>>>()
+                                            })
                                         })?,
                                     ))
                                 })()
@@ -20335,14 +20137,14 @@ pub mod worker_endpoint {
                         || v.is_instance_of::<::pyo3::types::PyByteArray>()
                         || v.is_instance_of::<::pyo3::types::PyMemoryView>()
                     {
-                        crate::python::owned_bytes(&v, "AsgiSentWsBytes.data")
+                        crate::python::owned_bytes(v.as_any(), "AsgiSentWsBytes.data")
                     } else {
                         v.try_iter().and_then(|items| {
                             items
                                 .map(|item| {
                                     let item = item?;
                                     crate::python::number_from_py::<u8>(
-                                        &item,
+                                        item.as_any(),
                                         "AsgiSentWsBytes.data",
                                     )
                                 })
@@ -20391,7 +20193,7 @@ pub mod worker_endpoint {
                         if v.is_instance_of::<::pyo3::types::PyList>()
                             || v.is_instance_of::<::pyo3::types::PyTuple>()
                         {
-                            v.try_iter()?.map(|item| { let item = &item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AsgiSentWsHttpResponseStart.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok((({ if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::python::owned_bytes(&item_0, "AsgiSentWsHttpResponseStart.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::python::number_from_py::<u8>(&item, "AsgiSentWsHttpResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) } })?, ({ if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::python::owned_bytes(&item_1, "AsgiSentWsHttpResponseStart.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::python::number_from_py::<u8>(&item, "AsgiSentWsHttpResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) } })?,)) })() }).collect::<PyResult<Vec<_>>>()
+                            v.try_iter()?.map(|item| { let item = &item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AsgiSentWsHttpResponseStart.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::python::owned_bytes(item_0.as_any(), "AsgiSentWsHttpResponseStart.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::python::number_from_py::<u8>(item.as_any(), "AsgiSentWsHttpResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) })?, (if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::python::owned_bytes(item_1.as_any(), "AsgiSentWsHttpResponseStart.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::python::number_from_py::<u8>(item.as_any(), "AsgiSentWsHttpResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) })?,)) })() }).collect::<PyResult<Vec<_>>>()
                         } else {
                             Err(::pyo3::exceptions::PyTypeError::new_err(
                                 "AsgiSentWsHttpResponseStart.headers: expected a list or tuple",
@@ -20412,14 +20214,14 @@ pub mod worker_endpoint {
                         || v.is_instance_of::<::pyo3::types::PyByteArray>()
                         || v.is_instance_of::<::pyo3::types::PyMemoryView>()
                     {
-                        crate::python::owned_bytes(&v, "AsgiSentWsHttpResponseBody.body")
+                        crate::python::owned_bytes(v.as_any(), "AsgiSentWsHttpResponseBody.body")
                     } else {
                         v.try_iter().and_then(|items| {
                             items
                                 .map(|item| {
                                     let item = item?;
                                     crate::python::number_from_py::<u8>(
-                                        &item,
+                                        item.as_any(),
                                         "AsgiSentWsHttpResponseBody.body",
                                     )
                                 })
@@ -20634,13 +20436,16 @@ pub mod worker_ipc {
                     || v.is_instance_of::<::pyo3::types::PyByteArray>()
                     || v.is_instance_of::<::pyo3::types::PyMemoryView>()
                 {
-                    crate::python::owned_bytes(&v, "StartJobFields.job")
+                    crate::python::owned_bytes(v.as_any(), "StartJobFields.job")
                 } else {
                     v.try_iter().and_then(|items| {
                         items
                             .map(|item| {
                                 let item = item?;
-                                crate::python::number_from_py::<u8>(&item, "StartJobFields.job")
+                                crate::python::number_from_py::<u8>(
+                                    item.as_any(),
+                                    "StartJobFields.job",
+                                )
                             })
                             .collect::<PyResult<Vec<_>>>()
                     })
@@ -20759,7 +20564,7 @@ pub mod worker_options {
 
     pub fn worker_permissions_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::worker::WorkerPermissions> {
+    ) -> PyResult<::lk_agents_abi::worker::types::WorkerPermissions> {
         let py = obj.py();
         if !obj.is_instance(WORKER_PERMISSIONS.import(
             py,
@@ -20768,7 +20573,7 @@ pub mod worker_options {
         )?)? {
             return Err(super::not_a(obj, "WorkerPermissions"));
         }
-        Ok(::lk_agents_abi::worker::worker::WorkerPermissions {
+        Ok(::lk_agents_abi::worker::types::WorkerPermissions {
             can_publish: crate::python::attr_with(obj, "WorkerPermissions", "can_publish", |v| {
                 v.extract::<bool>()
             })?,
@@ -20826,7 +20631,7 @@ pub mod worker_options {
 
     pub fn server_options_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::worker::ServerOptions> {
+    ) -> PyResult<::lk_agents_abi::worker::types::ServerOptions> {
         let py = obj.py();
         if !obj.is_instance(SERVER_OPTIONS.import(
             py,
@@ -20835,7 +20640,7 @@ pub mod worker_options {
         )?)? {
             return Err(super::not_a(obj, "ServerOptions"));
         }
-        Ok(::lk_agents_abi::worker::worker::ServerOptions {
+        Ok(::lk_agents_abi::worker::types::ServerOptions {
             ws_url: crate::python::attr_with(obj, "ServerOptions", "ws_url", |v| {
                 if crate::python::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)
@@ -21119,9 +20924,9 @@ pub mod worker_server {
 
     pub fn job_info_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::worker::worker::JobInfo,
+        value: ::lk_agents_abi::worker::types::JobInfo,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::worker::JobInfo {
+        let ::lk_agents_abi::worker::types::JobInfo {
             id,
             dispatch_id,
             r#type,
@@ -21182,9 +20987,9 @@ pub mod worker_server {
 
     pub fn running_job_info_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::worker::worker::RunningJobInfo,
+        value: ::lk_agents_abi::worker::types::RunningJobInfo,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::worker::RunningJobInfo {
+        let ::lk_agents_abi::worker::types::RunningJobInfo {
             accept_arguments,
             job,
             url,
@@ -21233,9 +21038,9 @@ pub mod worker_server {
 
     pub fn accept_arguments_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::worker::worker::AcceptArguments,
+        value: ::lk_agents_abi::worker::types::AcceptArguments,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::worker::AcceptArguments {
+        let ::lk_agents_abi::worker::types::AcceptArguments {
             name,
             identity,
             metadata,
@@ -21252,7 +21057,7 @@ pub mod worker_server {
                 attributes
                     .into_iter()
                     .map(|x| {
-                        PyResult::Ok({
+                        ::pyo3::PyResult::Ok({
                             let (x0, x1) = x;
                             ::pyo3::types::PyTuple::new(
                                 py,
@@ -21283,9 +21088,9 @@ pub mod worker_server {
 
     pub fn process_pool_options_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::worker::worker::ProcessPoolOptions,
+        value: ::lk_agents_abi::worker::types::ProcessPoolOptions,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::worker::ProcessPoolOptions {
+        let ::lk_agents_abi::worker::types::ProcessPoolOptions {
             num_idle_processes,
             initialize_timeout,
             close_timeout,
@@ -21341,9 +21146,9 @@ pub mod worker_server {
 
     pub fn process_start_options_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::worker::worker::ProcessStartOptions,
+        value: ::lk_agents_abi::worker::types::ProcessStartOptions,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::worker::ProcessStartOptions {
+        let ::lk_agents_abi::worker::types::ProcessStartOptions {
             devmode,
             job_processes,
             env,
@@ -21363,7 +21168,7 @@ pub mod worker_server {
                 py,
                 env.into_iter()
                     .map(|x| {
-                        PyResult::Ok({
+                        ::pyo3::PyResult::Ok({
                             let (x0, x1) = x;
                             ::pyo3::types::PyTuple::new(
                                 py,
@@ -21520,22 +21325,19 @@ pub mod workflows {
         Ok(::lk_agents_abi::voice::workflows::IoEnableState {
             audio_input: match obj.get_item("audio_input")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    (v.extract::<bool>())?
+                    (v.as_any().extract::<bool>())?
                 }
                 _ => true,
             },
             audio_output: match obj.get_item("audio_output")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    (v.extract::<bool>())?
+                    (v.as_any().extract::<bool>())?
                 }
                 _ => true,
             },
             transcription_output: match obj.get_item("transcription_output")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    (v.extract::<bool>())?
+                    (v.as_any().extract::<bool>())?
                 }
                 _ => true,
             },
@@ -21572,40 +21374,38 @@ pub mod workflows {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::workflows::TwilioDial {
             phone_number: {
-                let v = &obj.get_item("phone_number")?.ok_or_else(|| {
+                let v = obj.get_item("phone_number")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.phone_number")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             from_number: {
-                let v = &obj.get_item("from_number")?.ok_or_else(|| {
+                let v = obj.get_item("from_number")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.from_number")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             account_sid: {
-                let v = &obj.get_item("account_sid")?.ok_or_else(|| {
+                let v = obj.get_item("account_sid")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.account_sid")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             auth_token: {
-                let v = &obj.get_item("auth_token")?.ok_or_else(|| {
+                let v = obj.get_item("auth_token")?.ok_or_else(|| {
                     ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.auth_token")
                 })?;
-                (v.extract::<::std::string::String>())?
+                (v.as_any().extract::<::std::string::String>())?
             },
             call_token: match obj.get_item("call_token")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },
             original_caller_number: match obj.get_item("original_caller_number")? {
                 Some(v) if !v.is_none() && !crate::python::is_not_given(&v)? => {
-                    let v = &v;
-                    Some((v.extract::<::std::string::String>())?)
+                    Some((v.as_any().extract::<::std::string::String>())?)
                 }
                 _ => None,
             },

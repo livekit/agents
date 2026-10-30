@@ -183,7 +183,7 @@ impl Inner {
                     audio.segment_id,
                     audio.is_final,
                     audio.timed_transcript,
-                    audio.usage,
+                    audio.usage.map(|usage| *usage),
                     audio.characters_count,
                 );
             }

@@ -37,6 +37,8 @@ from scripts.bench.metrics import (
     distribution,
 )
 
+BUDGETS_PATH = Path(__file__).resolve().parents[2] / "rust" / "bench-budgets.json"
+
 _BUDGET_CONFIG = ConfigDict(strict=True, frozen=True, allow_inf_nan=False)
 HistoryItems = Literal[10, 1_000, 10_000]
 
@@ -86,9 +88,7 @@ class ReportBudget(BaseModel):
 
 
 def load_budget(path: Path | None = None) -> ReportBudget:
-    return ReportBudget.model_validate_json(
-        (path or Path(__file__).with_name("budgets.json")).read_bytes()
-    )
+    return ReportBudget.model_validate_json((path or BUDGETS_PATH).read_bytes())
 
 
 @dataclass(frozen=True)

@@ -74,7 +74,10 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         events.push(EventWrite::new(w.now_ms, JournalEvent::RunStarted(started)));
     }
     events.extend(items.iter().filter(|i| !w.loaded.iter().any(|(id, _)| *id == i.id)).map(|i| {
-        EventWrite::new(w.now_ms, JournalEvent::ConversationItemAdded { item: i.payload.clone() })
+        EventWrite::new(
+            w.now_ms,
+            JournalEvent::ConversationItemAdded { item: Box::new(i.payload.clone()) },
+        )
     }));
     events.extend(w.events.iter().cloned());
     if w.usage.requests != 0 || w.usage.tool_calls != 0 {

@@ -134,8 +134,11 @@ fn only_actionable_output_blocks_a_retry() {
         None,
     );
     let done = wire(serde_json::json!({}), Some("tool_calls"));
-    let attempts: [&[WireChunk]; 3] =
-        [&[metadata.clone()], &[metadata, call.clone(), args.clone()], &[call, args, done]];
+    let attempts: [&[WireChunk]; 3] = [
+        std::slice::from_ref(&metadata),
+        &[metadata.clone(), call.clone(), args.clone()],
+        &[call, args, done],
+    ];
     let mut request = start(policy());
     let mut now = at(0);
     for (attempt, chunks) in (0u32..).zip(attempts) {

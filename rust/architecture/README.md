@@ -49,11 +49,13 @@ From the repository root, `make -C rust check` runs this enforcement gate.
   `target-checks/default`, `target-checks/python`, `target-checks/all`, and
   `target-checks/tools`). This prevents successive
   invocations from replacing each other's fingerprints. mbx still shares
-  equivalent compiled artifacts across configurations and worktrees.
-- Warning-clean crates (`WARNING_CLEAN` in `check.py`, a list that only grows) stay clean:
-  any compiler warning of theirs in the workspace Clippy pass fails. Existing Clippy diagnostics remain subject to
-  the separate purity policy below. ABI, voice,
-  runtime, py, fuzz and external path dependencies are not gated yet.
+  equivalent compiled artifacts across configurations and worktrees. The syntax
+  helper uses the optimized `check-tools` profile; agent builds keep their normal
+  development profile.
+- Every workspace crate is warning-clean (`WARNING_CLEAN` in `check.py`): compiler and
+  Clippy warnings in the workspace pass fail the check. External path dependencies
+  are outside this gate. The separate purity passes below force their policy diagnostics
+  on and compare them with the shrinking baselines.
 - Git-tracked handwritten Rust files have a 1,250-line limit. A generated file's
   first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
   shrinking ceilings.

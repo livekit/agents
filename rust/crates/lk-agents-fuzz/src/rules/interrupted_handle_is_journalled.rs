@@ -32,13 +32,13 @@ impl Rule for InterruptedHandleIsJournalled {
             let journalled = internal.speech(speech.id).interrupted_at().is_some();
             if speech.is_interrupted() {
                 check.expect(
-                    &speech,
+                    speech,
                     journalled,
                     "handle interrupted, journal has no Interrupted step for it",
                 );
             } else if speech.is_done() {
                 check.expect(
-                    &speech,
+                    speech,
                     !journalled,
                     "done handle not interrupted, journal has an Interrupted step for it",
                 );

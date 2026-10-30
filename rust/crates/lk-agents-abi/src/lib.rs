@@ -56,12 +56,12 @@ pub use telemetry::report::{EvaluationRecord, LogRecordWire, Outcome, TAG_FAIL, 
 pub use media::emitter::EmitterError;
 pub use utils::resample::{Quality, ResampleError, Resampler};
 
-pub use llm::llm::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};
 pub use llm::realtime::{
     CancelReply, GenerateReply, PushAudio, PushItem, Say, Truncate, UpdateChatCtx,
     UpdateInstructions, UpdateTools,
 };
 pub use llm::realtime::{Realtime, RealtimeCommand, RealtimeCommandKind, RealtimeSession};
+pub use llm::types::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};
 pub use tts::stream_adapter::{
     SentenceSplitter, SentenceTextProcessor, SplitterFactory, StreamAdapterFunctions,
     TextProcessorFactory,
@@ -76,13 +76,15 @@ pub use llm::realtime::{
     InputSpeechStopped, InputTranscription, MessageDone, MessageModalities, MessageStarted,
     Modalities, TextDelta,
 };
-pub use stt::stt::{AlignedTranscript, Stt, SttCapabilities, SttSink, SttSource};
-pub use tts::tts::{
+pub use stt::types::{AlignedTranscript, Stt, SttCapabilities, SttSink, SttSource};
+pub use tts::types::{
     AudioEncoding, MarkupInfo, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
     no_duplex_path,
 };
-pub use utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, RetryReport, StreamSink, StreamSource};
-pub use vad::vad::{Vad, VadCapabilities, VadSink, VadSource};
+pub use utils::stream::{
+    Closed, HOST_TEARDOWN_TIMEOUT, RetryReport, StreamPair, StreamSink, StreamSource,
+};
+pub use vad::types::{Vad, VadCapabilities, VadSink, VadSource};
 
 /// At the root because generated extract code names it through `use lk_agents_abi::*`.
 pub use tokenize::language::LanguageCode;

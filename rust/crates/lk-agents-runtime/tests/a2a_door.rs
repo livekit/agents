@@ -51,7 +51,10 @@ impl TurnHost for Host {
                 TurnEvent::Progress { task_id: ctx.task_id.clone(), text: "working".into() },
                 TurnEvent::Token { task_id: ctx.task_id.clone(), delta: "reply".into() },
                 TurnEvent::Output {
-                    output: HandlerOutput { output: Some(json!("reply")), ..Default::default() },
+                    output: Box::new(HandlerOutput {
+                        output: Some(json!("reply")),
+                        ..Default::default()
+                    }),
                 },
             ];
             Ok((
@@ -97,7 +100,7 @@ impl TurnHost for AskingHost {
                             task_id: ctx.task_id.clone(),
                             text: "answering".into(),
                         },
-                        TurnEvent::Output { output },
+                        TurnEvent::Output { output: Box::new(output) },
                     ]
                     .into(),
                 )) as Box<dyn StreamSource<_>>,
@@ -124,7 +127,10 @@ impl TurnHost for BurstHost {
                 })
                 .collect();
             events.push_back(TurnEvent::Output {
-                output: HandlerOutput { output: Some(json!("done")), ..Default::default() },
+                output: Box::new(HandlerOutput {
+                    output: Some(json!("done")),
+                    ..Default::default()
+                }),
             });
             Ok((
                 Box::new(Sink) as Box<dyn StreamSink<_>>,

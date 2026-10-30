@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::errors::{ApiError, ProviderError};
 use crate::inference::fallback::SttFallbackModel;
 use crate::utils::stream::{StreamSink, StreamSource};
-use crate::vad::vad::Vad;
+use crate::vad::types::Vad;
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 
 /// The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by

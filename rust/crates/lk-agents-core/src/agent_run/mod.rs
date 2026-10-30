@@ -179,7 +179,7 @@ pub enum Event {
     /// Coordinated: the coordinator recorded `item` outside this invocation (another reply's
     /// call): approval reads it as asked or granted.
     Recorded {
-        item: ChatItem,
+        item: Box<ChatItem>,
     },
     Cancel,
     /// The deadline from `wake_at()` is due.
@@ -573,7 +573,7 @@ impl AgentRun {
             }
             Event::StepVerdict { step, verdict } => self.verdict(step, verdict, now, &mut fx),
             Event::Answered { approval_answers } => self.answered(approval_answers),
-            Event::Recorded { item } => self.history.push(item),
+            Event::Recorded { item } => self.history.push(*item),
         }
         fx
     }
@@ -602,7 +602,7 @@ impl AgentRun {
         }
         self.history = std::mem::take(&mut self.input.history);
         let message = match &mut self.input.opening {
-            Opening::Message(message) => message.clone(),
+            Opening::Message(message) => (**message).clone(),
             Opening::Coordinated { approval_answers } => {
                 self.approval_answers = std::mem::take(approval_answers);
                 self.first_new = self.history.len();
@@ -743,7 +743,7 @@ impl AgentRun {
         if step.request != request {
             return;
         }
-        if let Some(usage) = &chunk.usage {
+        if let Some(usage) = chunk.usage.as_deref() {
             self.ledger.report(request.0, usage.into());
         }
         let added = step.chunk(chunk);

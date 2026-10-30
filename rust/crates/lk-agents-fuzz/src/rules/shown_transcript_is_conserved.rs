@@ -70,7 +70,7 @@ impl Rule for ShownTranscriptIsConserved {
                 .collect();
             let shown = squash(&shown);
             check.expect(
-                &speech,
+                speech,
                 shown == forwarded,
                 format!("showed {shown:?}, was forwarded {forwarded:?}"),
             );

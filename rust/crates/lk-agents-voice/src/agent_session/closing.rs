@@ -454,7 +454,7 @@ impl Driver {
                 | ActivityCommand::UpdateChatCtx(_)
                 | ActivityCommand::SetAudioOutput(_)
                 | ActivityCommand::SetTranscriptionOutput(_)
-                | ActivityCommand::UpdateModels { .. },
+                | ActivityCommand::UpdateModels(_),
             )
             | Command::Turn(_)
             | Command::Video(_)

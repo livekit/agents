@@ -2,6 +2,7 @@
 //! `chat()` returns at once and the chain runs as a task feeding an `mpsc`
 //! (`FallbackLLMStream._run`), so its failure surfaces on the first `next()`.
 
+use lk_agents_abi::{Extra, HostRef, ToolSpec};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,9 +10,7 @@ use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{BoxFuture, Spawner};
-use lk_agents_abi::{
-    ChatRequest, Closed, Extra, HostRef, Llm, LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
-};
+use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamSource, ToolChoice, Ts};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use tokio::sync::mpsc;
 
@@ -159,6 +158,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
 
     /// A completion over the caller's own `ChatContext` and tools (the host objects every entry
     /// is handed, §1.11); the chain picks an entry on the first `recv()`.
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
     async fn chat(
         &self,
         chat_ctx_host: HostRef,

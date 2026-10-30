@@ -144,16 +144,16 @@ impl RunnerSupervisor {
     pub async fn wait_exit(&self) -> bool {
         let mut status = self.status.clone();
         let _ = status.wait_for(|state| state.exit.is_some() || state.cleaned).await;
-        let exited = status.borrow().exit.is_some();
-        exited
+
+        status.borrow().exit.is_some()
     }
 
     /// Waits for the supervision's end: whether a launched runner ended.
     pub async fn wait_cleaned(&self) -> bool {
         let mut status = self.status.clone();
         let _ = status.wait_for(|state| state.cleaned).await;
-        let exited = status.borrow().exit.is_some();
-        exited
+
+        status.borrow().exit.is_some()
     }
 }
 

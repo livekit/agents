@@ -146,15 +146,15 @@ pub struct Dialect {
 #[serde(tag = "type")]
 enum XaiProviderTool {
     #[serde(rename = "web_search")]
-    WebSearch,
+    Web,
     #[serde(rename = "x_search")]
-    XSearch {
+    X {
         #[serde(default)]
         #[serde(rename = "allowed_x_handles")]
         _allowed_x_handles: Option<Vec<String>>,
     },
     #[serde(rename = "file_search")]
-    FileSearch {
+    File {
         #[serde(rename = "vector_store_ids")]
         _vector_store_ids: Vec<String>,
         #[serde(default)]
@@ -166,11 +166,11 @@ enum XaiProviderTool {
 impl XaiProviderTool {
     fn reserved_names(self) -> &'static [&'static str] {
         match self {
-            Self::WebSearch => &["web_search", "browse_page"],
-            Self::XSearch { .. } => {
+            Self::Web => &["web_search", "browse_page"],
+            Self::X { .. } => {
                 &["x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"]
             }
-            Self::FileSearch { .. } => &["collections_search", "file_search"],
+            Self::File { .. } => &["collections_search", "file_search"],
         }
     }
 }

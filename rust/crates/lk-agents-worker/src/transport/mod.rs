@@ -21,7 +21,7 @@ pub enum TransportError {
 
 #[derive(Debug)]
 pub enum TransportEvent {
-    ServerMessage(ServerMessage),
+    ServerMessage(Box<ServerMessage>),
     EndpointRequest(EndpointStream),
 }
 

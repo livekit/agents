@@ -159,7 +159,10 @@ pub trait SpawnerExt: Spawner {
         S: FnOnce(TaskOutcome) -> F + Send + 'static,
         F: Future<Output = ()> + Send + 'static,
     {
-        let work = Box::pin(async move { Box::new(work.await) as Box<dyn Any + Send> });
+        let work = Box::pin(async move {
+            work.await;
+            Box::new(()) as Box<dyn Any + Send>
+        });
         let settled: Settle = Box::new(move |outcome| Box::pin(settled(outcome)));
         let task = self.launch(Launch { work, settled: Some(settled), site: Location::caller() });
         task.map(|_| ())
@@ -172,7 +175,10 @@ pub trait SpawnerExt: Spawner {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let work = Box::pin(async move { Box::new(work.await) as Box<dyn Any + Send> });
+        let work = Box::pin(async move {
+            work.await;
+            Box::new(()) as Box<dyn Any + Send>
+        });
         // Dropped without its control: dropping cancels nothing, the work ends on its own.
         let mut task = self.launch(Launch { work, settled: None, site: Location::caller() });
         task.control = None;

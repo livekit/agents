@@ -2,4 +2,5 @@
 
 pub mod events;
 pub mod inference;
-pub mod vad;
+#[path = "vad.rs"]
+pub mod types;

@@ -144,7 +144,7 @@ fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
 fn back_to_back_segments_are_each_reported_finished() {
     let mut core = running();
     let read =
-        |core: &mut RunnerCore, item| core.handle(audio_input(&core, Ok(Some(item))), Ts::ZERO);
+        |core: &mut RunnerCore, item| core.handle(audio_input(core, Ok(Some(item))), Ts::ZERO);
     read(&mut core, AudioReceiverFrame::Audio(pcm(1, 0.1)));
     read(&mut core, AudioReceiverFrame::SegmentEnd);
     read(&mut core, AudioReceiverFrame::Audio(pcm(2, 0.1)));

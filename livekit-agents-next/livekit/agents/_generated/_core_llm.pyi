@@ -267,42 +267,6 @@ class LlmChoiceParser:
 def llm_usage_chunk(chunk: object) -> ChatChunk | None:
     """The usage chunk of a streamed completion chunk, when it reports usage."""
 
-class ChatRequest:
-    """The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
-    host objects cross as themselves, and the context as its `ChatContext.to_dict()` form, read only
-    when the request carries no host context of its own.
-    """
-    @property
-    def chat_ctx_host(self) -> object | None:
-        """The host's canonical `llm.ChatContext`, when the request came from one."""
-    @property
-    def chat_ctx(self) -> dict[str, object]:
-        """`ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
-        rendered): the context of a request the core minted itself.
-        """
-    @property
-    def tool_names(self) -> list[str]:
-        """The names of the tools this turn offers, in order: the host pool is narrowed to these."""
-    @property
-    def function_schemas(self) -> list[RawFunctionDescription]:
-        """Canonical declarations of every function offered by this request, including tools
-        executed by the core that have no callable object in the host pool.
-        """
-    @property
-    def tools_host(self) -> object | None:
-        """The host's live `list[Tool]` pool."""
-    @property
-    def tools_host_extra(self) -> list[object]:
-        """The pools the session added on top of the agent's."""
-    @property
-    def parallel_tool_calls(self) -> bool | None: ...
-    @property
-    def tool_choice(self) -> ToolChoice | None: ...
-    @property
-    def extra(self) -> dict[str, object] | None: ...
-    @property
-    def inference_class(self) -> str | None: ...
-
 class McpSession:
     """An SDK session whose owner cancels and joins independently of request borrowers."""
     def __new__(cls, client_session_timeout_seconds: float) -> Self: ...
@@ -438,3 +402,39 @@ def chat_ctx_to_dict(
     """``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with
     ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
     """
+
+class ChatRequest:
+    """The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
+    host objects cross as themselves, and the context as its `ChatContext.to_dict()` form, read only
+    when the request carries no host context of its own.
+    """
+    @property
+    def chat_ctx_host(self) -> object | None:
+        """The host's canonical `llm.ChatContext`, when the request came from one."""
+    @property
+    def chat_ctx(self) -> dict[str, object]:
+        """`ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
+        rendered): the context of a request the core minted itself.
+        """
+    @property
+    def tool_names(self) -> list[str]:
+        """The names of the tools this turn offers, in order: the host pool is narrowed to these."""
+    @property
+    def function_schemas(self) -> list[RawFunctionDescription]:
+        """Canonical declarations of every function offered by this request, including tools
+        executed by the core that have no callable object in the host pool.
+        """
+    @property
+    def tools_host(self) -> object | None:
+        """The host's live `list[Tool]` pool."""
+    @property
+    def tools_host_extra(self) -> list[object]:
+        """The pools the session added on top of the agent's."""
+    @property
+    def parallel_tool_calls(self) -> bool | None: ...
+    @property
+    def tool_choice(self) -> ToolChoice | None: ...
+    @property
+    def extra(self) -> dict[str, object] | None: ...
+    @property
+    def inference_class(self) -> str | None: ...

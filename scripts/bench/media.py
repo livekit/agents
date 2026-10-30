@@ -23,6 +23,8 @@ from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
 from scripts.bench.metrics import CallbackSlices, Distribution, LoopLag, distribution
 
+BUDGETS_PATH = Path(__file__).resolve().parents[2] / "rust" / "bench-budgets.json"
+
 T = TypeVar("T")
 
 
@@ -59,9 +61,7 @@ class MediaBudget(BaseModel):
 
 
 def load_budget(path: Path | None = None) -> MediaBudget:
-    return MediaBudget.model_validate_json(
-        (path or Path(__file__).with_name("budgets.json")).read_bytes()
-    )
+    return MediaBudget.model_validate_json((path or BUDGETS_PATH).read_bytes())
 
 
 async def measure(

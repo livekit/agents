@@ -1,5 +1,8 @@
 //! What `start()` decides. The decision is in `lk-agents-voice/src/agent_session/`.
 
+/// A user-turn hook result: updated text, history and whether it stopped the response.
+pub type CompletedUserTurn = (Option<String>, Option<Vec<crate::ChatItem>>, bool);
+
 use crate::voice::session_options::RecordingOptions;
 
 /// The decision `start()` gets back.
@@ -77,10 +80,7 @@ pub trait SessionHooks: Send + Sync {
         chat_ctx: Vec<crate::ChatItem>,
         new_transcript: &'a str,
         transcript_confidence: f64,
-    ) -> crate::BoxFuture<
-        'a,
-        Result<(Option<String>, Option<Vec<crate::ChatItem>>, bool), crate::errors::HostError>,
-    >;
+    ) -> crate::BoxFuture<'a, Result<CompletedUserTurn, crate::errors::HostError>>;
     /// `agent.on_user_turn_exceeded(ev)`.
     #[host(await, name = "_core_on_user_turn_exceeded")]
     fn on_user_turn_exceeded<'a>(

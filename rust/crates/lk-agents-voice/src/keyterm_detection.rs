@@ -232,7 +232,7 @@ impl DetectionPass {
                     self.arguments = Some(call.arguments);
                 }
                 if chunk.usage.is_some() {
-                    self.usage = chunk.usage;
+                    self.usage = chunk.usage.map(|usage| *usage);
                 }
                 None
             }

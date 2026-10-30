@@ -666,7 +666,7 @@ async fn options_view_changes_only_after_core_acceptance() {
     let options =
         <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
     let api = running(assembled(no_room(), None, Some(options))).await;
-    api.send(TurnCommand::Configure(aec_warmup_layer(None))).unwrap();
+    api.send(TurnCommand::Configure(Box::new(aec_warmup_layer(None)))).unwrap();
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     let (call, answer) = api.call(Answer::idle).unwrap();
     let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
@@ -674,7 +674,7 @@ async fn options_view_changes_only_after_core_acceptance() {
     assert!(answer.await.unwrap().is_ok());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
     api.close(CloseReason::UserInitiated, false, None).await;
-    assert!(api.send(TurnCommand::Configure(aec_warmup_layer(Some(9.0)))).is_err());
+    assert!(api.send(TurnCommand::Configure(Box::new(aec_warmup_layer(Some(9.0))))).is_err());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
 }
 

@@ -533,7 +533,7 @@ impl AudioEmitter {
             is_final,
             segment_id: self.seg.as_ref().map(|s| s.segment_id.clone()).unwrap_or_default(),
             delta_text: String::new(),
-            usage,
+            usage: usage.map(Box::new),
             characters_count,
             // Stamped by `ChunkedStream`/`SynthesizeStream` on the way out (`tts.py:502`).
             started_time: None,

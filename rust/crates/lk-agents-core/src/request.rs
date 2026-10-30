@@ -122,7 +122,7 @@ pub fn model_view(history: &[ChatItem]) -> Vec<ChatItem> {
 
 #[cfg(test)]
 mod tests {
-    use lk_agents_abi::llm::llm::ToolFlags;
+    use lk_agents_abi::llm::types::ToolFlags;
     use serde_json::json;
 
     use super::*;

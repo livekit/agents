@@ -137,10 +137,11 @@ impl EndpointWriter {
     }
 
     pub async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
-        if {
+        let res = {
             let state = self.control.0.borrow();
             state.reset.is_some() || state.finish
-        } {
+        };
+        if res {
             self.apply_control()?;
             return Err(TransportError::Closed("endpoint response stopped".into()));
         }
@@ -352,6 +353,7 @@ impl WorkerStream for WtStream {
             if let Some((msg, used)) = parse_control(&self.buf)? {
                 self.buf.drain(..used);
                 return protocol::decode(&msg)
+                    .map(Box::new)
                     .map(TransportEvent::ServerMessage)
                     .map_err(|e| TransportError::Protocol(e.to_string()));
             }

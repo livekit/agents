@@ -96,7 +96,7 @@ impl ServerSettings {
     /// Validate the whole update before replacing the running configuration.
     pub fn apply(
         &mut self,
-        options: lk_agents_abi::worker::worker::ServerOptions,
+        options: lk_agents_abi::worker::types::ServerOptions,
     ) -> Result<(), String> {
         use lk_agents_abi::Maybe::Given;
         let mut next = self.clone();
@@ -352,7 +352,7 @@ pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
 /// The agent server's environment reads, as the host calls them.
 pub struct Environment;
 
-impl lk_agents_abi::worker::worker::ServerEnvironment for Environment {
+impl lk_agents_abi::worker::types::ServerEnvironment for Environment {
     fn cpu_count() -> f64 {
         f64::from(crate::CpuMonitor::new().cpu_count())
     }

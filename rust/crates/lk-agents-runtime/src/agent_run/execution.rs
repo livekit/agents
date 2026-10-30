@@ -10,8 +10,8 @@ pub(crate) struct Reporter {
 }
 
 impl Reporter {
-    async fn send(&self, report: Report) -> Result<(), mpsc::error::SendError<(String, Report)>> {
-        self.tx.send((self.id.clone(), report)).await
+    async fn send(&self, report: Report) -> Result<(), ()> {
+        self.tx.send((self.id.clone(), report)).await.map_err(|_| ())
     }
 }
 
@@ -181,9 +181,7 @@ impl Execution {
                 });
             }
             Effect::ReadBackRender { call, prepared, .. } => {
-                let Some(args) = self.prepared.get(&prepared).cloned() else {
-                    return None;
-                };
+                let args = self.prepared.get(&prepared).cloned()?;
                 let host = self.setup.host.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
@@ -211,9 +209,7 @@ impl Execution {
                 );
             }
             Effect::ToolExecute { call, prepared, function_call, approval } => {
-                let Some(args) = self.prepared.remove(&prepared) else {
-                    return None;
-                };
+                let args = self.prepared.remove(&prepared)?;
                 let host = self.setup.host.clone();
                 self.invoke(
                     Work::Call(call),
@@ -302,7 +298,7 @@ impl Execution {
                 self.outputs.clear();
                 self.prepared.clear();
                 let update = match settled {
-                    Ok(settled) => RunUpdate::Finished(settled),
+                    Ok(settled) => RunUpdate::Finished(Box::new(settled)),
                     Err(error) => RunUpdate::Failed(error),
                 };
                 return Some(update);

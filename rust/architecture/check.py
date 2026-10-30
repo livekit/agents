@@ -52,7 +52,6 @@ GRAPH = {
     # network are fakes at their ABI boundary, never inference's or net's code. The A2A DST runs
     # real storage over an in-memory database (decision 113 keeps storage DST-covered).
     "lk-agents-fuzz": PURE | {"lk-agents-runtime", "lk-agents-storage"},
-    "lk-agents-bench-steps": PURE,
     "lk-agents-runtime": PURE | ASYNC,
     "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
 }
@@ -82,11 +81,16 @@ PLATFORMS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 )
-# Crates whose `cargo check --tests` output has no compiler warning. This list only grows.
+# Workspace crates whose compiler and Clippy output must stay warning-free. This list only grows.
 WARNING_CLEAN = {
     f"lk-agents-{name}"
     for name in (
+        "abi",
         "core",
+        "voice",
+        "runtime",
+        "py",
+        "fuzz",
         "media",
         "net",
         "storage",
@@ -96,7 +100,6 @@ WARNING_CLEAN = {
         "codegen",
         "bindgen",
         "host-derive",
-        "bench-steps",
     )
 }
 # The exact first line lk-agents-codegen writes; prose that merely starts with "Generated" is not it.
@@ -384,7 +387,7 @@ def path_violations(root: Path, paths: list[str]) -> set[str]:
         parts = Path(path).parts
         if parts[:2] != ("rust", "crates") or len(parts) < 5:
             continue
-        own = crates / parts[2] / parts[3]
+        own = crates / parts[2]
         source = root / path
         for target in PATH_ATTR.findall(source.read_text()):
             resolved = (source.parent / target).resolve()
@@ -530,7 +533,7 @@ def check_boundaries(metadata: dict) -> int:
 
 
 def warning_violations(records: list[dict], names: Mapping[str, str]) -> list[str]:
-    """Compiler warnings of warning-clean crates, from a complete `cargo check` transcript."""
+    """Compiler and Clippy warnings of workspace crates, from a complete transcript."""
     if (
         not records
         or records[-1].get("reason") != "build-finished"
@@ -547,13 +550,12 @@ def warning_violations(records: list[dict], names: Mapping[str, str]) -> list[st
         for record in records
         if record.get("reason") == "compiler-message"
         and record["message"]["level"] == "warning"
-        and not (record["message"].get("code") or {}).get("code", "").startswith("clippy::")
         and names.get(record["package_id"]) in WARNING_CLEAN
     ]
 
 
 def check_workspace(metadata: dict, target: Path) -> int:
-    """One Clippy pass checks compilation and compiler warnings across the workspace."""
+    """One Clippy pass checks compilation and warnings across the workspace."""
     root = Path(__file__).resolve().parents[2]
     names = {p["id"]: p["name"] for p in metadata["packages"]}
     process = subprocess.run(
@@ -581,9 +583,7 @@ def check_workspace(metadata: dict, target: Path) -> int:
         if record.get("reason") != "compiler-message":
             continue
         message = record["message"]
-        if message["level"] == "error" or (message.get("code") or {}).get("code", "").startswith(
-            "clippy::"
-        ):
+        if message["level"] == "error":
             sys.stderr.write(message.get("rendered") or message["message"])
     if process.returncode:
         return process.returncode
@@ -695,6 +695,8 @@ def build_helper(root: Path, target: Path | None = None) -> Path:
             CARGO_RUNNER,
             "build",
             "--quiet",
+            "--profile",
+            "check-tools",
             "--manifest-path",
             str(root / "rust/Cargo.toml"),
             "--locked",

@@ -249,7 +249,6 @@ impl BackgroundAudioPlayer {
             return;
         }
         /// Clears `closing` unless the close got past stopping the sounds.
-
         struct Reopen<'a>(&'a AtomicBool, bool);
         impl Drop for Reopen<'_> {
             fn drop(&mut self) {
@@ -280,11 +279,10 @@ impl BackgroundAudioPlayer {
                 // The SDK can replace the publication on reconnect; resolve the current SID.
                 match output.participant.track_publications() {
                     Ok(publications) => {
-                        if let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME) {
-                            if let Err(error) = output.participant.unpublish_track(publication.sid()).await {
+                        if let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME)
+                            && let Err(error) = output.participant.unpublish_track(publication.sid()).await {
                                 log::error!(target: "livekit.agents", "background audio publication cleanup failed: {error}");
                             }
-                        }
                     }
                     Err(error) => log::error!(target: "livekit.agents", "background audio publication lookup failed: {error}"),
                 }
@@ -501,7 +499,7 @@ impl Drop for Source {
     fn drop(&mut self) {
         self.handle.finish();
         if !matches!(self.input, Input::Closed) {
-            let _ = self.teardown();
+            drop(self.teardown());
         }
     }
 }

@@ -6,10 +6,10 @@ use crate::python::{
 };
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::CapturedError;
-use lk_agents_abi::llm::llm::ProviderToolDeclaration;
 use lk_agents_abi::llm::provider_format::tools::ToolFlag;
+use lk_agents_abi::llm::types::ProviderToolDeclaration;
 use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
-use lk_agents_abi::tts::tts::AudioEncoding;
+use lk_agents_abi::tts::types::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::utils::host_ref::StaleHostRef;
@@ -444,7 +444,7 @@ pub fn synthesized_audio_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Synthesized
         delta_text: obj.getattr("delta_text")?.extract()?,
         usage: match obj.getattr("usage")? {
             usage if usage.is_none() => None,
-            usage => Some(crate::generated::records::usage::token_usage_from_py(&usage)?),
+            usage => Some(Box::new(crate::generated::records::usage::token_usage_from_py(&usage)?)),
         },
         characters_count: obj.getattr("characters_count")?.extract()?,
         started_time,
@@ -484,7 +484,7 @@ pub fn synthesized_audio_to_py<'py>(
     kwargs.set_item("delta_text", value.delta_text)?;
     if let Some(usage) = value.usage {
         kwargs
-            .set_item("usage", crate::generated::records::usage::token_usage_to_py(py, usage)?)?;
+            .set_item("usage", crate::generated::records::usage::token_usage_to_py(py, *usage)?)?;
     }
     kwargs.set_item("characters_count", value.characters_count)?;
     crate::host::call(

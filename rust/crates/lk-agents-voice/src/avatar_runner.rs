@@ -426,10 +426,8 @@ impl RunnerCore {
                     if let Some(duration) = self.pushing.take() {
                         let started = self.position == 0.0 && duration > 0.0;
                         self.position += duration;
-                        if started {
-                            if let Some(segment) = self.owed.front().cloned() {
-                                out.push(Effect::Io(IoOp::ReportStarted { segment }));
-                            }
+                        if started && let Some(segment) = self.owed.front().cloned() {
+                            out.push(Effect::Io(IoOp::ReportStarted { segment }));
                         }
                     }
                     self.next_frame(&mut out);

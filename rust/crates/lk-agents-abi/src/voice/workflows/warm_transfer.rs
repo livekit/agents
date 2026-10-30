@@ -125,6 +125,7 @@ pub trait WarmTransfer: Sized + Send + Sync + 'static {
     type Env;
 
     #[host(new)]
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         #[host(kw, default = None)] sip_call_to: Option<String>,

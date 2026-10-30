@@ -14,6 +14,7 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     #[host(class(name = "TtsStream"))]
     type Stream;
     #[host(new)]
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         model: String,

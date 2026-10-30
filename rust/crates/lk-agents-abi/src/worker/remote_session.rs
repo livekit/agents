@@ -136,7 +136,7 @@ pub enum WireEvent {
     FunctionToolsExecuted(FunctionToolsExecutedWire),
     FunctionToolsStarted(FunctionToolsStartedWire),
     DebugMessage(DebugMessageWire),
-    ConversationItemAdded(ItemAddedWire),
+    ConversationItemAdded(Box<ItemAddedWire>),
     SessionUsageUpdated(SessionUsageUpdatedWire),
     ToolExecutionUpdated(ToolExecutionUpdatedWire),
     AgentFalseInterruption(AgentFalseInterruption),

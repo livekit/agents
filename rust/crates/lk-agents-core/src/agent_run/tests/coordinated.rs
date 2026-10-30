@@ -271,7 +271,7 @@ fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
     input.history.push(asked("asked_1", "billing"));
     input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
     let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
-    d.send(Event::Recorded { item: asked("asked_2", "sales") });
+    d.send(Event::Recorded { item: Box::new(asked("asked_2", "sales")) });
     assert!(!repeat_runs(&mut d, "billing"));
 }
 

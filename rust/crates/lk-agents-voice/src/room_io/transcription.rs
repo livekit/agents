@@ -494,7 +494,7 @@ impl Admission {
     }
 
     /// The oldest batch, to perform; its bytes stay held until [`Self::performed`].
-    pub fn next(&mut self) -> Option<Batch> {
+    pub fn pop_batch(&mut self) -> Option<Batch> {
         self.queue.pop_front()
     }
 
@@ -577,7 +577,7 @@ mod admission_tests {
     use super::*;
 
     fn queued(admission: &mut Admission) -> Vec<WriterEffect> {
-        std::iter::from_fn(|| admission.next()).flat_map(|batch| batch.effects).collect()
+        std::iter::from_fn(|| admission.pop_batch()).flat_map(|batch| batch.effects).collect()
     }
 
     // Catches: a fifth queued batch latching a capacity failure while the performer was busy,
@@ -652,8 +652,8 @@ mod admission_tests {
         admission.submit(&mut writer, &first).unwrap();
         writer.end_segment(None);
         admission.submit(&mut writer, &Subject::default()).unwrap();
-        assert!(admission.next().is_some_and(|batch| batch.subject == first));
-        assert!(admission.next().is_some_and(|batch| batch.subject == Subject::default()));
+        assert!(admission.pop_batch().is_some_and(|batch| batch.subject == first));
+        assert!(admission.pop_batch().is_some_and(|batch| batch.subject == Subject::default()));
     }
 
     #[test]
@@ -670,6 +670,6 @@ mod admission_tests {
         }
         assert_eq!(failures, 1, "the overflow fails the output; later text is dropped quietly");
         assert!(admission.drained());
-        assert!(admission.next().is_none(), "a failed output performs nothing more");
+        assert!(admission.pop_batch().is_none(), "a failed output performs nothing more");
     }
 }

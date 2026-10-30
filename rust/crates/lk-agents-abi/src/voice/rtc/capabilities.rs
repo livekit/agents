@@ -1,5 +1,8 @@
 //! SDK room capabilities, declared once. Runtime owns every live queue and operation.
 
+/// A published audio source and the publication controlling its lifetime.
+pub type PublishedAudioTrack = (Arc<dyn AudioSource>, Arc<dyn TrackPublication>);
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -106,13 +109,14 @@ pub trait LocalParticipant: Send + Sync {
     fn publish_audio_track<'a>(
         &'a self,
         opts: TrackPublishOptions,
-    ) -> crate::BoxFuture<'a, Result<(Arc<dyn AudioSource>, Arc<dyn TrackPublication>), RtcError>>;
+    ) -> crate::BoxFuture<'a, Result<PublishedAudioTrack, RtcError>>;
 
     #[host(await, name = "_core_unpublish_track")]
     fn unpublish_track<'a>(
         &'a self,
         sid: &'a TrackSid,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
+        let _ = sid;
         Box::pin(async move { Err(RtcError::Unsupported("unpublish_track")) })
     }
 
@@ -151,6 +155,7 @@ pub trait LocalParticipant: Send + Sync {
         &'a self,
         opts: StreamBytesOptions,
     ) -> crate::BoxFuture<'a, Result<Box<dyn ByteStreamWriter>, RtcError>> {
+        let _ = opts;
         Box::pin(async move { Err(RtcError::Unsupported("stream_bytes")) })
     }
 
@@ -163,6 +168,7 @@ pub trait LocalParticipant: Send + Sync {
         method: String,
         payload: String,
     ) -> crate::BoxFuture<'a, Result<(u32, String), RtcError>> {
+        let _ = (destination, method, payload);
         Box::pin(async move { Err(RtcError::Unsupported("perform_rpc")) })
     }
 
@@ -173,11 +179,13 @@ pub trait LocalParticipant: Send + Sync {
         method: String,
         handler: Arc<dyn RpcCallback>,
     ) -> Result<(), RtcError> {
+        let _ = (method, handler);
         Err(RtcError::Unsupported("register_rpc_method"))
     }
 
     #[host(call, name = "_core_unregister_rpc_method")]
     fn unregister_rpc_method(&self, method: String) -> Result<(), RtcError> {
+        let _ = method;
         Err(RtcError::Unsupported("unregister_rpc_method"))
     }
 
@@ -188,6 +196,7 @@ pub trait LocalParticipant: Send + Sync {
         code: u32,
         digit: String,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
+        let _ = (code, digit);
         Box::pin(async move { Err(RtcError::Unsupported("publish_dtmf")) })
     }
 }
@@ -340,6 +349,7 @@ pub trait TrackPublication: Send + Sync {
         &'a self,
         subscribed: bool,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
+        let _ = subscribed;
         Box::pin(async move { Err(RtcError::Unsupported("set_subscribed")) })
     }
 

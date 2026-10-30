@@ -625,9 +625,7 @@ impl Pump {
         tokio::pin!(writer);
         self.dispatch(initial, &outgoing)?;
         let mut decoding: Option<
-            std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<wire::Incoming, ApiError>> + Send>,
-            >,
+            lk_agents_abi::BoxFuture<'static, Result<wire::Incoming, ApiError>>,
         > = None;
         let mut context_due = false;
         loop {
