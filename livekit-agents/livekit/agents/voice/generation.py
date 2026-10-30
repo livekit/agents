@@ -964,11 +964,9 @@ async def _execute_tools_task(
                 )
                 continue
 
-            # write canonical JSON back so subsequent LLM turns see valid JSON
-            # even if the original was repaired
-            canonical = json.dumps(raw_args, default=str)
-            if canonical != json_args:
-                fnc_call.arguments = canonical
+            # write repaired arguments back so subsequent LLM turns see valid JSON
+            if repaired := llm_utils._repaired_arguments_json(json_args, raw_args):
+                fnc_call.arguments = repaired
 
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
