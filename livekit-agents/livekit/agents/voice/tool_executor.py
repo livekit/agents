@@ -7,7 +7,7 @@ import itertools
 import json
 import weakref
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from typing_extensions import TypedDict
@@ -958,12 +958,6 @@ class _CallSink:
             chat_ctx=chat_ctx,
         )
 
-        def _on_reply_done(speech: SpeechHandle) -> None:
-            for update in updates:
-                if update.result:
-                    tool_replied(update.ctx, speech.chat_items)
-
-        speech.add_done_callback(_on_reply_done)
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
@@ -985,8 +979,20 @@ class _CallSink:
         )
 
         def _on_speech_done(speech: SpeechHandle) -> None:
+            # both paths record a reply cut before its first frame with no assistant text
+            unheard = speech.interrupted and not any(
+                item.type == "message" and item.role == "assistant" and item.text_content
+                for item in speech.chat_items
+            )
             reply_status: Literal["completed", "interrupted", "skipped"]
-            if speech.interrupted:
+            if unheard:
+                # cut off before any of it played: told after the person's turn, in call order
+                for update in updates:
+                    requeued = replace(update, say=None)  # its exact text was said on its own
+                    bisect.insort(self._pending_updates, requeued, key=lambda u: u.seq)
+                self._schedule_delivery(session)
+                reply_status = "interrupted"
+            elif speech.interrupted:
                 reply_status = "interrupted"
             elif not speech.chat_items:
                 # the LLM judged the content already covered and produced no output
@@ -999,7 +1005,11 @@ class _CallSink:
                     "async tool reply was done without outputs",
                     extra={"speech_id": speech.id, "interrupted": speech.interrupted},
                 )
-                # TODO(long): reschedule interrupted replies?
+
+            if not unheard:
+                for update in updates:
+                    if update.result:
+                        tool_replied(update.ctx, speech.chat_items)
 
             session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(

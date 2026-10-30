@@ -265,6 +265,55 @@ async def test_a_result_after_the_acknowledgement_started_follows_it(
 
 
 @pytest.mark.rule("B71")
+async def test_a_result_reply_cut_before_any_of_it_played_is_told_again(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate, ended = asyncio.Event(), list[str]()
+    gate.set()
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="slots")]),
+        Reply("", hold=asyncio.Event(), when=told("a1_final")),
+        Reply("We have 10 slots.", when=told("a1_final")),
+        Reply("Sure.", when=answering("hold on")),
+    )
+    desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended))])
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        rt = model.active_session
+        rt.hear("any slots?")
+        await soon(lambda: any(told("a1_final")(r) for r in model.requests), "the result reply")
+        rt.hear("hold on")
+        await soon(lambda: {"Sure.", "We have 10 slots."} <= set(spoken(session)), "both told")
+
+    assert sum(told("a1_final")(r) for r in model.requests) == 2
+
+
+@pytest.mark.rule("B71")
+async def test_a_result_reply_cut_after_part_of_it_played_is_not_told_again(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate, ended = asyncio.Event(), list[str]()
+    gate.set()
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="slots")]),
+        Reply("We have 10 slots.", hold=asyncio.Event(), when=told("a1_final")),
+        Reply("Sure.", when=answering("hold on")),
+    )
+    desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended))])
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        rt = model.active_session
+        rt.hear("any slots?")
+        await soon(lambda: any(told("a1_final")(r) for r in model.requests), "the result reply")
+        await asyncio.sleep(0.2)  # its first words play
+        rt.hear("hold on")
+        await soon(lambda: "Sure." in spoken(session), "the reply to the barge-in")
+        await asyncio.sleep(0.3)
+
+    assert sum(told("a1_final")(r) for r in model.requests) == 1
+
+
+@pytest.mark.rule("B71")
 @pytest.mark.virtual_time
 @pytest.mark.no_concurrent
 async def test_on_the_pipeline_a_result_before_the_turn_ends_is_told_after_it() -> None:

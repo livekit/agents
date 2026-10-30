@@ -208,9 +208,20 @@ REPLY_DELAY = 0.05
 
 class ScriptedRealtimeSession(FakeRealtimeSession):
     """Answers each ``generate_reply`` and ``say`` at once, and each turn ``hear`` plays, with
-    the model's next scripted reply; it keeps what was said in its context, as a provider does."""
+    the model's next scripted reply; it keeps what was said in its context, as a provider does,
+    and ``interrupt`` ends every held reply still under way."""
 
     _realtime_model: ScriptedRealtimeModel
+
+    def __init__(self, model: ScriptedRealtimeModel, *, turn_detection_disabled: bool) -> None:
+        super().__init__(model, turn_detection_disabled=turn_detection_disabled)
+        self._under_way: list[asyncio.Event] = []
+
+    def interrupt(self) -> None:
+        super().interrupt()
+        for hold in self._under_way:
+            hold.set()
+        self._under_way.clear()
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         self._chat_ctx = chat_ctx.copy()
@@ -278,6 +289,8 @@ class ScriptedRealtimeSession(FakeRealtimeSession):
             self._chat_ctx.add_message(role="assistant", content=text)
         self._chat_ctx.insert(calls)
         hold = reply.hold if reply is not None else None
+        if hold is not None:
+            self._under_way.append(hold)
         return _generation(text, calls, user_initiated=user_initiated, hold=hold)
 
 
