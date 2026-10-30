@@ -160,6 +160,21 @@ async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["after", "words"]);
 }
 
+// Catches (review of 242c57d69): a speech cut before any audio leaves its segment cleared with no
+// audio end owed in practice; the next unvoiced speech's audio end was absorbed by it, so that
+// speech's words stayed open and paired with the following speech's audio.
+#[tokio::test]
+async fn a_cut_wordy_segment_does_not_take_the_next_ones_audio_end() {
+    let c = Chain::new();
+    c.text("cut before its voice").await;
+    c.sync.audio_output().clear_buffer();
+    let _ = c.take_shown();
+    c.text("Ref two.").await;
+    c.sync.audio_output().flush();
+    let shown: String = c.take_shown().into_iter().map(|(w, _)| w).collect();
+    assert_eq!(shown, "Ref two.");
+}
+
 // Catches: the synchroniser still capturing after the output below reported its open segment cut
 // and reset. The speech's later frames opened no segment of their own, so its wait returned at
 // once with the cut and its words were shown under the next speech (survey seeds 29564, 24667,

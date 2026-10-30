@@ -180,7 +180,8 @@ struct Segment {
     /// until a reset starts the rest of its audio as a playout of its own.
     cut_below: bool,
     /// A clear closed its words before any of its audio and before its audio leg ended: the
-    /// leg's late end is its, not a new segment's. Gone at the next audio.
+    /// leg's late end is its, not a new segment's. Gone at the next words or audio: a cut leg
+    /// usually ends with no audio end at all, and the next speech's end is its own.
     cleared: bool,
 }
 
@@ -209,6 +210,7 @@ impl SyncSegments {
         let mut out = Vec::new();
         match input {
             SyncInput::Text { raw, start_time, end_time } => {
+                self.segments.retain(|s| !s.cleared);
                 let i = self.next(|s| !s.text_ended);
                 if self.segments[i].pacer.is_none() {
                     // A segment closed mid-write: its words have no pace to keep.
