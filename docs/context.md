@@ -207,8 +207,9 @@ load_context mutates only marked fields and returns the same typed object
 for callers preferring assignment. Existing saved values replace defaults
 before the agent runs; a new scope uses declared defaults. Runtime customer
 and service fields are untouched. The store tracks the loaded revision so
-save_context can reject stale writes. Framework scope/revision metadata is
-not serialized as application fields.
+save_context can reject stale writes; saving an object that store did not load
+raises `ValueError`. Framework scope/revision metadata is not serialized as
+application fields.
 
 Top-level helpers are equivalent conveniences using the supplied store:
 

@@ -76,18 +76,19 @@ The SQL adapter does not promise compatibility with arbitrary databases.
 The server-facing `Storage` trait opens shared engine handles. Thread
 metadata crosses as the threads service's own `livekit-protocol` records
 (`livekit_protocol::agent::agent_thread`): `CreateRequest`, `UpdateRequest`,
-`ListRequest`/`ListResponse` and `Thread`, the same messages the Cloud threads
+`ListRequest`/`ListResponse` and `Thread` (named `ThreadRecord` in the crate, where
+`Thread` is the engine's handle), the same messages the Cloud threads
 service speaks, on both backends.
 
 ```rust
 #[async_trait]
 pub trait Storage: Send + Sync {
-    async fn create_thread(&self, request: CreateRequest) -> Result<Thread, StorageError>;
-    async fn get_thread(&self, thread_id: &str) -> Result<Thread, StorageError>;
+    async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError>;
+    async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError>;
     async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError>;
-    async fn update_thread(&self, request: UpdateRequest) -> Result<Thread, StorageError>;
+    async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
-    async fn open(&self, thread_id: &str, holder: &str) -> Result<engine::Thread, StorageError>;
+    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError>;
     fn response_streams(&self) -> Arc<dyn ResponseStreams>;
     async fn close(&self);
 }
@@ -551,7 +552,7 @@ One journal per thread, shared by every lane. Each event carries:
 | Event                     | What it records                                                                                                                       |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `run_started`             | a run began: its task id and channel. A `run_started` with no `run_ended` after it is how an interrupted run is found |
-| `run_ended`               | how the run ended: `outcome` (`completed`, `input-required`, `failed`, `canceled`) and `reason`                                        |
+| `run_ended`               | how the run ended: `outcome` (`completed`, `input-required`, `failed`, `canceled`, `rejected`) and `reason`                                        |
 | `usage`                   | the run's model requests, tokens and tool calls                                                                                        |
 | `conversation_item_added` | an item entered the history: a message, a function call, a function call output                                            |
 | `tool_execution_updated`  | one call's lifecycle: started, a progress update from `ctx.update()`, ended                                                           |
