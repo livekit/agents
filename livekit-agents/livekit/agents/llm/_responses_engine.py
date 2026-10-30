@@ -268,6 +268,9 @@ class ResponsesLLMStream(llm.LLMStream):
 
         self._client = client
         self._llm = cast(ResponsesLLMHost, llm)
+        # bound at construction: a gateway transport routes by the model on its URL, so a
+        # turn must keep the transport matching the model it sends, across retries
+        self._ws = self._llm._ws
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
 
@@ -315,7 +318,7 @@ class ResponsesLLMStream(llm.LLMStream):
         if self._llm._opts.use_websocket is not False:
             retryable = True
             try:
-                if self._llm._ws is None:
+                if self._ws is None:
                     raise RuntimeError("use_websocket is True but _ws is None")
 
                 payload = {
@@ -325,7 +328,7 @@ class ResponsesLLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.generate_response(
+                async for raw_event in self._ws.generate_response(
                     payload,
                     receive_timeout=self._idle_timeout(),
                     connect_timeout=self._conn_options.timeout,
