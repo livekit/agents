@@ -11,8 +11,19 @@ from __future__ import annotations
 
 from typing import TypeAlias
 
+from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd
 from livekit.rtc import AudioFrame
+
+MediaFrame: TypeAlias = AudioFrame | rtc.VideoFrame
+"""A frame the SDK's synchronizer takes: audio or video."""
+
+
+AvatarFrame: TypeAlias = AudioFrame | rtc.VideoFrame | AudioSegmentEnd
+"""What an avatar's video generator yields: a frame, or the end of a segment
+(`AudioSegmentEnd`).
+"""
+
 
 AudioReceiverFrame: TypeAlias = AudioFrame | AudioSegmentEnd
 """An avatar audio receiver yields audio or the end of its segment, never video."""

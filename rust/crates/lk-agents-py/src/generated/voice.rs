@@ -2529,7 +2529,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarVideoGenerator._core_push_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [match frame_arg { None => py.None().into_bound(py), Some(x) => crate::generated::records::avatar::media_frame_to_py(py, x)? }];
                 Ok((host.bind(py).getattr("_core_push_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2608,7 +2608,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::utils::video::AvatarFrame>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::avatar::avatar_frame_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -2683,7 +2683,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarMedia._core_push", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::avatar::media_frame_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_push")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

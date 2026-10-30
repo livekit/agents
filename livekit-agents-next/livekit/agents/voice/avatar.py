@@ -55,10 +55,6 @@ class AudioSegmentEnd:
 _ReceiverEventT = TypeVar("_ReceiverEventT", default=Never, contravariant=True)
 
 
-_AudioReceiverFrame = rtc.AudioFrame | AudioSegmentEnd
-_AvatarFrame = _AudioReceiverFrame | rtc.VideoFrame
-
-
 class AudioReceiver(
     ABC, rtc.EventEmitter[Literal["clear_buffer"] | _ReceiverEventT], Generic[_ReceiverEventT]
 ):

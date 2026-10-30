@@ -3,8 +3,6 @@
 //! nothing; crossing in from a host `bytes` buffer copies nothing either, and crossing out is one
 //! copy into the host's `bytes`.
 
-use lk_agents_host_derive::Host;
-
 use crate::AudioFrame;
 
 /// `rtc.VideoFrame(width, height, type, data)`.
@@ -80,9 +78,8 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for VideoFrame {
 }
 
 /// A frame the SDK's synchronizer takes: audio or video.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, extract, untagged)]
-#[crate::host(handwritten(extract, emit, host = "rtc.AudioFrame | rtc.VideoFrame"))]
+#[crate::host(record(module = "avatar", extract, emit, transparent))]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MediaFrame {
     Audio(AudioFrame),
     Video(VideoFrame),
@@ -90,13 +87,12 @@ pub enum MediaFrame {
 
 /// What an avatar's video generator yields: a frame, or the end of a segment
 /// (`AudioSegmentEnd`).
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, extract, untagged)]
-#[host(host_type = "livekit.agents.voice.avatar._AvatarFrame")]
+#[crate::host(record(module = "avatar", extract, emit, transparent))]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AvatarFrame {
     Audio(AudioFrame),
     Video(VideoFrame),
-    #[binding(class = "livekit.agents.voice.avatar.AudioSegmentEnd")]
+    #[host(host_type = "livekit.agents.voice.avatar.AudioSegmentEnd")]
     SegmentEnd,
 }
 

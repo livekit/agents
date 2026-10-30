@@ -1154,6 +1154,53 @@ pub mod avatar {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
+    static MEDIA_FRAME__AUDIO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static MEDIA_FRAME__VIDEO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+
+    pub fn media_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::MediaFrame> {
+        if obj.is_instance(MEDIA_FRAME__AUDIO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("AudioFrame")?.unbind()))?.bind(obj.py()))? {
+            return Ok(::lk_agents_abi::utils::video::MediaFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        if obj.is_instance(MEDIA_FRAME__VIDEO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("VideoFrame")?.unbind()))?.bind(obj.py()))? {
+            return Ok(::lk_agents_abi::utils::video::MediaFrame::Video(obj.extract::<::lk_agents_abi::utils::video::VideoFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        Err(super::not_a(obj, "MediaFrame"))
+    }
+
+    pub fn media_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::MediaFrame) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::utils::video::MediaFrame::Audio(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::MediaFrame::Video(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
+    static AVATAR_FRAME__AUDIO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static AVATAR_FRAME__VIDEO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+    static AVATAR_FRAME__AUDIO_SEGMENT_END: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
+
+    pub fn avatar_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::AvatarFrame> {
+        if obj.is_instance(AVATAR_FRAME__AUDIO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("AudioFrame")?.unbind()))?.bind(obj.py()))? {
+            return Ok(::lk_agents_abi::utils::video::AvatarFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        if obj.is_instance(AVATAR_FRAME__VIDEO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("VideoFrame")?.unbind()))?.bind(obj.py()))? {
+            return Ok(::lk_agents_abi::utils::video::AvatarFrame::Video(obj.extract::<::lk_agents_abi::utils::video::VideoFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        if obj.is_instance(AVATAR_FRAME__AUDIO_SEGMENT_END.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.unbind()))?.bind(obj.py()))? {
+            return Ok(::lk_agents_abi::utils::video::AvatarFrame::SegmentEnd);
+        }
+        Err(super::not_a(obj, "AvatarFrame"))
+    }
+
+    pub fn avatar_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::AvatarFrame) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::utils::video::AvatarFrame::Audio(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::AvatarFrame::Video(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::AvatarFrame::SegmentEnd => crate::host::construct(py.import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.as_any(), (), None)?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
     static AUDIO_RECEIVER_FRAME__AUDIO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
     static AUDIO_RECEIVER_FRAME__AUDIO_SEGMENT_END: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();
 
