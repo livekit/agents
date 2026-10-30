@@ -176,12 +176,12 @@ class _TextRun(Generic[Context_T]):
         return store._for_scope(self.context_scope) if self.context_scope is not None else store
 
     async def prepare_thread(self) -> None:
-        from ..storage.backends import Storage
+        from ..storage.backends import _MemoryStorage
         from ..storage.context_store import ContextStore
         from ..storage.resolve import Thread
 
         if self.thread is None:
-            self._owned_storage = Storage({}, None)
+            self._owned_storage = _MemoryStorage()
             info = await self._owned_storage.threads.create_thread()
             self.thread = Thread(self._owned_storage, info.thread_id, agent_name=self.agent.name)
         if (self.hooks is None or self.hooks.store is None) and self._store is None:

@@ -180,6 +180,8 @@ class AgentServer(AgentHandler):
         AgentHandler.__init__(self)
         self._config = _core.ServerConfig(options)
         self._storage = storage
+        # a server with no storage still speaks A2A: its text doors share threads in memory
+        self._memory: Storage | None = None
         self._preload_modules = preload_module_names(preload_modules)
         self._setup_fnc = validate_setup_fnc(setup_fnc)
         self._load_fnc = _load_fnc
@@ -231,7 +233,12 @@ class AgentServer(AgentHandler):
                 raise TypeError(f"not a door: {door!r}")
             if door.name in self._a2a_endpoints:
                 raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
-            door.bind(storage=self._storage, config=self._config)
+            storage = self._storage
+            if storage is None:
+                from .storage.backends import _MemoryStorage
+
+                storage = self._memory = self._memory or _MemoryStorage()
+            door.bind(storage=storage, config=self._config)
             self._http.mount(f"/{door.name}", door.app, name=door.name)
             self._http.configure_endpoint(f"/{door.name}", public=False)
             self._a2a_endpoints[door.name] = door

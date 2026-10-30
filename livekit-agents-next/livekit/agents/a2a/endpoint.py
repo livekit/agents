@@ -104,16 +104,10 @@ class A2AEndpoint:
 
     # -- binding to a server --
 
-    def bind(self, *, storage: Storage | None, config: ServerConfig) -> A2AService:
+    def bind(self, *, storage: Storage, config: ServerConfig) -> A2AService:
         """Attach the endpoint to a server's storage and options: its agent name (the lane,
         unless the door writes its own), credentials and URL."""
         chosen = self._storage or storage
-        if chosen is None:
-            raise ValueError(
-                f"a2a_session(endpoint={self.name!r}) needs a storage: AgentServer(storage=...) "
-                "or a2a_session(storage=...)"
-            )
-
         self._deployment = config.deployment
         # the card's version is the deployment's; a local worker, registered under none, falls
         # back to LIVEKIT_AGENT_VERSION

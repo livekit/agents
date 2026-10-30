@@ -20,10 +20,12 @@ from ..log import logger
 
 
 class Storage:
-    """Where threads live: the contract ``AgentServer(storage=)`` and ``a2a_session(storage=)``
-    take. Construct ``AgentDBStorage`` or ``SQLiteStorage``."""
+    """Where threads live: the abstract type ``AgentServer(storage=)`` and
+    ``a2a_session(storage=)`` take. Construct ``AgentDBStorage`` or ``SQLiteStorage``."""
 
     def __init__(self, args: dict[str, Any], holder: str | None) -> None:
+        if type(self) is Storage:
+            raise TypeError("Storage is abstract: construct AgentDBStorage or SQLiteStorage")
         self._core = _core.Storage(**args)
         # what a job process rebuilds the storage from (``__reduce__``)
         self._args = args
@@ -66,6 +68,13 @@ def _seconds(value: timedelta | None, variable: str) -> float | None:
 
     raw = os.environ.get(variable)
     return float(raw) if raw else None
+
+
+class _MemoryStorage(Storage):
+    """Threads in this process's memory, where no storage is configured: nothing persists."""
+
+    def __init__(self) -> None:
+        super().__init__({}, None)
 
 
 class AgentDBStorage(Storage):

@@ -353,6 +353,26 @@ async def test_thin_slice_across_two_workers(thread_storages: Workers) -> None:
     assert all(t.status.state == pb.TaskState.TASK_STATE_COMPLETED for t in listed.tasks)
 
 
+async def test_a_server_without_storage_speaks_a2a_on_threads_in_memory() -> None:
+    seen: list[list[str]] = []
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        seen.append([i.text_content or "" for i in ctx.message_history.items])
+        return "seen " + str(len(ctx.message_history.items))
+
+    server = AgentServer(agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET)
+    server.a2a_session(endpoint=ENDPOINT, description="Answers.")(handler)
+    async with http_client(server) as http:
+        client = await stock_client(http)
+        first = payloads(await send(client, user_message("hello", "m1")))
+        ctx_id = first[0].context_id
+        second = payloads(await send(client, user_message("again", "m2", context_id=ctx_id)))
+        await client.close()
+    assert first[0].id.startswith("AST_") and second[0].id.startswith("AST_")
+    assert second[0].context_id == ctx_id
+    assert seen == [[], ["hello", "seen 0"]]
+
+
 def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agent:
     front = Agent(
         instructions="front desk",
