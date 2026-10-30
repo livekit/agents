@@ -679,7 +679,7 @@ impl LlmChoiceParser {
     fn parse<'py>(&mut self, py: Python<'py>, id: ::std::string::String, choice: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let choice = ::lk_agents_abi::python::value_from_py(&choice, "choice")?;
-        let out = py.detach(|| <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::llm::chat_chunk_to_py(py, value)?)).transpose()?)
     }
 }

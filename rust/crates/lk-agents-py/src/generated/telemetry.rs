@@ -134,9 +134,9 @@ impl CoreMetricSeries {
     }
 
     #[pyo3(signature = (name, attributes))]
-    fn admit(&mut self, py: Python<'_>, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
+    fn admit(&mut self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreMetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&mut self.0, name, attributes));
+        let out = <CoreMetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&mut self.0, name, attributes);
         Ok(out)
     }
 }
@@ -216,16 +216,16 @@ impl LlmMetricState {
 
     /// Whether `chunk` is the first with a response.
     #[pyo3(signature = (now, chunk))]
-    fn observe(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn observe(&mut self, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: Bound<'_, PyAny>) -> PyResult<bool> {
         let chunk = crate::generated::records::llm::chat_chunk_from_py(&chunk)?;
-        let out = py.detach(|| <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk));
+        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk);
         Ok(out)
     }
 
     /// `None` for a failed attempt or one that yielded no chunk.
     #[pyo3(signature = (now, failed, host))]
     fn finish<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_llm_metric_state_finish_now)] now: f64, failed: bool, #[pyo3(from_py_with = _extract_llm_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-        let out = py.detach(|| <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host));
+        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host);
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::llm_metrics_to_py(py, value)?)).transpose()?)
     }
 }
@@ -268,23 +268,23 @@ impl TtsMetricState {
 
     /// A streamed segment's text, in the order its audio is finished.
     #[pyo3(signature = (text))]
-    fn queue_text(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
-        py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::queue_text(&mut self.0, text));
+    fn queue_text(&mut self, text: ::std::string::String) -> PyResult<()> {
+        <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::queue_text(&mut self.0, text);
         Ok(())
     }
 
     /// Whether `audio` ends its segment.
     #[pyo3(signature = (now, start, audio))]
-    fn observe(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn observe(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: Bound<'_, PyAny>) -> PyResult<bool> {
         let audio = crate::generated::records::tts::synthesized_audio_from_py(&audio)?;
-        let out = py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio));
+        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio);
         Ok(out)
     }
 
     /// The record of a finished request or segment, then the figures reset.
     #[pyo3(signature = (now, start, failed, batch_text, host))]
     fn finish<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-        let out = py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, host));
+        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, host);
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::tts_metrics_to_py(py, value)?)).transpose()?)
     }
 }
@@ -334,34 +334,34 @@ impl Tagger {
 
     /// Mark the session as successful; ``reason`` is kept apart from the tag.
     #[pyo3(signature = (reason = None))]
-    fn success(&mut self, py: Python<'_>, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn success(&mut self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::success(&mut self.0, reason));
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::success(&mut self.0, reason);
         Ok(())
     }
 
     /// Mark the session as failed; ``reason`` is kept apart from the tag.
     #[pyo3(signature = (reason = None))]
-    fn fail(&mut self, py: Python<'_>, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn fail(&mut self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::fail(&mut self.0, reason));
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::fail(&mut self.0, reason);
         Ok(())
     }
 
     /// Add a ``key:value`` tag, with optional structured metadata.
     #[pyo3(signature = (tag, *, metadata = None))]
-    fn add(&mut self, py: Python<'_>, tag: ::std::string::String, metadata: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    fn add(&mut self, tag: ::std::string::String, metadata: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
         let metadata = metadata.map(|v| ::lk_agents_abi::python::value_from_py(&v, "metadata")).transpose()?;
-        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::add(&mut self.0, tag, metadata));
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::add(&mut self.0, tag, metadata);
         Ok(())
     }
 
     /// Remove a tag; removing an absent one does nothing.
     #[pyo3(signature = (tag))]
-    fn remove(&mut self, py: Python<'_>, tag: ::std::string::String) -> PyResult<()> {
+    fn remove(&mut self, tag: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::remove(&mut self.0, tag));
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::remove(&mut self.0, tag);
         Ok(())
     }
 
@@ -369,27 +369,27 @@ impl Tagger {
     #[getter]
     fn tags<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::tags(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::tags(&self.0);
         Ok(::pyo3::types::PyFrozenSet::new(py, out.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// ``sorted(tagger.tags)``.
-    fn sorted_tags(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::std::string::String>> {
+    fn sorted_tags(&self) -> PyResult<::std::vec::Vec<::std::string::String>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::sorted_tags(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::sorted_tags(&self.0);
         Ok(out)
     }
 
     /// ``(tag, metadata, epoch seconds)``, in insertion order.
     fn entries<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::entries(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::entries(&self.0);
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, match x1 { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x2, py)?])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
-    fn is_empty(&self, py: Python<'_>) -> PyResult<bool> {
+    fn is_empty(&self) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::is_empty(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::is_empty(&self.0);
         Ok(out)
     }
 
@@ -397,7 +397,7 @@ impl Tagger {
     #[getter]
     fn evaluations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::evaluations(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::evaluations(&self.0);
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::evaluation_record_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
@@ -405,30 +405,30 @@ impl Tagger {
     #[getter]
     fn outcome<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome(&self.0);
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::outcome_to_py(py, value)?)).transpose()?)
     }
 
     /// The reason given with the outcome.
     #[getter]
-    fn outcome_reason(&self, py: Python<'_>) -> PyResult<::std::option::Option<::std::string::String>> {
+    fn outcome_reason(&self) -> PyResult<::std::option::Option<::std::string::String>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome_reason(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome_reason(&self.0);
         Ok(out)
     }
 
     /// One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record.
     #[pyo3(signature = (name, verdict, reasoning, instructions))]
-    fn _core_record_judgment(&mut self, py: Python<'_>, name: ::std::string::String, verdict: ::std::string::String, reasoning: ::std::string::String, instructions: ::std::string::String) -> PyResult<()> {
+    fn _core_record_judgment(&mut self, name: ::std::string::String, verdict: ::std::string::String, reasoning: ::std::string::String, instructions: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_record_judgment(&mut self.0, name, verdict, reasoning, instructions));
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_record_judgment(&mut self.0, name, verdict, reasoning, instructions);
         Ok(())
     }
 
     /// Whether the session has judgments or an outcome to upload.
-    fn has_evals(&self, py: Python<'_>) -> PyResult<bool> {
+    fn has_evals(&self) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::has_evals(&self.0));
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::has_evals(&self.0);
         Ok(out)
     }
 
@@ -440,7 +440,7 @@ impl Tagger {
         crate::host::check_pid()?;
         let report = crate::generated::records::telemetry::session_report_input_from_py(&report)?;
         let project_item = crate::generated::telemetry::ChatItemProjectionProxy::from_host(&project_item)?;
-        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::log_record_wire_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 }
@@ -470,23 +470,23 @@ impl UploadGate {
     }
 
     /// Called when a session re-initialises recording.
-    fn reset(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn reset(&mut self) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::reset(&mut self.0));
+        <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::reset(&mut self.0);
         Ok(())
     }
 
     #[getter]
-    fn disabled(&self, py: Python<'_>) -> PyResult<bool> {
+    fn disabled(&self) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disabled(&self.0));
+        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disabled(&self.0);
         Ok(out)
     }
 
     /// Returns ``True`` on the transition only, where the reference logs its warning.
-    fn disable(&mut self, py: Python<'_>) -> PyResult<bool> {
+    fn disable(&mut self) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disable(&mut self.0));
+        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disable(&mut self.0);
         Ok(out)
     }
 
@@ -657,56 +657,56 @@ impl CoreEventRetention {
 
     /// Bind report access to the first job that starts the session. Ownership cannot transfer.
     #[pyo3(signature = (job_id))]
-    fn claim(&mut self, py: Python<'_>, job_id: ::std::string::String) -> PyResult<()> {
+    fn claim(&mut self, job_id: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::claim(&mut self.0, job_id));
+        <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::claim(&mut self.0, job_id);
         Ok(())
     }
 
     /// Sessions started outside a job retain their existing application-owned access contract.
     #[pyo3(signature = (job_id))]
-    fn allows_read(&self, py: Python<'_>, job_id: ::std::string::String) -> PyResult<bool> {
+    fn allows_read(&self, job_id: ::std::string::String) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::allows_read(&self.0, job_id));
+        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::allows_read(&self.0, job_id);
         Ok(out)
     }
 
     /// Immutable consent captured when this session's report retention was created.
     #[getter]
-    fn capture_content(&self, py: Python<'_>) -> PyResult<bool> {
+    fn capture_content(&self) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::capture_content(&self.0));
+        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::capture_content(&self.0);
         Ok(out)
     }
 
     /// Reject content without creation-time consent, unknown schemas and live-object events.
     #[pyo3(signature = (kind, redaction))]
-    fn accepts(&self, py: Python<'_>, kind: ::std::string::String, redaction: bool) -> PyResult<bool> {
+    fn accepts(&self, kind: ::std::string::String, redaction: bool) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::accepts(&self.0, kind, redaction));
+        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::accepts(&self.0, kind, redaction);
         Ok(out)
     }
 
     /// Expire old entries, then admit only within the item and byte budgets. The adapter removes
     /// exactly the returned prefix before appending the newly admitted snapshot.
     #[pyo3(signature = (retained_bytes, now_ns))]
-    fn admit(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
+    fn admit(&mut self, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&mut self.0, retained_bytes, now_ns));
+        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&mut self.0, retained_bytes, now_ns);
         Ok(out)
     }
 
     #[pyo3(signature = (now_ns))]
-    fn expire(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
+    fn expire(&mut self, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&mut self.0, now_ns));
+        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&mut self.0, now_ns);
         Ok(out)
     }
 
     #[getter]
-    fn diagnostics(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<(::std::string::String, u64)>> {
+    fn diagnostics(&self) -> PyResult<::std::vec::Vec<(::std::string::String, u64)>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::diagnostics(&self.0));
+        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::diagnostics(&self.0);
         Ok(out)
     }
 }

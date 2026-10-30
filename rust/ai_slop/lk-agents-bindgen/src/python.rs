@@ -659,6 +659,10 @@ fn method(o: &Object, m: &Method) -> TokenStream {
             {
                 to_core.visit_type_mut(t);
             }
+            // A mutex cell's class is frozen: its `&mut` comes from the lock, not a borrow.
+            if matches!(o.cell, Cell::Mutex { .. }) && sig.receiver == Receiver::Mut {
+                sig.receiver = Receiver::Ref;
+            }
             sig
         }
     };
@@ -809,9 +813,10 @@ fn output(s: &Sig) -> Option<crate::shape::Out> {
 }
 
 /// A synchronous entry runs the core without the GIL: a Rust task holding a lock it waits for
-/// may itself be waiting for the GIL.
+/// may itself be waiting for the GIL. `&mut self` keeps it: the GIL serializes its exclusive
+/// borrow, which a second thread would otherwise find taken.
 fn detaches(s: &Sig) -> bool {
-    !s.attached && !s.is_async
+    !s.attached && !s.is_async && s.receiver != Receiver::Mut
 }
 
 /// To release the GIL, to return an awaitable, or because a conversion needs it.

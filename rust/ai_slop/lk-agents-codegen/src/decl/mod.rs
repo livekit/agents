@@ -427,7 +427,7 @@ pub struct Method {
     /// An eager await declared `Result<BoxFuture<'static, T>, E>`: `E`, raised at the call.
     pub refused: Option<ErrorDecl>,
     /// A getter that provably takes no lock runs with the GIL held; every other synchronous
-    /// entry releases it for the native call.
+    /// entry releases it for the native call, except a mutable class's methods.
     pub attached: bool,
     /// Override the class or function group fork guard for this entry.
     pub pid: Option<bool>,

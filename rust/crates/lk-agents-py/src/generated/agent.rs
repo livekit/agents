@@ -84,59 +84,59 @@ impl RunEvents {
 
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[pyo3(signature = (index, expected))]
-    fn at(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_run_events_at_index)] index: i64, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
+    fn at(&self, #[pyo3(from_py_with = _extract_run_events_at_index)] index: i64, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
         crate::host::check_pid()?;
         let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
-        let out = py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected)).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// Advances to the next event of `expected`'s kind, or the next event when `None`.
     #[pyo3(signature = (expected))]
-    fn next_event(&mut self, py: Python<'_>, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
+    fn next_event(&mut self, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
         crate::host::check_pid()?;
         let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
-        let out = py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::next_event(&mut self.0, expected)).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::next_event(&mut self.0, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// Advances past the next event only if it meets `expected`.
     #[pyo3(signature = (expected))]
-    fn skip_next_event_if(&mut self, py: Python<'_>, expected: Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
+    fn skip_next_event_if(&mut self, expected: Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
         crate::host::check_pid()?;
         let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
-        let out = py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next_event_if(&mut self.0, expected));
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next_event_if(&mut self.0, expected);
         Ok(out)
     }
 
     #[pyo3(signature = (count))]
-    fn skip_next(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_run_events_skip_next_count)] count: usize) -> PyResult<()> {
+    fn skip_next(&mut self, #[pyo3(from_py_with = _extract_run_events_skip_next_count)] count: usize) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next(&mut self.0, count)).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next(&mut self.0, count).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
-    fn no_more_events(&self, py: Python<'_>) -> PyResult<()> {
+    fn no_more_events(&self) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::no_more_events(&self.0)).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::no_more_events(&self.0).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     /// The first event of `start..stop` meeting `expected`.
     #[pyo3(signature = (start, stop, expected))]
-    fn contains(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_run_events_contains_start)] start: usize, #[pyo3(from_py_with = _extract_run_events_contains_stop)] stop: usize, expected: Bound<'_, PyAny>) -> PyResult<usize> {
+    fn contains(&self, #[pyo3(from_py_with = _extract_run_events_contains_start)] start: usize, #[pyo3(from_py_with = _extract_run_events_contains_stop)] stop: usize, expected: Bound<'_, PyAny>) -> PyResult<usize> {
         crate::host::check_pid()?;
         let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
-        let out = py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected)).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// The message of a failure about the event at `index`, or the current one: `message` and
     /// the events with that one marked.
     #[pyo3(signature = (message, index))]
-    fn failure(&self, py: Python<'_>, message: ::std::string::String, #[pyo3(from_py_with = _extract_run_events_failure_index)] index: ::std::option::Option<usize>) -> PyResult<::std::string::String> {
+    fn failure(&self, message: ::std::string::String, #[pyo3(from_py_with = _extract_run_events_failure_index)] index: ::std::option::Option<usize>) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::failure(&self.0, message, index));
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::failure(&self.0, message, index);
         Ok(out)
     }
 }

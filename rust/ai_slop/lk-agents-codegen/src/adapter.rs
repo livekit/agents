@@ -407,7 +407,10 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             ));
         }
         _ => {
-            let needs_py = ret_ty.contains("'py") || !m.attached;
+            // A mutable class's state is behind PyO3's borrow flag, which the GIL serializes:
+            // released, another thread's call would be refused as already borrowed.
+            let detach = !m.attached && !(c.form == Form::MutableClass && receiver.is_some());
+            let needs_py = ret_ty.contains("'py") || detach;
             // A function is registered from `mod.rs`.
             let vis = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
                 "pub "
@@ -437,10 +440,10 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             );
             // The native call runs without the GIL: a Rust task holding a lock it waits for may
             // itself be waiting for the GIL.
-            let value = if m.attached {
-                format!("{invocation}{err}")
-            } else {
+            let value = if detach {
                 format!("py.detach(|| {invocation}){err}")
+            } else {
+                format!("{invocation}{err}")
             };
             let body = if m.ret.ok == Ty::Unit {
                 format!("{ind}    {value};\n{ind}    Ok(())\n")

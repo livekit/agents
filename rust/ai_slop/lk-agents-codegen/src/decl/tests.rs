@@ -400,8 +400,8 @@ fn mutable_classes_and_functions_are_their_own_forms() {
         "{llm}"
     );
     assert!(
-        llm.contains("fn parse(&mut self, py: Python<'_>, id: ::std::string::String)")
-            && llm.contains("(&mut self.0, &id)"),
+        llm.contains("fn parse(&mut self, id: ::std::string::String)")
+            && llm.contains("let out = <ParserImpl as ::lk_agents_abi::llm::class::Parser>::parse(&mut self.0, &id);"),
         "{llm}"
     );
     assert!(llm.contains("#[pyfunction]\n#[pyo3(signature = (chunk))]\npub fn llm_usage_chunk(py: Python<'_>, chunk: Bound<'_, PyAny>)"), "{llm}");

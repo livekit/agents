@@ -146,24 +146,24 @@ impl TranscriptMarkupStripper {
     }
 
     #[pyo3(signature = (text))]
-    fn push(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::string::String> {
-        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::push(&mut self.0, text));
+    fn push(&mut self, text: ::std::string::String) -> PyResult<::std::string::String> {
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::push(&mut self.0, text);
         Ok(out)
     }
 
-    fn flush(&mut self, py: Python<'_>) -> PyResult<::std::string::String> {
-        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::flush(&mut self.0));
+    fn flush(&mut self) -> PyResult<::std::string::String> {
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::flush(&mut self.0);
         Ok(out)
     }
 
     #[getter]
-    fn tags(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>> {
-        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0));
+    fn tags(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>> {
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0);
         Ok(out)
     }
 
-    fn expression_attribute(&self, py: Python<'_>) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>> {
-        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::expression_attribute(&self.0));
+    fn expression_attribute(&self) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>> {
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::expression_attribute(&self.0);
         Ok(out)
     }
 }
@@ -218,23 +218,23 @@ impl SentencePacer {
     }
 
     #[pyo3(signature = (text))]
-    fn push(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
+    fn push(&mut self, text: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::push(&mut self.0, text));
+        <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::push(&mut self.0, text);
         Ok(())
     }
 
-    fn end(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn end(&mut self) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::end(&mut self.0));
+        <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::end(&mut self.0);
         Ok(())
     }
 
     /// Text to emit, remaining audio for diagnostics, and next wakeup (None means done).
     #[pyo3(signature = (now, audio))]
-    fn poll(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: f64, #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)] audio: f64) -> PyResult<(::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>)> {
+    fn poll(&mut self, #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: f64, #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)] audio: f64) -> PyResult<(::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>)> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::poll(&mut self.0, now, audio));
+        let out = <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::poll(&mut self.0, now, audio);
         Ok(out)
     }
 }

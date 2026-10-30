@@ -182,13 +182,13 @@ impl TokenBuffer {
 
     /// The tokens ``text`` proves complete, batched.
     #[pyo3(signature = (text))]
-    fn push(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        let out = py.detach(|| <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::push(&mut self.0, text)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn push(&mut self, text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        let out = <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::push(&mut self.0, text).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
-    fn flush(&mut self, py: Python<'_>) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        let out = py.detach(|| <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::flush(&mut self.0)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn flush(&mut self) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        let out = <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::flush(&mut self.0).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 }
@@ -289,28 +289,28 @@ impl BM25Index {
     }
 
     #[pyo3(signature = (documents))]
-    fn build(&mut self, py: Python<'_>, documents: Bound<'_, PyAny>) -> PyResult<()> {
+    fn build(&mut self, documents: Bound<'_, PyAny>) -> PyResult<()> {
         let documents = documents.try_iter().and_then(|items| items.map(|item| { let item = item?; item.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())?;
-        py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::build(&mut self.0, documents));
+        <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::build(&mut self.0, documents);
         Ok(())
     }
 
-    fn clear(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::clear(&mut self.0));
+    fn clear(&mut self) -> PyResult<()> {
+        <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::clear(&mut self.0);
         Ok(())
     }
 
     #[pyo3(signature = (doc, terms))]
-    fn score(&self, py: Python<'_>, doc: Bound<'_, PyAny>, terms: ::std::vec::Vec<::std::string::String>) -> PyResult<f64> {
+    fn score(&self, doc: Bound<'_, PyAny>, terms: ::std::vec::Vec<::std::string::String>) -> PyResult<f64> {
         let doc = doc.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)?;
-        let out = py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::score(&self.0, doc, terms));
+        let out = <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::score(&self.0, doc, terms);
         Ok(out)
     }
 
     #[pyo3(signature = (query, docs, limit))]
-    fn search(&self, py: Python<'_>, query: ::std::string::String, docs: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_search_index_search_limit)] limit: i64) -> PyResult<::std::vec::Vec<usize>> {
+    fn search(&self, query: ::std::string::String, docs: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_search_index_search_limit)] limit: i64) -> PyResult<::std::vec::Vec<usize>> {
         let docs = docs.try_iter().and_then(|items| items.map(|item| { let item = item?; item.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())?;
-        let out = py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::search(&self.0, query, docs, limit));
+        let out = <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::search(&self.0, query, docs, limit);
         Ok(out)
     }
 }

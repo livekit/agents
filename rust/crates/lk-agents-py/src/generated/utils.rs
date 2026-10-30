@@ -50,43 +50,43 @@ impl AudioByteStream {
 
     /// Buffer ``data`` and emit every whole frame it completes.
     #[pyo3(signature = (data))]
-    fn push(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
-        let out = py.detach(|| <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::push(&mut self.0, data));
+    fn push(&mut self, #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::push(&mut self.0, data);
         Ok(out)
     }
 
     /// Public alias of ``push`` in the reference.
     #[pyo3(signature = (data))]
-    fn write(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
-        let out = py.detach(|| <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::write(&mut self.0, data));
+    fn write(&mut self, #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::write(&mut self.0, data);
         Ok(out)
     }
 
     /// Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
     /// for the next push.
-    fn flush(&mut self, py: Python<'_>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
-        let out = py.detach(|| <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::flush(&mut self.0));
+    fn flush(&mut self) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::flush(&mut self.0);
         Ok(out)
     }
 
     /// Seconds of audio waiting for the next frame.
     #[getter]
-    fn buffered_duration(&self, py: Python<'_>) -> PyResult<f64> {
-        let out = py.detach(|| <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::buffered_duration(&self.0));
+    fn buffered_duration(&self) -> PyResult<f64> {
+        let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::buffered_duration(&self.0);
         Ok(out)
     }
 
     /// Restart progressive sizing, keeping the buffered audio: after a mid-stream flush, the
     /// next burst starts with small frames without losing a partial sample.
-    fn reset_progressive(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::reset_progressive(&mut self.0));
+    fn reset_progressive(&mut self) -> PyResult<()> {
+        <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::reset_progressive(&mut self.0);
         Ok(())
     }
 
     /// Drop everything buffered and restart progressive sizing (called on interruption, so the
     /// next word is not a full frame late).
-    fn clear(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::clear(&mut self.0));
+    fn clear(&mut self) -> PyResult<()> {
+        <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::clear(&mut self.0);
         Ok(())
     }
 }
@@ -143,70 +143,70 @@ impl ConnectionPoolState {
     }
 
     #[getter]
-    fn generation(&self, py: Python<'_>) -> PyResult<u64> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::generation(&self.0));
+    fn generation(&self) -> PyResult<u64> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::generation(&self.0);
         Ok(out)
     }
 
     #[getter]
-    fn last_acquire_time(&self, py: Python<'_>) -> PyResult<f64> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_acquire_time(&self.0));
+    fn last_acquire_time(&self) -> PyResult<f64> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_acquire_time(&self.0);
         Ok(out)
     }
 
     #[getter]
-    fn last_connection_reused(&self, py: Python<'_>) -> PyResult<bool> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_connection_reused(&self.0));
+    fn last_connection_reused(&self) -> PyResult<bool> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_connection_reused(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (id, now, generation, acquire_time))]
-    fn connected(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_connection_pool_state_connected_id)] id: u64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_now)] now: f64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_generation)] generation: u64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_acquire_time)] acquire_time: ::std::option::Option<f64>) -> PyResult<bool> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::connected(&mut self.0, id, now, generation, acquire_time));
+    fn connected(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_connected_id)] id: u64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_now)] now: f64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_generation)] generation: u64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_acquire_time)] acquire_time: ::std::option::Option<f64>) -> PyResult<bool> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::connected(&mut self.0, id, now, generation, acquire_time);
         Ok(out)
     }
 
-    fn empty(&self, py: Python<'_>) -> PyResult<bool> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::empty(&self.0));
+    fn empty(&self) -> PyResult<bool> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::empty(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (now))]
-    fn get(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_connection_pool_state_get_now)] now: f64) -> PyResult<::std::option::Option<u64>> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::get(&mut self.0, now));
+    fn get(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_get_now)] now: f64) -> PyResult<::std::option::Option<u64>> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::get(&mut self.0, now);
         Ok(out)
     }
 
     #[pyo3(signature = (id))]
-    fn put(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_connection_pool_state_put_id)] id: u64) -> PyResult<()> {
-        py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::put(&mut self.0, id));
+    fn put(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_put_id)] id: u64) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::put(&mut self.0, id);
         Ok(())
     }
 
     #[pyo3(signature = (id))]
-    fn remove(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_connection_pool_state_remove_id)] id: u64) -> PyResult<()> {
-        py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::remove(&mut self.0, id));
+    fn remove(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_remove_id)] id: u64) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::remove(&mut self.0, id);
         Ok(())
     }
 
-    fn invalidate(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::invalidate(&mut self.0));
+    fn invalidate(&mut self) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::invalidate(&mut self.0);
         Ok(())
     }
 
-    fn close_all(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::close_all(&mut self.0));
+    fn close_all(&mut self) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::close_all(&mut self.0);
         Ok(())
     }
 
-    fn next_closing(&self, py: Python<'_>) -> PyResult<::std::option::Option<u64>> {
-        let out = py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::next_closing(&self.0));
+    fn next_closing(&self) -> PyResult<::std::option::Option<u64>> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::next_closing(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (id))]
-    fn closed(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_connection_pool_state_closed_id)] id: u64) -> PyResult<()> {
-        py.detach(|| <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::closed(&mut self.0, id));
+    fn closed(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_closed_id)] id: u64) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::closed(&mut self.0, id);
         Ok(())
     }
 }
@@ -271,14 +271,14 @@ impl ExpFilter {
     }
 
     #[pyo3(signature = (alpha = ::lk_agents_abi::Maybe::NotGiven, initial = ::lk_agents_abi::Maybe::NotGiven, min_val = ::lk_agents_abi::Maybe::NotGiven, max_val = ::lk_agents_abi::Maybe::NotGiven))]
-    fn reset(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_exp_filter_reset_alpha)] alpha: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_initial)] initial: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_min_val)] min_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_max_val)] max_val: ::lk_agents_abi::Maybe<f64>) -> PyResult<()> {
-        py.detach(|| <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val)).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn reset(&mut self, #[pyo3(from_py_with = _extract_exp_filter_reset_alpha)] alpha: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_initial)] initial: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_min_val)] min_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_max_val)] max_val: ::lk_agents_abi::Maybe<f64>) -> PyResult<()> {
+        <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     #[pyo3(signature = (exp, sample = ::lk_agents_abi::Maybe::NotGiven))]
-    fn apply(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64, #[pyo3(from_py_with = _extract_exp_filter_apply_sample)] sample: ::lk_agents_abi::Maybe<f64>) -> PyResult<f64> {
-        let out = py.detach(|| <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::apply(&mut self.0, exp, sample)).map_err(|e: ::lk_agents_abi::FilterError| <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn apply(&mut self, #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64, #[pyo3(from_py_with = _extract_exp_filter_apply_sample)] sample: ::lk_agents_abi::Maybe<f64>) -> PyResult<f64> {
+        let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::apply(&mut self.0, exp, sample).map_err(|e: ::lk_agents_abi::FilterError| <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -289,8 +289,8 @@ impl ExpFilter {
     }
 
     #[pyo3(signature = (alpha))]
-    fn update_base(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_exp_filter_update_base_alpha)] alpha: f64) -> PyResult<()> {
-        py.detach(|| <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::update_base(&mut self.0, alpha));
+    fn update_base(&mut self, #[pyo3(from_py_with = _extract_exp_filter_update_base_alpha)] alpha: f64) -> PyResult<()> {
+        <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::update_base(&mut self.0, alpha);
         Ok(())
     }
 }
@@ -319,23 +319,23 @@ impl MovingAverage {
     }
 
     #[pyo3(signature = (sample))]
-    fn add_sample(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_moving_average_add_sample_sample)] sample: f64) -> PyResult<()> {
-        py.detach(|| <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::add_sample(&mut self.0, sample));
+    fn add_sample(&mut self, #[pyo3(from_py_with = _extract_moving_average_add_sample_sample)] sample: f64) -> PyResult<()> {
+        <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::add_sample(&mut self.0, sample);
         Ok(())
     }
 
-    fn get_avg(&self, py: Python<'_>) -> PyResult<f64> {
-        let out = py.detach(|| <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::get_avg(&self.0));
+    fn get_avg(&self) -> PyResult<f64> {
+        let out = <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::get_avg(&self.0);
         Ok(out)
     }
 
-    fn reset(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::reset(&mut self.0));
+    fn reset(&mut self) -> PyResult<()> {
+        <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::reset(&mut self.0);
         Ok(())
     }
 
-    fn size(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::size(&self.0));
+    fn size(&self) -> PyResult<usize> {
+        let out = <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::size(&self.0);
         Ok(out)
     }
 }
