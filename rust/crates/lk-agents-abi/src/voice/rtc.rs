@@ -304,16 +304,17 @@ impl Default for TrackPublishOptions {
     }
 }
 
-/// `rtc.AudioStream.from_track(...)`'s parameters. `Default` is hand-written: AGC defaults to on.
+/// `rtc.AudioStream.from_track(...)`'s parameters: what `_core_rtc.TrackPublication.
+/// _core_open_audio_stream` opens its `rtc.AudioStream` (and, with `auto_gain_control`, its
+/// `AudioProcessingModule`) with.
 #[derive(Debug, Clone)]
-#[crate::class]
+#[crate::host(record(module = "rtc_wire", emit))]
 pub struct AudioStreamOptions {
     /// The participant selected by the room coordinator, for the host's per-track selector callback.
     pub participant_identity: ParticipantIdentity,
-
-    /// `None` leaves the track's own rate. `AudioInputOptions.sample_rate` defaults to 24000.
-    pub sample_rate: Option<u32>,
-    pub num_channels: Option<u16>,
+    /// `AudioInputOptions.sample_rate`, default 24000.
+    pub sample_rate: u32,
+    pub num_channels: u16,
     /// `AudioInputOptions.frame_size_ms`, default 50.
     pub frame_size_ms: Option<u32>,
     /// The host-side `rtc.FrameProcessor` / `rtc.NoiseCancellationOptions`, an opaque host object
@@ -321,54 +322,20 @@ pub struct AudioStreamOptions {
     pub noise_cancellation: Option<HostRef>,
     /// `AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream.
     pub auto_gain_control: bool,
-}
-
-/// The host's view: what `_core_rtc.TrackPublication._core_open_audio_stream` opens its
-/// `rtc.AudioStream` (and, with `auto_gain_control`, its `AudioProcessingModule`) with.
-#[crate::host(object)]
-impl AudioStreamOptions {
-    #[host(getter)]
-    pub fn participant_identity(&self) -> ParticipantIdentity {
-        self.participant_identity.clone()
-    }
-
-    #[host(getter)]
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate.unwrap_or(48_000)
-    }
-    #[host(getter)]
-    pub fn num_channels(&self) -> u16 {
-        self.num_channels.unwrap_or(1)
-    }
-    #[host(getter)]
-    pub fn frame_size_ms(&self) -> Option<u32> {
-        self.frame_size_ms
-    }
-    /// Bound the SDK queue before frames reach the core's equally bounded input queue.
-    #[host(getter)]
-    pub fn queue_capacity(&self) -> usize {
-        crate::utils::bounded_lossy::AUDIO_QUEUE_FRAMES
-    }
-    /// The host's own object.
-    #[host(getter)]
-    pub fn noise_cancellation(&self) -> Option<HostRef> {
-        self.noise_cancellation.clone()
-    }
-    #[host(getter)]
-    pub fn auto_gain_control(&self) -> bool {
-        self.auto_gain_control
-    }
+    /// Bounds the SDK queue before frames reach the core's equally bounded input queue.
+    pub queue_capacity: usize,
 }
 
 impl Default for AudioStreamOptions {
     fn default() -> Self {
         AudioStreamOptions {
             participant_identity: ParticipantIdentity::default(),
-            sample_rate: None,
-            num_channels: None,
+            sample_rate: 48_000,
+            num_channels: 1,
             frame_size_ms: None,
             noise_cancellation: None,
             auto_gain_control: true,
+            queue_capacity: crate::utils::bounded_lossy::AUDIO_QUEUE_FRAMES,
         }
     }
 }

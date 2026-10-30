@@ -4688,7 +4688,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(opts_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::rtc_wire::audio_stream_options_to_py(py, opts_arg)?];
                 Ok((host.bind(py).getattr("_core_open_audio_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {

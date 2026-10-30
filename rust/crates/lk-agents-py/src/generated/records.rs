@@ -3278,6 +3278,23 @@ pub mod rtc_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static AUDIO_STREAM_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn audio_stream_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::AudioStreamOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::AudioStreamOptions { participant_identity, sample_rate, num_channels, frame_size_ms, noise_cancellation, auto_gain_control, queue_capacity } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("participant_identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(participant_identity, py)?)?;
+            kwargs.set_item("sample_rate", ::pyo3::IntoPyObjectExt::into_bound_py_any(sample_rate, py)?)?;
+            kwargs.set_item("num_channels", ::pyo3::IntoPyObjectExt::into_bound_py_any(num_channels, py)?)?;
+            kwargs.set_item("frame_size_ms", match frame_size_ms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("noise_cancellation", match noise_cancellation { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("auto_gain_control", ::pyo3::IntoPyObjectExt::into_bound_py_any(auto_gain_control, py)?)?;
+            kwargs.set_item("queue_capacity", ::pyo3::IntoPyObjectExt::into_bound_py_any(queue_capacity, py)?)?;
+            crate::host::construct(AUDIO_STREAM_OPTIONS.import(py, "livekit.agents._generated.rtc_wire", "AudioStreamOptions")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
     static VIDEO_FRAME_REF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

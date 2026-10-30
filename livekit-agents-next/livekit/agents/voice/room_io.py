@@ -578,7 +578,7 @@ class TrackPublication:
         assert isinstance(self._publication, rtc.LocalTrackPublication)
         await self._publication.wait_for_subscription()
 
-    def _core_open_audio_stream(self, opts: _core.AudioStreamOptions) -> _AudioStream:
+    def _core_open_audio_stream(self, opts: rtc_wire.AudioStreamOptions) -> _AudioStream:
         track = self._publication.track
         if track is None:
             raise RuntimeError(f"track {self._publication.sid} is no longer subscribed")

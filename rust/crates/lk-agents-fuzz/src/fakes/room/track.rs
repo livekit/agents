@@ -228,8 +228,8 @@ impl FakeTrackPublication {
         let mut state = self.state.lock().unwrap();
         state.streams.push(OpenStream {
             tx,
-            sample_rate: opts.sample_rate,
-            num_channels: opts.num_channels,
+            sample_rate: Some(opts.sample_rate),
+            num_channels: Some(opts.num_channels),
         });
         state.requested.0.push(opts);
         rx

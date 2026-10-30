@@ -29,27 +29,6 @@ REDACTED_EXCEPTION: str
 REDACTED_LOG_BODY: str
 
 
-class AudioStreamOptions:
-    """The host's view: what `_core_rtc.TrackPublication._core_open_audio_stream` opens its
-    `rtc.AudioStream` (and, with `auto_gain_control`, its `AudioProcessingModule`) with.
-    """
-
-    @property
-    def participant_identity(self) -> str: ...
-    @property
-    def sample_rate(self) -> int: ...
-    @property
-    def num_channels(self) -> int: ...
-    @property
-    def frame_size_ms(self) -> int | None: ...
-    @property
-    def queue_capacity(self) -> int: ...
-    @property
-    def noise_cancellation(self) -> Any | None: ...
-    @property
-    def auto_gain_control(self) -> bool: ...
-
-
 class RoomEventBus:
     @property
     def subscriber_count(self) -> int: ...

@@ -48,7 +48,6 @@ from ._generated._core_classes import (
     TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
     UPLOAD_TIMEOUT_SECONDS as UPLOAD_TIMEOUT_SECONDS,
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
-    AudioStreamOptions as AudioStreamOptions,
     ChatRequest as ChatRequest,
     RoomEventBus as RoomEventBus,
     SessionClosing as SessionClosing,

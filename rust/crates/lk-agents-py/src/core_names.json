@@ -9,7 +9,6 @@
     "AudioByteStream",
     "AudioDecoder",
     "AudioEmitter",
-    "AudioStreamOptions",
     "AvatarRunner",
     "BM25Index",
     "BackgroundAudioPlayer",

@@ -30,6 +30,30 @@ class TrackPublishOptions:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class AudioStreamOptions:
+    """`rtc.AudioStream.from_track(...)`'s parameters: what `_core_rtc.TrackPublication.
+    _core_open_audio_stream` opens its `rtc.AudioStream` (and, with `auto_gain_control`, its
+    `AudioProcessingModule`) with.
+    """
+
+    participant_identity: str
+    """The participant selected by the room coordinator, for the host's per-track selector callback."""
+    sample_rate: int
+    """`AudioInputOptions.sample_rate`, default 24000."""
+    num_channels: int
+    frame_size_ms: int | None
+    """`AudioInputOptions.frame_size_ms`, default 50."""
+    noise_cancellation: object | None
+    """The host-side `rtc.FrameProcessor` / `rtc.NoiseCancellationOptions`, an opaque host object
+    Rust never inspects.
+    """
+    auto_gain_control: bool
+    """`AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream."""
+    queue_capacity: int
+    """Bounds the SDK queue before frames reach the core's equally bounded input queue."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class VideoFrameRef:
     """One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a
     [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never cross), the size read at the seam to

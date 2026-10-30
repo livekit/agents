@@ -449,12 +449,13 @@ impl Reader for ParticipantAudioInput {
         open: &Open,
     ) -> Result<()> {
         let input_stream = publication.open_audio_stream(AudioStreamOptions {
-            sample_rate: Some(self.config.sample_rate),
-            num_channels: Some(self.config.num_channels),
+            sample_rate: self.config.sample_rate,
+            num_channels: self.config.num_channels,
             frame_size_ms: Some(self.config.frame_size_ms),
             noise_cancellation: self.config.noise_cancellation.clone(),
             auto_gain_control: self.config.auto_gain_control,
             participant_identity: participant.identity().clone(),
+            queue_capacity: lk_agents_abi::utils::bounded_lossy::AUDIO_QUEUE_FRAMES,
         })?;
         let stream = input_stream.frames()?;
         let owner = Owner { identity: participant.identity(), sid: participant.sid() };
