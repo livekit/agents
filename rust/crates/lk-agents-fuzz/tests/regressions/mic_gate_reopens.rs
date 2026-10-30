@@ -1,31 +1,50 @@
-//! The microphone gate an uninterruptible speech closed reopens before the next frame.
-use lk_agents_fuzz::input::Input;
-use lk_agents_fuzz::search;
+//! The microphone gate the agent's speech closed reopens before the next frame.
+use lk_agents_fuzz::drive::{Case, Policy, Setup, run};
+use lk_agents_fuzz::input::{AgentText, Count, Input, Millis, Ref, SayInput};
 
 // Catches: the gate reopening through the owner's queue, behind frames already queued, so frames
-// pushed after the speech finished were silenced (a45633b37). The gate's effects settle in their
-// batch, before another frame is forwarded. Seed 27243 witnesses the gate window: with the effect
-// sent through the queue again, it fails `forwarded_while_enabled` (re-picked from the campaign
-// with the bug restored once the DST held a call's handle from its return; 30097 was). Seed
-// 5390 fails it with the effect sent through the queue since the fakes' delays are hand-set.
+// pushed as it reopened were silenced (`forwarded_while_enabled`, campaign seed 27243; a45633b37).
+// The gate's effects settle in their batch, before another frame is forwarded. The race is the
+// scheduler's, so 32 schedules of each queue policy run.
 #[test]
-fn microphone_is_not_silenced_after_uninterruptible_speech_finishes() {
-    let seed = 5_390;
-    let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-    assert!(setup.stt, "the case must gate a recognition leg");
-    let outcome = search::explore(setup, seed, 3_000);
-    assert!(
-        outcome
-            .case
-            .inputs
-            .iter()
-            .any(|input| matches!(input, Input::Say { allow: Some(false), .. })),
-        "the case must play an uninterruptible speech"
-    );
-    assert!(outcome.expectations.get("forwarded_while_enabled").is_some_and(|n| *n > 0));
-    assert!(
-        !outcome.failures.iter().any(|failure| failure.contract == "forwarded_while_enabled"),
-        "{:#?}",
-        outcome.failures
-    );
+fn the_microphone_is_heard_once_the_gate_reopens() {
+    let mic = |chunks| Input::MicFrames { mic: Ref::new(0), chunks: Count(chunks) };
+    let inputs = vec![
+        Input::Say {
+            text: AgentText("Your balance is due on Friday, and the next one in March.".into()),
+            input: SayInput::Words,
+            allow: None,
+            to_ctx: true,
+        },
+        Input::Advance { ms: Millis(20) },
+        // The agent starts speaking: the recogniser's gate closes until the echo canceller warms.
+        Input::PlayoutStarted { segment: Ref::new(0) },
+        mic(10),
+        Input::Advance { ms: Millis(100) },
+        mic(10),
+        Input::Advance { ms: Millis(2_900) },
+        // The gate reopens, and the person's frames arrive in the same instant.
+        mic(10),
+        Input::Advance { ms: Millis(100) },
+        mic(10),
+        Input::Advance { ms: Millis(100) },
+    ];
+    for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+        let silenced: Vec<u64> = (0..32)
+            .filter(|&schedule| {
+                let case = Case {
+                    setup: Setup { stt: true, interruption: true, ..Setup::default() },
+                    inputs: inputs.clone(),
+                    schedule,
+                    random: Vec::new(),
+                    policy,
+                };
+                run(case).failures.iter().any(|f| f.contract == "forwarded_while_enabled")
+            })
+            .collect();
+        assert!(
+            silenced.is_empty(),
+            "{policy:?}: schedules silencing the microphone: {silenced:?}"
+        );
+    }
 }
