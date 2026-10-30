@@ -1617,9 +1617,12 @@ pool policy, in three layers:
   `Channel` (`send`/`try_send`/`recv`/`close`) over the platform's best
   transport: an AF_UNIX socketpair on Linux and macOS (close-on-exec, the job's
   end too once adopted; `SO_NOSIGPIPE` on macOS), a single-instance named pipe on
-  Windows that the worker connects itself, and a bounded in-memory duplex in
-  tests. Each side writes a magic and its protocol version, then length-prefixed
-  postcard frames; lengths are checked before allocating, in both directions.
+  Windows (random name, current-user-only DACL, remote clients rejected) that the
+  worker connects itself and refuses unless the connected client is itself, and a
+  bounded in-memory duplex in tests. Each side writes a magic and its protocol
+  version, then length-prefixed postcard frames, then an empty end frame (a named
+  pipe cannot half-close); lengths are checked before allocating, in both
+  directions.
   `recv` ends with `Closed` (EOF, reset, aborted, broken pipe, not connected),
   `Truncated` (EOF inside a frame), `TooLarge`, `Malformed` or `Version`. A
   refused oversized send is a typed error and the channel stays usable; senders
@@ -1672,6 +1675,11 @@ boundary:
   failure, child crashes, abrupt parent death and blocked host loops. Verify
   process exit and reaping separately; treating a zombie as gone does not prove
   successful reaping. Check inherited endpoint cleanup as well as live children.
+  On Windows the job's pipe end is duplicated straight into the child by
+  multiprocessing's spawning `Popen`; the earlier socket path
+  (`resource_sharer.DupSocket`) kept the parent's copy open until a child that
+  died before unpickling would have fetched it, leaking a socket per failed
+  launch. Count the parent's handles across failed launches to keep that gone.
 - Measure resource retention after warm-up and after each settled batch:
   processes, descriptors/OS handles, threads, tasks, pending requests and host
   references. Baselines include declared caches and launch helpers, such as the

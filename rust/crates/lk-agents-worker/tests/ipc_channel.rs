@@ -133,7 +133,9 @@ async fn the_stream_ending_mid_frame_is_truncated_and_between_frames_closed() {
 async fn a_version_mismatch_is_named_before_any_message() {
     let (channel, mut peer) = raw().await;
     peer.write_all(&preamble(VERSION + 1)).await.unwrap();
-    assert!(matches!(within(channel.recv()).await, Err(ChannelError::Version(v)) if v == VERSION + 1));
+    assert!(
+        matches!(within(channel.recv()).await, Err(ChannelError::Version(v)) if v == VERSION + 1)
+    );
 
     let (channel, mut peer) = raw().await;
     peer.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();

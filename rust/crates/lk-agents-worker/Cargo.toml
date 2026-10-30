@@ -31,7 +31,9 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 # The job channel's named pipe (`ipc/channel.rs`).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Pipes"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Threading"] }
+# The pipe's unguessable name (`ipc/channel.rs`).
+getrandom = "0.3"
 
 [dev-dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
