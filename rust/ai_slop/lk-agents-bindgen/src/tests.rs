@@ -571,15 +571,15 @@ fn a_declared_error_is_a_core_exception_class_of_its_base() {
     assert!(crate::error(quote!(error(kind = "a.B", declare = "RuntimeError")), &item).is_err());
 }
 
-// Catches: a native-only trait proxying a host object, or a bare declaration marker emitting an
-// executable ABI proxy.
+// Catches: a native-only trait emitting an in-place proxy (pyo3 in ABI; codegen's generated reader
+// refuses non-native objects), or a misspelled native key accepted.
 #[test]
-fn a_native_trait_takes_its_native_or_refuses() {
+fn a_native_trait_is_declaration_metadata_only() {
     let tr: syn::ItemTrait = syn::parse2(quote! { pub trait Room: Send { fn rtc(&self); } }).unwrap();
-    let out = text(crate::native(quote!(native(refused = "only native")), &tr).unwrap());
-    assert!(out.contains("native :: < dyn Room >"), "{out}");
-    assert!(out.contains("PyTypeError :: new_err (\"only native\")"), "{out}");
+    assert!(crate::native(quote!(native(refused = "only native")), &tr).unwrap().is_empty());
     assert!(crate::native(quote!(native), &tr).unwrap().is_empty());
+    let err = crate::native(quote!(native(refuse = "x")), &tr).unwrap_err();
+    assert!(err.to_string().contains("native(refuse) has no meaning"), "{err}");
 }
 
 #[test]
