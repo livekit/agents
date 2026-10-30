@@ -187,4 +187,22 @@ mod tests {
         assert_eq!(payload, json!({"phase": "update", "text": "checking"}));
         assert!(JournalEvent::from_row("run_ended", json!({"outcome": "maybe"})).is_err());
     }
+
+    /// usage.md "Removing duplicate contracts": a row stored before `Usage` existed reads as one
+    /// unidentified LLM entry, with no old field names in the returned record.
+    #[test]
+    fn a_legacy_usage_row_reads_as_one_unidentified_llm_entry() {
+        use crate::usage::{LlmUsage, ModelUsage, TokenUsage};
+        let row = json!({"requests": 2, "input_tokens": 100, "output_tokens": 30, "tool_calls": 1});
+        let JournalEvent::Usage(usage) = JournalEvent::from_row("usage", row).unwrap() else {
+            panic!("a usage row is a usage event");
+        };
+        let tokens = TokenUsage { input_tokens: 100, output_tokens: 30, ..TokenUsage::default() };
+        let llm = LlmUsage { requests: 2, tokens: tokens.clone(), ..LlmUsage::default() };
+        assert_eq!(usage.models, vec![ModelUsage::Llm(llm)]);
+        assert_eq!((&usage.tokens, usage.requests, usage.tool_calls), (&tokens, 2, 1));
+        assert!(usage.settled);
+        let (_, payload) = JournalEvent::Usage(usage).into_row();
+        assert!(payload.get("models").is_some(), "re-stored in the record's shape: {payload}");
+    }
 }
