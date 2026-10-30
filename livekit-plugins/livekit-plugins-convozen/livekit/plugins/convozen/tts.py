@@ -240,8 +240,10 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 if resp.status != 200:
                     body = (await resp.text())[:_MAX_ERROR_BODY]
+                    # The body stays out of `message`: retry logging prints the message,
+                    # and provider error bodies can echo the text being synthesized.
                     raise APIStatusError(
-                        message=f"ConvoZen Ragini returned {resp.status}: {body}",
+                        message=f"ConvoZen Ragini returned {resp.status}",
                         status_code=resp.status,
                         request_id=None,
                         body=body,

@@ -203,6 +203,45 @@ def test_stt_update_options_moves_lang_tags_with_language() -> None:
     assert stt._opts.lang_tags == ["ta"]
 
 
+def test_stt_update_options_keeps_explicit_lang_tags() -> None:
+    from livekit.plugins.convozen import STT
+
+    stt = STT(api_key="k", language="hi", lang_tags=["hi", "en"])
+    stt.update_options(language="ta")
+    assert stt._opts.language == "ta"
+    assert stt._opts.lang_tags == ["hi", "en"]
+
+    # Explicitly disabling the hint is also kept.
+    stt = STT(api_key="k", language="hi", lang_tags=None)
+    stt.update_options(language="ta")
+    assert stt._opts.lang_tags is None
+
+
+def test_stt_update_options_explicit_lang_tags_stick() -> None:
+    from livekit.plugins.convozen import STT
+
+    stt = STT(api_key="k", language="en")
+    stt.update_options(lang_tags=["hi", "en"])
+    stt.update_options(language="ta")
+    assert stt._opts.lang_tags == ["hi", "en"]
+
+
+def test_stt_rejected_update_options_changes_nothing() -> None:
+    from livekit.plugins.convozen import STT
+
+    stt = STT(api_key="k", language="hi", model="akshara-pro", keywords=["ConvoZen"])
+    before = stt._opts
+
+    with pytest.raises(ValueError, match="invalid lang_tags"):
+        stt.update_options(language="ta", model="akshara", keywords=["other"], lang_tags=["xx"])
+
+    assert stt._opts is before
+    assert stt._opts.language == "hi"
+    assert stt._opts.model == "akshara-pro"
+    assert stt._opts.keywords == ["ConvoZen"]
+    assert stt._opts.lang_tags == ["hi"]
+
+
 def test_stt_session_keyterms_merge_with_user_keywords() -> None:
     from livekit.plugins.convozen import STT
 
@@ -359,6 +398,9 @@ async def test_stt_maps_http_error_to_api_status_error() -> None:
     assert exc.value.status_code == 401
     assert exc.value.retryable is False
     assert len(session.calls) == 1
+    # The provider body is kept on the error but out of the logged message.
+    assert exc.value.body == "invalid api key"
+    assert "invalid api key" not in exc.value.message
 
 
 # --------------------------------------------------------------------------- #
@@ -464,3 +506,5 @@ async def test_tts_maps_http_error_to_api_status_error() -> None:
             pass
 
     assert exc.value.status_code == 422
+    assert exc.value.body == "unsupported speaker"
+    assert "unsupported speaker" not in exc.value.message

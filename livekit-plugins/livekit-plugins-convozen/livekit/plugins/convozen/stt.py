@@ -71,6 +71,9 @@ class _STTOptions:
     # apart from the user's own `keywords` so `update_options` can replace one
     # without clobbering the other.
     session_keyterms: list[str] = field(default_factory=list)
+    # Whether `lang_tags` was set by the caller rather than derived from `language`.
+    # Explicit tags (e.g. a code-mixing pair) survive a later language change.
+    lang_tags_explicit: bool = False
 
     def transcribe_url(self) -> str:
         return f"{self.base_url.rstrip('/')}{_TRANSCRIBE_PATH}"
@@ -176,6 +179,7 @@ class STT(stt.STT):
             keywords=list(keywords) if keywords else [],
             blank_penalty=blank_penalty,
             word_timestamps=word_timestamps,
+            lang_tags_explicit=is_given(lang_tags),
         )
         self._session = http_session
 
@@ -201,22 +205,32 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
         blank_penalty: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
-        """Update recognition options for subsequent requests."""
+        """Update recognition options for subsequent requests.
+
+        Changing ``language`` alone also moves a ``lang_tags`` hint that was derived
+        from it, but leaves explicitly configured ``lang_tags`` in place.
+
+        Raises:
+            ValueError: If ``lang_tags`` contains a tag Akshara does not accept. No
+                option is changed in that case.
+        """
+        # Build and validate the new options in full before swapping them in, so a
+        # rejected update leaves the current configuration untouched.
+        opts = replace(self._opts)
         if is_given(model):
-            self._opts.model = model
+            opts.model = model
         if is_given(keywords):
-            self._opts.keywords = list(keywords)
+            opts.keywords = list(keywords)
         if is_given(blank_penalty):
-            self._opts.blank_penalty = blank_penalty
+            opts.blank_penalty = blank_penalty
         if is_given(language):
-            self._opts.language = language
-        if is_given(language) or is_given(lang_tags):
-            # Re-derive so that changing the language alone also moves the hint,
-            # and so an explicit tag list is validated the same way as at __init__.
-            self._opts.lang_tags = _resolve_lang_tags(
-                self._opts.language,
-                lang_tags if is_given(lang_tags) else NOT_GIVEN,
-            )
+            opts.language = language
+        if is_given(lang_tags):
+            opts.lang_tags = _resolve_lang_tags(opts.language, lang_tags)
+            opts.lang_tags_explicit = True
+        elif is_given(language) and not opts.lang_tags_explicit:
+            opts.lang_tags = _resolve_lang_tags(opts.language, NOT_GIVEN)
+        self._opts = opts
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # Framework-managed keyterms map onto Akshara's `keywords` vocabulary boost.
@@ -252,7 +266,8 @@ class STT(stt.STT):
         opts = replace(self._opts)
         if is_given(language) and language != opts.language:
             opts.language = language
-            opts.lang_tags = _resolve_lang_tags(language, NOT_GIVEN)
+            if not opts.lang_tags_explicit:
+                opts.lang_tags = _resolve_lang_tags(language, NOT_GIVEN)
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
@@ -268,8 +283,10 @@ class STT(stt.STT):
             ) as res:
                 if res.status != 200:
                     body = (await res.text())[:_MAX_ERROR_BODY]
+                    # The body stays out of `message`: retry logging prints the message,
+                    # and provider error bodies can echo request content.
                     raise APIStatusError(
-                        message=f"ConvoZen Akshara returned {res.status}: {body}",
+                        message=f"ConvoZen Akshara returned {res.status}",
                         status_code=res.status,
                         request_id=None,
                         body=body,
