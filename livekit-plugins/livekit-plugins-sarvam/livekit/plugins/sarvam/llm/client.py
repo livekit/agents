@@ -109,6 +109,17 @@ def _api_version(model: str) -> str:
     return "v1" if model in _V1_MODELS else "v2"
 
 
+def _with_api_version(base_url: httpx.URL, version: str) -> httpx.URL:
+    """Point *base_url* at *version* by swapping the trailing ``/v1`` or ``/v2`` of its path.
+
+    A base URL whose path has no version segment is returned unchanged.
+    """
+    head, _, tail = base_url.path.rstrip("/").rpartition("/")
+    if tail in ("v1", "v2"):
+        return base_url.copy_with(path=f"{head}/{version}/")
+    return base_url
+
+
 def _validate_model(model: str) -> str:
     if model not in _SUPPORTED_MODELS:
         raise ValueError(
@@ -153,7 +164,9 @@ class LLM(OpenAILLM):
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
     The endpoint (``/v1`` vs ``/v2``) is resolved automatically from the model.
-    An explicit ``base_url`` always overrides automatic resolution.
+    An explicit ``base_url`` overrides automatic resolution. When ``update_options``
+    switches between a ``/v1`` and a ``/v2`` model, the trailing ``/v1`` or ``/v2`` of
+    the base URL follows the new model, and the rest of it is kept.
     """
 
     def __init__(
@@ -245,8 +258,7 @@ class LLM(OpenAILLM):
             timeout=timeout,
         )
 
-        # Track the API key and version for runtime model switching
-        self._sarvam_api_key = sarvam_api_key
+        # Track the API version for runtime model switching
         self._sarvam_api_version = _api_version(validated_model)
 
     # ------------------------------------------------------------------
@@ -268,9 +280,9 @@ class LLM(OpenAILLM):
     ) -> None:
         """Update the model at runtime.
 
-        Validates the new model and recreates the underlying client when the
-        API version changes (``/v1`` ↔ ``/v2``).  When both old and new models
-        share the same endpoint, the client is **not** recreated.
+        Validates the new model and, when the API version changes (``/v1`` ↔ ``/v2``),
+        swaps the version segment of the current base URL, so a custom ``base_url``
+        such as a proxy keeps being used.
         """
         if not is_given(model):
             return
@@ -279,11 +291,10 @@ class LLM(OpenAILLM):
         new_version = _api_version(new_model)
 
         if new_version != self._sarvam_api_version:
-            # Endpoint changed — recreate the client pointing at the new URL
-            new_base_url = _resolve_base_url(new_model)
-            self._client = _create_sarvam_client(
-                api_key=self._sarvam_api_key,
-                base_url=new_base_url,
+            # with_options shares the http client, so the timeout and connection pool
+            # carry over and the client being replaced has nothing left to close
+            self._client = self._client.with_options(
+                base_url=_with_api_version(self._client.base_url, new_version)
             )
             self._sarvam_api_version = new_version
 
@@ -360,29 +371,3 @@ class LLM(OpenAILLM):
             response_format=response_format,
             extra_kwargs=merged_extra if merged_extra else NOT_GIVEN,
         )
-
-
-def _create_sarvam_client(
-    *,
-    api_key: str,
-    base_url: str,
-) -> openai.AsyncClient:
-    """Create an ``openai.AsyncClient`` with Sarvam auth headers."""
-    return openai.AsyncClient(
-        api_key=api_key,
-        base_url=base_url,
-        max_retries=0,
-        default_headers={
-            "api-subscription-key": api_key,
-            "User-Agent": USER_AGENT,
-        },
-        http_client=httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=15.0, read=60.0, write=5.0, pool=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=50,
-                max_keepalive_connections=50,
-                keepalive_expiry=120,
-            ),
-        ),
-    )
