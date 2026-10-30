@@ -83,6 +83,8 @@ class SpeechHandle:
         self._done_fut.add_done_callback(_on_done)
         self._maybe_run_final_output: Any = None  # kept private
         self._error: BaseException | None = None
+        # set while generate_reply() from a tool is held until function_call_output is pushed
+        self._deferred_until_tool_output: bool = False
 
     @staticmethod
     def create(
@@ -250,6 +252,14 @@ class SpeechHandle:
                     "This creates a circular wait: the speech handle is waiting for the function tool to complete, "
                     "while the function tool is simultaneously waiting for the speech handle.\n"
                     "To wait for the assistant’s spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead."
+                )
+            if info and info.function_call and self._deferred_until_tool_output:
+                raise RuntimeError(
+                    f"cannot await a `generate_reply()` SpeechHandle from inside the function tool "
+                    f"`{info.function_call.name}` while the realtime model requires tool results "
+                    "before that reply. The reply is deferred until this tool returns; awaiting it "
+                    "here would deadlock. Return text from the tool instead, or call "
+                    "`generate_reply()` without awaiting it."
                 )
 
         await asyncio.shield(self._done_fut)
