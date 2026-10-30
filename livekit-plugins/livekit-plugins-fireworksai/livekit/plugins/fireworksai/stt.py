@@ -41,6 +41,11 @@ from .log import logger
 _STREAMING_PATH = "/audio/transcriptions/streaming"
 
 
+def _validate_text_timeout_seconds(text_timeout_seconds: NotGivenOr[float]) -> None:
+    if is_given(text_timeout_seconds) and not 1.0 <= text_timeout_seconds <= 29.0:
+        raise ValueError("text_timeout_seconds must be between 1.0 and 29.0")
+
+
 class _PeriodicCollector:
     def __init__(self, duration: float, callback: Callable[[float], None]):
         self._duration = duration
@@ -146,8 +151,7 @@ class STT(stt.STT):
         if sample_rate != 16000:
             raise ValueError("FireworksAI STT only supports a sample rate of 16000")
 
-        if not 1.0 <= text_timeout_seconds <= 29.0:
-            raise ValueError("text_timeout_seconds must be between 1.0 and 29.0")
+        _validate_text_timeout_seconds(text_timeout_seconds)
 
         fireworks_api_key = api_key if is_given(api_key) else os.environ.get("FIREWORKS_API_KEY")
         if fireworks_api_key is None:
@@ -227,6 +231,10 @@ class STT(stt.STT):
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        # check before changing anything, so a rejected update leaves this STT and its
+        # open streams on the same options
+        _validate_text_timeout_seconds(text_timeout_seconds)
+
         if is_given(model):
             self._opts.model = model
         if is_given(language):
@@ -240,8 +248,6 @@ class STT(stt.STT):
         if is_given(vad_kwargs):
             self._opts.vad_kwargs = vad_kwargs
         if is_given(text_timeout_seconds):
-            if not 1.0 <= text_timeout_seconds <= 29.0:
-                raise ValueError("text_timeout_seconds must be between 1.0 and 29.0")
             self._opts.text_timeout_seconds = text_timeout_seconds
         if is_given(timestamp_granularities):
             self._opts.timestamp_granularities = timestamp_granularities
@@ -298,6 +304,8 @@ class SpeechStream(stt.SpeechStream):
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        _validate_text_timeout_seconds(text_timeout_seconds)
+
         if is_given(model):
             self._opts.model = model
         if is_given(language):
