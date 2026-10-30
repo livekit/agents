@@ -32,6 +32,7 @@ use std::{
 };
 
 use crate::fakes::room::FakeRoom;
+pub use crate::fakes::room::Faults;
 use lk_agents_abi::voice::background_audio::BackgroundAudioPlayer as _;
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::rtc::ParticipantKind;
@@ -182,9 +183,9 @@ pub struct Setup {
     /// `RoomOptions(video_input=True)` on the room's legs: the person publishes a camera with
     /// their microphone, and the room's video input reads it.
     pub room_camera: bool,
-    /// The room's microphone input runs noise cancellation and gain control, and both reject
-    /// some of the person's audio: each failing span is the session's error, never its silence.
-    pub failing_processors: bool,
+    /// The room's microphone input runs input processors that reject some of the person's audio:
+    /// each failing span is the session's error, never its silence.
+    pub failing_processors: Option<ProcessorFaults>,
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
     pub sync_transcription: bool,
@@ -318,6 +319,14 @@ pub enum TtsAlignment {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoomLegs {
     pub pre_connect: Option<PreConnect>,
+}
+
+/// How the room microphone's processors reject audio: noise cancellation always runs, gain
+/// control only with `gain_control` (the session turns it off otherwise).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProcessorFaults {
+    pub denoiser: Faults,
+    pub gain_control: Option<Faults>,
 }
 
 /// What the person's app does with its pre-connect buffer: sends it, never sends it (the
@@ -473,7 +482,7 @@ impl Default for Setup {
             connect_ms: None,
             video: false,
             room_camera: false,
-            failing_processors: false,
+            failing_processors: None,
             sync_transcription: false,
             text_output_raises: false,
             lagging_output: false,
@@ -671,7 +680,7 @@ enum Mic {
 const ROOM_BURST_FRAMES: u32 = (lk_agents_abi::AUDIO_QUEUE_FRAMES / 2) as u32;
 
 /// The side table a host ref points into. Releases are no-ops: no host holds these objects.
-struct NoopRefs;
+pub(crate) struct NoopRefs;
 
 impl RefRegistry for NoopRefs {
     fn release(&self, _id: u64) {}

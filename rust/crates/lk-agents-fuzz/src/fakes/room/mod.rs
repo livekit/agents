@@ -26,7 +26,7 @@ mod audio_source;
 mod track;
 
 pub use audio_source::{FakeAudioSource, FrameSynth};
-pub use track::{FakeTrackPublication, StreamRequests, subscribe_local};
+pub use track::{FailingProcessors, FakeTrackPublication, Faults, StreamRequests, subscribe_local};
 
 pub struct FakeRtc {
     clock: Arc<dyn Clock>,

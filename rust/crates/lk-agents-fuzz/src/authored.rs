@@ -379,6 +379,13 @@ impl Authored {
         self
     }
 
+    /// A room stream handed its reader the failure opening `processor`'s failing span.
+    pub fn processor_span(mut self, processor: u64, label: &str) -> Self {
+        let at = self.next();
+        self.recording.record_processor_span(at, processor, label.to_owned());
+        self
+    }
+
     /// A realtime socket's server held these messages as its connection closed.
     pub fn held(mut self, socket: u32, items: Vec<(u32, u64)>) -> Self {
         let at = self.next();

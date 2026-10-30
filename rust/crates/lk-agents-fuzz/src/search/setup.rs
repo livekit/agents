@@ -4,8 +4,8 @@ use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
     drive::{
-        AmdAnswer, AmdSetup, ConnSetup, KeytermDetectionSetup, NodeSetup, PreConnect,
-        RealtimeSetup, RoomLegs, RoomSetup, Setup, TtsAlignment,
+        AmdAnswer, AmdSetup, ConnSetup, Faults, KeytermDetectionSetup, NodeSetup, PreConnect,
+        ProcessorFaults, RealtimeSetup, RoomLegs, RoomSetup, Setup, TtsAlignment,
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
@@ -61,7 +61,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         connect_ms: rng.bool().then(|| ms(rng)),
         video: rng.bool(),
         room_camera: false,
-        failing_processors: false,
+        failing_processors: None,
         sync_transcription: rng.bool(),
         text_output_raises: false,
         lagging_output: false,
@@ -196,7 +196,23 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.tools_refuse_cancel = rng.u8(0..100) < 10;
     // Drawn last: one setup in ten stores its lane and loses the lease at one of its first answers.
     setup.storage_lost_at = (rng.u8(0..100) < 10).then(|| rng.u32(1..6));
-    // Drawn last: a third of the room's microphones go through processors that reject some audio.
-    setup.failing_processors = setup.room_legs.is_some() && rng.u8(0..100) < 33;
+    // Drawn last: a third of the room's microphones go through processors that fail. A broken
+    // model, license or connection fails a while, at worst for the rest of the call; a glitch
+    // fails one frame now and then; a processor flapping at the edge of its budget is the rarest.
+    // Gain control is on in half of them.
+    let faults = |rng: &mut Rng| match rng.u8(0..100) {
+        0..50 => Faults::Span {
+            from: rng.u32(0..60),
+            frames: if rng.u8(0..4) == 0 { u32::MAX } else { rng.u32(1..250) },
+        },
+        50..85 => Faults::Rare { from: rng.u32(0..60), every: rng.u32(20..200) },
+        _ => {
+            let period = rng.u32(2..32);
+            Faults::Flapping { period, fails: rng.u32(1..period) }
+        }
+    };
+    setup.failing_processors = (setup.room_legs.is_some() && rng.u8(0..100) < 33).then(|| {
+        ProcessorFaults { denoiser: faults(rng), gain_control: rng.bool().then(|| faults(rng)) }
+    });
     setup
 }

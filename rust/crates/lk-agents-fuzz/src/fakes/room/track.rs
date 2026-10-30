@@ -41,8 +41,49 @@ struct PublicationState {
     video_streams: Vec<LossyTx<VideoFrameRef>>,
     /// Kept past `close_streams`, so a test can inspect it after the track went away.
     requested: StreamRequests,
-    /// The side table of the failing processors' host objects, once they fail.
-    failing_processors: Option<Arc<dyn RefRegistry>>,
+    /// The processors every stream opened from now on runs, once they fail.
+    failing_processors: Option<FailingProcessors>,
+}
+
+/// The input processors of a track that fail, how, and who is told of each failing span.
+#[derive(Clone)]
+pub struct FailingProcessors {
+    /// Runs on every stream that asks for noise cancellation.
+    pub denoiser: Faults,
+    /// Runs on every stream that asks for `auto_gain_control`.
+    pub gain_control: Faults,
+    /// The processors' host objects: stream `n`'s are `first_ref + 2n` (gain control) and
+    /// `first_ref + 2n + 1` (denoiser).
+    pub first_ref: u64,
+    pub refs: Arc<dyn RefRegistry>,
+    /// Told of each failing span, by its processor's host object and label, as the stream hands
+    /// the failure that opens it to its reader.
+    pub spans: Arc<dyn Fn(u64, &str) + Send + Sync>,
+}
+
+/// Which of a stream's frames a processor rejects, by the frame's position in the stream (the
+/// replayed pre-connect head first).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Faults {
+    /// Never.
+    None,
+    /// Broken for a while (its model, license or connection): `frames` frames from the `from`-th.
+    Span { from: u32, frames: u32 },
+    /// A glitch: one frame in `every`, from the `from`-th.
+    Rare { from: u32, every: u32 },
+    /// At the edge of its budget: the first `fails` frames of every `period`.
+    Flapping { period: u32, fails: u32 },
+}
+
+impl Faults {
+    fn rejects(self, nth: u32) -> bool {
+        match self {
+            Faults::None => false,
+            Faults::Span { from, frames } => nth.checked_sub(from).is_some_and(|n| n < frames),
+            Faults::Rare { from, every } => nth.checked_sub(from).is_some_and(|n| n % every == 0),
+            Faults::Flapping { period, fails } => nth % period < fails,
+        }
+    }
 }
 
 /// The options are kept because a real `rtc.AudioStream` converts to the requested rate and
@@ -96,11 +137,9 @@ impl FakeTrackPublication {
         self.state.lock().unwrap().features = features;
     }
 
-    /// The processors of every stream opened from now on reject some audio: the gain control
-    /// (`auto_gain_control`) two frames of every eight, the denoiser (`noise_cancellation`) one
-    /// of every sixteen, by the frame's tag.
-    pub fn fail_processors(&self, refs: Arc<dyn RefRegistry>) {
-        self.state.lock().unwrap().failing_processors = Some(refs);
+    /// The processors of every stream opened from now on reject audio as `processors` says.
+    pub fn fail_processors(&self, processors: FailingProcessors) {
+        self.state.lock().unwrap().failing_processors = Some(processors);
     }
 
     pub fn stream_requests(&self) -> StreamRequests {
@@ -227,21 +266,36 @@ impl TrackPublication for FakeTrackPublication {
     }
 
     fn open_audio_stream(&self, opts: AudioStreamOptions) -> Result<Arc<dyn AudioInputStream>> {
-        let failing = self.state.lock().unwrap().failing_processors.clone();
-        let processors = failing.map_or_else(Vec::new, |refs| {
-            let processor = |id| HostRef::new(id, &refs);
-            let gain = opts.auto_gain_control.then(|| (GAIN_CONTROL, processor(1 << 40)));
-            let denoiser =
-                opts.noise_cancellation.is_some().then(|| (DENOISER, processor((1 << 40) + 1)));
-            gain.into_iter().chain(denoiser).collect()
-        });
+        let (gain, denoise) = (opts.auto_gain_control, opts.noise_cancellation.is_some());
+        let (failing, serial) = {
+            let state = self.state.lock().unwrap();
+            (state.failing_processors.clone(), state.requested.len() as u64)
+        };
         let frames = self.audio_stream(opts);
+        let processing = failing.map(|failing| {
+            let processor = |on: bool, label, faults, nth| {
+                let host = HostRef::new(failing.first_ref + 2 * serial + nth, &failing.refs);
+                on.then_some(Processor { label, host, faults, failing: false })
+            };
+            Processing {
+                processors: [
+                    processor(gain, GAIN_CONTROL, failing.gain_control, 0),
+                    processor(denoise, DENOISER, failing.denoiser, 1),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                frames: 0,
+                spans: failing.spans,
+            }
+        });
+        let processing = Arc::new(Mutex::new(processing));
         let source = ProcessedFrames {
             frames: super::LossySource(frames),
-            processors,
+            processing: processing.clone(),
             ready: VecDeque::new(),
         };
-        Ok(Arc::new(FakeAudioInputStream { frames: Mutex::new(Some(source)) }))
+        Ok(Arc::new(FakeAudioInputStream { frames: Mutex::new(Some(source)), processing }))
     }
 
     fn open_video_stream(&self) -> Result<Box<dyn StreamSource<VideoFrameRef>>> {
@@ -272,6 +326,8 @@ impl FakeTrackPublication {
 
 struct FakeAudioInputStream {
     frames: Mutex<Option<ProcessedFrames>>,
+    /// Shared with the frames: the pre-connect head goes through the same processors first.
+    processing: Arc<Mutex<Option<Processing>>>,
 }
 
 impl AudioInputStream for FakeAudioInputStream {
@@ -280,36 +336,80 @@ impl AudioInputStream for FakeAudioInputStream {
             self.frames.lock().unwrap().take().ok_or(RtcError::Closed("audio input stream"))?;
         Ok(Box::new(frames))
     }
+
+    fn process_audio<'a>(
+        &'a self,
+        frames: Vec<AudioFrame>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<AudioStreamItem>>> {
+        let items = frames.into_iter().flat_map(|frame| process(&self.processing, frame));
+        let items = items.map(|item| handed(&self.processing, item)).collect();
+        Box::pin(async move { Ok(items) })
+    }
 }
 
 const GAIN_CONTROL: &str = "fake.GainControl";
 const DENOISER: &str = "fake.Denoiser";
 
-/// A stream's frames through its processors, which run as each frame is read, after the SDK
-/// queue, as `_AudioStream` runs them: a failing one is reported ahead of its frame.
-struct ProcessedFrames {
-    frames: super::LossySource<AudioFrame>,
-    processors: Vec<(&'static str, HostRef)>,
-    ready: VecDeque<AudioStreamItem>,
+/// A stream's processors, and how many frames went through them.
+struct Processing {
+    processors: Vec<Processor>,
+    frames: u32,
+    spans: Arc<dyn Fn(u64, &str) + Send + Sync>,
 }
 
-impl ProcessedFrames {
-    /// Which processors reject this frame, by its tag's chunk number.
-    fn process(&mut self, frame: AudioFrame) {
-        let chunk = frame.data.get(..2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]) & 63);
-        for (label, processor) in &self.processors {
-            let fails = if *label == GAIN_CONTROL { chunk % 8 >= 6 } else { chunk % 16 == 5 };
-            if fails {
-                self.ready.push_back(AudioStreamItem::ProcessorFailed(ProcessorFailure {
-                    label: (*label).into(),
-                    processor: processor.clone(),
-                    error: processor.clone(),
-                    message: format!("{label} rejected the frame"),
-                }));
-            }
+struct Processor {
+    label: &'static str,
+    host: HostRef,
+    faults: Faults,
+    /// It failed on the last frame.
+    failing: bool,
+}
+
+/// One item and whether it opens its processor's failing span.
+type Processed = (AudioStreamItem, bool);
+
+/// The frame through each processor, as `_AudioStream` runs them: each failure ahead of it.
+fn process(processing: &Mutex<Option<Processing>>, frame: AudioFrame) -> Vec<Processed> {
+    let mut processing = processing.lock().unwrap();
+    let Some(processing) = processing.as_mut() else {
+        return vec![(AudioStreamItem::Frame(frame), false)];
+    };
+    let nth = processing.frames;
+    processing.frames += 1;
+    let mut items = Vec::new();
+    for processor in &mut processing.processors {
+        let fails = processor.faults.rejects(nth);
+        if fails {
+            let failure = ProcessorFailure {
+                label: processor.label.into(),
+                processor: processor.host.clone(),
+                error: processor.host.clone(),
+                message: format!("{} rejected the frame", processor.label),
+            };
+            items.push((AudioStreamItem::ProcessorFailed(failure), !processor.failing));
         }
-        self.ready.push_back(AudioStreamItem::Frame(frame));
+        processor.failing = fails;
     }
+    items.push((AudioStreamItem::Frame(frame), false));
+    items
+}
+
+/// An item handed to the reader: a failure opening its span is the span's ground truth.
+fn handed(processing: &Mutex<Option<Processing>>, (item, opens): Processed) -> AudioStreamItem {
+    if let (AudioStreamItem::ProcessorFailed(failure), true) = (&item, opens)
+        && let Some(processing) = processing.lock().unwrap().as_ref()
+    {
+        (processing.spans)(failure.processor.id(), &failure.label);
+    }
+    item
+}
+
+/// A stream's frames through its processors, which run as each frame is read, after the SDK
+/// queue, as `_AudioStream` runs them.
+struct ProcessedFrames {
+    frames: super::LossySource<AudioFrame>,
+    processing: Arc<Mutex<Option<Processing>>>,
+    ready: VecDeque<Processed>,
 }
 
 impl StreamSource<AudioStreamItem> for ProcessedFrames {
@@ -320,9 +420,9 @@ impl StreamSource<AudioStreamItem> for ProcessedFrames {
         Box::pin(async move {
             if self.ready.is_empty() {
                 let Some(frame) = self.frames.next().await? else { return Ok(None) };
-                self.process(frame);
+                self.ready.extend(process(&self.processing, frame));
             }
-            Ok(self.ready.pop_front())
+            Ok(self.ready.pop_front().map(|item| handed(&self.processing, item)))
         })
     }
     fn cancel_safe(&self) -> bool {

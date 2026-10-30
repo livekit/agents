@@ -77,7 +77,10 @@ impl Run {
                 sample_rate: SAMPLE_RATE,
                 noise_cancellation: setup
                     .failing_processors
-                    .then(|| lk_agents_abi::HostRef::new(1 << 41, &refs)),
+                    .map(|_| lk_agents_abi::HostRef::new(1 << 41, &refs)),
+                auto_gain_control: setup
+                    .failing_processors
+                    .is_none_or(|faults| faults.gain_control.is_some()),
                 pre_connect_audio: legs.pre_connect.is_some(),
                 pre_connect_audio_timeout: Duration::from_millis(super::PRE_CONNECT_TIMEOUT_MS),
                 ..AudioInputConfig::default()
@@ -449,8 +452,17 @@ impl Run {
         self.joins += 1;
         let track = format!("TR_mic_{}", self.joins);
         let mic = caller.publish_microphone(track.as_str());
-        if self.setup.failing_processors {
-            mic.fail_processors(self.refs.clone());
+        if let Some(faults) = self.setup.failing_processors {
+            let registry = self.registry.clone();
+            mic.fail_processors(crate::fakes::room::FailingProcessors {
+                denoiser: faults.denoiser,
+                gain_control: faults.gain_control.unwrap_or(Faults::None),
+                first_ref: (1 << 40) + (u64::from(self.joins) << 20),
+                refs: self.refs.clone(),
+                spans: Arc::new(move |processor, label| {
+                    registry.record_processor_span(processor, label)
+                }),
+            });
         }
         if let Some(pre_connect) = legs.pre_connect {
             mic.set_audio_features(vec![

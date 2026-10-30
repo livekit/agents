@@ -251,6 +251,12 @@ pub enum Record {
         slot: Slot,
         after_ms: u64,
     },
+    /// An input processor's failing span opened, by the processor's host object and label.
+    ProcessorSpan {
+        at: Observed,
+        processor: u64,
+        label: String,
+    },
     /// The session opened one of an agent's nodes.
     Node {
         at: Observed,
@@ -458,6 +464,12 @@ impl Registry {
     /// the audio output knows the pairing, and it learns the segment's identity from the call.
     pub(super) fn attach_segment(&self, segment: u32, output: u32) {
         self.write(Record::Segment { segment, output });
+    }
+
+    /// A room stream handed its reader the failure that opens `processor`'s failing span.
+    pub fn record_processor_span(&self, processor: u64, label: &str) {
+        let at = self.stamps.next();
+        self.write(Record::ProcessorSpan { at, processor, label: label.to_owned() });
     }
 
     pub(super) fn record_forwarded(&self, slot: Slot, tags: Vec<crate::record::Tag>) {

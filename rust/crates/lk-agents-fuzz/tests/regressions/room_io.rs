@@ -20,7 +20,9 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
     HOST_TEARDOWN_TIMEOUT, StreamSource, TOPIC_CHAT, Ts, VirtualClock,
 };
-use lk_agents_fuzz::fakes::room::{FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication};
+use lk_agents_fuzz::fakes::room::{
+    FailingProcessors, FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication, Faults,
+};
 use lk_agents_runtime::net::clock::RealClock;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
@@ -576,7 +578,14 @@ async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed
     let (room, clock) = fake_room("processor-spans");
     let user = room.add_participant("user", ParticipantKind::Standard);
     let mic = user.publish_microphone("TR_mic");
-    mic.fail_processors(Arc::new(NoRefs));
+    // The denoiser rejects frames 0, 1, 3 and 4: two spans, the second after a clean frame.
+    mic.fail_processors(FailingProcessors {
+        denoiser: Faults::Flapping { period: 3, fails: 2 },
+        gain_control: Faults::None,
+        first_ref: 1 << 40,
+        refs: Arc::new(NoRefs),
+        spans: Arc::new(|_, _| {}),
+    });
     let denoised = AudioInputConfig {
         noise_cancellation: Some(lk_agents_abi::HostRef::new(1, &(Arc::new(NoRefs) as _))),
         auto_gain_control: false,
@@ -591,9 +600,8 @@ async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed
         input.handle_event(&subscribed(&user, mic.clone())).unwrap();
     }
     yields(4).await;
-    // The denoiser rejects chunks 5 and 21: two spans, the second after a clean frame. The frames
-    // arrive together: the second span opens before the session took the first report.
-    for chunk in [5i16, 21, 6, 21, 7] {
+    // The frames arrive together: the second span opens before the session took the first report.
+    for chunk in 0..5i16 {
         mic.push_frame(AudioFrame::new(chunk.to_le_bytes().repeat(480), 24000, 1, 480));
     }
     let hearing = async {

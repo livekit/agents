@@ -660,6 +660,9 @@ pub struct Recording {
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
     /// Each node the session opened, and the agent whose override it is.
     nodes: Vec<(Observed, String, NodeUse)>,
+    /// Each input processor's failing span the room stream handed its reader: the processor's
+    /// host object and label.
+    processor_spans: Vec<(Observed, u64, String)>,
     sink: Vec<(Observed, Sink)>,
     output_attachments: Vec<(Observed, u32, bool)>,
     host: Vec<(Observed, Host)>,
@@ -983,6 +986,14 @@ impl Recording {
     /// The n-th realtime socket's server held these messages as its connection closed.
     pub fn record_held(&mut self, at: Observed, socket: u32, items: Vec<(u32, u64)>) {
         self.held.push((at, socket, items));
+    }
+
+    pub fn record_processor_span(&mut self, at: Observed, processor: u64, label: String) {
+        self.processor_spans.push((at, processor, label));
+    }
+
+    pub fn processor_spans(&self) -> &[(Observed, u64, String)] {
+        &self.processor_spans
     }
 
     pub fn heard_generations(&self) -> &[(Observed, u32, u64, bool)] {
