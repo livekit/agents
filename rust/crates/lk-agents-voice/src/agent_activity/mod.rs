@@ -578,8 +578,9 @@ impl Driver {
         self.perform_commit(commit, out);
     }
 
-    /// An item on the record changed in place (an answered `InputRequired`'s output): the host
-    /// is told again, under the item's own id, source and agent.
+    /// An item on the record changed in place (an answered `InputRequired`'s output, an expert's
+    /// outcome): the host is told again, under the item's own id, source and agent, and a
+    /// realtime server's copy follows.
     pub(crate) fn replace_item(&mut self, item: ChatItem, out: &mut Out) {
         let Some(entry) = self.session.chat_ctx.entry(item.id()) else { return };
         let (source, visibility, agent) =
@@ -594,6 +595,11 @@ impl Driver {
                 visibility: entry.visibility,
                 run,
             });
+        }
+        if self.activity.rt_session.is_some() {
+            let chat_ctx = self.session.chat_ctx.for_realtime();
+            let update = lk_agents_abi::UpdateChatCtx { chat_ctx };
+            self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(update), out);
         }
         self.publish_activity();
     }

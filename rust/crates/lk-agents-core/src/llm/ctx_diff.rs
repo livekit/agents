@@ -59,7 +59,7 @@ fn prefix_diff(old: &ChatContext, new: &ChatContext) -> DiffOps {
     let shared = old.len().min(new.len());
     let mut diff = DiffOps::default();
     for (index, (before, after)) in old.items.iter().zip(&new.items).enumerate() {
-        if message_changed(before, after) {
+        if item_changed(before, after) {
             diff.to_update.push((
                 index.checked_sub(1).map(|prev| new.items[prev].id().to_owned()),
                 after.id().to_owned(),
@@ -73,8 +73,13 @@ fn prefix_diff(old: &ChatContext, new: &ChatContext) -> DiffOps {
     diff
 }
 
-fn message_changed(old: &ChatItem, new: &ChatItem) -> bool {
+/// A message's text or a call output's result changed under the same id (an expert's outcome
+/// replaces its call's pending output).
+fn item_changed(old: &ChatItem, new: &ChatItem) -> bool {
     use lk_agents_abi::ChatContent;
+    if let (ChatItem::FunctionCallOutput(old), ChatItem::FunctionCallOutput(new)) = (old, new) {
+        return old.output != new.output || old.is_error != new.is_error;
+    }
     let (Some(old), Some(new)) = (old.as_message(), new.as_message()) else {
         return false;
     };
@@ -130,6 +135,22 @@ mod tests {
             lk_agents_abi::ChatContent::Text("there".into()),
         ];
         assert_eq!(compute_chat_ctx_diff(&before, &after), DiffOps::default());
+    }
+
+    // Catches: an expert's outcome replacing its call's pending output under the same id never
+    // reaching a realtime server, which kept answering from the pending output.
+    #[test]
+    fn a_replaced_call_output_is_an_update() {
+        let output = |text: &str| {
+            let at = std::time::SystemTime::UNIX_EPOCH;
+            ChatItem::from(lk_agents_abi::FunctionCallOutput::new("out", "call", text, false, at))
+        };
+        let before = ChatContext::new(vec![msg("a", Role::User, "hi", 0), output("pending")]);
+        let after = ChatContext::new(vec![msg("a", Role::User, "hi", 0), output("refunded")]);
+        assert_eq!(
+            ids(&compute_chat_ctx_diff(&before, &after).to_update),
+            vec![(Some("a"), "out")]
+        );
     }
 
     // Catches: anchoring every new item to the last surviving id (a run arrives reversed).

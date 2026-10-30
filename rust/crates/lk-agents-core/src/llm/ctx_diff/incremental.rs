@@ -1,6 +1,6 @@
 //! Bounded preparation of the conversation edit script.
 
-use super::{DiffOps, message_changed};
+use super::{DiffOps, item_changed};
 use lk_agents_abi::ChatContext;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -200,7 +200,7 @@ impl ChatContextDiff {
                         } else if self
                             .old_by_id
                             .get(item.id())
-                            .is_some_and(|&at| message_changed(&old.items[at], item))
+                            .is_some_and(|&at| item_changed(&old.items[at], item))
                         {
                             self.operations
                                 .to_update
