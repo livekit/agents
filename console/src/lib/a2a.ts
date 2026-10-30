@@ -144,6 +144,7 @@ export class A2AClient {
       headers: this.headers(sessionId),
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
     });
+    if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
     if (!response.headers.get("content-type")?.startsWith("text/event-stream")) {
       yield (await response.json()) as Frame;
       return;

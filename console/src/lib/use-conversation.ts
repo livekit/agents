@@ -417,9 +417,21 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
     [append, grant, inCall, name, patch, refreshSessions, setSession, settleDelegations],
   );
 
+  /** The client, on a new grant when the one it holds expires within a minute. */
+  const current = useCallback(async () => {
+    const held = grantRef.current;
+    if (held && held.expiresAt - 60 < Date.now() / 1000) {
+      const minted = await getGrant(held.sub, held.agent, held.endpointName);
+      grantRef.current = minted;
+      setGrant(minted);
+      client.current = new A2AClient(minted.endpoint, minted.token);
+    }
+    return client.current;
+  }, []);
+
   const send = useCallback(
     async (textToSend: string) => {
-      const a2a = client.current;
+      const a2a = await current();
       if (!a2a) return;
       const message: Record<string, unknown> = {
         messageId: uuid(),
@@ -435,12 +447,12 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
       append({ kind: "user", text: textToSend });
       await consume(a2a.stream("message/stream", { message }, sessionRef.current), textToSend);
     },
-    [append, consume, grant, setSession],
+    [append, consume, current, grant, setSession],
   );
 
   const resume = useCallback(
     async (pending: Pending) => {
-      const a2a = client.current;
+      const a2a = await current();
       if (!a2a) return;
       if (pending.text) append({ kind: "user", text: pending.text });
       append({ kind: "status", text: "resuming the reply", taskId: pending.taskId });
@@ -449,7 +461,7 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
         pending.text,
       );
     },
-    [append, consume],
+    [append, consume, current],
   );
 
   /** Talks to one example from here on: its grant, its card, its sessions. */
