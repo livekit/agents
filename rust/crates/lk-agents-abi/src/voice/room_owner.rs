@@ -13,7 +13,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoomIoEvent {
     /// `outbound_sip`: a SIP participant the agent dialed (no dispatch rule admitted them).
-    ParticipantLinked { participant: ParticipantLinked, outbound_sip: bool },
+    ParticipantLinked {
+        participant: ParticipantLinked,
+        outbound_sip: bool,
+    },
     ParticipantUnlinked(ParticipantUnlinked),
     TextInput(TextInput),
     DeleteRoomRequested(DeleteRoomRequested),

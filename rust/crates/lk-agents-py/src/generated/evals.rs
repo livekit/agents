@@ -22,41 +22,106 @@ pub struct CoreJudgeRunner(pub(crate) ::std::sync::Arc<CoreJudgeRunnerImpl>);
 impl CoreJudgeRunner {
     #[new]
     #[pyo3(signature = (llm, tools, host))]
-    fn new(py: Python<'_>, llm: Option<Bound<'_, PyAny>>, tools: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<CoreJudgeRunner> {
+    fn new(
+        py: Python<'_>,
+        llm: Option<Bound<'_, PyAny>>,
+        tools: Bound<'_, PyAny>,
+        host: Bound<'_, PyAny>,
+    ) -> PyResult<CoreJudgeRunner> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let tools = crate::conversions::host_ref_from_py(&tools)?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
-        let out = py.detach(|| <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host));
+        let out = py.detach(|| {
+            <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(
+                &env, llm, tools, host,
+            )
+        });
         Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
     }
 
     /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
     /// outcomes in judge order. An unknown built-in judge is refused before any runs.
     #[pyo3(signature = (judges, chat_ctx, reference))]
-    fn evaluate<'py>(&self, py: Python<'py>, judges: Bound<'_, PyAny>, chat_ctx: Bound<'_, PyAny>, reference: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    fn evaluate<'py>(
+        &self,
+        py: Python<'py>,
+        judges: Bound<'_, PyAny>,
+        chat_ctx: Bound<'_, PyAny>,
+        reference: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let judges = judges.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::evals::judge_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
-        let chat_ctx = chat_ctx.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
-        let reference = reference.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let judges = judges.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::evals::judge_spec_from_py(&item)
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let chat_ctx = chat_ctx.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(&item)
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let reference = reference
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::generated::records::chat_items::chat_item_from_py(&item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            })
+            .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
                 .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::evals::judge_outcome_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    ::pyo3::types::PyList::new(
+                        py,
+                        out.into_iter()
+                            .map(|x| {
+                                PyResult::Ok(crate::generated::records::evals::judge_outcome_to_py(
+                                    py, x,
+                                )?)
+                            })
+                            .collect::<PyResult<Vec<_>>>()?,
+                    )?
+                    .into_any(),
+                    py,
+                )
+            })
         })
     }
 
     /// Whether `message` fulfills `intent`. A provider failure raises the provider's error.
     #[pyo3(signature = (intent, message))]
-    fn judge_intent<'py>(&self, py: Python<'py>, intent: ::std::string::String, message: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+    fn judge_intent<'py>(
+        &self,
+        py: Python<'py>,
+        intent: ::std::string::String,
+        message: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
                 .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::evals::intent_judgment_to_py(py, out)?, py))
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::evals::intent_judgment_to_py(py, out)?,
+                    py,
+                )
+            })
         })
     }
 }
@@ -67,7 +132,10 @@ type EvaluationsImpl = <crate::Selected as super::Implementations>::Evaluations;
 /// The aggregates of `verdicts`; a verdict other than pass, fail or maybe is refused.
 #[pyfunction]
 #[pyo3(signature = (verdicts))]
-pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+pub fn _core_evaluation_score<'py>(
+    py: Python<'py>,
+    verdicts: ::std::vec::Vec<::std::string::String>,
+) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let out = py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts)).map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(crate::generated::records::evals::evaluation_score_to_py(py, out)?)
@@ -77,7 +145,8 @@ pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::
 #[pyfunction]
 pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let out = py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas());
+    let out =
+        py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas());
     Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
 }
 
@@ -93,27 +162,41 @@ pub struct EvaluationHostProxy {
 
 impl EvaluationHostProxy {
     /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj) {
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
+        if let Some(native) =
+            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
     }
 
     /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj) {
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
+        if let Some(native) =
+            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::evals::EvaluationHost>> {
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::evals::EvaluationHost>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::host::capture_context(obj.py())?,
@@ -123,26 +206,39 @@ impl EvaluationHostProxy {
 }
 
 impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
-    fn evaluate<'a>(&'a self, evaluator: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::lk_agents_abi::evals::Judgment, ::lk_agents_abi::errors::HostError>> {
+    fn evaluate<'a>(
+        &'a self,
+        evaluator: &::lk_agents_abi::HostRef,
+    ) -> ::lk_agents_abi::BoxFuture<
+        'a,
+        ::std::result::Result<::lk_agents_abi::evals::Judgment, ::lk_agents_abi::errors::HostError>,
+    > {
         let host = ::std::sync::Arc::clone(&self.host);
         let evaluator_arg = ::std::clone::Clone::clone(evaluator);
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "EvaluationHost.evaluate", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, evaluator_arg)?];
+        let started = ::lk_agents_runtime::host::call(
+            &crate::host::Entry,
+            "EvaluationHost.evaluate",
+            &self.context,
+            &[],
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::conversions::host_ref_to_py(py, evaluator_arg)?];
                 Ok((host.bind(py).getattr("evaluate")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
+            }),
+        );
         ::std::boxed::Box::pin(async move {
-        let out = started.await;
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
-            Ok(out)
-        })
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.bind(py);
+                let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
         })
     }
 }

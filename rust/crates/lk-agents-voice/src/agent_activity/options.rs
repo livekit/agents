@@ -8,7 +8,6 @@ use crate::turn::{
     UserTurnLimitOptions, count, endpointing_options, interruption_options, nullable,
     turn_handling_layer,
 };
-use lk_agents_abi::{Maybe, Vocabulary, secs};
 pub use lk_agents_abi::voice::session_options::{
     DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive, HostValue,
     InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions, ResolvedEndpointing,
@@ -16,6 +15,7 @@ pub use lk_agents_abi::voice::session_options::{
     ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet, TurnDetection,
     TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
 };
+use lk_agents_abi::{Maybe, Vocabulary, secs};
 use std::time::Duration;
 
 /// `_RECORDING_ALL_ON`. Note `redaction: false`: "all on" is about the four capture keys.

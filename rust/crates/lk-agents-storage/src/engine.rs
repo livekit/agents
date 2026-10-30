@@ -10,8 +10,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use crate::db::{
-    self, Acquire, Acquired, Commit, Committed, EventWrite, Fenced, ItemPage,
-    Receive, Resolution, TaskPage, TaskQuery,
+    self, Acquire, Acquired, Commit, Committed, EventWrite, Fenced, ItemPage, Receive, Resolution,
+    TaskPage, TaskQuery,
 };
 use crate::lease::LanePoll;
 use crate::run::{

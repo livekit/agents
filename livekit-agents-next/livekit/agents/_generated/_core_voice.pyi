@@ -255,76 +255,6 @@ def stt_node(
     vad: VAD[Any] | None = None,
 ) -> SttNodeEvents: ...
 
-class SpeechHandle:
-    def __new__(cls, *, speech_id: str = "", allow_interruptions: bool = True) -> Self:
-        """A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
-        behind it.
-        """
-    @property
-    def host(self) -> object | None:
-        """The host's object for this speech, as it set it; `None` until then."""
-    @host.setter
-    def host(self, host: object) -> None:
-        """Set by the host when it creates its handle over this one: from then on every event, tool
-        and hook naming the speech hands back this object.
-        """
-    @property
-    def id(self) -> str:
-        """`speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
-        the id it was constructed with.
-        """
-    @property
-    def num_steps(self) -> int: ...
-    @property
-    def chat_items(self) -> list[ChatItem]:
-        """What this speech committed to the conversation; a copy."""
-    @property
-    def scheduled(self) -> bool: ...
-    @property
-    def interrupted(self) -> bool:
-        """`True` from the tick `interrupt()` was called until the speech is done, and once the loop
-        has interrupted the speech for any reason (an interruption, a supersede, the close). A done
-        speech reads the loop's verdict.
-        """
-    def done(self) -> bool: ...
-    @property
-    def allow_interruptions(self) -> bool:
-        """The core's last accepted `allow_interruptions`."""
-    @allow_interruptions.setter
-    def allow_interruptions(self, value: bool) -> None:
-        """Enqueues the change; the accepted view changes when the loop applies it."""
-    def exception(self) -> BaseException | None:
-        """The exception the speech failed with: the host's own object when a provider raised one."""
-    def interrupt(self, *, force: bool = False) -> None:
-        """`interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
-        command is sent when the loop creates it.
-        """
-    def end_call(self) -> None:
-        """`EndCallTool`: close the session once this speech is done, or once a realtime model's own
-        reply to the tool result is. Sent to this speech's own session.
-        """
-    def hold_interruptions(self) -> None:
-        """`_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
-        when the speech is already interrupted, without counting the attempt.
-        """
-    def release_interruptions(self) -> None:
-        """`_release_interruptions`. Idempotent past zero, like the reference's."""
-    async def wait_for_playout(self, *, origin: str | None = None) -> None:
-        """`wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
-        tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
-        the session ended before creating, or a handle constructed directly, has nothing to play.
-        """
-    async def wait_for_generation(self, step: int | None) -> None:
-        """`_wait_for_generation(step_idx)`: one step of the turn, not the whole thing; `None` is the
-        latest. No generation, no such step and a never-created speech are distinct errors.
-        """
-    async def wait_for_interrupted(self) -> None:
-        """Resolves when the speech is interrupted, and only then: a speech that finishes normally
-        never resolves this, so `wait_if_not_interrupted` can race it.
-        """
-    async def wait_until_created(self) -> None:
-        """Resolves once the loop has created the speech and put it in the queue."""
-
 class RoomEventBus:
     """The fan-out a host room creates and hands its SDK callbacks."""
     def __new__(cls) -> Self: ...
@@ -756,6 +686,76 @@ def resolve_interruption_detector(
     """`AgentActivity._resolve_interruption_detection`: whether to build the detector, and if not,
     why. Constructing it stays the host's.
     """
+
+class SpeechHandle:
+    def __new__(cls, *, speech_id: str = "", allow_interruptions: bool = True) -> Self:
+        """A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
+        behind it.
+        """
+    @property
+    def host(self) -> object | None:
+        """The host's object for this speech, as it set it; `None` until then."""
+    @host.setter
+    def host(self, host: object) -> None:
+        """Set by the host when it creates its handle over this one: from then on every event, tool
+        and hook naming the speech hands back this object.
+        """
+    @property
+    def id(self) -> str:
+        """`speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
+        the id it was constructed with.
+        """
+    @property
+    def num_steps(self) -> int: ...
+    @property
+    def chat_items(self) -> list[ChatItem]:
+        """What this speech committed to the conversation; a copy."""
+    @property
+    def scheduled(self) -> bool: ...
+    @property
+    def interrupted(self) -> bool:
+        """`True` from the tick `interrupt()` was called until the speech is done, and once the loop
+        has interrupted the speech for any reason (an interruption, a supersede, the close). A done
+        speech reads the loop's verdict.
+        """
+    def done(self) -> bool: ...
+    @property
+    def allow_interruptions(self) -> bool:
+        """The core's last accepted `allow_interruptions`."""
+    @allow_interruptions.setter
+    def allow_interruptions(self, value: bool) -> None:
+        """Enqueues the change; the accepted view changes when the loop applies it."""
+    def exception(self) -> BaseException | None:
+        """The exception the speech failed with: the host's own object when a provider raised one."""
+    def interrupt(self, *, force: bool = False) -> None:
+        """`interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
+        command is sent when the loop creates it.
+        """
+    def end_call(self) -> None:
+        """`EndCallTool`: close the session once this speech is done, or once a realtime model's own
+        reply to the tool result is. Sent to this speech's own session.
+        """
+    def hold_interruptions(self) -> None:
+        """`_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
+        when the speech is already interrupted, without counting the attempt.
+        """
+    def release_interruptions(self) -> None:
+        """`_release_interruptions`. Idempotent past zero, like the reference's."""
+    async def wait_for_playout(self, *, origin: str | None = None) -> None:
+        """`wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
+        tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
+        the session ended before creating, or a handle constructed directly, has nothing to play.
+        """
+    async def wait_for_generation(self, step: int | None) -> None:
+        """`_wait_for_generation(step_idx)`: one step of the turn, not the whole thing; `None` is the
+        latest. No generation, no such step and a never-created speech are distinct errors.
+        """
+    async def wait_for_interrupted(self) -> None:
+        """Resolves when the speech is interrupted, and only then: a speech that finishes normally
+        never resolves this, so `wait_if_not_interrupted` can race it.
+        """
+    async def wait_until_created(self) -> None:
+        """Resolves once the loop has created the speech and put it in the queue."""
 
 def validate_card_number(card_number: str) -> bool:
     """The Luhn checksum over an all-digit string."""

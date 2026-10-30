@@ -1,11 +1,11 @@
+use parking_lot::Mutex;
 use std::io;
 use std::sync::mpsc as sync_mpsc;
-use parking_lot::Mutex;
 
 use lk_agents_media::recorder::{EncodeError, PCM_ENCODER_TRAILER};
 
 use super::*;
-use lk_agents_media::pool::{MediaPoolLimits, MediaPool};
+use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
 
 fn media_pool(total: usize) -> MediaPool {
     MediaPool::new(MediaPoolLimits {
@@ -315,11 +315,12 @@ async fn finalization_preserves_the_input_resamplers_tail() {
         let encoder = Encoder(sink.trace.clone());
         let mut limits = limits();
         limits.retained_bytes = 64 * 1024;
-        let recorder = SessionRecorder::open_with(&media_pool, 48_000, Some(0.0), limits, move || {
-            Ok((encoder, sink.writer))
-        })
-        .await
-        .unwrap();
+        let recorder =
+            SessionRecorder::open_with(&media_pool, 48_000, Some(0.0), limits, move || {
+                Ok((encoder, sink.writer))
+            })
+            .await
+            .unwrap();
         let input = AudioFrame::new(lk_agents_media::pcm_bytes(&[16000; 160]), 16_000, 1, 160);
         recorder.record(RecordingCommand::Input(0.01, input)).unwrap();
         if flush_before_finish {

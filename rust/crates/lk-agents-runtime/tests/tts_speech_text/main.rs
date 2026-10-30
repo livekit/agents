@@ -5,6 +5,6 @@ use lk_agents_runtime::inference::fallback::FallbackTts;
 use lk_agents_runtime::inference::tts::GatewayTts;
 
 mod fallback;
-mod judge;
 mod gateway;
+mod judge;
 mod sentence_adapter;

@@ -1,39 +1,39 @@
 //! The host conversions no declaration expresses: a type declared `handwritten(.., py)` in ABI
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
+use lk_agents_abi::Maybe;
+use lk_agents_abi::errors::CapturedError;
+use lk_agents_abi::llm::llm::ProviderToolDeclaration;
+use lk_agents_abi::llm::provider_format::tools::ToolFlag;
 use lk_agents_abi::python::{
     BufferFormat, MaybeNull, attr_with, number_from_py, retained_bytes, snapshot_buffer,
 };
 use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
-use lk_agents_abi::voice::session_options::{
-    BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions, SessionConnOptions,
-    TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
-};
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
-use lk_agents_abi::Maybe;
-use lk_agents_abi::errors::CapturedError;
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::utils::host_ref::StaleHostRef;
 use lk_agents_abi::utils::video::VideoFrame;
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
-use lk_agents_abi::voice::session_effects::FillerReply;
 use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, ParticipantIdentity, ParticipantKind, RoomIoConfig,
     StreamInfo, TextOutputConfig, TrackPublishOptions, TrackSource,
 };
-use std::time::Duration;
-use lk_agents_abi::llm::llm::ProviderToolDeclaration;
-use lk_agents_abi::llm::provider_format::tools::ToolFlag;
+use lk_agents_abi::voice::session_effects::FillerReply;
+use lk_agents_abi::voice::session_options::{
+    BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions, SessionConnOptions,
+    TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
+};
 use lk_agents_abi::{
-    AlignedTranscript, ApiConnectOptions, AudioFrame, HostRef, ImageSource, MediaRef, SynthesizedAudio, TimedString,
-    ToolChoice, ToolFlags, ToolSpec, VadEvent, VadEventType,
+    AlignedTranscript, ApiConnectOptions, AudioFrame, HostRef, ImageSource, MediaRef,
+    SynthesizedAudio, TimedString, ToolChoice, ToolFlags, ToolSpec, VadEvent, VadEventType,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{
     PyBool, PyBytes, PyDate, PyDict, PyFloat, PyInt, PyMapping, PySequence, PyString, PyType,
 };
+use std::time::Duration;
 
 /// A scalar applies to both edges.
 pub fn backchannel_boundary_from_py(obj: &Bound<'_, PyAny>) -> PyResult<BackchannelBoundary> {
@@ -361,7 +361,8 @@ pub fn overlapping_speech_event_to_py<'py>(
     }
     kwargs.set_item("probability", value.probability)?;
     kwargs.set_item("num_requests", value.num_requests)?;
-    let class = CLASS.import(py, "livekit.agents.inference.interruption", "OverlappingSpeechEvent")?;
+    let class =
+        CLASS.import(py, "livekit.agents.inference.interruption", "OverlappingSpeechEvent")?;
     crate::host::construct(class, (), Some(&kwargs))
 }
 
@@ -383,7 +384,11 @@ pub fn timed_string_to_py<'py>(py: Python<'py>, value: TimedString) -> PyResult<
     if let Some(v) = value.speaker_id {
         kwargs.set_item("speaker_id", v)?;
     }
-    crate::host::construct(CLASS.import(py, "livekit.agents.types", "TimedString")?, (), Some(&kwargs))
+    crate::host::construct(
+        CLASS.import(py, "livekit.agents.types", "TimedString")?,
+        (),
+        Some(&kwargs),
+    )
 }
 
 /// The `str` itself and its timings; `NOT_GIVEN`, `None`, anything unreadable and a missing
@@ -482,10 +487,15 @@ pub fn synthesized_audio_to_py<'py>(
     kwargs.set_item("segment_id", value.segment_id)?;
     kwargs.set_item("delta_text", value.delta_text)?;
     if let Some(usage) = value.usage {
-        kwargs.set_item("usage", crate::generated::records::usage::token_usage_to_py(py, usage)?)?;
+        kwargs
+            .set_item("usage", crate::generated::records::usage::token_usage_to_py(py, usage)?)?;
     }
     kwargs.set_item("characters_count", value.characters_count)?;
-    crate::host::construct(CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?, (), Some(&kwargs))
+    crate::host::construct(
+        CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?,
+        (),
+        Some(&kwargs),
+    )
 }
 
 /// `frames` is read only for an end of speech, the one event whose audio is recognized
@@ -501,7 +511,11 @@ pub fn vad_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<VadEvent> {
         speech_duration: number("speech_duration")?,
         silence_duration: number("silence_duration")?,
         frames: match kind == VadEventType::EndOfSpeech && !frames.is_none() {
-            true => frames.extract::<Vec<Bound<'_, PyAny>>>()?.iter().map(audio_frame_from_py).collect::<PyResult<_>>()?,
+            true => frames
+                .extract::<Vec<Bound<'_, PyAny>>>()?
+                .iter()
+                .map(audio_frame_from_py)
+                .collect::<PyResult<_>>()?,
             false => Vec::new(),
         },
         probability: number("probability")?,
@@ -654,7 +668,9 @@ pub fn tool_spec_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolSpec> {
         provider_tool,
         name: item(obj, OWNER, "name")?,
         description: item_or(obj, OWNER, "description", |v| v.extract(), String::new)?,
-        json_schema: item_with(obj, OWNER, "json_schema", |v| value_from_py(v, "ToolSpec.json_schema"))?,
+        json_schema: item_with(obj, OWNER, "json_schema", |v| {
+            value_from_py(v, "ToolSpec.json_schema")
+        })?,
         flags: ToolFlags {
             ignore_on_enter: item_or(obj, OWNER, "ignore_on_enter", |v| v.extract(), || false)?,
         },
@@ -671,9 +687,9 @@ pub fn tool_choice_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolChoice> {
         return ToolChoice::from_literal(&name)
             .ok_or_else(|| PyValueError::new_err(format!("unknown tool_choice {name:?}")));
     }
-    let named = obj.cast::<PyDict>().map_err(|_| {
-        PyValueError::new_err("tool_choice must be a string or a named-tool dict")
-    })?;
+    let named = obj
+        .cast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("tool_choice must be a string or a named-tool dict"))?;
     let function = named
         .get_item("function")?
         .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("NamedToolChoice.function"))?;
@@ -779,8 +795,12 @@ fn optional_host_ref(obj: &Bound<'_, PyAny>) -> PyResult<Option<HostRef>> {
 }
 
 /// The host's own exception, released: `None` when another clone already took it.
-pub fn captured_error_to_py<'py>(py: Python<'py>, value: CapturedError) -> PyResult<Bound<'py, PyAny>> {
-    Ok(lk_agents_abi::python::release(value).map_or_else(|| py.None().into_bound(py), |obj| obj.into_bound(py)))
+pub fn captured_error_to_py<'py>(
+    py: Python<'py>,
+    value: CapturedError,
+) -> PyResult<Bound<'py, PyAny>> {
+    Ok(lk_agents_abi::python::release(value)
+        .map_or_else(|| py.None().into_bound(py), |obj| obj.into_bound(py)))
 }
 
 /// The host object `id` names, provided its key was issued by this runtime's table.
@@ -798,7 +818,10 @@ pub struct Omittable<'py>(Maybe<Bound<'py, PyAny>>);
 impl<'py> Omittable<'py> {
     pub const NOT_GIVEN: Self = Omittable(Maybe::NotGiven);
 
-    pub fn map<T>(self, convert: impl FnOnce(Bound<'py, PyAny>) -> PyResult<T>) -> PyResult<Maybe<T>> {
+    pub fn map<T>(
+        self,
+        convert: impl FnOnce(Bound<'py, PyAny>) -> PyResult<T>,
+    ) -> PyResult<Maybe<T>> {
         Ok(match self.0 {
             Maybe::NotGiven => Maybe::NotGiven,
             Maybe::Given(value) => Maybe::Given(convert(value)?),
@@ -858,10 +881,16 @@ class VADEvent:
         Python::initialize();
         Python::attach(|py| {
             let spec = parse_spec(py, "").expect("the producers' dict reads");
-            assert_eq!((spec.name.as_str(), spec.description.as_str()), ("lookup", "look something up"));
+            assert_eq!(
+                (spec.name.as_str(), spec.description.as_str()),
+                ("lookup", "look something up")
+            );
             assert_eq!(spec.json_schema["type"], "object");
             assert!(spec.provider_tool.is_none());
-            assert!(spec.flags.ignore_on_enter, "the flag was read as the default rather than the value");
+            assert!(
+                spec.flags.ignore_on_enter,
+                "the flag was read as the default rather than the value"
+            );
         });
     }
 
@@ -871,7 +900,10 @@ class VADEvent:
     fn tool_defaults_apply_to_omission_and_nonnullable_fields_refuse_null() {
         Python::initialize();
         Python::attach(|py| {
-            assert_eq!(parse_spec(py, "out['json_schema'] = None").unwrap().json_schema, serde_json::Value::Null);
+            assert_eq!(
+                parse_spec(py, "out['json_schema'] = None").unwrap().json_schema,
+                serde_json::Value::Null
+            );
             assert!(parse_spec(py, "out['description'] = None").is_err());
             assert!(parse_spec(py, "out['ignore_on_enter'] = None").is_err());
             assert!(parse_spec(py, "del out['json_schema']").is_err());
@@ -977,7 +1009,10 @@ frame = SimpleNamespace(data=memoryview(owner)[2:6], width=1, height=1, type=0)
                 let error = super::host_ref_to_py(py, r).unwrap_err();
                 error.get_type(py).name().unwrap().to_string()
             };
-            assert_eq!(stale_name(lk_agents_abi::HostRef::new(u64::MAX, media().registry())), "StaleHandle");
+            assert_eq!(
+                stale_name(lk_agents_abi::HostRef::new(u64::MAX, media().registry())),
+                "StaleHandle"
+            );
             let original = PyDict::new(py);
             let local = intern_host(original.clone().into_any().unbind());
             assert!(super::host_ref_to_py(py, local.clone()).unwrap().is(&original));

@@ -16,6 +16,7 @@ use quote::{format_ident, quote};
 use crate::shape::{args, is, is_json, is_json_map, one};
 use crate::{Metas, doc};
 
+mod union;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -148,7 +149,6 @@ impl Record {
     }
 }
 
-
 /// What a field without its own word inherits from its record, read the same way by the binding
 /// and by `lk-agents-codegen`:
 ///
@@ -183,7 +183,12 @@ fn tag_of(ms: &Metas, at: &syn::Ident) -> syn::Result<Option<Tag>> {
     let value = match (ms.text("tag_value")?, ms.ident("tag_const")?) {
         (Some(v), _) => TagValue::Lit(v.to_owned()),
         (None, Some(c)) => TagValue::Const(c),
-        (None, None) => return Err(syn::Error::new_spanned(at, format!("tag = \"{key}\" needs tag_value or tag_const"))),
+        (None, None) => {
+            return Err(syn::Error::new_spanned(
+                at,
+                format!("tag = \"{key}\" needs tag_value or tag_const"),
+            ));
+        }
     };
     Ok(Some(Tag { key: key.to_owned(), value }))
 }
@@ -191,18 +196,39 @@ fn tag_of(ms: &Metas, at: &syn::Ident) -> syn::Result<Option<Tag>> {
 fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
     let ident = input.ident.clone();
     if !input.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(&input.generics, "#[derive(Host)] is for a concrete type"));
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "#[derive(Host)] is for a concrete type",
+        ));
     }
     let b = Metas::named(&input.attrs, "binding")?;
     let py = Metas::named(&input.attrs, "python")?;
     b.only(
         &format!("#[binding] on {ident}"),
-        &["emit", "extract", "class", "new", "from_items", "fields_only", "from", "tag", "tag_value", "tag_const", "default", "skip_if_none", "model_dump", "untagged"],
+        &[
+            "emit",
+            "extract",
+            "class",
+            "new",
+            "from_items",
+            "fields_only",
+            "from",
+            "tag",
+            "tag_value",
+            "tag_const",
+            "default",
+            "skip_if_none",
+            "model_dump",
+            "untagged",
+        ],
     )?;
     let inherit = RecordDefaults::of(&input.attrs)?;
     let from = b.path("from")?;
     if from.as_ref().is_some_and(|p| p.segments.last().is_some_and(|s| s.ident == ident)) {
-        return Err(syn::Error::new_spanned(&ident, "`from` names the record itself: leave it out"));
+        return Err(syn::Error::new_spanned(
+            &ident,
+            "`from` names the record itself: leave it out",
+        ));
     }
     let mut targets = Vec::new();
     for (word, kind) in [("extract", Kind::Extract), ("emit", Kind::Emit), ("class", Kind::Class)] {
@@ -217,7 +243,10 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
         });
     }
     if from.is_some() && targets.iter().any(|t| t.kind != Kind::Emit) {
-        return Err(syn::Error::new_spanned(&ident, "`from` is an emit target's projection; an extract or class target is the record itself"));
+        return Err(syn::Error::new_spanned(
+            &ident,
+            "`from` is an emit target's projection; an extract or class target is the record itself",
+        ));
     }
     let body = match &input.data {
         syn::Data::Struct(s) => {
@@ -228,7 +257,9 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
             Body::Struct(fields)
         }
         syn::Data::Enum(e) if b.flag("untagged") => Body::Untagged(arms(e)?),
-        syn::Data::Enum(e) if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)) => Body::Unit,
+        syn::Data::Enum(e) if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)) => {
+            Body::Unit
+        }
         syn::Data::Enum(e) => {
             let mut vs = Vec::new();
             let mut skipped = false;
@@ -239,20 +270,34 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
                     continue;
                 }
                 let syn::Fields::Unnamed(u) = &v.fields else {
-                    return Err(syn::Error::new_spanned(&v.ident, "a host union variant carries one record"));
+                    return Err(syn::Error::new_spanned(
+                        &v.ident,
+                        "a host union variant carries one record",
+                    ));
                 };
                 if u.unnamed.len() != 1 {
-                    return Err(syn::Error::new_spanned(&v.ident, "a host union variant carries one record"));
+                    return Err(syn::Error::new_spanned(
+                        &v.ident,
+                        "a host union variant carries one record",
+                    ));
                 }
                 let twin = Metas::named(&v.attrs, "binding")?.path("twin")?;
                 vs.push(Variant { ident: v.ident.clone(), ty: u.unnamed[0].ty.clone(), twin });
             }
             if skipped && b.flag("emit") {
-                return Err(syn::Error::new_spanned(&ident, "an emit union writes every variant: #[binding(skip)] is for an extract union"));
+                return Err(syn::Error::new_spanned(
+                    &ident,
+                    "an emit union writes every variant: #[binding(skip)] is for an extract union",
+                ));
             }
             Body::Union(vs)
         }
-        syn::Data::Union(_) => return Err(syn::Error::new_spanned(&ident, "#[derive(Host)] is for a struct or an enum")),
+        syn::Data::Union(_) => {
+            return Err(syn::Error::new_spanned(
+                &ident,
+                "#[derive(Host)] is for a struct or an enum",
+            ));
+        }
     };
     Ok(Record {
         binding_tag: tag_of(&b, &ident)?,
@@ -272,9 +317,14 @@ fn arms(e: &syn::DataEnum) -> syn::Result<Vec<Arm>> {
         let vb = Metas::named(&v.attrs, "binding")?;
         vb.only(&format!("#[binding] on {}", v.ident), &["none", "rest", "class"])?;
         let last = i + 1 == e.variants.len();
-        let class = vb.text("class")?.and_then(|c| c.rsplit_once('.')).map(|(m, n)| (m.to_owned(), n.to_owned()));
+        let class = vb
+            .text("class")?
+            .and_then(|c| c.rsplit_once('.'))
+            .map(|(m, n)| (m.to_owned(), n.to_owned()));
         let fits = match &v.fields {
-            syn::Fields::Unnamed(u) if u.unnamed.len() == 1 => Fits::Member(u.unnamed[0].ty.clone()),
+            syn::Fields::Unnamed(u) if u.unnamed.len() == 1 => {
+                Fits::Member(u.unnamed[0].ty.clone())
+            }
             syn::Fields::Unit if vb.flag("none") => Fits::None,
             syn::Fields::Unit if class.is_some() => {
                 let (module, name) = class.expect("checked");
@@ -282,7 +332,10 @@ fn arms(e: &syn::DataEnum) -> syn::Result<Vec<Arm>> {
             }
             syn::Fields::Unit if vb.flag("rest") && last => Fits::Rest,
             syn::Fields::Unit if vb.flag("rest") => {
-                return Err(syn::Error::new_spanned(&v.ident, "`rest` takes what no arm before it fits: it is the last arm"));
+                return Err(syn::Error::new_spanned(
+                    &v.ident,
+                    "`rest` takes what no arm before it fits: it is the last arm",
+                ));
             }
             _ => {
                 return Err(syn::Error::new_spanned(
@@ -297,15 +350,23 @@ fn arms(e: &syn::DataEnum) -> syn::Result<Vec<Arm>> {
 }
 
 fn field(f: &syn::Field, inherit: RecordDefaults) -> syn::Result<Field> {
-    let ident = f.ident.clone().ok_or_else(|| syn::Error::new_spanned(f, "a host record has named fields"))?;
+    let ident = f
+        .ident
+        .clone()
+        .ok_or_else(|| syn::Error::new_spanned(f, "a host record has named fields"))?;
     let b = Metas::named(&f.attrs, "binding")?;
     let h = Metas::of(&f.attrs)?;
     let p = Metas::named(&f.attrs, "python")?;
     for m in &b.0 {
-        if !["skip", "extract_skip", "skip_if_none", "default", "flatten", "py", "dump_with"].contains(&m.key.as_str()) {
+        if !["skip", "extract_skip", "skip_if_none", "default", "flatten", "py", "dump_with"]
+            .contains(&m.key.as_str())
+        {
             return Err(syn::Error::new_spanned(
                 &ident,
-                format!("#[binding({})] is not a field word: a value with its own host shape implements IntoPyObject/FromPyObject in its crate", m.key),
+                format!(
+                    "#[binding({})] is not a field word: a value with its own host shape implements IntoPyObject/FromPyObject in its crate",
+                    m.key
+                ),
             ));
         }
     }
@@ -321,7 +382,8 @@ fn field(f: &syn::Field, inherit: RecordDefaults) -> syn::Result<Field> {
         private: p.flag("private"),
         emit_skip: b.flag("skip"),
         extract_skip: b.flag("extract_skip"),
-        skip_if_none: b.flag("skip_if_none") || (inherit.skip_if_none && one(&f.ty, "Option").is_some()),
+        skip_if_none: b.flag("skip_if_none")
+            || (inherit.skip_if_none && one(&f.ty, "Option").is_some()),
         default,
         flatten: b.flag("flatten"),
         py: b.flag("py"),
@@ -335,16 +397,22 @@ fn unraw(s: &str) -> String {
     s.strip_prefix("r#").unwrap_or(s).to_owned()
 }
 
-
 /// Types no crate here can implement a pyo3 trait for: [`emit_value`]/[`extract_value`] handle them.
 fn structural(t: &syn::Type) -> bool {
-    if is(t, "Duration") || is(t, "SystemTime") || is_json(t) || is_json_map(t) || one(t, "Box").is_some() {
+    if is(t, "Duration")
+        || is(t, "SystemTime")
+        || is_json(t)
+        || is_json_map(t)
+        || one(t, "Box").is_some()
+    {
         return true;
     }
     if let Some(i) = one(t, "Option").or_else(|| one(t, "Vec")) {
         return structural(i);
     }
-    if (is(t, "HashMap") || is(t, "BTreeMap")) && let [_, v] = args(t).as_slice() {
+    if (is(t, "HashMap") || is(t, "BTreeMap"))
+        && let [_, v] = args(t).as_slice()
+    {
         return structural(v);
     }
     if let syn::Type::Tuple(tu) = t {
@@ -383,7 +451,11 @@ fn emit_value(t: &syn::Type, e: TokenStream) -> TokenStream {
         }
         if let [_, v] = args(t).as_slice() {
             let x = emit_value(v, quote!(v));
-            let map = if is(t, "BTreeMap") { quote!(::std::collections::BTreeMap) } else { quote!(::std::collections::HashMap) };
+            let map = if is(t, "BTreeMap") {
+                quote!(::std::collections::BTreeMap)
+            } else {
+                quote!(::std::collections::HashMap)
+            };
             return quote!(#e.iter().map(|(k, v)| ::std::result::Result::Ok::<_, ::pyo3::PyErr>((::std::clone::Clone::clone(k), #x))).collect::<::pyo3::PyResult<#map<_, _>>>()?);
         }
         if let syn::Type::Tuple(tu) = t {
@@ -407,7 +479,9 @@ fn extract_value(t: &syn::Type, v: TokenStream, label: &str) -> Option<TokenStre
         return None;
     }
     if let Some(inner) = one(t, "Box") {
-        let x = extract_value(inner, v.clone(), label).unwrap_or_else(|| quote!(#v.extract::<#inner>().map_err(::std::convert::Into::<::pyo3::PyErr>::into)));
+        let x = extract_value(inner, v.clone(), label).unwrap_or_else(
+            || quote!(#v.extract::<#inner>().map_err(::std::convert::Into::<::pyo3::PyErr>::into)),
+        );
         return Some(quote!((#x).map(::std::boxed::Box::new)));
     }
     if is(t, "Duration") {
@@ -421,19 +495,24 @@ fn extract_value(t: &syn::Type, v: TokenStream, label: &str) -> Option<TokenStre
     }
     if is_json_map(t) {
         // Checked under the path `extra` whatever the field, as the codegen's `json` reader did.
-        return Some(quote!(#v.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|d| #rt::extra_from_py(&d))));
+        return Some(
+            quote!(#v.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|d| #rt::extra_from_py(&d))),
+        );
     }
     if let Some(inner) = one(t, "Option") {
         let x = extract_value(inner, quote!(v), label)?;
-        return Some(quote!({ let v = #v; if v.is_none() { ::std::result::Result::Ok(::std::option::Option::None) } else { (#x).map(::std::option::Option::Some) } }));
+        return Some(
+            quote!({ let v = #v; if v.is_none() { ::std::result::Result::Ok(::std::option::Option::None) } else { (#x).map(::std::option::Option::Some) } }),
+        );
     }
     if let Some(inner) = one(t, "Vec") {
         let x = extract_value(inner, quote!(v), label)?;
-        return Some(quote!(#v.extract::<::std::vec::Vec<::pyo3::Bound<'_, ::pyo3::PyAny>>>().and_then(|items| items.iter().map(|v| #x).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>())));
+        return Some(
+            quote!(#v.extract::<::std::vec::Vec<::pyo3::Bound<'_, ::pyo3::PyAny>>>().and_then(|items| items.iter().map(|v| #x).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>())),
+        );
     }
     None
 }
-
 
 /// Gated on the calling crate's `python` feature.
 pub fn record(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
@@ -457,18 +536,22 @@ pub fn record(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         Body::Untagged(arms) => {
             for t in &r.targets {
                 out.extend(match t.kind {
-                    Kind::Emit => emit_untagged(&r, arms),
-                    Kind::Extract => extract_untagged(&r, arms),
-                    Kind::Class => return Err(syn::Error::new_spanned(&r.ident, "a union is not a class")),
+                    Kind::Emit => union::emit_untagged(&r, arms),
+                    Kind::Extract => union::extract_untagged(&r, arms),
+                    Kind::Class => {
+                        return Err(syn::Error::new_spanned(&r.ident, "a union is not a class"));
+                    }
                 });
             }
         }
         Body::Union(vs) => {
             for t in &r.targets {
                 out.extend(match t.kind {
-                    Kind::Emit => emit_union(&r, vs)?,
-                    Kind::Extract => extract_union(&r, t, vs)?,
-                    Kind::Class => return Err(syn::Error::new_spanned(&r.ident, "a union is not a class")),
+                    Kind::Emit => union::emit_union(&r, vs)?,
+                    Kind::Extract => union::extract_union(&r, t, vs)?,
+                    Kind::Class => {
+                        return Err(syn::Error::new_spanned(&r.ident, "a union is not a class"));
+                    }
                 });
             }
         }
@@ -611,11 +694,17 @@ fn dict_body(r: &Record, fields: &[Field], py_args: bool) -> TokenStream {
             // `Maybe<T>`: `NotGiven` writes no key; `Option<T>`: `None` writes none.
             let inner = one(&f.ty, "Option").or_else(|| one(&f.ty, "Maybe"));
             let Some(inner) = inner else {
-                sets.push(quote!(compile_error!("skip_if_none is for an Option or a Maybe field");));
+                sets.push(
+                    quote!(compile_error!("skip_if_none is for an Option or a Maybe field");),
+                );
                 continue;
             };
             let x = emit_value(inner, quote!(x));
-            let pat = if is(&f.ty, "Maybe") { quote!(::lk_agents_abi::Maybe::Given(x)) } else { quote!(::std::option::Option::Some(x)) };
+            let pat = if is(&f.ty, "Maybe") {
+                quote!(::lk_agents_abi::Maybe::Given(x))
+            } else {
+                quote!(::std::option::Option::Some(x))
+            };
             sets.push(quote!(if let #pat = &v.#ident { d.set_item(#key, #x)?; }));
         } else {
             let x = emit_value(&f.ty, quote!(&v.#ident));
@@ -632,14 +721,22 @@ fn dict_body(r: &Record, fields: &[Field], py_args: bool) -> TokenStream {
 fn emit_struct(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
     let ident = &r.ident;
     if let Some(f) = fields.iter().find(|f| f.emitted() && f.flatten) {
-        return Err(syn::Error::new_spanned(&f.ident, "#[binding(flatten)] is the read direction's; an emit target would nest the keys"));
+        return Err(syn::Error::new_spanned(
+            &f.ident,
+            "#[binding(flatten)] is the read direction's; an emit target would nest the keys",
+        ));
     }
     let py_fields: Vec<&Field> = fields.iter().filter(|f| f.emitted() && f.py).collect();
-    let use_dict = quote!(use ::pyo3::types::PyDictMethods as _;);
+    let use_dict = quote!(
+        use ::pyo3::types::PyDictMethods as _;
+    );
     if !py_fields.is_empty() {
         // Host objects the call site passes, in declaration order: no `IntoPyObject` can hold them.
         if t.from.is_some() {
-            return Err(syn::Error::new_spanned(ident, "a #[binding(py)] record is built by the call site, not from another record"));
+            return Err(syn::Error::new_spanned(
+                ident,
+                "a #[binding(py)] record is built by the call site, not from another record",
+            ));
         }
         let params = py_fields.iter().map(|f| {
             let i = &f.ident;
@@ -707,7 +804,9 @@ fn read_value(f: &Field, v: TokenStream, owner: &TokenStream, wrap: bool) -> Tok
             ::pyo3::impl_::frompyobject::extract_struct_field_with(|v: &::pyo3::Bound<'_, ::pyo3::PyAny>| -> ::pyo3::PyResult<#ty> { #x }, &#v, #owner, #key)?
         },
         Some(x) => quote!({ let v = &#v; #x? }),
-        None if wrap => quote!(::pyo3::impl_::frompyobject::extract_struct_field::<#ty>(&#v, #owner, #key)?),
+        None if wrap => {
+            quote!(::pyo3::impl_::frompyobject::extract_struct_field::<#ty>(&#v, #owner, #key)?)
+        }
         None => quote!(#v.extract::<#ty>()?),
     }
 }
@@ -773,7 +872,10 @@ fn flat(r: &Record, fields: &[Field]) -> syn::Result<TokenStream> {
     let mut inits = Vec::new();
     for f in fields.iter().filter(|f| f.read()) {
         if f.flatten {
-            return Err(syn::Error::new_spanned(&f.ident, "a fields_only record does not flatten another"));
+            return Err(syn::Error::new_spanned(
+                &f.ident,
+                "a fields_only record does not flatten another",
+            ));
         }
         let i = &f.ident;
         let x = attr_field(f, &owner, &items);
@@ -818,7 +920,10 @@ fn extract_struct(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<Token
     let flats: Vec<&Field> = read.iter().copied().filter(|f| f.flatten).collect();
     let manual = read.iter().filter(|f| !f.flatten).all(|f| f.defaulted()) && flats.is_empty();
     if manual && !t.from_items {
-        return Err(syn::Error::new_spanned(ident, "every field of this object reader has a default, so it matches anything: add from_items, or require a key"));
+        return Err(syn::Error::new_spanned(
+            ident,
+            "every field of this object reader has a default, so it matches anything: add from_items, or require a key",
+        ));
     }
     let asserts = flats.iter().map(|f| {
         let ty = &f.ty;
@@ -845,10 +950,12 @@ fn extract_struct(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<Token
             inits.push(quote!(#i: <#ty as ::lk_agents_abi::python::FlatRecord>::read_flat(obj, #owner, #items)?));
             continue;
         }
-        let x = if manual { manual_field(f, &owner) } else { attr_field(f, &owner, &quote!(#items)) };
+        let x =
+            if manual { manual_field(f, &owner) } else { attr_field(f, &owner, &quote!(#items)) };
         inits.push(quote!(#i: #x));
     }
-    let rest = fields.iter().any(|f| f.private).then(|| quote!(..::std::default::Default::default()));
+    let rest =
+        fields.iter().any(|f| f.private).then(|| quote!(..::std::default::Default::default()));
     let prelude = if manual {
         quote!(let d = (*obj).cast::<::pyo3::types::PyDict>()?;)
     } else {
@@ -907,7 +1014,9 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
             params.push(quote!(#checked #arg: #ty));
             init.push(if *i == arg { quote!(#i) } else { quote!(#i: #arg) });
         }
-        let d1 = format!(" `{name}(**fields)`: every field as a keyword argument. The field list appears here");
+        let d1 = format!(
+            " `{name}(**fields)`: every field as a keyword argument. The field list appears here"
+        );
         let d2 = " once, as the host's constructor signature, and nowhere else by hand.";
         let signature = (!sig.is_empty()).then(|| quote!(#[pyo3(signature = (*, #(#sig),*))]));
         methods.push(quote! {
@@ -923,7 +1032,10 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
     }
     for f in fields.iter().filter(|f| f.emitted()) {
         if f.skip_if_none || f.py || f.flatten {
-            return Err(syn::Error::new_spanned(&f.ident, "a getter is always there and reads one field: skip_if_none, py and flatten have no class meaning"));
+            return Err(syn::Error::new_spanned(
+                &f.ident,
+                "a getter is always there and reads one field: skip_if_none, py and flatten have no class meaning",
+            ));
         }
         let getter = crate::host_ident(&f.key);
         let wrapper = format_ident!("__host_py_get_{}", f.key);
@@ -939,7 +1051,8 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
         });
     }
     let repr = format!("{name}({{:?}})");
-    let message = format!("the record's class is `{name}`: its #[lk_agents_abi::class] names it so");
+    let message =
+        format!("the record's class is `{name}`: its #[lk_agents_abi::class] names it so");
     Ok(quote! {
         const _: () = assert!(::lk_agents_abi::python::same_name(<#ident as ::pyo3::PyClass>::NAME, #name), #message);
         #(#converters)*
@@ -948,187 +1061,6 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
             #(#methods)*
             fn __repr__(&self) -> ::std::string::String {
                 ::std::format!(#repr, self)
-            }
-        }
-    })
-}
-
-fn emit_union(r: &Record, vs: &[Variant]) -> syn::Result<TokenStream> {
-    let ident = &r.ident;
-    let arms = vs.iter().map(|v| {
-        let vi = &v.ident;
-        match &v.twin {
-            Some(p) => quote!(#ident::#vi(x) => #p::host_dict(py, x)?.into_any()),
-            None => quote!(#ident::#vi(x) => ::pyo3::IntoPyObject::into_pyobject(x, py)?.into_any()),
-        }
-    });
-    // The arm's emitting type: the member, or the projection it emits through.
-    let emitters: Vec<TokenStream> = vs
-        .iter()
-        .map(|v| match &v.twin {
-            Some(p) => quote!(#p),
-            None => {
-                let t = &v.ty;
-                quote!(#t)
-            }
-        })
-        .collect();
-    Ok(quote! {
-        impl<'py> ::pyo3::IntoPyObject<'py> for &#ident {
-            type Target = ::pyo3::PyAny;
-            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
-            type Error = ::pyo3::PyErr;
-            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-                ::std::result::Result::Ok(match self { #(#arms,)* })
-            }
-        }
-        impl<'py> ::pyo3::IntoPyObject<'py> for #ident {
-            type Target = ::pyo3::PyAny;
-            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
-            type Error = ::pyo3::PyErr;
-            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-                ::pyo3::IntoPyObject::into_pyobject(&self, py)
-            }
-        }
-        impl #ident {
-            /// Every discriminant this union's members write, in declaration order, once each.
-            pub fn host_kinds() -> ::std::vec::Vec<&'static str> {
-                let mut out: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
-                #[allow(unused_imports)]
-                use ::lk_agents_abi::python::{EmitTagDeclared as _, EmitTagNone as _};
-                #(
-                    if let ::std::option::Option::Some(k) = (&::lk_agents_abi::python::EmitTagOf::<#emitters>::new()).emit_tag()
-                        && !out.contains(&k)
-                    {
-                        out.push(k);
-                    }
-                )*
-                out
-            }
-        }
-    })
-}
-
-/// Each arm as its member, `None` for a unit arm.
-fn emit_untagged(r: &Record, arms: &[Arm]) -> TokenStream {
-    let ident = &r.ident;
-    let arms = arms.iter().map(|a| {
-        let ai = &a.ident;
-        match &a.fits {
-            Fits::Member(_) => quote!(#ident::#ai(x) => ::pyo3::IntoPyObject::into_pyobject(x, py)?.into_any()),
-            Fits::None | Fits::Rest => quote!(#ident::#ai => py.None().into_bound(py)),
-            Fits::Class { module, name } => {
-                quote!(#ident::#ai => py.import(#module)?.getattr(#name)?.call0()?)
-            }
-        }
-    });
-    quote! {
-        impl<'py> ::pyo3::IntoPyObject<'py> for &#ident {
-            type Target = ::pyo3::PyAny;
-            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
-            type Error = ::pyo3::PyErr;
-            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-                ::std::result::Result::Ok(match self { #(#arms,)* })
-            }
-        }
-        impl<'py> ::pyo3::IntoPyObject<'py> for #ident {
-            type Target = ::pyo3::PyAny;
-            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
-            type Error = ::pyo3::PyErr;
-            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-                ::pyo3::IntoPyObject::into_pyobject(&self, py)
-            }
-        }
-    }
-}
-
-/// The first arm the object fits; when none does, the last member's error.
-fn extract_untagged(r: &Record, arms: &[Arm]) -> TokenStream {
-    let ident = &r.ident;
-    let unfit = format!("{ident}: the value fits no arm");
-    let tries = arms.iter().map(|a| {
-        let ai = &a.ident;
-        match &a.fits {
-            Fits::Member(ty) => quote! {
-                match obj.extract::<#ty>() {
-                    ::std::result::Result::Ok(v) => return ::std::result::Result::Ok(#ident::#ai(v)),
-                    ::std::result::Result::Err(e) => last = ::std::option::Option::Some(::std::convert::Into::<::pyo3::PyErr>::into(e)),
-                }
-            },
-            Fits::None => quote! {
-                if obj.is_none() {
-                    return ::std::result::Result::Ok(#ident::#ai);
-                }
-            },
-            Fits::Class { module, name } => quote! {
-                if obj.is_instance(&obj.py().import(#module)?.getattr(#name)?)? {
-                    return ::std::result::Result::Ok(#ident::#ai);
-                }
-            },
-            Fits::Rest => quote!(return ::std::result::Result::Ok(#ident::#ai);),
-        }
-    });
-    quote! {
-        impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #ident {
-            type Error = ::pyo3::PyErr;
-            #[allow(unreachable_code, unused_assignments, unused_mut)]
-            fn extract(obj: ::pyo3::Borrowed<'a, 'py, ::pyo3::PyAny>) -> ::pyo3::PyResult<Self> {
-                let mut last: ::std::option::Option<::pyo3::PyErr> = ::std::option::Option::None;
-                #(#tries)*
-                ::std::result::Result::Err(last.unwrap_or_else(|| ::pyo3::exceptions::PyValueError::new_err(#unfit)))
-            }
-        }
-    }
-}
-
-fn extract_union(r: &Record, t: &Target, vs: &[Variant]) -> syn::Result<TokenStream> {
-    let ident = &r.ident;
-    let first = &vs.first().ok_or_else(|| syn::Error::new_spanned(ident, "a union with no arms"))?.ty;
-    let rust = ident.to_string();
-    let _ = t;
-    let arms = vs.iter().map(|v| {
-        let (vi, ty) = (&v.ident, &v.ty);
-        quote! {
-            if tag == <#ty as ::lk_agents_abi::python::HostReadTag>::TAG {
-                return ::std::result::Result::Ok(::std::option::Option::Some(#ident::#vi(::lk_agents_abi::python::extract_generated::<#ty>(obj)?)));
-            }
-        }
-    });
-    let checks = vs.iter().map(|v| {
-        let ty = &v.ty;
-        quote! {
-            assert!(::lk_agents_abi::python::same_name(<#ty as ::lk_agents_abi::python::HostReadTag>::KEY, <#first as ::lk_agents_abi::python::HostReadTag>::KEY), "every member of a union reads its discriminant under one key");
-            assert!(<#ty as ::lk_agents_abi::python::HostReadTag>::ITEMS == <#first as ::lk_agents_abi::python::HostReadTag>::ITEMS, "every member of a union is read the same way");
-        }
-    });
-    Ok(quote! {
-        const _: () = { #(#checks)* };
-        impl #ident {
-            /// The member this object's discriminant names, or `None` for one this build does not know.
-            pub fn extract_known(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::option::Option<Self>> {
-                let tag: ::std::string::String = Self::__host_tag(obj)?;
-                Self::__host_of_tag(obj, &tag)
-            }
-
-            fn __host_tag(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::string::String> {
-                use ::pyo3::types::PyAnyMethods as _;
-                let key = <#first as ::lk_agents_abi::python::HostReadTag>::KEY;
-                if <#first as ::lk_agents_abi::python::HostReadTag>::ITEMS { obj.get_item(key)?.extract() } else { obj.getattr(key)?.extract() }
-            }
-
-            fn __host_of_tag(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, tag: &str) -> ::pyo3::PyResult<::std::option::Option<Self>> {
-                #(#arms)*
-                ::std::result::Result::Ok(::std::option::Option::None)
-            }
-        }
-        impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #ident {
-            type Error = ::pyo3::PyErr;
-            fn extract(obj: ::pyo3::Borrowed<'a, 'py, ::pyo3::PyAny>) -> ::pyo3::PyResult<Self> {
-                let tag = Self::__host_tag(&obj)?;
-                Self::__host_of_tag(&obj, &tag)?.ok_or_else(|| {
-                    let key = <#first as ::lk_agents_abi::python::HostReadTag>::KEY;
-                    ::pyo3::exceptions::PyValueError::new_err(::std::format!("{}: unknown {} {:?}", #rust, key, tag))
-                })
             }
         }
     })

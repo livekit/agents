@@ -3,13 +3,13 @@
 use super::ingress::MAX_STREAM_BYTES;
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
 use crate::transcription::{Visible, VisibleStream};
-use lk_agents_core::tts::markup::expression_attribute;
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TimedString,
 };
+use lk_agents_core::tts::markup::expression_attribute;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The microphone view observed by the performer when a transcript's subject changes.

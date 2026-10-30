@@ -317,7 +317,9 @@ mod tests {
         let out = m.process(msg(json!({"type": "final_transcript", "transcript": "hi"})));
         let usage =
             out.events.iter().find(|e| e.kind == SpeechEventType::RecognitionUsage).unwrap();
-        assert!((usage.recognition_usage.as_ref().unwrap().audio_duration.unwrap() - 0.1).abs() < 1e-9);
+        assert!(
+            (usage.recognition_usage.as_ref().unwrap().audio_duration.unwrap() - 0.1).abs() < 1e-9
+        );
 
         let out = m.process(msg(json!({"type": "final_transcript", "transcript": "again"})));
         assert!(

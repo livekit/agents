@@ -68,4 +68,3 @@ impl VideoSampler {
         self.should_sample_at(speaking, Ts::ZERO.saturating_add(lk_agents_abi::secs(now_secs)))
     }
 }
-

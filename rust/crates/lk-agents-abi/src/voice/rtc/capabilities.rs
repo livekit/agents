@@ -8,9 +8,8 @@ use super::events::RoomEventSink;
 use super::ports::{ByteStreamIngress, RpcCallback, TextStreamIngress};
 use super::{
     AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity,
-    ParticipantKind,
-    PlaybackInfo, RtcError, StreamBytesOptions, StreamTextOptions, TrackPublishOptions, TrackSid,
-    TrackSource, Transcription,
+    ParticipantKind, PlaybackInfo, RtcError, StreamBytesOptions, StreamTextOptions,
+    TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
 use crate::{AudioFrame, StreamSource};
 
@@ -169,7 +168,11 @@ pub trait LocalParticipant: Send + Sync {
 
     /// `register_rpc_method(method, handler)`: the SDK keeps one handler per method, the last one.
     #[host(call, name = "_core_register_rpc_method")]
-    fn register_rpc_method(&self, method: String, handler: Arc<dyn RpcCallback>) -> Result<(), RtcError> {
+    fn register_rpc_method(
+        &self,
+        method: String,
+        handler: Arc<dyn RpcCallback>,
+    ) -> Result<(), RtcError> {
         Err(RtcError::Unsupported("register_rpc_method"))
     }
 

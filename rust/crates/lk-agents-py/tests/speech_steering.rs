@@ -22,9 +22,11 @@ fn steering_reads_absent_and_none_alike_and_keeps_the_three_nonverbal_cases_apar
         );
         py.run(&std::ffi::CString::new(setup).unwrap(), None, None).unwrap();
         let read = |src: &str| -> PyResult<SpeechSteering> {
-            _core::generated::records::expressive::speech_steering_options_from_py(
-                &py.eval(&std::ffi::CString::new(src).unwrap(), None, None)?,
-            )
+            _core::generated::records::expressive::speech_steering_options_from_py(&py.eval(
+                &std::ffi::CString::new(src).unwrap(),
+                None,
+                None,
+            )?)
         };
         assert_eq!(read("{}").unwrap(), SpeechSteering::default());
         assert_eq!(
@@ -55,7 +57,10 @@ fn steering_reads_absent_and_none_alike_and_keeps_the_three_nonverbal_cases_apar
         );
         let err = read("{'pace': 'brisk'}").unwrap_err();
         assert!(err.is_instance_of::<PyValueError>(py));
-        assert_eq!(err.value(py).to_string(), "Pace: \"brisk\" is not one of 'slow', 'normal', 'fast'");
+        assert_eq!(
+            err.value(py).to_string(),
+            "Pace: \"brisk\" is not one of 'slow', 'normal', 'fast'"
+        );
         let err = read("{'nonverbal_sounds': 3}").unwrap_err();
         assert!(err.is_instance_of::<PyTypeError>(py), "{err}");
     });

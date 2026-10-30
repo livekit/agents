@@ -8,7 +8,6 @@ use serde_json::{Map, Number, Value};
 
 use crate::Extra;
 
-
 // JSON, not a `HostRef`: Rust branches on `extra` and provider formats inline it. One mapping rule
 // serves both directions so they stay inverses; non-JSON raises naming the path, never coerced.
 
@@ -174,13 +173,18 @@ pub fn value_to_py<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py, P
         }
         // The core's one bytes shape inside JSON (`format::BYTES_TAG`, a provider payload's image
         // or signature): a one-key object only, so a user dict is never mistaken for one.
-        Value::Object(map) if map.len() == 1 && map.contains_key(crate::llm::provider_format::BYTES_TAG) => {
+        Value::Object(map)
+            if map.len() == 1 && map.contains_key(crate::llm::provider_format::BYTES_TAG) =>
+        {
             use base64::Engine as _;
             let Some(Value::String(b64)) = map.get(crate::llm::provider_format::BYTES_TAG) else {
                 return map_to_py(py, map).map(Bound::into_any);
             };
             let raw = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| {
-                PyValueError::new_err(format!("malformed base64 in a {} leaf", crate::llm::provider_format::BYTES_TAG))
+                PyValueError::new_err(format!(
+                    "malformed base64 in a {} leaf",
+                    crate::llm::provider_format::BYTES_TAG
+                ))
             })?;
             pyo3::types::PyBytes::new(py, &raw).into_any()
         }
@@ -268,7 +272,9 @@ where
 
 /// pyo3's derive replaces a `from_py_with` failure with "failed to extract field .." and keeps the
 /// real message only as `__cause__`; these errors end up in log lines, so the cause is lifted.
-pub fn extract_generated<'a, 'py, T: FromPyObject<'a, 'py, Error = PyErr>>(obj: &'a Bound<'py, PyAny>) -> PyResult<T> {
+pub fn extract_generated<'a, 'py, T: FromPyObject<'a, 'py, Error = PyErr>>(
+    obj: &'a Bound<'py, PyAny>,
+) -> PyResult<T> {
     obj.extract::<T>().map_err(|err| {
         let py = obj.py();
         let Some(cause) = err.cause(py) else { return err };
@@ -322,9 +328,9 @@ where
     T::Error: Into<PyErr>,
 {
     fn get(&self) -> PyResult<T> {
-        self.0
-            .extract::<T>()
-            .map_err(|e| pyo3::impl_::extract_argument::argument_extraction_error(self.0.py(), self.1, e.into()))
+        self.0.extract::<T>().map_err(|e| {
+            pyo3::impl_::extract_argument::argument_extraction_error(self.0.py(), self.1, e.into())
+        })
     }
 }
 
@@ -424,7 +430,10 @@ fn attribute_missing(obj: &Bound<'_, PyAny>, key: &str, error: &PyErr) -> PyResu
 }
 
 /// A failure is a `ValueError` naming the message.
-pub fn proto_in<M>(v: &Bound<'_, PyAny>, decode: impl FnOnce(&[u8]) -> Result<M, String>) -> PyResult<M> {
+pub fn proto_in<M>(
+    v: &Bound<'_, PyAny>,
+    decode: impl FnOnce(&[u8]) -> Result<M, String>,
+) -> PyResult<M> {
     let data = v.cast::<pyo3::types::PyBytes>()?;
     decode(pyo3::types::PyBytesMethods::as_bytes(data)).map_err(|e| {
         let name = std::any::type_name::<M>().rsplit("::").next().unwrap_or("message");

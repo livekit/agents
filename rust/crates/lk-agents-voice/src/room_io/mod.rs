@@ -106,7 +106,8 @@ pub fn outbound_sip(
     kind: lk_agents_abi::voice::rtc::ParticipantKind,
     attributes: &BTreeMap<String, String>,
 ) -> bool {
-    kind == lk_agents_abi::voice::rtc::ParticipantKind::Sip && !attributes.contains_key("sip.ruleID")
+    kind == lk_agents_abi::voice::rtc::ParticipantKind::Sip
+        && !attributes.contains_key("sip.ruleID")
 }
 
 /// `_ParticipantInputStream._on_track_available`: not the track already read (reopening would

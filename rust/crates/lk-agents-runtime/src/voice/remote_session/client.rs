@@ -2,11 +2,11 @@
 //! correlation, timeouts and the ready poll. No agent runs it; the host's tests drive the
 //! session host with it.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
@@ -173,12 +173,7 @@ impl RemoteSession {
         timeout: Duration,
     ) -> Result<proto::SessionResponse, RequestError> {
         let sh = &*self.shared;
-        let transport = sh
-            .state
-            .lock()
-            .transport
-            .clone()
-            .ok_or(RequestError::NotStarted)?;
+        let transport = sh.state.lock().transport.clone().ok_or(RequestError::NotStarted)?;
         let kind = request_name(&request);
         let id = sh.ids.mint();
         let (tx, rx) = oneshot::channel();

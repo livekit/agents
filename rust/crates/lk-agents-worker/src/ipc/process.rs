@@ -12,8 +12,8 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 
 use super::Level;
@@ -887,6 +887,7 @@ pub struct Bootstrap;
 
 impl lk_agents_abi::worker::ipc_host::ProcessBootstrap for Bootstrap {
     fn ipc_pair() -> Result<(i64, i64), lk_agents_abi::errors::HostError> {
-        super::channel::pair().map_err(|error| lk_agents_abi::errors::HostError::new(error.to_string()))
+        super::channel::pair()
+            .map_err(|error| lk_agents_abi::errors::HostError::new(error.to_string()))
     }
 }

@@ -82,10 +82,7 @@ impl Execution {
     pub fn progress(&self, operation: u64, message: String) -> Option<Event> {
         self.operations.iter().find_map(|(work, op)| match work {
             Work::Call(call) if *op == operation && self.invoker.live(*op).is_some() => {
-                Some(Event::ToolProgress {
-                    call: *call,
-                    message: message.clone(),
-                })
+                Some(Event::ToolProgress { call: *call, message: message.clone() })
             }
             _ => None,
         })
@@ -134,12 +131,7 @@ impl Execution {
             Effect::HostCheckpointCancel { checkpoint } => {
                 self.cancel(Work::Checkpoint(checkpoint))
             }
-            Effect::LlmRequestStart {
-                request,
-                chat_ctx,
-                tools,
-                ..
-            } => {
+            Effect::LlmRequestStart { request, chat_ctx, tools, .. } => {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
                 let req = ChatRequest {
@@ -152,8 +144,7 @@ impl Execution {
                 let llm = self.setup.llm.clone();
                 let clock = self.setup.clock.clone();
                 let events = self.events_tx.clone();
-                self.runtime
-                    .spawn(stream_request(request, req, llm, clock, events, cancelled));
+                self.runtime.spawn(stream_request(request, req, llm, clock, events, cancelled));
             }
             Effect::LlmRequestCancel { request } => {
                 if let Some(cancel) = self.requests.get_mut(&request).and_then(Option::take) {
@@ -162,26 +153,14 @@ impl Execution {
             }
             Effect::InstructionsRender { render } => {
                 let host = self.setup.host.clone();
-                self.invoke(
-                    Work::Render(render),
-                    None,
-                    None,
-                    move |inv, events| async move {
-                        let result = host
-                            .render_instructions(&inv)
-                            .await
-                            .map_err(|e| e.to_string());
-                        let _ = events
-                            .send(Report::Core(Event::InstructionsRendered { render, result }))
-                            .await;
-                    },
-                );
+                self.invoke(Work::Render(render), None, None, move |inv, events| async move {
+                    let result = host.render_instructions(&inv).await.map_err(|e| e.to_string());
+                    let _ = events
+                        .send(Report::Core(Event::InstructionsRendered { render, result }))
+                        .await;
+                });
             }
-            Effect::ToolPrepare {
-                call,
-                arguments,
-                function_call,
-            } => {
+            Effect::ToolPrepare { call, arguments, function_call } => {
                 self.calls.insert(call, function_call.clone());
                 let host = self.setup.host.clone();
                 let resource = self.mint();
@@ -207,17 +186,11 @@ impl Execution {
                 };
                 let host = self.setup.host.clone();
                 let function_call = self.calls.get(&call).cloned();
-                self.invoke(
-                    Work::Call(call),
-                    function_call,
-                    None,
-                    move |inv, events| async move {
-                        let result = host.read_back(&inv, &args).await.map_err(|e| e.to_string());
-                        let _ = events
-                            .send(Report::Core(Event::ReadBackRendered { call, result }))
-                            .await;
-                    },
-                );
+                self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
+                    let result = host.read_back(&inv, &args).await.map_err(|e| e.to_string());
+                    let _ =
+                        events.send(Report::Core(Event::ReadBackRendered { call, result })).await;
+                });
             }
             Effect::TemplateRender { call, template } => {
                 let host = self.setup.host.clone();
@@ -237,12 +210,7 @@ impl Execution {
                     },
                 );
             }
-            Effect::ToolExecute {
-                call,
-                prepared,
-                function_call,
-                approval,
-            } => {
+            Effect::ToolExecute { call, prepared, function_call, approval } => {
                 let Some(args) = self.prepared.remove(&prepared) else {
                     return None;
                 };
@@ -257,15 +225,9 @@ impl Execution {
                                 let _ = events
                                     .send(Report::Core(Event::ToolCallUpdated { call, extra }))
                                     .await;
-                                Event::ToolSettled {
-                                    call,
-                                    outcome: report.outcome,
-                                }
+                                Event::ToolSettled { call, outcome: report.outcome }
                             }
-                            Err(e) => Event::ToolLaunchFailed {
-                                call,
-                                error: e.to_string(),
-                            },
+                            Err(e) => Event::ToolLaunchFailed { call, error: e.to_string() },
                         };
                         let _ = events.send(Report::Core(event)).await;
                     },
@@ -279,10 +241,7 @@ impl Execution {
             Effect::ToolArgumentsRelease { prepared } => {
                 self.prepared.remove(&prepared);
             }
-            Effect::OutputValidate {
-                validation,
-                candidate,
-            } => {
+            Effect::OutputValidate { validation, candidate } => {
                 let host = self.setup.host.clone();
                 self.invoke(
                     Work::Validation(validation),
@@ -291,11 +250,7 @@ impl Execution {
                     move |inv, events| async move {
                         let (verdict, value, serialized) =
                             match host.validate_output(&inv, candidate).await {
-                                Ok(ValidatedOutput::Accepted {
-                                    text,
-                                    value,
-                                    serialized,
-                                }) => (
+                                Ok(ValidatedOutput::Accepted { text, value, serialized }) => (
                                     OutputVerdict::Accepted { text },
                                     value,
                                     serialized.map(|output| output.value),
@@ -309,12 +264,7 @@ impl Execution {
                                 Err(e) => (OutputVerdict::Failed(e.to_string()), None, None),
                             };
                         let _ = events
-                            .send(Report::Validated {
-                                validation,
-                                verdict,
-                                value,
-                                serialized,
-                            })
+                            .send(Report::Validated { validation, verdict, value, serialized })
                             .await;
                     },
                 );
@@ -322,11 +272,7 @@ impl Execution {
             Effect::Emit(event) => {
                 return Some(RunUpdate::Stream(event));
             }
-            Effect::ArgumentsRepaired {
-                call_id,
-                error,
-                repaired,
-            } => {
+            Effect::ArgumentsRepaired { call_id, error, repaired } => {
                 let repaired = match repaired {
                     serde_json::Value::String(s) => s,
                     other => other.to_string(),
@@ -372,45 +318,20 @@ impl Execution {
             Report::LlmFailed { request, error } => {
                 let message = error.to_string();
                 self.failure = Some(error);
-                (
-                    Event::LlmFailed {
-                        request,
-                        error: message,
-                    },
-                    None,
-                )
+                (Event::LlmFailed { request, error: message }, None)
             }
-            Report::Prepared {
-                call,
-                resource,
-                prepared,
-            } => {
+            Report::Prepared { call, resource, prepared } => {
                 self.prepared.insert(resource, prepared.prepared);
                 (
-                    Event::ToolPrepared {
-                        call,
-                        prepared: resource,
-                        identity: prepared.identity,
-                    },
+                    Event::ToolPrepared { call, prepared: resource, identity: prepared.identity },
                     None,
                 )
             }
-            Report::Validated {
-                validation,
-                verdict,
-                value,
-                serialized,
-            } => {
+            Report::Validated { validation, verdict, value, serialized } => {
                 if let Some(value) = value {
                     self.outputs.insert(validation, value);
                 }
-                (
-                    Event::OutputValidated {
-                        validation,
-                        verdict,
-                    },
-                    serialized,
-                )
+                (Event::OutputValidated { validation, verdict }, serialized)
             }
         }
     }
@@ -429,19 +350,13 @@ impl Execution {
         let events = self.events_tx.clone();
         let operation = self
             .invoker
-            .invoke(function_call, approval, &self.runtime, move |inv| {
-                call(inv, events)
-            });
+            .invoke(function_call, approval, &self.runtime, move |inv| call(inv, events));
         self.operations.insert(work, operation);
     }
 
     /// Cancels the work's callback through the host; the callback still settles.
     fn cancel(&mut self, work: Work) {
-        if let Some(invocation) = self
-            .operations
-            .get(&work)
-            .and_then(|op| self.invoker.live(*op))
-        {
+        if let Some(invocation) = self.operations.get(&work).and_then(|op| self.invoker.live(*op)) {
             self.setup.host.cancel(invocation);
         }
     }
@@ -470,10 +385,7 @@ async fn stream_request(
     let mut stream = match opened {
         None => {
             let _ = events
-                .send(Report::Core(Event::LlmFailed {
-                    request,
-                    error: "cancelled".into(),
-                }))
+                .send(Report::Core(Event::LlmFailed { request, error: "cancelled".into() }))
                 .await;
             return;
         }
@@ -493,17 +405,10 @@ async fn stream_request(
             None => {
                 let deadline = clock.now().saturating_add(Duration::from_secs(5));
                 let _ = stream.close(deadline).await;
-                Report::Core(Event::LlmFailed {
-                    request,
-                    error: "cancelled".into(),
-                })
+                Report::Core(Event::LlmFailed { request, error: "cancelled".into() })
             }
             Some(Ok(Some(chunk))) => {
-                if events
-                    .send(Report::Core(Event::LlmChunk { request, chunk }))
-                    .await
-                    .is_err()
-                {
+                if events.send(Report::Core(Event::LlmChunk { request, chunk })).await.is_err() {
                     return;
                 }
                 continue;

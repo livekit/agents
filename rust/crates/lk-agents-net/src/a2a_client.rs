@@ -22,11 +22,11 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 use crate::env::ProcessEnv;
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
-use parking_lot::Mutex;
 use crate::source::{NativeSource, PullError, Pulled};
 use crate::sse::SseDecoder;
 use crate::task::TokioSpawner;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
+use parking_lot::Mutex;
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;

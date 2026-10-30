@@ -14,9 +14,9 @@ use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportSte
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
 };
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 
 struct RxInner {
@@ -65,10 +65,7 @@ impl RxInner {
                 wake.await;
                 continue;
             };
-            let mut reader = self
-                .state
-                .lock()
-                .begin(&stream.info, self.frame_size);
+            let mut reader = self.state.lock().begin(&stream.info, self.frame_size);
             let outcome = match &mut reader {
                 Err(error) => Err(error.clone()),
                 Ok(reader) => async {
@@ -136,12 +133,7 @@ impl RxInner {
         let Some(mut rx) = self.rpc_rx.lock().take() else {
             return Ok(());
         };
-        let remote = self
-            .state
-            .lock()
-            .sender()
-            .unwrap_or_default()
-            .to_owned();
+        let remote = self.state.lock().sender().unwrap_or_default().to_owned();
         while let Some(report) = rx.recv().await {
             let mut attempts = report.attempts(self.rpc_max_retries);
             while attempts.pending() {
@@ -252,11 +244,8 @@ impl DataStreamAudioReceiver {
             .or_default()
             .insert(remote.clone(), Arc::downgrade(inner));
         let handler = RpcHandler::new(move |caller, _payload| {
-            let found = RX_ROUTES
-                .lock()
-                .get(&room)
-                .and_then(|m| m.get(caller))
-                .and_then(Weak::upgrade);
+            let found =
+                RX_ROUTES.lock().get(&room).and_then(|m| m.get(caller)).and_then(Weak::upgrade);
             match found {
                 Some(rx) => rx.on_clear_buffer(),
                 None => {
@@ -286,10 +275,7 @@ impl DataStreamAudioReceiver {
                             return;
                         }
                     };
-                    let admitted = inner
-                        .state
-                        .lock()
-                        .admits(&stream.sender.0);
+                    let admitted = inner.state.lock().admits(&stream.sender.0);
                     if !admitted {
                         let deadline =
                             inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);

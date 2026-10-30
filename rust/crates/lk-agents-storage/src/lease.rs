@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
 use tokio::sync::watch;
 
 use crate::db::EventWrite;

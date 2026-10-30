@@ -1,9 +1,9 @@
 //! A reply cut mid-playout is committed as the words heard when the output reports the cut late.
 use lk_agents_abi::{ChatItem, Role};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_core::tts::markup::ChatMessageExt;
 
 const TEXT: &str = "One, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve.";
 

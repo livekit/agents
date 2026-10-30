@@ -65,7 +65,6 @@ pub enum RtcError {
     WaitEnded(String),
 }
 
-
 impl RtcError {
     pub fn host(message: impl Into<String>) -> Self {
         RtcError::Host(crate::errors::HostError::new(message))

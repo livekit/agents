@@ -3,14 +3,14 @@
 //! the host wait on it, and sends the host's requests to the core as queued inputs.
 
 use super::session::Tx;
+use crate::monotone::Monotone;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport};
-use crate::monotone::Monotone;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Event, SpeechCommand};
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
-use std::collections::BTreeMap;
 use parking_lot::{Mutex, MutexGuard};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{mpsc, watch};
 
@@ -126,7 +126,12 @@ impl PartialEq for SpeechHandle {
 impl Eq for SpeechHandle {}
 
 impl SpeechHandle {
-    fn base(creation: Creation, reserved: Option<SpeechId>, allow: bool, requests: Requests) -> Self {
+    fn base(
+        creation: Creation,
+        reserved: Option<SpeechId>,
+        allow: bool,
+        requests: Requests,
+    ) -> Self {
         SpeechHandle {
             id: OnceLock::new(),
             reserved,
@@ -604,7 +609,11 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         let Some(speech) = self.created().or(self.reserved) else {
             return Err(refused(SpeechRefused::Detached));
         };
-        self.ask(&mut requests, &mut inner, SpeechCommand::SetAllowInterruptions { speech, allow: value });
+        self.ask(
+            &mut requests,
+            &mut inner,
+            SpeechCommand::SetAllowInterruptions { speech, allow: value },
+        );
         Ok(())
     }
 
@@ -626,10 +635,17 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         }
         inner.requested = true;
         if *self.creation.borrow() != Creation::Detached {
-            self.ask(&mut requests, &mut inner, SpeechCommand::InterruptSpeech {
-                speech: self.created().or(self.reserved).expect("an attached handle has its id"),
-                force,
-            });
+            self.ask(
+                &mut requests,
+                &mut inner,
+                SpeechCommand::InterruptSpeech {
+                    speech: self
+                        .created()
+                        .or(self.reserved)
+                        .expect("an attached handle has its id"),
+                    force,
+                },
+            );
         }
         Ok(())
     }

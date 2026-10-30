@@ -24,7 +24,6 @@ pub enum ProviderError {
     Local(#[from] ApiError),
 }
 
-
 impl ProviderError {
     /// The same failure, no longer to be retried: whoever spent the budget already gave up.
     pub fn into_final(self) -> ProviderError {
@@ -99,7 +98,6 @@ impl ProviderError {
     }
 }
 
-
 /// `raise APIConnectionError(message) from cause`: the host's own exception with the chain the
 /// reference's `__str__` reads its root failure from; without a host, the bare connection error.
 #[cfg_attr(not(feature = "python"), allow(unused_variables))]
@@ -120,4 +118,3 @@ pub fn chained_connection_error(message: String, cause: &ProviderError) -> Provi
     #[allow(unreachable_code)]
     local
 }
-

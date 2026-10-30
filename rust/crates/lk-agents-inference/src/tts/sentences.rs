@@ -6,10 +6,10 @@ use lk_agents_media::blingfire::{Error, split_sentences};
 // The incremental splitter
 // ==================================================================================================
 
+use lk_agents_abi::tts::markup::SentenceTokenizerConfig;
 use lk_agents_core::tokenize::{
     NativeTokenBuffer as TokenBuffer, Span as TextSpan, TokenBufferOptions, Tokenize,
 };
-use lk_agents_abi::tts::markup::SentenceTokenizerConfig;
 
 /// `tokenize/blingfire.py::SentenceTokenizer`'s two model knobs; batching is [`TokenBuffer`]'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

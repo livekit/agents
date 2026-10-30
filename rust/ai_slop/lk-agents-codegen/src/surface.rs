@@ -16,14 +16,7 @@ const HANDWRITTEN_STUB: &str = "_core_handwritten";
 /// `_core` names registered by handwritten `#[pyclass]`/`#[pyfunction]` items (the export-placement
 /// baseline) and stubbed in `_core_handwritten.pyi`. It only shrinks: a family moved to declarations
 /// leaves it, and generation fails while a name is both here and generated.
-const HANDWRITTEN: &[&str] = &[
-    "Role",
-    "Run",
-    "Thread",
-    "Turn",
-    "init",
-    "resolve_host_ref",
-];
+const HANDWRITTEN: &[&str] = &["Role", "Run", "Thread", "Turn", "init", "resolve_host_ref"];
 
 /// `_core.pyi` (package-relative) and `core_names.json`, from the generated stubs of `_generated/`.
 pub fn emit<'a>(stubs: impl IntoIterator<Item = &'a Stub>) -> Result<(Out, Out), String> {

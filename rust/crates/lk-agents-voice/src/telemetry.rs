@@ -35,11 +35,11 @@ use crate::events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle};
 use crate::speech_handle::SpeechView;
 use lk_agents_abi::metrics::base::{AgentMetrics, LlmMetrics, Metadata};
 use lk_agents_abi::telemetry::attrs;
-use lk_agents_core::telemetry::gen_ai::provider_name;
 use lk_agents_abi::voice::events::{
     AgentState, SpanEndedWire, SpanEvent, SpanMetric, SpanStartedWire, UserState,
 };
 use lk_agents_abi::{Extra, Ts};
+use lk_agents_core::telemetry::gen_ai::provider_name;
 use serde_json::Value;
 use std::collections::BTreeMap;
 

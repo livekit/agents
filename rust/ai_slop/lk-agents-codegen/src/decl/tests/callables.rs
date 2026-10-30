@@ -310,17 +310,25 @@ fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy
         converted.contains(".ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err"),
         "unregistered objects must be refused: {converted}"
     );
-    assert!(converted.contains("expected native livekit.agents._core.RoomAudioInput"), "{converted}");
+    assert!(
+        converted.contains("expected native livekit.agents._core.RoomAudioInput"),
+        "{converted}"
+    );
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let code = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
-    assert!(code.contains("python::native::<dyn ::lk_agents_abi::llm::class::AudioInput>"), "{code}");
+    assert!(
+        code.contains("python::native::<dyn ::lk_agents_abi::llm::class::AudioInput>"),
+        "{code}"
+    );
     assert!(!code.contains("HostProxy") && !code.contains("AudioInputProxy"), "{code}");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let stub = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
     assert!(stub.contains("def set_audio_input(self, input: RoomAudioInput) -> None"), "{stub}");
     assert!(stub.contains("import RoomAudioInput"), "{stub}");
     let boxed = declaration.replace("input: Arc<dyn AudioInput>", "input: Box<dyn AudioInput>");
-    assert!(read(&boxed).unwrap_err().contains("a native-only trait crosses as `Arc<dyn AudioInput>`"));
+    assert!(
+        read(&boxed).unwrap_err().contains("a native-only trait crosses as `Arc<dyn AudioInput>`")
+    );
     let unregistered = declaration.replace("as_dyn(AudioInput = as_audio_input)", "pid = false");
     assert!(
         read(&unregistered)
@@ -502,8 +510,9 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let code = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
     assert!(
-        code.contains("let out = py.detach(|| <MatrixImpl as ::lk_agents_abi::llm::class::Matrix>::values());")
-            && code.contains("for (k, x) in out {"),
+        code.contains(
+            "let out = py.detach(|| <MatrixImpl as ::lk_agents_abi::llm::class::Matrix>::values());"
+        ) && code.contains("for (k, x) in out {"),
         "the adapter must retain the native enum-keyed map: {code}"
     );
     assert!(code.contains("k.as_str()"), "no ABI PyO3 enum conversion is needed: {code}");

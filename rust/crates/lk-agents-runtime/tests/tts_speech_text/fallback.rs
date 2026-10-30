@@ -8,8 +8,8 @@ use lk_agents_abi::{
 use lk_agents_inference::fallback::ChainPolicy;
 use lk_agents_inference::testkit::fallback::{Frames, NO_DEADLINE, boom, parts, until, within};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -192,7 +192,7 @@ fn tts_chain(entries: Vec<Arc<dyn Tts>>) -> FallbackTts {
         },
         clock,
         spawner,
-        obs
+        obs,
     )
     .expect("a usable list")
 }

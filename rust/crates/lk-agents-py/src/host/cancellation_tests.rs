@@ -1,7 +1,7 @@
 //! Cancellation before the host loop starts a call and while it publishes the host task.
 
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::invoke::HostEntry;

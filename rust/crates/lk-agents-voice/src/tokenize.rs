@@ -10,7 +10,12 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
         split_character: bool,
         retain_format: bool,
     ) -> Vec<(String, usize, usize)> {
-        lk_agents_core::tokenize::split_words_of(&text, ignore_punctuation, split_character, retain_format)
+        lk_agents_core::tokenize::split_words_of(
+            &text,
+            ignore_punctuation,
+            split_character,
+            retain_format,
+        )
     }
     fn replace_words(
         text: String,

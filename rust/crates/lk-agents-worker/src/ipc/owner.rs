@@ -2,8 +2,8 @@
 //! launch through the process or thread executor, then initialization, supervision and the
 //! runner's end, which continue whether or not the host still awaits them.
 
-use parking_lot::Mutex;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;

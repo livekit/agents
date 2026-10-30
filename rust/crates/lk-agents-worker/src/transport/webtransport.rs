@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 use web_transport_quinn::proto::ConnectRequest;
 use web_transport_quinn::{ClientBuilder, RecvStream, SendStream, Session};
-use tokio::sync::Mutex;
 
 use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
 use super::{TransportError, TransportEvent};

@@ -1,10 +1,10 @@
 //! A realtime server's empty records of its items stay out of history; the words that fill
 //! them reach it, once, under the server's ids.
 use lk_agents_abi::{ChatItem, Role};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
 use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_core::tts::markup::ChatMessageExt;
 
 // Catches: `remote_item_added` committed into history as it came, empty, and the transcript and
 // the reply that fill those items never told to the host: the user's final transcript upserted

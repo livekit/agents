@@ -14,8 +14,8 @@ use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::attempts::RequestPolicy;
-use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 use crate::headers::HeaderProvider;

@@ -104,9 +104,7 @@ pub(crate) fn holds_record(ty: &Ty) -> bool {
         Ty::Record(r) => {
             matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs | HostForm::Converted(_))
         }
-        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => {
-            holds_record(t)
-        }
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => holds_record(t),
         Ty::Map(k, t) => holds_record(k) || holds_record(t),
         Ty::OrderedMap(..) => true,
         Ty::Tuple(ts) => ts.iter().any(holds_record),
@@ -139,8 +137,11 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             classes.push(r.name.clone());
             let class = class_ref(&module, &r.name);
             // An emit-only record's fields need no reader (an emitted failure has none).
-            let reads =
-                if r.extract && !r.extract_by_hand { struct_reads(&r.name, fields, "obj")? } else { String::new() };
+            let reads = if r.extract && !r.extract_by_hand {
+                struct_reads(&r.name, fields, "obj")?
+            } else {
+                String::new()
+            };
             let check = format!(
                 "        if !obj.is_instance({class})? {{\n            return Err(super::not_a(obj, {name:?}));\n        }}\n",
                 name = r.name
@@ -588,7 +589,9 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
         let cell = format!("{}__{}", cell(&r.name), cell(name));
         // A class or a union alias of classes (a transparent record's members).
         cells.push_str(&format!("static {cell}: ::pyo3::sync::PyOnceLock<Py<PyAny>> = ::pyo3::sync::PyOnceLock::new();\n"));
-        format!("obj.is_instance({cell}.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import({module:?})?.getattr({name:?})?.unbind()))?.bind(obj.py()))?")
+        format!(
+            "obj.is_instance({cell}.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import({module:?})?.getattr({name:?})?.unbind()))?.bind(obj.py()))?"
+        )
     };
     for v in variants {
         let f = match &v.shape {
@@ -728,7 +731,8 @@ fn uses_py(code: &str) -> bool {
     code.match_indices("py").any(|(i, _)| {
         let before = code[..i].chars().next_back();
         let after = code[i + 2..].chars().next();
-        let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':');
+        let ident =
+            |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':');
         !ident(before) && !ident(after)
     })
 }

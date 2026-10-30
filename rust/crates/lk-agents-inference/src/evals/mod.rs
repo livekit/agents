@@ -60,12 +60,7 @@ impl JudgeRunner for Judges {
         tools: HostRef,
         host: Arc<dyn EvaluationHost>,
     ) -> Self {
-        Judges {
-            llm,
-            tools,
-            host,
-            clock: env.clock.clone(),
-        }
+        Judges { llm, tools, host, clock: env.clock.clone() }
     }
 
     async fn evaluate(

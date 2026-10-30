@@ -430,7 +430,9 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             let all_args = receiver
                 .map(str::to_owned)
                 .into_iter()
-                .chain(needs_py.then(|| format!("py: Python<'{}>", if lifetime { "py" } else { "_" })))
+                .chain(
+                    needs_py.then(|| format!("py: Python<'{}>", if lifetime { "py" } else { "_" })),
+                )
                 .chain(args)
                 .collect::<Vec<_>>()
                 .join(", ");

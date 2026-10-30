@@ -2,10 +2,10 @@
 
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::time::Duration;
 
 use futures_util::{Sink, Stream, StreamExt};

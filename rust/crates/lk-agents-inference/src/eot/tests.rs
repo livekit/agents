@@ -12,8 +12,8 @@ use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdError, ThresholdOptions, TurnDetectorModel,
 };
 use lk_agents_abi::{ApiConnectOptions, EotInferenceMetrics};
-use parking_lot::Mutex;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
+use parking_lot::Mutex;
 use prost::Message as _;
 
 use crate::eot::cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID};

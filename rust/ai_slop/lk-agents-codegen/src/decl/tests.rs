@@ -155,7 +155,8 @@ fn an_eager_await_runs_at_the_call_and_awaits_its_future() {
     assert_eq!(ready.ret.ok, Ty::Int(crate::decl::Int::U32));
     let adapter = crate::adapter::emit(&decls).unwrap();
     let text = adapter.iter().map(|o| o.text.as_str()).collect::<String>();
-    let (sent, awaited) = (text.find("let call = py.detach(|| <").unwrap(), text.find("call.await").unwrap());
+    let (sent, awaited) =
+        (text.find("let call = py.detach(|| <").unwrap(), text.find("call.await").unwrap());
     assert!(sent < text.find("future_into_py").unwrap() && sent < awaited, "{text}");
     let raised = text[sent..].find(".map_err(").unwrap() + sent;
     assert!(raised < text.find("future_into_py").unwrap(), "{text}");
@@ -1026,7 +1027,8 @@ fn a_value_implementing_a_declared_class_crosses_as_a_handle_over_a_clone() {
     .expect("resolves");
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
-    let want = "::pyo3::Bound::new(py, crate::generated::llm::Request(::std::sync::Arc::new(req_arg)))?";
+    let want =
+        "::pyo3::Bound::new(py, crate::generated::llm::Request(::std::sync::Arc::new(req_arg)))?";
     assert!(llm.contains(want), "{want}\n{llm}");
 }
 
@@ -1097,7 +1099,10 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let decls = read(&source).expect("string enum with its native diagnostic resolves");
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
-    assert!(llm.contains("fn new(py: Python<'_>, kind: ::lk_agents_abi::llm::class::Kind)"), "{llm}");
+    assert!(
+        llm.contains("fn new(py: Python<'_>, kind: ::lk_agents_abi::llm::class::Kind)"),
+        "{llm}"
+    );
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
 }

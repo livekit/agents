@@ -1,7 +1,7 @@
 //! Bounded room observations and admitted SDK streams, using the shared source lifecycle.
 
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -92,11 +92,7 @@ impl RoomEventBus {
     }
 
     pub fn subscriber_count(&self) -> usize {
-        self.subscribers
-            .lock()
-            .iter()
-            .filter(|subscriber| !subscriber.events.is_closed())
-            .count()
+        self.subscribers.lock().iter().filter(|subscriber| !subscriber.events.is_closed()).count()
     }
 }
 
@@ -346,7 +342,6 @@ pub fn text_streams(room: &dyn RtcRoom, topic: &str) -> Result<Receiver<TextStre
     room.register_text_stream_handler(topic, sender)?;
     Ok(receiver)
 }
-
 
 #[cfg(test)]
 mod tests {

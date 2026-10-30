@@ -15,7 +15,6 @@ impl CapturedError {
     }
 }
 
-
 /// An error crossing a host boundary. Recovery policy belongs to the operation receiving it.
 /// Clones share ownership of the original exception; the last drop releases its adapter entry.
 /// Raised back to the host as the exception it was.

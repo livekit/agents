@@ -5,7 +5,14 @@ use crate::AudioFrame;
 
 // `vad.py:19`, a `(str, Enum)`: the wire strings are public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_host_derive::Vocabulary)]
-#[crate::host(record(module = "vad", path = "livekit.agents", name = "VADEventType", enum, extract, emit))]
+#[crate::host(record(
+    module = "vad",
+    path = "livekit.agents",
+    name = "VADEventType",
+    enum,
+    extract,
+    emit
+))]
 #[crate::host(wire_strs(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "VADEventType", value: s.to_owned() },

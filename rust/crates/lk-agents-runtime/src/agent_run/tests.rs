@@ -2,10 +2,10 @@
 //! invocation, cancellation through the host, the cleanup deadline, and release of what the host
 //! handed over.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
@@ -497,8 +497,7 @@ async fn cancel_reaches_the_running_tool_through_the_host_and_waits_for_it() {
     let updates = drain(&mut s.updates).await;
     assert!(matches!(finished(&updates), Err(RunError::Cancelled)));
     assert!(!updates.iter().any(|u| matches!(u, RunUpdate::IncompleteCleanup(_))));
-    let run_operation =
-        s.host.seen.lock().iter().find(|(c, _)| *c == "run").unwrap().1.operation;
+    let run_operation = s.host.seen.lock().iter().find(|(c, _)| *c == "run").unwrap().1.operation;
     assert_eq!(*s.host.cancelled.lock(), [run_operation]);
 }
 

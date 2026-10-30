@@ -78,7 +78,10 @@ pub trait TransferHost: Send + Sync {
         &self,
         room_name: String,
         identity: String,
-    ) -> crate::BoxFuture<'_, Result<std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>, HostError>>;
+    ) -> crate::BoxFuture<
+        '_,
+        Result<std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>, HostError>,
+    >;
     #[host(await, name = "_core_start_human")]
     fn start_human(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(notify, name = "_core_close_human")]

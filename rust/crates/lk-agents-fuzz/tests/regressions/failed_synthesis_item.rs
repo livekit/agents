@@ -1,8 +1,8 @@
 //! A reply whose voice failed mid-step commits what was heard of it, marked cut short.
 use lk_agents_abi::{ChatItem, Role};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
-use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{events::SessionEvent, trace::Step};
 
 // Catches: a TTS failing after its first chunk played committed the reply as complete. The

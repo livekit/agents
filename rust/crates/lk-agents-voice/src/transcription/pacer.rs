@@ -1,10 +1,10 @@
 //! One segment's pacing: its words released against its audio's playhead, as the reference's
 //! `_SegmentSynchronizerImpl` does.
+use crate::transcription::Heard;
+use crate::transcription::synchronizer::{Hyphenator, Liang};
 use lk_agents_core::tokenize::{
     NativeTokenBuffer as TokenBuffer, TokenBufferOptions, WordTokenizerOptions, Words, split_words,
 };
-use crate::transcription::Heard;
-use crate::transcription::synchronizer::{Hyphenator, Liang};
 use lk_agents_core::tts::markup::TranscriptMarkupStripper;
 use std::collections::VecDeque;
 use std::sync::Arc;

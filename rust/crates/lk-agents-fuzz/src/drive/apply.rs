@@ -450,7 +450,9 @@ impl Run {
                 else {
                     return false;
                 };
-                self.handles.get(speech).is_some_and(|speech| HostSpeech::end_call(&**speech).is_ok())
+                self.handles
+                    .get(speech)
+                    .is_some_and(|speech| HostSpeech::end_call(&**speech).is_ok())
             }
             Input::FillerStart { tool, speech, delay, interval, text } => {
                 let (Some(call_id), Some(speech)) =

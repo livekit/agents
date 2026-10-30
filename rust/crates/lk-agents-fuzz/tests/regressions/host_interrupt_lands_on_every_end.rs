@@ -23,8 +23,8 @@ fn an_interrupt_of_a_speech_created_done_lands_nowhere() {
         Input::Advance { ms: Millis(5_000) },
     ];
     let run = simulate(async {
-        let mut run = Run::start(&Setup { tts: false, ..Setup::default() }, 0, Default::default())
-            .await;
+        let mut run =
+            Run::start(&Setup { tts: false, ..Setup::default() }, 0, Default::default()).await;
         for input in &inputs {
             run.apply(input).await;
         }

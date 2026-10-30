@@ -13,9 +13,9 @@ use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 };
-use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{EotPrediction, SpeechEvent, SpeechEventType, Ts};
+use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use std::time::Duration;
 
 impl AudioRecognition {

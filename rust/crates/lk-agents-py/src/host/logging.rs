@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use parking_lot::Mutex;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -126,9 +126,9 @@ pub fn flush() {
 impl Forwarder {
     fn enabled(&self, metadata: &Metadata) -> bool {
         let levels = self.levels.lock();
-        levels.get(metadata.target()).is_none_or(|(filter, read)| {
-            metadata.level() <= *filter || read.elapsed() > LEVEL_TTL
-        })
+        levels
+            .get(metadata.target())
+            .is_none_or(|(filter, read)| metadata.level() <= *filter || read.elapsed() > LEVEL_TTL)
     }
 
     fn queue(&self, record: &Record) {

@@ -202,10 +202,7 @@ impl SessionReportUploader {
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = response_body(response).await?;
-                    if <UploadGate as UploadGateApi>::is_disabled_response(
-                        status,
-                        body.clone(),
-                    ) {
+                    if <UploadGate as UploadGateApi>::is_disabled_response(status, body.clone()) {
                         self.disabled.store(true, Ordering::Release);
                         return Ok(false);
                     }

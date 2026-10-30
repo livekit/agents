@@ -265,11 +265,7 @@ async fn a_full_assignment_history_rolls_over_after_pending_assignments_settle()
     until_sent(&mut rig.sent, |m| refused(m, "overload")).await;
     let next = rig.next_peer();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(
-        rig.connections.lock().len(),
-        1,
-        "no rollover while an assignment is pending"
-    );
+    assert_eq!(rig.connections.lock().len(), 1, "no rollover while an assignment is pending");
     rig.launches.add_permits(1);
     rig.peer.send(Ok(assignment_message("pending"))).unwrap();
     let migrated =

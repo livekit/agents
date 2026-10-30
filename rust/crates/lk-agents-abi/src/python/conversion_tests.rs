@@ -54,9 +54,10 @@ fn module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
 fn omission_is_only_not_given_and_none_is_a_given_value() {
     attach(|py| {
         let read = |code: &str| {
-            let value = module(py, &format!("from livekit.agents.types import NotGiven\nvalue = {code}\n"))
-                .getattr("value")
-                .unwrap();
+            let value =
+                module(py, &format!("from livekit.agents.types import NotGiven\nvalue = {code}\n"))
+                    .getattr("value")
+                    .unwrap();
             value.extract::<MaybeNull<f64>>().map(|v| v.into_core())
         };
         assert!(matches!(read("NotGiven()").unwrap(), crate::Maybe::NotGiven));

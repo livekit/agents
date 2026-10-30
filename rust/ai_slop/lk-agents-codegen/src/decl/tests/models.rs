@@ -381,7 +381,8 @@ fn a_dataclass_record_is_mutable_positional_and_calls_its_post_init_hook() {
     );
     let shell = crate::records::conversions(&decls).expect("emits").text;
     assert!(
-        shell.contains("if let Some(x) = created_at {") && shell.contains("kwargs.set_item(\"type\""),
+        shell.contains("if let Some(x) = created_at {")
+            && shell.contains("kwargs.set_item(\"type\""),
         "{shell}"
     );
     let unordered = read(

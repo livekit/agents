@@ -3,10 +3,12 @@
 //! [`Calls`] keeps each reply until the core answers its call.
 
 use crate::voice::session::Tx;
-use lk_agents_voice::agent_session::{Answer, Command, Event, Input, Origin, QueueClosed, RequestId, Sent};
 use crate::voice::speech_handle::SpeechHandle;
-use std::collections::BTreeMap;
+use lk_agents_voice::agent_session::{
+    Answer, Command, Event, Input, Origin, QueueClosed, RequestId, Sent,
+};
 use parking_lot::Mutex;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 

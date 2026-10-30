@@ -7,7 +7,9 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyType};
 
-use crate::errors::{ApiErrorKind, CapturedError, PayloadTable, ProviderError, TaxonomyMatches, host_retryable};
+use crate::errors::{
+    ApiErrorKind, CapturedError, PayloadTable, ProviderError, TaxonomyMatches, host_retryable,
+};
 use crate::{HostRef, MediaRef};
 
 // A host exception goes into the side table and only its key plus scalar `retryable`/`status_code`/
@@ -137,7 +139,9 @@ impl ExceptionValue for crate::errors::HostError {
     fn to_exception<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         Ok(match self.host_ref.clone().and_then(|r| resolve_captured(py, r)) {
             Some(original) => original.into_bound(py),
-            None => PyRuntimeError::new_err(self.to_string()).into_value(py).into_bound(py).into_any(),
+            None => {
+                PyRuntimeError::new_err(self.to_string()).into_value(py).into_bound(py).into_any()
+            }
         })
     }
 }

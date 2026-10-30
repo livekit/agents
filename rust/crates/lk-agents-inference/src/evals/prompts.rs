@@ -118,11 +118,7 @@ impl BuiltIn {
     }
 
     /// The prompt judging `chat_ctx`, against `reference` when given.
-    pub fn prompt(
-        &self,
-        chat_ctx: &[ChatItem],
-        reference: Option<&[ChatItem]>,
-    ) -> String {
+    pub fn prompt(&self, chat_ctx: &[ChatItem], reference: Option<&[ChatItem]>) -> String {
         let mut parts = match self.frame {
             Frame::Criteria => vec![format!("Criteria: {}", self.criteria), String::new()],
             _ => vec![self.criteria.to_owned(), String::new()],

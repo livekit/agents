@@ -9,12 +9,12 @@ use lk_agents_abi::tts::tts::{SynthesizedAudio, TtsCapabilities, TtsSink, TtsSou
 use lk_agents_abi::utils::audio::AudioFrame;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamSource};
-use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use lk_agents_core::tts::markup::{Markup, MarkupExt};
+use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;

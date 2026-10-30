@@ -50,7 +50,8 @@ impl Metas {
     /// By the path's last segment; a bare `#[<name>]` contributes nothing.
     pub fn named(attrs: &[syn::Attribute], name: &str) -> syn::Result<Metas> {
         let mut out = Vec::new();
-        for a in attrs.iter().filter(|a| a.path().segments.last().is_some_and(|s| s.ident == name)) {
+        for a in attrs.iter().filter(|a| a.path().segments.last().is_some_and(|s| s.ident == name))
+        {
             if matches!(a.meta, syn::Meta::Path(_)) {
                 continue;
             }
@@ -61,7 +62,11 @@ impl Metas {
 
     /// Each on its own: a type may carry two `stream(..)`s.
     pub fn each(attrs: &[syn::Attribute]) -> syn::Result<Vec<Metas>> {
-        attrs.iter().filter(|a| is_host(a)).map(|a| Self::named(std::slice::from_ref(a), "host")).collect()
+        attrs
+            .iter()
+            .filter(|a| is_host(a))
+            .map(|a| Self::named(std::slice::from_ref(a), "host"))
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -92,7 +97,9 @@ impl Metas {
         match self.last(key) {
             None | Some(Value::Word) => Ok(None),
             Some(Value::Text(s)) => Ok(Some(s)),
-            Some(Value::Rust(r)) => Err(err(format!("`{key} = {r}`: this value is host text, write it as a string"))),
+            Some(Value::Rust(r)) => {
+                Err(err(format!("`{key} = {r}`: this value is host text, write it as a string")))
+            }
         }
     }
 
@@ -111,7 +118,9 @@ impl Metas {
             Some(Value::Word) => Ok(Some(true)),
             Some(Value::Rust(v)) if v == "true" => Ok(Some(true)),
             Some(Value::Rust(v)) if v == "false" => Ok(Some(false)),
-            Some(Value::Text(v) | Value::Rust(v)) => Err(err(format!("`{key} = {v}`: write true or false"))),
+            Some(Value::Text(v) | Value::Rust(v)) => {
+                Err(err(format!("`{key} = {v}`: write true or false")))
+            }
         }
     }
 
@@ -123,7 +132,10 @@ impl Metas {
     pub fn expr(&self, key: &str) -> syn::Result<Option<TokenStream>> {
         match self.rust(key) {
             None => Ok(None),
-            Some(v) => v.parse().map(Some).map_err(|_| err(format!("`{key} = {v}` is not a Rust expression"))),
+            Some(v) => v
+                .parse()
+                .map(Some)
+                .map_err(|_| err(format!("`{key} = {v}` is not a Rust expression"))),
         }
     }
 
@@ -142,8 +154,12 @@ impl Metas {
     fn unquoted<T: syn::parse::Parse>(&self, key: &str, what: &str) -> syn::Result<Option<T>> {
         match self.last(key) {
             None | Some(Value::Word) => Ok(None),
-            Some(Value::Rust(v)) => syn::parse_str(v).map(Some).map_err(|_| err(format!("`{key} = {v}` is not {what}"))),
-            Some(Value::Text(v)) => Err(err(format!("`{key} = \"{v}\"`: {what} is Rust, write it unquoted"))),
+            Some(Value::Rust(v)) => {
+                syn::parse_str(v).map(Some).map_err(|_| err(format!("`{key} = {v}` is not {what}")))
+            }
+            Some(Value::Text(v)) => {
+                Err(err(format!("`{key} = \"{v}\"`: {what} is Rust, write it unquoted")))
+            }
         }
     }
 
@@ -155,7 +171,9 @@ impl Metas {
     /// Refuse any key not in `known` (key or `group.` prefix): unread keys would be dropped silently.
     pub fn only(&self, what: &str, known: &[&str]) -> syn::Result<()> {
         for m in &self.0 {
-            let ok = known.iter().any(|k| if k.ends_with('.') { m.key.starts_with(k) } else { m.key == *k });
+            let ok = known
+                .iter()
+                .any(|k| if k.ends_with('.') { m.key.starts_with(k) } else { m.key == *k });
             if !ok {
                 return Err(err(format!("{what}: `{}` is not a key here", m.key)));
             }
@@ -232,7 +250,8 @@ pub fn to_snake(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
         if c.is_ascii_uppercase() {
-            let prev_lower = i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
+            let prev_lower =
+                i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
             let next_lower = i + 1 < chars.len() && chars[i + 1].is_ascii_lowercase();
             let prev_upper = i > 0 && chars[i - 1].is_ascii_uppercase();
             if i > 0 && (prev_lower || (prev_upper && next_lower)) {

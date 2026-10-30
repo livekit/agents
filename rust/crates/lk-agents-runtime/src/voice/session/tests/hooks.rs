@@ -6,8 +6,8 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 struct NoRegistry;
 
@@ -68,7 +68,8 @@ impl SessionHooks for ScriptedHooks {
     fn setup_tools<'a>(
         &'a self,
         _: &'a lk_agents_abi::HostRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError>>
+    {
         Box::pin(async move { self.result(Vec::new()) })
     }
     fn closing(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {

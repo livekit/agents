@@ -63,10 +63,7 @@ pub trait SessionHooks: Send + Sync {
     fn setup_tools<'a>(
         &'a self,
         tools: &'a crate::HostRef,
-    ) -> crate::BoxFuture<
-        'a,
-        Result<Vec<crate::agent::FunctionToolInfo>, crate::errors::HostError>,
-    >;
+    ) -> crate::BoxFuture<'a, Result<Vec<crate::agent::FunctionToolInfo>, crate::errors::HostError>>;
     /// The session closes: what runs beside it (AMD) closes first.
     #[host(await, name = "_core_closing")]
     fn closing(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;

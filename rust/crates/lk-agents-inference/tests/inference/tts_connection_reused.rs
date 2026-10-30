@@ -15,9 +15,9 @@ use base64::Engine;
 use lk_agents_abi::Tts;
 use lk_agents_inference::tts::{GatewayTts, TtsOptions};
 use lk_agents_net::clock::SimClock;
-use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 /// What opening a gateway connection costs before its first frame. Measured on calls: a reply

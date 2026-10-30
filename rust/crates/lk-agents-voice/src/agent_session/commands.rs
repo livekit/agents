@@ -320,14 +320,9 @@ pub enum TurnCommand {
 pub enum DtmfCommand {
     /// Answered once with the first outcome, or `Stopped`; the confirm arm is spoken by the
     /// driver.
-    Start {
-        collector: crate::workflows::dtmf::DtmfCollector,
-        call: Option<RequestId>,
-    },
+    Start { collector: crate::workflows::dtmf::DtmfCollector, call: Option<RequestId> },
     /// The awaiter of `call` went away: its collection stops; a newer one is left running.
-    Cancel {
-        call: RequestId,
-    },
+    Cancel { call: RequestId },
 }
 
 impl From<DtmfCommand> for Command {
@@ -477,7 +472,9 @@ pub struct HoldId(pub u64);
 pub enum SayText {
     Text(String),
     /// Pre-synthesised frames, which the host's handle holds for the speech.
-    Audio { text: String },
+    Audio {
+        text: String,
+    },
     /// Text chunks the host's handle holds for the speech; closing the sender ends it.
     Stream,
 }

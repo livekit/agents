@@ -694,7 +694,6 @@ pub trait HostRealtimeModel: Send + Sync + Sized + 'static {
     ) -> Result<Self, crate::errors::HostError>;
 }
 
-
 // The OpenAI-protocol realtime client (OpenAI/Azure, xAI, LiveKit Inference) and its
 // presence-aware option boundary.
 

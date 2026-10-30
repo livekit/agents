@@ -316,9 +316,7 @@ impl SessionEvent {
             }
             SessionEvent::Error(e) => HostWire::Error(e.wire()),
             SessionEvent::ToolExecutionUpdated(update) => {
-                HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated {
-                    update: update.wire(),
-                })
+                HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated { update: update.wire() })
             }
         }
     }
@@ -382,7 +380,9 @@ mod tests {
             None,
         );
         let close = SessionEvent::Close { reason: CloseReason::Error, error: Some(error) };
-        let HostWire::Close(w) = close.wire(anchor(), &|_| unreachable!()) else { panic!("not a close") };
+        let HostWire::Close(w) = close.wire(anchor(), &|_| unreachable!()) else {
+            panic!("not a close")
+        };
         let e = w.error.expect("the close's error");
         assert_eq!((e.source.as_str(), e.recoverable), ("llm_error", false));
     }

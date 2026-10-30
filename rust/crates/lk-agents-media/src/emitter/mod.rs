@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use crate::{AudioByteStream, Frame};
 use lk_agents_abi::media::emitter::EmitterError;
-use lk_agents_abi::{AudioEncoding, AudioFrame, SynthesizedAudio};
 use lk_agents_abi::usage::TokenUsage;
+use lk_agents_abi::{AudioEncoding, AudioFrame, SynthesizedAudio};
 use lk_agents_abi::{TimedString, Ts};
 
 /// What the machine asks of its owner, in order.

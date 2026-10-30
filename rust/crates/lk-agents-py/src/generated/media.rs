@@ -25,29 +25,70 @@ pub fn _core_install_frame_reader(py: Python<'_>, reader: Bound<'_, PyAny>) -> P
 // Declared in rust/crates/lk-agents-abi/src/media/images.rs.
 type ImageFunctionsImpl = <crate::Selected as super::Implementations>::ImageFunctions;
 
-fn _extract_image_functions_encode_image_quality(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u8>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u8>(&obj, "quality")).map(Some) }
+fn _extract_image_functions_encode_image_quality(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u8>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u8>(&obj, "quality")).map(Some)
+    }
 }
 
-fn _extract_image_functions_encode_image_resize_width(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "resize_width")).map(Some) }
+fn _extract_image_functions_encode_image_resize_width(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "resize_width")).map(Some)
+    }
 }
 
-fn _extract_image_functions_encode_image_resize_height(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "resize_height")).map(Some) }
+fn _extract_image_functions_encode_image_resize_height(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "resize_height")).map(Some)
+    }
 }
 
-fn _extract_image_functions_serialize_image_frame_inference_width(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_width")).map(Some) }
+fn _extract_image_functions_serialize_image_frame_inference_width(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_width")).map(Some)
+    }
 }
 
-fn _extract_image_functions_serialize_image_frame_inference_height(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_height")).map(Some) }
+fn _extract_image_functions_serialize_image_frame_inference_height(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "inference_height")).map(Some)
+    }
 }
 
 #[pyfunction]
 #[pyo3(signature = (frame, *, format = "JPEG".to_owned(), quality = None, resize_width = None, resize_height = None, resize_strategy = None))]
-pub fn encode_image<'py>(py: Python<'py>, frame: Bound<'_, PyAny>, format: ::std::string::String, #[pyo3(from_py_with = _extract_image_functions_encode_image_quality)] quality: ::std::option::Option<u8>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_width)] resize_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_height)] resize_height: ::std::option::Option<u32>, resize_strategy: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+pub fn encode_image<'py>(
+    py: Python<'py>,
+    frame: Bound<'_, PyAny>,
+    format: ::std::string::String,
+    #[pyo3(from_py_with = _extract_image_functions_encode_image_quality)]
+    quality: ::std::option::Option<u8>,
+    #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_width)]
+    resize_width: ::std::option::Option<u32>,
+    #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_height)]
+    resize_height: ::std::option::Option<u32>,
+    resize_strategy: ::std::option::Option<::std::string::String>,
+) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     let frame = crate::conversions::media_ref_from_py(&frame)?;
@@ -60,7 +101,14 @@ pub fn encode_image<'py>(py: Python<'py>, frame: Bound<'_, PyAny>, format: ::std
 /// A frame as JPEG bytes, resized to its inference size when it has one.
 #[pyfunction]
 #[pyo3(signature = (frame, inference_width = None, inference_height = None))]
-pub fn serialize_image_frame<'py>(py: Python<'py>, frame: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_width)] inference_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_height)] inference_height: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
+pub fn serialize_image_frame<'py>(
+    py: Python<'py>,
+    frame: Bound<'_, PyAny>,
+    #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_width)]
+    inference_width: ::std::option::Option<u32>,
+    #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_height)]
+    inference_height: ::std::option::Option<u32>,
+) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     let frame = crate::conversions::media_ref_from_py(&frame)?;
@@ -73,7 +121,11 @@ pub fn serialize_image_frame<'py>(py: Python<'py>, frame: Bound<'_, PyAny>, #[py
 /// A URL's inline bytes and MIME type, or the URL itself when it is external.
 #[pyfunction]
 #[pyo3(signature = (url, mime_type))]
-pub fn serialize_image_url<'py>(py: Python<'py>, url: ::std::string::String, mime_type: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+pub fn serialize_image_url<'py>(
+    py: Python<'py>,
+    url: ::std::string::String,
+    mime_type: ::std::option::Option<::std::string::String>,
+) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
     crate::host::future_into_py(py, async move {
@@ -98,11 +150,31 @@ fn _extract_audio_emitter_initialize_frame_size_ms(obj: &Bound<'_, PyAny>) -> Py
 }
 
 fn _extract_audio_emitter_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) }
+    if obj.is_instance_of::<::pyo3::types::PyBytes>()
+        || obj.is_instance_of::<::pyo3::types::PyByteArray>()
+        || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
+    {
+        ::lk_agents_abi::python::owned_bytes(&obj, "data")
+    } else {
+        obj.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    ::lk_agents_abi::python::number_from_py::<u8>(&item, "data")
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })
+    }
 }
 
-fn _extract_audio_emitter_report_usage_characters_count(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u64>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u64>(&obj, "characters_count")).map(Some) }
+fn _extract_audio_emitter_report_usage_characters_count(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u64>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u64>(&obj, "characters_count")).map(Some)
+    }
 }
 
 fn _extract_audio_emitter_pushed_duration_idx(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
@@ -116,7 +188,11 @@ pub struct AudioEmitter(pub(crate) ::std::sync::Arc<AudioEmitterImpl>);
 impl AudioEmitter {
     #[new]
     #[pyo3(signature = (*, label, dst_ch))]
-    fn new(py: Python<'_>, label: ::std::string::String, dst_ch: Bound<'_, PyAny>) -> PyResult<AudioEmitter> {
+    fn new(
+        py: Python<'_>,
+        label: ::std::string::String,
+        dst_ch: Bound<'_, PyAny>,
+    ) -> PyResult<AudioEmitter> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let dst_ch = crate::generated::media::EmitterOutputProxy::from_host(&dst_ch)?;
@@ -125,29 +201,76 @@ impl AudioEmitter {
     }
 
     #[pyo3(signature = (*, request_id, sample_rate, num_channels, mime_type, frame_size_ms = 200, stream = false))]
-    fn initialize(&self, py: Python<'_>, request_id: ::std::string::String, #[pyo3(from_py_with = _extract_audio_emitter_initialize_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_audio_emitter_initialize_num_channels)] num_channels: u16, mime_type: ::std::string::String, #[pyo3(from_py_with = _extract_audio_emitter_initialize_frame_size_ms)] frame_size_ms: u32, stream: bool) -> PyResult<()> {
+    fn initialize(
+        &self,
+        py: Python<'_>,
+        request_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_audio_emitter_initialize_sample_rate)] sample_rate: u32,
+        #[pyo3(from_py_with = _extract_audio_emitter_initialize_num_channels)] num_channels: u16,
+        mime_type: ::std::string::String,
+        #[pyo3(from_py_with = _extract_audio_emitter_initialize_frame_size_ms)] frame_size_ms: u32,
+        stream: bool,
+    ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::initialize(&self.0, request_id, sample_rate, num_channels, mime_type, frame_size_ms, stream)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::initialize(
+                &self.0,
+                request_id,
+                sample_rate,
+                num_channels,
+                mime_type,
+                frame_size_ms,
+                stream,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     #[pyo3(signature = (*, segment_id))]
     fn start_segment(&self, py: Python<'_>, segment_id: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::start_segment(&self.0, segment_id)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::start_segment(
+                &self.0, segment_id,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     fn end_segment(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::end_segment(&self.0)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::end_segment(
+                &self.0,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     #[pyo3(signature = (data))]
-    fn push(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_audio_emitter_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<()> {
+    fn push(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_audio_emitter_push_data)] data: ::std::vec::Vec<u8>,
+    ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push(&self.0, &data)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push(
+                &self.0, &data,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
@@ -155,14 +278,32 @@ impl AudioEmitter {
     fn push_frame(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let frame = crate::conversions::audio_frame_from_py(&frame)?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push_frame(&self.0, frame)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push_frame(
+                &self.0, frame,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     #[pyo3(signature = (delta_text))]
     fn push_timed_transcript(&self, py: Python<'_>, delta_text: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
-        let delta_text = (if delta_text.is_instance_of::<::pyo3::types::PyList>() { delta_text.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::timed_string_from_py(&item) }).collect::<PyResult<Vec<_>>>()) } else { (crate::conversions::timed_string_from_py(&delta_text)).map(|item| vec![item]) })?;
+        let delta_text = (if delta_text.is_instance_of::<::pyo3::types::PyList>() {
+            delta_text.try_iter().and_then(|items| {
+                items
+                    .map(|item| {
+                        let item = item?;
+                        crate::conversions::timed_string_from_py(&item)
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        } else {
+            (crate::conversions::timed_string_from_py(&delta_text)).map(|item| vec![item])
+        })?;
         py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push_timed_transcript(&self.0, delta_text)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -171,22 +312,48 @@ impl AudioEmitter {
     /// frame. Reports add up, one per provider request; providers that report nothing keep the
     /// framework's own measure (characters sent, audio received).
     #[pyo3(signature = (usage = None, *, characters_count = None))]
-    fn report_usage(&self, py: Python<'_>, usage: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_audio_emitter_report_usage_characters_count)] characters_count: ::std::option::Option<u64>) -> PyResult<()> {
+    fn report_usage(
+        &self,
+        py: Python<'_>,
+        usage: Option<Bound<'_, PyAny>>,
+        #[pyo3(from_py_with = _extract_audio_emitter_report_usage_characters_count)]
+        characters_count: ::std::option::Option<u64>,
+    ) -> PyResult<()> {
         crate::host::check_pid()?;
-        let usage = usage.map(|v| crate::generated::records::usage::token_usage_from_py(&v)).transpose()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::report_usage(&self.0, usage, characters_count)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let usage =
+            usage.map(|v| crate::generated::records::usage::token_usage_from_py(&v)).transpose()?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::report_usage(
+                &self.0,
+                usage,
+                characters_count,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::flush(&self.0)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::flush(&self.0)
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::end_input(&self.0)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::end_input(&self.0)
+        })
+        .map_err(|e: ::lk_agents_abi::EmitterError| {
+            <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
@@ -213,21 +380,37 @@ impl AudioEmitter {
     }
 
     #[pyo3(signature = (idx = -1))]
-    fn pushed_duration(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_audio_emitter_pushed_duration_idx)] idx: i64) -> PyResult<f64> {
+    fn pushed_duration(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_audio_emitter_pushed_duration_idx)] idx: i64,
+    ) -> PyResult<f64> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::pushed_duration(&self.0, idx));
+        let out = py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::pushed_duration(
+                &self.0, idx,
+            )
+        });
         Ok(out)
     }
 
     #[getter]
     fn num_segments(&self, py: Python<'_>) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::num_segments(&self.0));
+        let out = py.detach(|| {
+            <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::num_segments(
+                &self.0,
+            )
+        });
         Ok(out)
     }
 
     #[pyo3(signature = (context_id))]
-    fn _note_provider_request_id(&self, py: Python<'_>, context_id: ::std::string::String) -> PyResult<()> {
+    fn _note_provider_request_id(
+        &self,
+        py: Python<'_>,
+        context_id: ::std::string::String,
+    ) -> PyResult<()> {
         crate::host::check_pid()?;
         py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::_note_provider_request_id(&self.0, context_id)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -244,8 +427,14 @@ impl AudioEmitter {
 // Declared in rust/crates/lk-agents-abi/src/media/codecs.rs.
 type AudioDecoderImpl = <crate::Selected as super::Implementations>::AudioDecoder;
 
-fn _extract_audio_decoder_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some) }
+fn _extract_audio_decoder_new_sample_rate(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some)
+    }
 }
 
 fn _extract_audio_decoder_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
@@ -253,7 +442,21 @@ fn _extract_audio_decoder_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u
 }
 
 fn _extract_audio_decoder_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) }
+    if obj.is_instance_of::<::pyo3::types::PyBytes>()
+        || obj.is_instance_of::<::pyo3::types::PyByteArray>()
+        || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
+    {
+        ::lk_agents_abi::python::owned_bytes(&obj, "data")
+    } else {
+        obj.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    ::lk_agents_abi::python::number_from_py::<u8>(&item, "data")
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })
+    }
 }
 
 /// Container bytes decoded on one admitted native worker: input is queued without waiting for
@@ -265,7 +468,13 @@ pub struct AudioDecoder(pub(crate) ::std::sync::Arc<AudioDecoderImpl>);
 impl AudioDecoder {
     #[new]
     #[pyo3(signature = (mime, *, sample_rate = Some(48000), num_channels = 1))]
-    fn new(py: Python<'_>, mime: ::std::string::String, #[pyo3(from_py_with = _extract_audio_decoder_new_sample_rate)] sample_rate: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_audio_decoder_new_num_channels)] num_channels: u16) -> PyResult<AudioDecoder> {
+    fn new(
+        py: Python<'_>,
+        mime: ::std::string::String,
+        #[pyo3(from_py_with = _extract_audio_decoder_new_sample_rate)]
+        sample_rate: ::std::option::Option<u32>,
+        #[pyo3(from_py_with = _extract_audio_decoder_new_num_channels)] num_channels: u16,
+    ) -> PyResult<AudioDecoder> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let out = py.detach(|| <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::new(&env, mime, sample_rate, num_channels)).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -274,7 +483,11 @@ impl AudioDecoder {
 
     /// Refused after `end_input`, `aclose` or a decode failure.
     #[pyo3(signature = (data))]
-    fn push(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_audio_decoder_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<()> {
+    fn push(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_audio_decoder_push_data)] data: ::std::vec::Vec<u8>,
+    ) -> PyResult<()> {
         crate::host::check_pid()?;
         py.detach(|| <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::push(&self.0, &data)).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -283,7 +496,9 @@ impl AudioDecoder {
     /// No more input: `next` returns `None` once everything pushed is decoded.
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::end_input(&self.0));
+        py.detach(|| {
+            <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::end_input(&self.0)
+        });
         Ok(())
     }
 
@@ -294,7 +509,15 @@ impl AudioDecoder {
         crate::host::future_into_py(py, async move {
             let out = <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::next(&this, )
                 .await.map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::audio_frame_to_py(py, value)?)).transpose()?, py))
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    out.map(|value| {
+                        Ok::<_, ::pyo3::PyErr>(crate::conversions::audio_frame_to_py(py, value)?)
+                    })
+                    .transpose()?,
+                    py,
+                )
+            })
         })
     }
 
@@ -314,7 +537,21 @@ impl AudioDecoder {
 type StreamBufferImpl = <crate::Selected as super::Implementations>::StreamBuffer;
 
 fn _extract_stream_buffer_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) }
+    if obj.is_instance_of::<::pyo3::types::PyBytes>()
+        || obj.is_instance_of::<::pyo3::types::PyByteArray>()
+        || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
+    {
+        ::lk_agents_abi::python::owned_bytes(&obj, "data")
+    } else {
+        obj.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    ::lk_agents_abi::python::number_from_py::<u8>(&item, "data")
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })
+    }
 }
 
 fn _extract_stream_buffer_read_size(obj: &Bound<'_, PyAny>) -> PyResult<isize> {
@@ -330,40 +567,61 @@ impl StreamBuffer {
     #[new]
     fn new(py: Python<'_>) -> PyResult<StreamBuffer> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::new());
+        let out =
+            py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::new());
         Ok(StreamBuffer(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (data))]
-    fn write(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_stream_buffer_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<()> {
+    fn write(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_stream_buffer_write_data)] data: ::std::vec::Vec<u8>,
+    ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::write(&self.0, &data));
+        py.detach(|| {
+            <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::write(
+                &self.0, &data,
+            )
+        });
         Ok(())
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::end_input(&self.0));
+        py.detach(|| {
+            <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::end_input(&self.0)
+        });
         Ok(())
     }
 
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::close(&self.0));
+        py.detach(|| {
+            <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::close(&self.0)
+        });
         Ok(())
     }
 
     #[pyo3(name = "__len__")]
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::len(&self.0));
+        let out = py.detach(|| {
+            <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::len(&self.0)
+        });
         Ok(out)
     }
 
     #[pyo3(signature = (size = -1))]
-    fn read(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_stream_buffer_read_size)] size: isize) -> PyResult<::std::vec::Vec<u8>> {
+    fn read(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_stream_buffer_read_size)] size: isize,
+    ) -> PyResult<::std::vec::Vec<u8>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::read(&self.0, size));
+        let out = py.detach(|| {
+            <StreamBufferImpl as ::lk_agents_abi::media::codecs::StreamBuffer>::read(&self.0, size)
+        });
         Ok(out)
     }
 }
@@ -371,13 +629,21 @@ impl StreamBuffer {
 // Declared in rust/crates/lk-agents-abi/src/media/codecs.rs.
 type MediaTokenizationImpl = <crate::Selected as super::Implementations>::MediaTokenization;
 
-fn _extract_media_tokenization_split_sentences_min_sentence_len(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+fn _extract_media_tokenization_split_sentences_min_sentence_len(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<usize> {
     ::lk_agents_abi::python::number_from_py::<usize>(&obj, "min_sentence_len")
 }
 
 #[pyfunction]
 #[pyo3(signature = (text, min_sentence_len = 20, *, retain_format = false))]
-pub fn split_sentences(py: Python<'_>, text: ::std::string::String, #[pyo3(from_py_with = _extract_media_tokenization_split_sentences_min_sentence_len)] min_sentence_len: usize, retain_format: bool) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
+pub fn split_sentences(
+    py: Python<'_>,
+    text: ::std::string::String,
+    #[pyo3(from_py_with = _extract_media_tokenization_split_sentences_min_sentence_len)]
+    min_sentence_len: usize,
+    retain_format: bool,
+) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
     let out = py.detach(|| <MediaTokenizationImpl as ::lk_agents_abi::media::codecs::MediaTokenization>::split_sentences(&text, min_sentence_len, retain_format)).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
@@ -392,40 +658,64 @@ pub struct FrameReaderProxy {
 
 impl FrameReaderProxy {
     /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj) {
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
+        if let Some(native) =
+            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
     }
 
     /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj) {
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
+        if let Some(native) =
+            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::images::FrameReader>> {
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::images::FrameReader>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
         let _ = context;
         Ok(FrameReaderProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 
 impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
-    fn rgba(&self, frame: &::lk_agents_abi::MediaRef) -> ::std::result::Result<::lk_agents_abi::utils::video::VideoFrame, ::lk_agents_abi::errors::HostError> {
+    fn rgba(
+        &self,
+        frame: &::lk_agents_abi::MediaRef,
+    ) -> ::std::result::Result<
+        ::lk_agents_abi::utils::video::VideoFrame,
+        ::lk_agents_abi::errors::HostError,
+    > {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = ::std::clone::Clone::clone(frame);
-        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::media_ref_to_py(py, frame_arg)?];
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::host::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::conversions::media_ref_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_rgba")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
+            }),
+        );
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -454,39 +744,72 @@ pub struct EmitterOutputProxy {
 
 impl EmitterOutputProxy {
     /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj) {
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<
+            dyn ::lk_agents_abi::media::emitter::EmitterOutput,
+        >(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
     }
 
     /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj) {
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<
+            dyn ::lk_agents_abi::media::emitter::EmitterOutput,
+        >(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
-        let view = crate::host::construct(&obj.py().import("livekit.agents.tts")?.getattr("_EmitterOutput")?, (obj,), None)?;
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let view = crate::host::construct(
+            &obj.py().import("livekit.agents.tts")?.getattr("_EmitterOutput")?,
+            (obj,),
+            None,
+        )?;
         let obj = &view;
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::host::capture_context(obj.py())?,
         };
-        Ok(EmitterOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
+        Ok(EmitterOutputProxy {
+            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            context,
+            notifier: ::std::default::Default::default(),
+        })
     }
 }
 
 impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
-    fn send(&self, frame: ::lk_agents_abi::AudioFrame, request_id: ::std::string::String, segment_id: ::std::string::String, is_final: bool, timed_transcript: ::std::vec::Vec<::lk_agents_abi::TimedString>, usage: ::std::option::Option<::lk_agents_abi::usage::TokenUsage>, characters_count: ::std::option::Option<u64>) {
+    fn send(
+        &self,
+        frame: ::lk_agents_abi::AudioFrame,
+        request_id: ::std::string::String,
+        segment_id: ::std::string::String,
+        is_final: bool,
+        timed_transcript: ::std::vec::Vec<::lk_agents_abi::TimedString>,
+        usage: ::std::option::Option<::lk_agents_abi::usage::TokenUsage>,
+        characters_count: ::std::option::Option<u64>,
+    ) {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let request_id_arg = request_id;
@@ -495,28 +818,73 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         let timed_transcript_arg = timed_transcript;
         let usage_arg = usage;
         let characters_count_arg = characters_count;
-        ::lk_agents_runtime::host::notify(&self.notifier, "EmitterOutput.send", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 7] = [crate::conversions::audio_frame_to_py(py, frame_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::types::PyList::new(py, timed_transcript_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), match usage_arg { None => py.None().into_bound(py), Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count_arg, py)?];
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "EmitterOutput.send",
+            &self.context,
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 7] = [
+                    crate::conversions::audio_frame_to_py(py, frame_arg)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?,
+                    ::pyo3::types::PyList::new(
+                        py,
+                        timed_transcript_arg
+                            .into_iter()
+                            .map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?))
+                            .collect::<PyResult<Vec<_>>>()?,
+                    )?
+                    .into_any(),
+                    match usage_arg {
+                        None => py.None().into_bound(py),
+                        Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)?,
+                    },
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count_arg, py)?,
+                ];
                 Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
+            }),
+        );
     }
 
-    fn span_attribute(&self, key: ::std::string::String, values: ::std::vec::Vec<::std::string::String>) {
+    fn span_attribute(
+        &self,
+        key: ::std::string::String,
+        values: ::std::vec::Vec<::std::string::String>,
+    ) {
         let host = ::std::sync::Arc::clone(&self.host);
         let key_arg = key;
         let values_arg = values;
-        ::lk_agents_runtime::host::notify(&self.notifier, "EmitterOutput.span_attribute", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(key_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(values_arg, py)?];
-                Ok((host.bind(py).getattr("span_attribute")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "EmitterOutput.span_attribute",
+            &self.context,
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(key_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(values_arg, py)?,
+                ];
+                Ok((
+                    host.bind(py).getattr("span_attribute")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                ))
+            }),
+        );
     }
 
     fn closed(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::host::Entry,
+            ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("closed")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
+            }),
+        );
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,

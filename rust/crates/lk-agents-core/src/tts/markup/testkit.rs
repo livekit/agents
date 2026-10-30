@@ -25,4 +25,3 @@ pub fn call(id: &str, name: &str, at: u64) -> ChatItem {
     }
     .into()
 }
-

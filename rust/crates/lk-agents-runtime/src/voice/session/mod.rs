@@ -19,9 +19,10 @@ pub use shared::*;
 pub use time::Timebase;
 
 use crate::voice::nodes::Nodes;
-use crate::voice::session::transcript_sync::TranscriptSynchronizer;
-use lk_agents_abi::errors::HostError;
 use crate::voice::resources::Resources;
+use crate::voice::session::transcript_sync::TranscriptSynchronizer;
+use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::events::{CloseReason, HostWire};
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::voice::session::{
@@ -40,15 +41,17 @@ use lk_agents_voice::agent_session::lifecycle::{
     CloseAction, OpenAction, RecorderTarget, SessionLifecycle,
 };
 use lk_agents_voice::agent_session::nodes::OutputNodes;
-use lk_agents_voice::agent_session::{AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, HostRecorder, Origin, RecorderCommand, RequestId, SayText, SessionView, SpeechCall, SpeechCommand};
+use lk_agents_voice::agent_session::{
+    AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, HostRecorder, Origin,
+    RecorderCommand, RequestId, SayText, SessionView, SpeechCall, SpeechCommand,
+};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
-use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_voice::tool_executor::Toolset;
 use lk_agents_voice::trace::{CoreStep, Step};
-use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// The host's session handle: assembled at construction, opened once, commanded, and closed.

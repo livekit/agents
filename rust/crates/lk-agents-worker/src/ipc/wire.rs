@@ -28,7 +28,9 @@ pub enum ToChild {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ToParent {
     /// The answer to `Hello`: initialized, or the error it failed with.
-    Ready { error: Option<String> },
+    Ready {
+        error: Option<String>,
+    },
     Pong {
         sent_ms: u64,
     },

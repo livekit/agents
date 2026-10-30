@@ -33,15 +33,8 @@ impl port::FallbackTts for FallbackTts {
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         let spawner = (env.spawner)().map_err(InvalidPayload)?;
-        FallbackTts::new(
-            ttss,
-            sample_rate,
-            policy,
-            env.clock.clone(),
-            spawner,
-            observer,
-        )
-        .map_err(|error| InvalidPayload(error.to_string()))
+        FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
+            .map_err(|error| InvalidPayload(error.to_string()))
     }
     fn active_index(&self) -> usize {
         self.chain.active_index()

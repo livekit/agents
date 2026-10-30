@@ -1,6 +1,7 @@
 //! `perform_audio_forwarding`: one segment's frames pushed to the sink, and what the sink reports.
 
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment,
@@ -14,7 +15,6 @@ use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::playout::{
     Completion, CutEffect, CutEvent, CutReceipt, Playout, PlayoutEffect, SinkReport,
 };
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{PlayoutStep, SinkCall};
 use lk_agents_voice::transcription::Heard;
 use std::sync::Arc;

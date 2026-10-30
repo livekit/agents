@@ -8,13 +8,13 @@ pub mod background_audio;
 pub mod events;
 pub mod io;
 pub mod nodes;
-pub mod speech_handle;
 pub mod room_io;
 pub mod rtc;
 pub mod session;
 pub mod session_effects;
 pub mod session_options;
 pub mod speech;
+pub mod speech_handle;
 pub mod workflows;
 
 pub mod console;

@@ -17,8 +17,7 @@ fn judge_prompts_strip_only_assistant_markup_in_conversation_and_reference() {
         message("system", Role::System, "hidden instructions"),
         message("reference", Role::Assistant, marked),
     ];
-    let prompt =
-        prompts::built_in("conciseness").unwrap().prompt(&conversation, Some(&reference));
+    let prompt = prompts::built_in("conciseness").unwrap().prompt(&conversation, Some(&reference));
     assert!(prompt.contains("Conversation:\nassistant: Hello.\nuser: <expr"));
     assert!(prompt.contains("Reference:\nassistant: Hello."));
     assert!(!prompt.contains("hidden instructions"));

@@ -55,7 +55,9 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
         .await
         .unwrap();
     let (sink, mut events) = Events::new();
-    std::sync::Arc::clone(&store).dispatch(VoiceStorageCommand::ObserveLoss { speech: 1 }, sink.clone()).unwrap();
+    std::sync::Arc::clone(&store)
+        .dispatch(VoiceStorageCommand::ObserveLoss { speech: 1 }, sink.clone())
+        .unwrap();
     let lost = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap();
     assert!(matches!(lost, Some(VoiceStorageEvent::LeaseLost { speech: 1 })));
     assert!(store.lease_lost());

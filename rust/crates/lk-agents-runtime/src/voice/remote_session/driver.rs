@@ -2,9 +2,9 @@
 //! (`voice/remote_session.py`'s `SessionHost`). Tasks go through the injected [`Spawner`]; every
 //! wait is bounded on the session clock.
 
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::voice::session::Timebase;
@@ -717,10 +717,7 @@ mod tests {
         client.start(ct.clone(), events).await.unwrap();
         let ping = || proto::session_request::Request::Ping(Default::default());
         assert_eq!(client.request(ping(), secs(0.05)).await.unwrap_err(), RequestError::Timeout);
-        assert!(
-            client.shared.pending.lock().is_empty(),
-            "a timed-out request kept its slot"
-        );
+        assert!(client.shared.pending.lock().is_empty(), "a timed-out request kept its slot");
 
         let c = Arc::clone(&client);
         let waiting = tokio::spawn(async move { c.request(ping(), secs(5.0)).await });

@@ -88,9 +88,12 @@ fn the_transcript_ends_once_per_message() {
         }
         run
     });
-    let done = run.record.host_view().events().into_iter().any(|(_, ev)| {
-        matches!(ev, SessionEvent::SpeechDone { .. })
-    });
+    let done = run
+        .record
+        .host_view()
+        .events()
+        .into_iter()
+        .any(|(_, ev)| matches!(ev, SessionEvent::SpeechDone { .. }));
     assert!(done, "the scenario: the server ended the reply");
     let flushes =
         run.record.sink().iter().filter(|(_, sink)| matches!(sink, Sink::TextFlush { .. })).count();

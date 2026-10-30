@@ -9,10 +9,10 @@
 //! The captured context crosses as a `HostRef` to the host's `(loop, contextvars.Context)` pair,
 //! taken at the operation's entry (`asyncio.get_running_loop(), contextvars.copy_context()`).
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal};
@@ -27,11 +27,11 @@ use tokio::sync::oneshot;
 mod boundary_tests;
 #[cfg(test)]
 mod cancellation_tests;
+pub mod logging;
 #[cfg(test)]
 mod node_tests;
 #[cfg(test)]
 mod parentage_tests;
-pub mod logging;
 pub mod source;
 pub mod stream;
 

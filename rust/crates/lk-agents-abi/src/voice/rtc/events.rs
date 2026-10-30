@@ -209,7 +209,10 @@ pub trait RtcRuntime: Send + Sync + Sized + 'static {
     }
 
     #[host(function, name = "_core_room_participant_attributes_changed")]
-    fn participant_attributes_changed(bus: Arc<dyn RoomEventSink>, participant: Arc<dyn RemoteParticipant>) {
+    fn participant_attributes_changed(
+        bus: Arc<dyn RoomEventSink>,
+        participant: Arc<dyn RemoteParticipant>,
+    ) {
         bus.emit(RoomEvent::ParticipantAttributesChanged { participant });
     }
 

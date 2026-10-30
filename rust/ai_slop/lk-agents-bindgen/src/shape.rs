@@ -69,7 +69,6 @@ fn iter_item(t: &syn::Type) -> Option<&syn::Type> {
     })
 }
 
-
 /// `None`: pyo3 crosses it.
 pub struct Out {
     pub ty: TokenStream,
@@ -88,7 +87,12 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
     {
         let inner = &*r.elem;
         if is_str(inner) {
-            return Some(Out { ty: quote!(::std::string::String), expr: quote!(::std::borrow::ToOwned::to_owned(#e)), py: false, fallible: false });
+            return Some(Out {
+                ty: quote!(::std::string::String),
+                expr: quote!(::std::borrow::ToOwned::to_owned(#e)),
+                py: false,
+                fallible: false,
+            });
         }
         let (owned, expr): (syn::Type, TokenStream) = match inner {
             syn::Type::Slice(s) => {
@@ -101,16 +105,31 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
             None => Out { ty: quote!(#owned), expr, py: false, fallible: false },
             Some(o) => {
                 let x = o.expr;
-                Out { ty: o.ty, expr: quote!({ let v = #expr; #x }), py: o.py, fallible: o.fallible }
+                Out {
+                    ty: o.ty,
+                    expr: quote!({ let v = #expr; #x }),
+                    py: o.py,
+                    fallible: o.fallible,
+                }
             }
         });
     }
     if is(t, "Duration") {
-        return Some(Out { ty: quote!(f64), expr: quote!(#e.as_secs_f64()), py: false, fallible: false });
+        return Some(Out {
+            ty: quote!(f64),
+            expr: quote!(#e.as_secs_f64()),
+            py: false,
+            fallible: false,
+        });
     }
     // A side-table key is the host object it names.
     if is(t, "HostRef") || is(t, "MediaRef") {
-        return Some(Out { ty: quote!(::pyo3::Py<::pyo3::PyAny>), expr: quote!(::pyo3::IntoPyObjectExt::into_py_any(#e, py)?), py: true, fallible: true });
+        return Some(Out {
+            ty: quote!(::pyo3::Py<::pyo3::PyAny>),
+            expr: quote!(::pyo3::IntoPyObjectExt::into_py_any(#e, py)?),
+            py: true,
+            fallible: true,
+        });
     }
     // An `Arc<T>` of an `arc`-cell class: that class over the same `Arc`, a shared handle.
     if let Some(inner) = one(t, "Arc")
@@ -124,7 +143,12 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
         });
     }
     if is(t, "SystemTime") {
-        return Some(Out { ty: quote!(f64), expr: quote!(#rt::wall_to_py(#e)), py: false, fallible: false });
+        return Some(Out {
+            ty: quote!(f64),
+            expr: quote!(#rt::wall_to_py(#e)),
+            py: false,
+            fallible: false,
+        });
     }
     if is_json(t) {
         return Some(Out {
@@ -145,7 +169,12 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
     if let Some(item) = iter_item(t) {
         let inner = output(item, quote!(v));
         return Some(match inner {
-            None => Out { ty: quote!(::std::vec::Vec<#item>), expr: quote!(#e.collect::<::std::vec::Vec<_>>()), py: false, fallible: false },
+            None => Out {
+                ty: quote!(::std::vec::Vec<#item>),
+                expr: quote!(#e.collect::<::std::vec::Vec<_>>()),
+                py: false,
+                fallible: false,
+            },
             Some(i) => collect(e, i),
         });
     }
@@ -158,7 +187,12 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
         } else {
             quote!(#e.map(|v| #x))
         };
-        return Some(Out { ty: quote!(::std::option::Option<#ty>), expr, py: i.py, fallible: i.fallible });
+        return Some(Out {
+            ty: quote!(::std::option::Option<#ty>),
+            expr,
+            py: i.py,
+            fallible: i.fallible,
+        });
     }
     if let Some(inner) = one(t, "Vec") {
         let i = output(inner, quote!(v))?;
@@ -174,18 +208,28 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
         } else {
             quote!(#e.into_iter().map(|(k, v)| (k, #x)).collect::<::std::collections::HashMap<_, _>>())
         };
-        return Some(Out { ty: quote!(::std::collections::HashMap<#k, #ty>), expr, py: i.py, fallible: i.fallible });
+        return Some(Out {
+            ty: quote!(::std::collections::HashMap<#k, #ty>),
+            expr,
+            py: i.py,
+            fallible: i.fallible,
+        });
     }
     if let syn::Type::Tuple(tu) = t
         && !tu.elems.is_empty()
     {
         let names: Vec<_> = (0..tu.elems.len()).map(|i| format_ident!("v{i}")).collect();
-        let parts: Vec<_> = tu.elems.iter().zip(&names).map(|(t, n)| (t, output(t, quote!(#n)))).collect();
+        let parts: Vec<_> =
+            tu.elems.iter().zip(&names).map(|(t, n)| (t, output(t, quote!(#n)))).collect();
         if parts.iter().all(|(_, o)| o.is_none()) {
             return None;
         }
-        let tys = parts.iter().map(|(t, o)| o.as_ref().map_or_else(|| quote!(#t), |o| o.ty.clone()));
-        let xs = parts.iter().zip(&names).map(|((_, o), n)| o.as_ref().map_or_else(|| quote!(#n), |o| o.expr.clone()));
+        let tys =
+            parts.iter().map(|(t, o)| o.as_ref().map_or_else(|| quote!(#t), |o| o.ty.clone()));
+        let xs = parts
+            .iter()
+            .zip(&names)
+            .map(|((_, o), n)| o.as_ref().map_or_else(|| quote!(#n), |o| o.expr.clone()));
         let py = parts.iter().any(|(_, o)| o.as_ref().is_some_and(|o| o.py));
         let fallible = parts.iter().any(|(_, o)| o.as_ref().is_some_and(|o| o.fallible));
         return Some(Out {
@@ -214,7 +258,6 @@ fn collect(e: TokenStream, i: Out) -> Out {
     Out { ty: quote!(::std::vec::Vec<#ty>), expr, py: i.py, fallible: i.fallible }
 }
 
-
 /// Host type, the statement rebinding it to the core value (`None`: pyo3 extracts it), and how
 /// the core call is handed it.
 pub struct In {
@@ -238,7 +281,9 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
             {
                 return In {
                     ty: quote!(::std::vec::Vec<::std::string::String>),
-                    prelude: Some(quote!(let #name: ::std::vec::Vec<&str> = #name.iter().map(::std::string::String::as_str).collect();)),
+                    prelude: Some(
+                        quote!(let #name: ::std::vec::Vec<&str> = #name.iter().map(::std::string::String::as_str).collect();),
+                    ),
                     arg: quote!(&#name),
                     py: false,
                 };
@@ -254,7 +299,12 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
         if is_str(inner) {
             return native(name, t);
         }
-        if is_json(inner) || is_json_map(inner) || ["String", "Vec", "HashMap", "Option", "Duration", "SystemTime"].iter().any(|n| is(inner, n)) {
+        if is_json(inner)
+            || is_json_map(inner)
+            || ["String", "Vec", "HashMap", "Option", "Duration", "SystemTime"]
+                .iter()
+                .any(|n| is(inner, n))
+        {
             let mut i = input(name, label, inner);
             i.arg = quote!(&#name);
             return i;
@@ -283,7 +333,12 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
         let elem = &*r.elem;
         let owned: syn::Type = syn::parse_quote!(::std::option::Option<#elem>);
         // A class (or any type's own reading) borrowed off its host object, or `None`.
-        if is_opaque(elem) && !is_json(elem) && !is_json_map(elem) && !is(elem, "Duration") && !is(elem, "SystemTime") {
+        if is_opaque(elem)
+            && !is_json(elem)
+            && !is_json_map(elem)
+            && !is(elem, "Duration")
+            && !is(elem, "SystemTime")
+        {
             return In {
                 ty: quote!(::std::option::Option<&::pyo3::Bound<'py, ::pyo3::PyAny>>),
                 prelude: Some(quote!(let #name = #name.map(|v| {
@@ -309,7 +364,9 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     {
         return In {
             ty: quote!(::std::option::Option<::pyo3::Bound<'py, ::pyo3::PyAny>>),
-            prelude: Some(quote!(let #name = #name.map(|v| <#inner as ::lk_agents_abi::python::ArcClass>::shared(&v)).transpose()?;)),
+            prelude: Some(
+                quote!(let #name = #name.map(|v| <#inner as ::lk_agents_abi::python::ArcClass>::shared(&v)).transpose()?;),
+            ),
             arg: quote!(#name),
             py: true,
         };
@@ -319,7 +376,9 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     if let Some(tr) = arc_dyn(t) {
         return In {
             ty: quote!(&::pyo3::Bound<'py, ::pyo3::PyAny>),
-            prelude: Some(quote!(let #name = <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(#name)?;)),
+            prelude: Some(
+                quote!(let #name = <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(#name)?;),
+            ),
             arg: quote!(#name),
             py: true,
         };
@@ -329,7 +388,9 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     {
         return In {
             ty: quote!(::std::option::Option<::pyo3::Bound<'py, ::pyo3::PyAny>>),
-            prelude: Some(quote!(let #name = #name.map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v)).transpose()?;)),
+            prelude: Some(
+                quote!(let #name = #name.map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v)).transpose()?;),
+            ),
             arg: quote!(#name),
             py: true,
         };
@@ -337,13 +398,17 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     // `Maybe<Arc<dyn Trait>>` / `Maybe<Option<Arc<dyn Trait>>>`: `NOT_GIVEN` keeps the leg, `None`
     // (the latter) removes it, an object replaces it.
     if let Some(inner) = one(t, "Maybe") {
-        let from_host = |tr: &syn::Path| quote!(<dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v));
+        let from_host =
+            |tr: &syn::Path| quote!(<dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(&v));
         let (ty, given) = if let Some(tr) = arc_dyn(inner) {
             let f = from_host(tr);
             (quote!(::pyo3::Bound<'py, ::pyo3::PyAny>), quote!(#f?))
         } else if let Some(tr) = one(inner, "Option").and_then(arc_dyn) {
             let f = from_host(tr);
-            (quote!(::std::option::Option<::pyo3::Bound<'py, ::pyo3::PyAny>>), quote!(v.map(|v| #f).transpose()?))
+            (
+                quote!(::std::option::Option<::pyo3::Bound<'py, ::pyo3::PyAny>>),
+                quote!(v.map(|v| #f).transpose()?),
+            )
         } else {
             (TokenStream::new(), TokenStream::new())
         };
@@ -364,7 +429,9 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
     {
         return In {
             ty: quote!(::std::vec::Vec<::pyo3::Bound<'py, ::pyo3::PyAny>>),
-            prelude: Some(quote!(let #name = #name.iter().map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(v)).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?;)),
+            prelude: Some(
+                quote!(let #name = #name.iter().map(|v| <dyn #tr as ::lk_agents_abi::python::HostProxy>::from_host(v)).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?;),
+            ),
             arg: quote!(#name),
             py: true,
         };
@@ -390,7 +457,9 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
         if one(t, "Vec").is_some_and(|i| is(i, key)) {
             return In {
                 ty: quote!(::std::vec::Vec<::pyo3::Py<::pyo3::PyAny>>),
-                prelude: Some(quote!(let #name: ::std::vec::Vec<_> = #name.into_iter().map(::lk_agents_abi::python::#intern).collect();)),
+                prelude: Some(
+                    quote!(let #name: ::std::vec::Vec<_> = #name.into_iter().map(::lk_agents_abi::python::#intern).collect();),
+                ),
                 arg: quote!(#name),
                 py: false,
             };
@@ -407,13 +476,28 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
         return input(name, label, &v);
     }
     if impl_item_is_into_string(t) {
-        return In { ty: quote!(::std::string::String), prelude: None, arg: quote!(#name), py: false };
+        return In {
+            ty: quote!(::std::string::String),
+            prelude: None,
+            arg: quote!(#name),
+            py: false,
+        };
     }
     if one(t, "Option").is_some_and(impl_item_is_into_string) {
-        return In { ty: quote!(::std::option::Option<::std::string::String>), prelude: None, arg: quote!(#name), py: false };
+        return In {
+            ty: quote!(::std::option::Option<::std::string::String>),
+            prelude: None,
+            arg: quote!(#name),
+            py: false,
+        };
     }
     match leaf_in(t, label) {
-        Some((ty, conv, py)) => In { ty, prelude: Some(quote!(let #name = { let v = #name; #conv };)), arg: quote!(#name), py },
+        Some((ty, conv, py)) => In {
+            ty,
+            prelude: Some(quote!(let #name = { let v = #name; #conv };)),
+            arg: quote!(#name),
+            py,
+        },
         None => native(name, t),
     }
 }
@@ -455,14 +539,17 @@ fn impl_item_is_into_string(t: &syn::Type) -> bool {
 /// Types pyo3 extracts and reports itself. Any other named type is read through
 /// `lk_agents_abi::python::Arg` (its `HostStr` reading if it has one).
 const NATIVE: &[&str] = &[
-    "bool", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64",
-    "String", "str", "Vec", "HashMap", "HashSet", "BTreeMap", "Option", "Bound", "Borrowed", "Py", "PyRef", "PyRefMut",
-    "PyObject", "Self", "Cow", "Box", "Arc",
+    "bool", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128",
+    "isize", "f32", "f64", "String", "str", "Vec", "HashMap", "HashSet", "BTreeMap", "Option",
+    "Bound", "Borrowed", "Py", "PyRef", "PyRefMut", "PyObject", "Self", "Cow", "Box", "Arc",
 ];
 
 pub fn is_opaque(t: &syn::Type) -> bool {
     match last(t) {
-        Some(seg) => !NATIVE.iter().any(|n| seg.ident == n) && matches!(seg.arguments, syn::PathArguments::None),
+        Some(seg) => {
+            !NATIVE.iter().any(|n| seg.ident == n)
+                && matches!(seg.arguments, syn::PathArguments::None)
+        }
         None => false,
     }
 }
@@ -491,7 +578,9 @@ fn leaf_in(t: &syn::Type, label: &str) -> Option<(TokenStream, TokenStream, bool
     if is(t, "Duration") {
         return Some((
             quote!(f64),
-            quote!(::std::time::Duration::try_from_secs_f64(v).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(::std::format!("{}: {}", #label, e)))?),
+            quote!(::std::time::Duration::try_from_secs_f64(v).map_err(|e| {
+                ::pyo3::exceptions::PyValueError::new_err(::std::format!("{}: {}", #label, e))
+            })?),
             false,
         ));
     }
@@ -499,10 +588,18 @@ fn leaf_in(t: &syn::Type, label: &str) -> Option<(TokenStream, TokenStream, bool
         return Some((quote!(f64), quote!(#rt::wall_from_py(v, #label)?), false));
     }
     if is_json(t) {
-        return Some((quote!(&::pyo3::Bound<'py, ::pyo3::PyAny>), quote!(#rt::value_from_py(v, #label)?), true));
+        return Some((
+            quote!(&::pyo3::Bound<'py, ::pyo3::PyAny>),
+            quote!(#rt::value_from_py(v, #label)?),
+            true,
+        ));
     }
     if is_json_map(t) {
-        return Some((quote!(&::pyo3::Bound<'py, ::pyo3::types::PyDict>), quote!(#rt::map_from_py(v, #label)?), true));
+        return Some((
+            quote!(&::pyo3::Bound<'py, ::pyo3::types::PyDict>),
+            quote!(#rt::map_from_py(v, #label)?),
+            true,
+        ));
     }
     if is_opaque(t) {
         return Some((quote!(&::pyo3::Bound<'py, ::pyo3::PyAny>), arg(t, label), true));
@@ -520,7 +617,11 @@ fn leaf_in(t: &syn::Type, label: &str) -> Option<(TokenStream, TokenStream, bool
             None => (ty, conv),
         };
         let ok = ok(&conv);
-        return Some((quote!(::std::vec::Vec<#ty>), quote!(v.into_iter().map(|v| #ok).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?), py));
+        return Some((
+            quote!(::std::vec::Vec<#ty>),
+            quote!(v.into_iter().map(|v| #ok).collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?),
+            py,
+        ));
     }
     None
 }

@@ -43,7 +43,9 @@ impl FakeRtc {
         Arc::new(FakeRtc { clock, bus, virtual_clock: None, rooms: Mutex::default() })
     }
 
-    pub fn with_virtual_clock(bus: fn() -> Arc<dyn RoomEventSink>) -> (Arc<Self>, Arc<VirtualClock>) {
+    pub fn with_virtual_clock(
+        bus: fn() -> Arc<dyn RoomEventSink>,
+    ) -> (Arc<Self>, Arc<VirtualClock>) {
         let clock = Arc::new(VirtualClock::new());
         let rtc = Arc::new(FakeRtc {
             clock: clock.clone(),

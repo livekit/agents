@@ -94,11 +94,7 @@ pub fn plan_play(
     if !phase.started {
         return Err(PlaybackError::NotStarted);
     }
-    let index = if choose {
-        select_sound(sounds, draw)
-    } else {
-        (!sounds.is_empty()).then_some(0)
-    };
+    let index = if choose { select_sound(sounds, draw) } else { (!sounds.is_empty()).then_some(0) };
     let Some(index) = index else { return Ok(None) };
     let is_stream = matches!(sounds[index].source, SoundSource::Stream(_));
     let looping = looping || (ambient && !is_stream);

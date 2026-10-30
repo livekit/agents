@@ -548,7 +548,6 @@ pub enum IoError {
     Host(#[from] crate::errors::HostError),
 }
 
-
 impl From<crate::errors::ProviderError> for IoError {
     fn from(error: crate::errors::ProviderError) -> Self {
         match error {

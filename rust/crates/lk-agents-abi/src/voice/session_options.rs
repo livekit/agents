@@ -148,7 +148,11 @@ impl BackchannelBoundary {
 
 /// `SessionConnectOptions`: each leg's retry budget and timeout; not given (`None`) is the
 /// provider's own policy, else the defaults.
-#[crate::host(handwritten(extract, host = "livekit.agents.voice.agent_session.SessionConnectOptions", py))]
+#[crate::host(handwritten(
+    extract,
+    host = "livekit.agents.voice.agent_session.SessionConnectOptions",
+    py
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SessionConnOptions {
     pub stt: Option<crate::ApiConnectOptions>,
@@ -157,7 +161,11 @@ pub struct SessionConnOptions {
 }
 
 /// A kwarg whose value is a host object, or a dict that holds one: only presence crosses.
-#[crate::host(handwritten(extract, host = "livekit.agents._generated.keyterms.STTContextOptions | None", py))]
+#[crate::host(handwritten(
+    extract,
+    host = "livekit.agents._generated.keyterms.STTContextOptions | None",
+    py
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostValue {
     #[default]
@@ -172,7 +180,11 @@ impl HostValue {
 }
 
 /// Of a detector object only whether it streams crosses.
-#[crate::host(handwritten(extract, host = "livekit.agents.voice.turn.TurnDetectionMode | None", py))]
+#[crate::host(handwritten(
+    extract,
+    host = "livekit.agents.voice.turn.TurnDetectionMode | None",
+    py
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnDetectionKwarg {
     Mode(TurnDetection),
@@ -726,6 +738,10 @@ pub struct ExpressiveConfig {
 /// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)`, `Agent(expressive=)` and
 /// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
 /// (even an empty one) on with those options.
-#[crate::host(handwritten(extract, host = "bool | livekit.agents._generated.expressive.ExpressiveOptions | None", py))]
+#[crate::host(handwritten(
+    extract,
+    host = "bool | livekit.agents._generated.expressive.ExpressiveOptions | None",
+    py
+))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expressive(pub Option<ExpressiveConfig>);

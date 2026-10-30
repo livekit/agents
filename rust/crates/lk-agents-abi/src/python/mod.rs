@@ -3,12 +3,12 @@
 
 mod bridge;
 mod buffers;
+#[cfg(test)]
+mod conversion_tests;
 mod host_errors;
 #[cfg(test)]
 mod host_tests;
 mod values;
-#[cfg(test)]
-mod conversion_tests;
 
 pub use bridge::*;
 pub use buffers::*;

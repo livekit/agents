@@ -60,7 +60,10 @@ impl Tts for HostLikeTts {
     fn synthesize<'a>(&'a self, _text: &'a str) -> BoxFuture<'a, Result<TtsSource, ProviderError>> {
         unreachable!("the test only streams")
     }
-    fn stream(&self, _expressive: bool) -> BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    fn stream(
+        &self,
+        _expressive: bool,
+    ) -> BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         let mut opened = self.opened.clone();
         let pushing = self.pushing.clone();
         Box::pin(async move {

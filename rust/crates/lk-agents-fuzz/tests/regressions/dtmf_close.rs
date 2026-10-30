@@ -1,6 +1,8 @@
 //! A close ends a DTMF collection as it begins, before its drain.
 use lk_agents_fuzz::drive::{Case, RoomSetup, Setup, run};
-use lk_agents_fuzz::input::{AgentText, Count, DtmfInput, DtmfKey, Input, Millis, RoomIn, SayInput};
+use lk_agents_fuzz::input::{
+    AgentText, Count, DtmfInput, DtmfKey, Input, Millis, RoomIn, SayInput,
+};
 
 fn dtmf(input: DtmfInput, key: DtmfKey) -> Input {
     Input::Dtmf { input, key, digits: Count(0), confirm: false, timeout: Millis(120) }
@@ -29,6 +31,7 @@ fn a_key_pressed_while_closing_is_not_collected() {
     ];
     // The caller presses the key in the room.
     let room = Some(RoomSetup { close_on_disconnect: false, delete_room_on_close: false });
-    let outcome = run(Case { setup: Setup { room, ..Setup::default() }, inputs, ..Case::default() });
+    let outcome =
+        run(Case { setup: Setup { room, ..Setup::default() }, inputs, ..Case::default() });
     assert!(outcome.ok(), "{:#?}", outcome.failures);
 }

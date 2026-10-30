@@ -246,6 +246,11 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
         o.add(Path::new(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text);
         o.add(python_root.join("__init__.py"), INIT);
     }
+    for (path, text) in &mut o.files {
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            *text = rustfmt(root, text)?;
+        }
+    }
     Ok(o)
 }
 
@@ -281,6 +286,24 @@ const INIT: &str = "# GENERATED DIRECTORY -- every file here is written by `carg
 # Nothing re-exports from this package. The frozen public paths do the re-exporting\n\
 # (`voice/events.py` does `from .._generated.events import ...`), because moving a\n\
 # name here would move it in the public API too.\n";
+
+/// Generated Rust is formatted as the workspace's `cargo fmt` would format it.
+fn rustfmt(root: &Path, text: &str) -> Result<String, String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("rustfmt")
+        .args(["--edition", "2024", "--emit", "stdout", "--config-path"])
+        .arg(root.join("rust/rustfmt.toml"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("rustfmt: {e}"))?;
+    child.stdin.take().expect("piped").write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    let output = child.wait_with_output().map_err(|e| format!("rustfmt: {e}"))?;
+    if !output.status.success() {
+        return Err("rustfmt rejected generated Rust".into());
+    }
+    String::from_utf8(output.stdout).map_err(|e| e.to_string())
+}
 
 /// Returns 1 when the file on disk differs from what would be written.
 fn put(path: &Path, text: &str, check: bool) -> Result<usize, String> {

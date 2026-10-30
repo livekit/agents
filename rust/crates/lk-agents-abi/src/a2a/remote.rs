@@ -52,10 +52,8 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         structured: bool,
         offers_extension: bool,
         history: Vec<ChatItem>,
-        #[host(default = None)]
-        thread_id: Option<String>,
-        #[host(default = None)]
-        token: Option<String>,
+        #[host(default = None)] thread_id: Option<String>,
+        #[host(default = None)] token: Option<String>,
     ) -> Result<Message, AgentClientError>;
 
     /// The person's answer to the retained input request `request_id`, on its task; refused

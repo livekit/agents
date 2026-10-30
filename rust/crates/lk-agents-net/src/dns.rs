@@ -15,7 +15,9 @@ pub async fn lookup(addr: impl ToSocketAddrs + Send + 'static) -> io::Result<Vec
 
 /// A TCP connection to the first address of `addr` that accepts, with Nagle off: a small request
 /// after a small frame must not wait for the peer's delayed ack.
-pub async fn connect(addr: impl ToSocketAddrs + Send + 'static) -> io::Result<tokio::net::TcpStream> {
+pub async fn connect(
+    addr: impl ToSocketAddrs + Send + 'static,
+) -> io::Result<tokio::net::TcpStream> {
     let addrs = lookup(addr).await?;
     let stream = tokio::net::TcpStream::connect(addrs.as_slice()).await?;
     stream.set_nodelay(true)?;

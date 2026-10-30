@@ -54,7 +54,9 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         }
         Ty::Error(_) => format!("::lk_agents_abi::python::ExceptionValue::to_exception({x}, py)?"),
         Ty::Timestamp => {
-            format!("::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::unix_secs({x}), py)?")
+            format!(
+                "::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::unix_secs({x}), py)?"
+            )
         }
         Ty::Duration => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}.as_secs_f64(), py)?")

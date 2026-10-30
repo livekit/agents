@@ -1,8 +1,8 @@
 //! A speech whose voice failed before any of its audio played commits no assistant item.
 use lk_agents_abi::{ChatItem, Role};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
-use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{events::SessionEvent, trace::Step};
 
 // Catches: the failed synthesis's words committed as an interrupted assistant message the caller

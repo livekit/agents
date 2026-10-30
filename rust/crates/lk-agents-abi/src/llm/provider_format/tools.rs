@@ -110,7 +110,12 @@ pub enum DuplicateScope {
 ///
 /// It is also compatible with other LLM providers that support raw JSON Schema-based
 /// function definitions.
-#[crate::host(record(module = "tool_context", path = "livekit.agents.llm.tool_context", typed_dict, emit))]
+#[crate::host(record(
+    module = "tool_context",
+    path = "livekit.agents.llm.tool_context",
+    typed_dict,
+    emit
+))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RawFunctionDescription {
     pub name: String,

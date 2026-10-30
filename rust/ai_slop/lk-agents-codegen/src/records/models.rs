@@ -436,7 +436,11 @@ fn model(
         .map(|(name, value)| format!("    {name}: Literal[{value:?}] = {value:?}\n"))
         .collect();
     // A pydantic model resolves its annotations as it is built: they are runtime imports.
-    let class = |name: &str, doc: &[String], fields: &[&Field], nested: &str, imports: &mut Imports| {
+    let class = |name: &str,
+                 doc: &[String],
+                 fields: &[&Field],
+                 nested: &str,
+                 imports: &mut Imports| {
         let name = name.rsplit('.').next().unwrap_or(name);
         let mut s = match pydantic {
             Some(p) => {
@@ -578,7 +582,9 @@ fn model(
             for (name, ann) in &p.private {
                 let container = ann.split('[').next().unwrap_or(ann);
                 let ann = typing.annotation(ann, &r.rust);
-                private.push_str(&format!("    {name}: {ann} = PrivateAttr(default_factory={container})\n"));
+                private.push_str(&format!(
+                    "    {name}: {ann} = PrivateAttr(default_factory={container})\n"
+                ));
             }
             if !private.is_empty() {
                 runtime.add("pydantic", "PrivateAttr");

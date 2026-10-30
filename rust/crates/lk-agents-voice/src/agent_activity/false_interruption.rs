@@ -10,13 +10,13 @@ use crate::agent_session::{Answer, Driver, RequestId};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
-use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use crate::trace::{InputStep, InterruptCause, InterruptStep, SpeechStep};
 use crate::turn::InterruptionOptions;
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
+use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use std::time::Duration;
 
 pub use paused_speech::PausedSpeech;

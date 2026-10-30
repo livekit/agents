@@ -302,7 +302,12 @@ mod tests {
         PlaybackTracker::note_flush(&tracker);
         assert!(!tracker.playback_finished(old, finished.clone()));
         assert!(!tracker.playback_started(old, Ts::ZERO));
-        assert!(!tracker.playback_progressed(old, Ts::ZERO, Duration::ZERO, Duration::from_millis(20)));
+        assert!(!tracker.playback_progressed(
+            old,
+            Ts::ZERO,
+            Duration::ZERO,
+            Duration::from_millis(20)
+        ));
         assert!(tracker.playback_finished(new, finished));
     }
 }

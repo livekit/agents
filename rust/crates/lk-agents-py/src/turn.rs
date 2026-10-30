@@ -8,8 +8,8 @@
 use lk_agents_abi::SpawnerExt as _;
 use std::sync::Arc;
 
-use lk_agents_abi::a2a::options::TurnOptions;
 use crate::host::check_pid;
+use lk_agents_abi::a2a::options::TurnOptions;
 use lk_agents_abi::python::{value_from_py, value_to_py};
 use lk_agents_abi::storage as host;
 use lk_agents_runtime::a2a::Turn;

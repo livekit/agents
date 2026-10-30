@@ -17,8 +17,14 @@ fn _extract_session_recorder_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult
     ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
 }
 
-fn _extract_session_recorder_new_t0(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "t0")).map(Some) }
+fn _extract_session_recorder_new_t0(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "t0")).map(Some)
+    }
 }
 
 fn _extract_session_recorder_new_bitrate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
@@ -29,8 +35,14 @@ fn _extract_session_recorder_flush_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> 
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
 }
 
-fn _extract_session_recorder_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")).map(Some) }
+fn _extract_session_recorder_finish_now(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")).map(Some)
+    }
 }
 
 /// One admitted runtime worker owns opening, encoding, writes and finalization.
@@ -41,7 +53,13 @@ pub struct SessionRecorder(pub(crate) ::std::sync::Arc<SessionRecorderImpl>);
 impl SessionRecorder {
     #[new]
     #[pyo3(signature = (path, *, sample_rate = 48000, t0 = None, bitrate = 64000))]
-    fn new(py: Python<'_>, path: ::std::string::String, #[pyo3(from_py_with = _extract_session_recorder_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_session_recorder_new_t0)] t0: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)] bitrate: u32) -> PyResult<SessionRecorder> {
+    fn new(
+        py: Python<'_>,
+        path: ::std::string::String,
+        #[pyo3(from_py_with = _extract_session_recorder_new_sample_rate)] sample_rate: u32,
+        #[pyo3(from_py_with = _extract_session_recorder_new_t0)] t0: ::std::option::Option<f64>,
+        #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)] bitrate: u32,
+    ) -> PyResult<SessionRecorder> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(&env, path, sample_rate, t0, bitrate)).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -62,37 +80,62 @@ impl SessionRecorder {
     #[getter]
     fn bytes_written(&self, py: Python<'_>) -> PyResult<u64> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::bytes_written(&self.0));
+        let out = py.detach(|| {
+            <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::bytes_written(
+                &self.0,
+            )
+        });
         Ok(out)
     }
 
     #[getter]
     fn started_at(&self, py: Python<'_>) -> PyResult<::std::option::Option<f64>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::started_at(&self.0));
+        let out = py.detach(|| {
+            <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::started_at(&self.0)
+        });
         Ok(out)
     }
 
     #[getter]
     fn dropped_samples(&self, py: Python<'_>) -> PyResult<(u64, u64)> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::dropped_samples(&self.0));
+        let out = py.detach(|| {
+            <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::dropped_samples(
+                &self.0,
+            )
+        });
         Ok(out)
     }
 
     #[pyo3(signature = (now))]
-    fn flush<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_session_recorder_flush_now)] now: f64) -> PyResult<Bound<'py, PyAny>> {
+    fn flush<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = _extract_session_recorder_flush_now)] now: f64,
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::flush(&this, now)
                 .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::recorder::recording_summary_to_py(py, out)?, py))
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::recorder::recording_summary_to_py(py, out)?,
+                    py,
+                )
+            })
         })
     }
 
     #[pyo3(signature = (now = None))]
-    fn finish<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_session_recorder_finish_now)] now: ::std::option::Option<f64>) -> PyResult<Bound<'py, PyAny>> {
+    fn finish<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = _extract_session_recorder_finish_now)] now: ::std::option::Option<
+            f64,
+        >,
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {

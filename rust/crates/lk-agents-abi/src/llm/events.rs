@@ -55,14 +55,12 @@ pub struct CollectedResponse {
 // `llm/llm.py:79`. `has_response` is a host method hook: a core call per token would be a GIL
 // crossing per token.
 #[crate::host(record(module = "llm", name = "ChatChunk", pydantic, emit, extract))]
-#[python(
-    method(
-        name = "has_response",
-        ret = "bool",
-        hook = "chat_chunk_has_response",
-        doc = "Whether this chunk delivered generation the caller can see.\n\nToken counts and provider metadata (a gateway deployment stamp, a thought\nsignature) reach the caller without being output: they neither start the\nclock on time-to-first-token nor give a retry anything to duplicate."
-    )
-)]
+#[python(method(
+    name = "has_response",
+    ret = "bool",
+    hook = "chat_chunk_has_response",
+    doc = "Whether this chunk delivered generation the caller can see.\n\nToken counts and provider metadata (a gateway deployment stamp, a thought\nsignature) reach the caller without being output: they neither start the\nclock on time-to-first-token nor give a retry anything to duplicate."
+))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LlmChunk {
     pub id: String,

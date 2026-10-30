@@ -6,8 +6,8 @@ use lk_agents_abi::media::emitter::{AudioEmitter as _, EmitterOutput};
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioFrame, TimedString};
 use lk_agents_net::clock::RealClock;
-use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
 
 use super::{AudioEmitter, EmitterEnv};
 

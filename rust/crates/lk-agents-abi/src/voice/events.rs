@@ -51,7 +51,12 @@ pub enum AgentState {
 
 // --- the session events --------------------------------------------------------------------------
 
-#[crate::host(record(module = "events", name = "UserStateChangedEvent", emit, constant(type = "user_state_changed")))]
+#[crate::host(record(
+    module = "events",
+    name = "UserStateChangedEvent",
+    emit,
+    constant(type = "user_state_changed")
+))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserStateChanged {
     pub old_state: UserState,
@@ -62,7 +67,12 @@ pub struct UserStateChanged {
     pub created_at: f64,
 }
 
-#[crate::host(record(module = "events", name = "AgentStateChangedEvent", emit, constant(type = "agent_state_changed")))]
+#[crate::host(record(
+    module = "events",
+    name = "AgentStateChangedEvent",
+    emit,
+    constant(type = "agent_state_changed")
+))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentStateChanged {
     pub old_state: AgentState,
@@ -72,7 +82,12 @@ pub struct AgentStateChanged {
     pub created_at: f64,
 }
 
-#[crate::host(record(module = "events", name = "UserInputTranscribedEvent", emit, constant(type = "user_input_transcribed")))]
+#[crate::host(record(
+    module = "events",
+    name = "UserInputTranscribedEvent",
+    emit,
+    constant(type = "user_input_transcribed")
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserInputTranscribed {
     pub transcript: String,
@@ -88,7 +103,12 @@ pub struct UserInputTranscribed {
     pub created_at: f64,
 }
 
-#[crate::host(record(module = "events", name = "UserTranscriptionTimeoutEvent", emit, constant(type = "user_transcription_timeout")))]
+#[crate::host(record(
+    module = "events",
+    name = "UserTranscriptionTimeoutEvent",
+    emit,
+    constant(type = "user_transcription_timeout")
+))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserTranscriptionTimeout {
     /// Total VAD-detected speech (s) in the turn that produced no transcript.
@@ -100,7 +120,12 @@ pub struct UserTranscriptionTimeout {
     pub created_at: f64,
 }
 
-#[crate::host(record(module = "events", name = "EotPredictionEvent", emit, constant(type = "eot_prediction")))]
+#[crate::host(record(
+    module = "events",
+    name = "EotPredictionEvent",
+    emit,
+    constant(type = "eot_prediction")
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EotPrediction {
     pub probability: f64,
@@ -125,7 +150,12 @@ pub struct EotPrediction {
 /// backchannels (yeah/okay/right) are safe; a small margin (or a negative one, where
 /// ``end_of_turn_probability >= end_of_turn_threshold`` and a reply is imminent) calls
 /// for safe, less ambiguous ones (hmm/uh-huh) that won't collide with the reply.
-#[crate::host(record(module = "events", name = "_AgentBackchannelOpportunityEvent", emit, constant(type = "agent_backchannel_opportunity")))]
+#[crate::host(record(
+    module = "events",
+    name = "_AgentBackchannelOpportunityEvent",
+    emit,
+    constant(type = "agent_backchannel_opportunity")
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentBackchannelOpportunityEvent {
     pub probability: f64,
@@ -139,7 +169,12 @@ pub struct AgentBackchannelOpportunityEvent {
     pub created_at: f64,
 }
 
-#[crate::host(record(module = "events", name = "AgentFalseInterruptionEvent", emit, constant(type = "agent_false_interruption")))]
+#[crate::host(record(
+    module = "events",
+    name = "AgentFalseInterruptionEvent",
+    emit,
+    constant(type = "agent_false_interruption")
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentFalseInterruption {
     /// Whether the false interruption was resumed automatically.
@@ -174,7 +209,12 @@ pub struct ToolCallStarted {
 }
 
 /// A progress update emitted via ``ctx.update()`` while a tool call runs.
-#[crate::host(record(module = "events", name = "ToolCallUpdated", emit, constant(type = "tool_call_updated")))]
+#[crate::host(record(
+    module = "events",
+    name = "ToolCallUpdated",
+    emit,
+    constant(type = "tool_call_updated")
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallUpdated {
     /// Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred.
@@ -184,7 +224,12 @@ pub struct ToolCallUpdated {
 }
 
 /// A tool call's single terminal entry.
-#[crate::host(record(module = "events", name = "ToolCallEnded", emit, constant(type = "tool_call_ended")))]
+#[crate::host(record(
+    module = "events",
+    name = "ToolCallEnded",
+    emit,
+    constant(type = "tool_call_ended")
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallEnded {
     /// Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred.
@@ -200,7 +245,12 @@ pub struct ToolCallEnded {
 /// Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
 /// when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
 /// several calls; an inline first update never gets one.
-#[crate::host(record(module = "events", name = "ToolReplyUpdated", emit, constant(type = "tool_reply_updated")))]
+#[crate::host(record(
+    module = "events",
+    name = "ToolReplyUpdated",
+    emit,
+    constant(type = "tool_reply_updated")
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolReplyUpdated {
     /// ``ToolCallUpdated.id`` values this reply covers.
@@ -230,7 +280,12 @@ pub struct ToolExecutionUpdated {
 // --- limits, errors and the close ------------------------------------------------------------------
 
 // The user turn passed a configured word or duration limit. No `///`: it would become a docstring.
-#[crate::host(record(module = "events", name = "UserTurnExceededEvent", emit, constant(type = "user_turn_exceeded")))]
+#[crate::host(record(
+    module = "events",
+    name = "UserTurnExceededEvent",
+    emit,
+    constant(type = "user_turn_exceeded")
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserTurnExceededEvent {
     /// Transcript from the current (uncommitted) user turn only.

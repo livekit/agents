@@ -2,6 +2,7 @@
 //! Its activation re-targets it to the session's current outputs and opens the transcript chain.
 
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::TimedString;
 use lk_agents_abi::voice::io::Result as IoResult;
 use lk_agents_abi::voice::io::{
@@ -13,7 +14,6 @@ use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::agent_session::output::SegmentBinding;
 use lk_agents_voice::agent_session::{Answer, RequestId};
 use lk_agents_voice::generation::GenEvent;
-use crate::voice::speech_handle::SpeechHandle;
 use std::sync::{Arc, Weak};
 
 pub(super) struct OutputBinding {

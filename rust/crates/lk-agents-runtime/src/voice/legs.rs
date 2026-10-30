@@ -2,10 +2,10 @@
 //! predictions and the tasks that forward the room's and the interruption detector's events.
 
 use super::Runtime;
+use crate::voice::resources::Resources;
 use crate::voice::session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::{PushAudio, RealtimeCommand};
-use crate::voice::resources::Resources;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::{
@@ -98,9 +98,7 @@ impl SessionExecutor for Executor {
     fn tts_adapter(&self) -> crate::voice::session::TtsAdapter {
         Arc::new(|tts, clock, budget| {
             lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
-                tts,
-                clock,
-                budget,
+                tts, clock, budget,
             )
         })
     }

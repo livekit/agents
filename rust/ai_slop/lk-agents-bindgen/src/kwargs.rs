@@ -20,7 +20,10 @@ pub struct KwField {
 
 fn fields(st: &syn::ItemStruct) -> syn::Result<Vec<KwField>> {
     let syn::Fields::Named(named) = &st.fields else {
-        return Err(syn::Error::new_spanned(&st.ident, "a keyword record has named fields: they are the keywords"));
+        return Err(syn::Error::new_spanned(
+            &st.ident,
+            "a keyword record has named fields: they are the keywords",
+        ));
     };
     let mut out = Vec::new();
     for f in &named.named {
@@ -38,7 +41,9 @@ fn fields(st: &syn::ItemStruct) -> syn::Result<Vec<KwField>> {
         let input = if fm.flag("kwarg.lenient") {
             crate::shape::In {
                 ty: quote!(&::pyo3::Bound<'py, ::pyo3::PyAny>),
-                prelude: Some(quote!(let #ident: #ty = ::pyo3::types::PyAnyMethods::extract(#ident).unwrap_or_default();)),
+                prelude: Some(
+                    quote!(let #ident: #ty = ::pyo3::types::PyAnyMethods::extract(#ident).unwrap_or_default();),
+                ),
                 arg: quote!(#ident),
                 py: true,
             }
@@ -132,8 +137,13 @@ pub fn kwargs(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<TokenStrea
 /// `#[host(client(..))]`: the class's keyword constructor, from the struct's fields.
 pub fn client(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<TokenStream> {
     let m = Metas::parse(attr)?;
-    m.only(&format!("struct {}", st.ident), &["client", "client.class", "client.build", "client.positional"])?;
-    let class = m.path("client.class")?.ok_or_else(|| syn::Error::new_spanned(&st.ident, "client(class = ..) names the class"))?;
+    m.only(
+        &format!("struct {}", st.ident),
+        &["client", "client.class", "client.build", "client.positional"],
+    )?;
+    let class = m
+        .path("client.class")?
+        .ok_or_else(|| syn::Error::new_spanned(&st.ident, "client(class = ..) names the class"))?;
     let build = match m.path("client.build")? {
         Some(b) => quote!(#b),
         None => quote!(#class::build),
@@ -141,7 +151,11 @@ pub fn client(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<TokenStrea
     let fs = fields(st)?;
     let positional = match m.ident("client.positional")? {
         None => 0,
-        Some(p) => 1 + fs.iter().position(|f| f.ident == p).ok_or_else(|| syn::Error::new_spanned(&st.ident, format!("positional = {p} names no field")))?,
+        Some(p) => {
+            1 + fs.iter().position(|f| f.ident == p).ok_or_else(|| {
+                syn::Error::new_spanned(&st.ident, format!("positional = {p} names no field"))
+            })?
+        }
     };
     let sig = fs.iter().enumerate().map(|(i, f)| {
         let s = &f.sig;
@@ -151,7 +165,10 @@ pub fn client(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<TokenStrea
     let preludes = fs.iter().filter_map(|f| f.prelude.as_ref());
     let inits = fs.iter().map(|f| &f.init);
     let ident = &st.ident;
-    let doc = format!(" `{}`'s keyword constructor, from `{ident}`.", class.segments.last().map(|s| s.ident.to_string()).unwrap_or_default());
+    let doc = format!(
+        " `{}`'s keyword constructor, from `{ident}`.",
+        class.segments.last().map(|s| s.ident.to_string()).unwrap_or_default()
+    );
     Ok(quote! {
         #[cfg(feature = "python")]
         const _: () = {
