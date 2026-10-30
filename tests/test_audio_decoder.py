@@ -487,8 +487,29 @@ async def test_parameterized_wav_preserves_pyav_formats(
     assert expected
     actual = await decode("audio/wav; codecs=1")
     # PyAV's low-latency path can discard leading samples while probing.
-    assert 0 < len(actual) <= len(pcm) * 16 // bits_per_sample
+    assert len(expected) <= len(actual) <= len(pcm) * 16 // bits_per_sample
     assert actual == struct.pack("<h", 8192) * (len(actual) // 2)
+
+
+async def test_pcm16_wav_audio_does_not_spill_to_disk(monkeypatch: pytest.MonkeyPatch):
+    temporary_files = []
+    temporary_file = tempfile.TemporaryFile
+
+    def track_temporary_file(*args, **kwargs):
+        temporary_files.append(True)
+        return temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "TemporaryFile", track_temporary_file)
+    wav = _make_wav(24000, 1, 48000)
+    decoder = AudioStreamDecoder(sample_rate=24000, format="audio/wav; codecs=1")
+    try:
+        decoder.push(wav)
+        decoder.end_input()
+        frames = [frame async for frame in decoder]
+        assert sum(frame.samples_per_channel for frame in frames) == 48000
+        assert not temporary_files
+    finally:
+        await decoder.aclose()
 
 
 @pytest.mark.parametrize("metadata_size", [65536, 131072])

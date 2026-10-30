@@ -392,22 +392,25 @@ class AudioStreamDecoder:
             except OSError:
                 pass
 
+    def _write_wav_header(self, chunk: bytes) -> None:
+        if self._wav_header is not None:
+            try:
+                self._wav_header.write(chunk)
+            except OSError:
+                # Replay is optional for PCM16; the inline parser can still
+                # skip metadata when temporary storage is unavailable.
+                self._clear_wav_header()
+
     def push(self, chunk: bytes) -> None:
         if self._closed:
             return
         if self._is_wav:
             if self._wav_decoder is None:
                 self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
-            if self._wav_header is not None:
-                try:
-                    self._wav_header.write(chunk)
-                except OSError:
-                    # Replay is optional for PCM16; the inline parser can still
-                    # skip metadata when temporary storage is unavailable.
-                    self._clear_wav_header()
             try:
                 self._wav_decoder.push(chunk)
             except _UnsupportedWavFormat:
+                self._write_wav_header(chunk)
                 if self._wav_header is None:
                     logger.exception("error decoding WAV audio")
                     self._output_ch.close()
@@ -423,6 +426,8 @@ class AudioStreamDecoder:
             else:
                 if self._wav_decoder._state == _WavState.STREAMING:
                     self._clear_wav_header()
+                else:
+                    self._write_wav_header(chunk)
                 self._started = True
                 return
 
