@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .chat_items import ChatItem, FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
+    from .rtc_wire import ProcessorFailure
     from .telemetry import RecordingOptions
 
 
@@ -317,10 +318,14 @@ class SessionErrorWire:
     """`ErrorSource::as_str`."""
     recoverable: bool
     label: str
-    """`"host"` when the error was captured off a plugin object, else `"engine"`."""
+    """The failing input processor's label; otherwise `"host"` when the error was captured off
+    a plugin object, else `"engine"`.
+    """
     error: BaseException
     """The host's own exception when the provider raised one, else an `APIError`."""
     speech_id: str | None
+    processor_failure: ProcessorFailure | None
+    """An `audio_processing_error`'s processor (`ErrorEvent.source`) and the exception it raised."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -6,6 +6,7 @@ call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast
@@ -16,7 +17,6 @@ from livekit import rtc
 
 from .. import _core
 from .._generated import rtc_wire
-from ..log import logger
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .io import TextOutput
@@ -181,9 +181,8 @@ class RoomOptions:
             return self.text_output
         return TextOutputOptions() if self.text_output is not False else None
 
-    def _to_core(self, session: VoiceSession[Any]) -> dict[str, Any]:
-        """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off.
-        ``session`` is told when one of its input processors fails."""
+    def _to_core(self) -> dict[str, Any]:
+        """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off."""
         audio_in = self.get_audio_input_options()
         audio_out = self.get_audio_output_options()
         text_out = self.get_text_output_options()
@@ -204,7 +203,6 @@ class RoomOptions:
                 "num_channels": audio_in.num_channels,
                 "frame_size_ms": audio_in.frame_size_ms,
                 "noise_cancellation": audio_in.noise_cancellation,
-                "session": session,
                 # unsaid: off when noise cancellation is configured directly
                 "auto_gain_control": (
                     audio_in.auto_gain_control
@@ -619,8 +617,7 @@ class TrackPublication:
                 except BaseException as cleanup_error:
                     error.add_note(f"Audio input processor cleanup failed: {cleanup_error!r}")
             raise
-        session = cast("VoiceSession[Any] | None", opts.session)
-        return _AudioStream(session, stream, noise_cancellation, apm, owns_processor=owned)
+        return _AudioStream(stream, noise_cancellation, apm, owns_processor=owned)
 
     def _core_open_video_stream(self) -> _VideoStream:
         track = self._publication.track
@@ -643,14 +640,12 @@ class AudioProcessingError(BaseModel):
     recoverable: bool = True
 
 
-class _AudioStream(AsyncIterator[rtc.AudioFrame]):
-    """One input track's frames, through its processors. A processor failing reports to the
-    session that opened the stream once per failing span, which ends at the next frame processed
-    cleanly."""
+class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):
+    """One input track's frames, through its processors. A processor that fails on a frame is
+    reported ahead of it, and the frame goes on as that processor received it."""
 
     def __init__(
         self,
-        session: VoiceSession[Any] | None,
         stream: rtc.AudioStream,
         noise_cancellation: rtc.NoiseCancellationOptions
         | rtc.FrameProcessor[rtc.AudioFrame]
@@ -659,8 +654,6 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
         *,
         owns_processor: bool = False,
     ) -> None:
-        self._session = session
-        self._failing = False
         self._stream = stream
         self._noise_cancellation = noise_cancellation
         self._apm = apm
@@ -669,67 +662,54 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
             if owns_processor and isinstance(noise_cancellation, rtc.FrameProcessor)
             else None
         )
+        self._ready: deque[rtc_wire.AudioStreamItem] = deque()
 
     def _core_frames(self) -> _AudioStream:
         return self
 
-    async def _core_process_audio(self, frames: list[rtc.AudioFrame]) -> list[rtc.AudioFrame]:
+    async def _core_process_audio(
+        self, frames: list[rtc.AudioFrame]
+    ) -> list[rtc_wire.AudioStreamItem]:
         if isinstance(self._noise_cancellation, rtc.NoiseCancellationOptions):
-            self._report_processing_error(
-                self._noise_cancellation,
-                RuntimeError("the SDK native audio filter does not support pre-connect replay"),
-            )
-            return frames
-        return [self._process_frame(frame) for frame in frames]
+            cause = RuntimeError("the SDK native audio filter does not support pre-connect replay")
+            failed = _processor_failed(self._noise_cancellation, cause)
+            return [
+                item for f in frames for item in (failed, rtc_wire.AudioStreamItemFrame(frame=f))
+            ]
+        items: list[rtc_wire.AudioStreamItem] = []
+        for frame in frames:
+            items.extend(self._process_frame(frame))
+        return items
 
-    def _process_frame(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        if not isinstance(self._noise_cancellation, rtc.FrameProcessor) and self._apm is None:
-            return frame
-        # Processors may mutate their input before raising; preserve the original PCM span.
-        original_frame = frame
-        original = bytes(frame.data)
-        processor: object = self._noise_cancellation
-        try:
-            if (
-                isinstance(self._noise_cancellation, rtc.FrameProcessor)
-                and self._noise_cancellation.enabled
-            ):
-                frame = self._noise_cancellation._process(frame)
-            if self._apm is not None:
-                processor = self._apm
+    def _process_frame(self, frame: rtc.AudioFrame) -> list[rtc_wire.AudioStreamItem]:
+        items: list[rtc_wire.AudioStreamItem] = []
+        nc = self._noise_cancellation
+        if isinstance(nc, rtc.FrameProcessor) and nc.enabled:
+            # Processors may mutate their input before raising; keep the span they received.
+            kept = _copy(frame)
+            try:
+                frame = nc._process(frame)
+            except Exception as cause:
+                items.append(_processor_failed(nc, cause))
+                frame = kept
+        if self._apm is not None:
+            kept = _copy(frame)
+            try:
                 self._apm.process_stream(frame)
-            self._failing = False
-            return frame
-        except Exception as cause:
-            self._report_processing_error(processor, cause)
-            return rtc.AudioFrame(
-                original,
-                original_frame.sample_rate,
-                original_frame.num_channels,
-                original_frame.samples_per_channel,
-                userdata=original_frame.userdata,
-            )
-
-    def _report_processing_error(self, processor: object, cause: Exception) -> None:
-        if self._failing:
-            return
-        self._failing = True
-        kind = type(processor)
-        error = AudioProcessingError(label=f"{kind.__module__}.{kind.__qualname__}", error=cause)
-        logger.warning(
-            "input audio processing failed; forwarding the original span",
-            exc_info=cause,
-            extra={"label": error.label},
-        )
-        if self._session is not None:
-            self._session._on_audio_processing_error(error, processor)
+            except Exception as cause:
+                items.append(_processor_failed(self._apm, cause))
+                frame = kept
+        items.append(rtc_wire.AudioStreamItemFrame(frame=frame))
+        return items
 
     def __aiter__(self) -> _AudioStream:
         return self
 
-    async def __anext__(self) -> rtc.AudioFrame:
-        event = await self._stream.__anext__()
-        return self._process_frame(event.frame)
+    async def __anext__(self) -> rtc_wire.AudioStreamItem:
+        if not self._ready:
+            event = await self._stream.__anext__()
+            self._ready.extend(self._process_frame(event.frame))
+        return self._ready.popleft()
 
     async def aclose(self) -> None:
         try:
@@ -738,6 +718,28 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
             processor, self._owned_processor = self._owned_processor, None
             if processor is not None:
                 processor._close()
+
+
+def _copy(frame: rtc.AudioFrame) -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        bytes(frame.data),
+        frame.sample_rate,
+        frame.num_channels,
+        frame.samples_per_channel,
+        userdata=frame.userdata,
+    )
+
+
+def _processor_failed(processor: object, cause: Exception) -> rtc_wire.AudioStreamItem:
+    kind = type(processor)
+    return rtc_wire.AudioStreamItemProcessorFailed(
+        failure=rtc_wire.ProcessorFailure(
+            label=f"{kind.__module__}.{kind.__qualname__}",
+            processor=processor,
+            error=cause,
+            message=str(cause),
+        )
+    )
 
 
 class _VideoStream(AsyncIterator[rtc_wire.VideoFrameRef]):

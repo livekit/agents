@@ -75,6 +75,9 @@ impl Run {
             // With its own legs, the host has turned the room's off, as `agent_session.py` does.
             audio_input: legs.map(|legs| AudioInputConfig {
                 sample_rate: SAMPLE_RATE,
+                noise_cancellation: setup
+                    .failing_processors
+                    .then(|| lk_agents_abi::HostRef::new(1 << 41, &refs)),
                 pre_connect_audio: legs.pre_connect.is_some(),
                 pre_connect_audio_timeout: Duration::from_millis(super::PRE_CONNECT_TIMEOUT_MS),
                 ..AudioInputConfig::default()
@@ -446,6 +449,9 @@ impl Run {
         self.joins += 1;
         let track = format!("TR_mic_{}", self.joins);
         let mic = caller.publish_microphone(track.as_str());
+        if self.setup.failing_processors {
+            mic.fail_processors(self.refs.clone());
+        }
         if let Some(pre_connect) = legs.pre_connect {
             mic.set_audio_features(vec![
                 lk_agents_abi::voice::rtc::AudioTrackFeature::PreconnectBuffer,

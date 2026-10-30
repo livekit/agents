@@ -320,9 +320,6 @@ pub struct AudioStreamOptions {
     /// The host-side `rtc.FrameProcessor` / `rtc.NoiseCancellationOptions`, an opaque host object
     /// Rust never inspects.
     pub noise_cancellation: Option<HostRef>,
-    /// The host's session the stream feeds, told when an input processor fails on a span; an
-    /// opaque host object Rust never inspects.
-    pub session: Option<HostRef>,
     /// `AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream.
     pub auto_gain_control: bool,
     /// Bounds the SDK queue before frames reach the core's equally bounded input queue.
@@ -337,11 +334,33 @@ impl Default for AudioStreamOptions {
             num_channels: 1,
             frame_size_ms: None,
             noise_cancellation: None,
-            session: None,
             auto_gain_control: true,
             queue_capacity: AUDIO_QUEUE_FRAMES,
         }
     }
+}
+
+/// An input audio processor (noise cancellation, gain control) that raised on a frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[crate::host(record(module = "rtc_wire", extract, emit))]
+pub struct ProcessorFailure {
+    /// The processor's class, `module.qualname`: what its failing span is tracked by.
+    pub label: String,
+    pub processor: HostRef,
+    /// The exception it raised, handed back as `AudioProcessingError.error`.
+    pub error: HostRef,
+    pub message: String,
+}
+
+/// One item off an input audio stream: a frame, or a processor that failed on the frame that
+/// follows, which arrives as that processor received it.
+#[derive(Debug, Clone)]
+#[crate::host(record(module = "rtc_wire", extract))]
+pub enum AudioStreamItem {
+    #[host(field = "frame")]
+    Frame(AudioFrame),
+    #[host(field = "failure")]
+    ProcessorFailed(ProcessorFailure),
 }
 
 /// One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a

@@ -578,7 +578,7 @@ impl Driver {
         speech: Option<SpeechId>,
         out: &mut Out,
     ) {
-        let ev = crate::events::ErrorEvent { source, recoverable, error, speech };
+        let ev = crate::events::ErrorEvent::provider(source, recoverable, error, speech);
         out.machine().emit(SessionEvent::Error(Box::new(ev.clone())));
         if recoverable || self.session.closing.is_some() {
             return;

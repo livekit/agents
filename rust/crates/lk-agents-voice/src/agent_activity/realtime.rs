@@ -808,12 +808,12 @@ impl Driver {
         let close = Close {
             reason: lk_agents_abi::voice::events::CloseReason::Error,
             drain: false,
-            error: Some(crate::events::ErrorEvent {
-                source: crate::events::ErrorSource::Realtime,
-                recoverable: false,
-                error: ProviderError::Local(error),
-                speech: None,
-            }),
+            error: Some(crate::events::ErrorEvent::provider(
+                crate::events::ErrorSource::Realtime,
+                false,
+                ProviderError::Local(error),
+                None,
+            )),
         };
         self.begin_closing(now, close, out);
     }

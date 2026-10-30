@@ -357,6 +357,7 @@ impl ErrorCounts {
             S::Llm => &mut self.llm,
             S::Tts => &mut self.tts,
             S::Realtime => return true,
+            S::AudioProcessing => return false,
         };
         *count += 1;
         *count > self.max

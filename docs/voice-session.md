@@ -187,8 +187,10 @@ must declare that capability.
 
 If an input processor such as noise cancellation fails, the session emits an
 `"error"` event whose `error` is a recoverable `room_io.AudioProcessingError` and whose
-`source` is the processor, logs it and continues with unprocessed frames for that
-span. The input stream does not end and the agent keeps hearing the user.
+`source` is the processor, logs it and continues with frames that processor left
+unprocessed for that span. Each processor's failing span is one error, ending at the
+first frame it processes cleanly; a processor that fails again reports again. The
+input stream does not end and the agent keeps hearing the user.
 
 Playback completion waits are bounded by the delivered audio duration and a
 transport allowance. A missing completion report cannot hold the speech or

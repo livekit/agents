@@ -17,11 +17,24 @@ pub struct ErrorEvent {
     pub error: lk_agents_abi::errors::ProviderError,
     /// The speech whose request failed; `None` for the STT leg and the realtime socket.
     pub speech: Option<crate::agent_activity::scheduling::SpeechId>,
+    /// The input processor that failed, for [`ErrorSource::AudioProcessing`].
+    pub processor_failure: Option<lk_agents_abi::voice::rtc::ProcessorFailure>,
 }
 
 impl ErrorEvent {
+    /// A provider leg's failure.
+    pub fn provider(
+        source: ErrorSource,
+        recoverable: bool,
+        error: lk_agents_abi::errors::ProviderError,
+        speech: Option<crate::agent_activity::scheduling::SpeechId>,
+    ) -> Self {
+        ErrorEvent { source, recoverable, error, speech, processor_failure: None }
+    }
+
+    /// Without the processor's host objects, which the journal would pin.
     fn journal_form(&self) -> ErrorEvent {
-        ErrorEvent { error: journal_error(&self.error), ..self.clone() }
+        ErrorEvent { error: journal_error(&self.error), processor_failure: None, ..self.clone() }
     }
 }
 
@@ -33,6 +46,8 @@ pub enum ErrorSource {
     Llm,
     Tts,
     Realtime,
+    /// An input audio processor; always recoverable.
+    AudioProcessing,
 }
 
 impl SessionEvent {
@@ -77,6 +92,7 @@ impl ErrorSource {
             ErrorSource::Llm => "llm_error",
             ErrorSource::Tts => "tts_error",
             ErrorSource::Realtime => "realtime_model_error",
+            ErrorSource::AudioProcessing => "audio_processing_error",
         }
     }
 }

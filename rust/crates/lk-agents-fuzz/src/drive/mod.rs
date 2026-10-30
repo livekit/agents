@@ -183,6 +183,9 @@ pub struct Setup {
     /// `RoomOptions(video_input=True)` on the room's legs: the person publishes a camera with
     /// their microphone, and the room's video input reads it.
     pub room_camera: bool,
+    /// The room's microphone input runs noise cancellation and gain control, and both reject
+    /// some of the person's audio: each failing span is the session's error, never its silence.
+    pub failing_processors: bool,
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
     pub sync_transcription: bool,
@@ -471,6 +474,7 @@ impl Default for Setup {
             connect_ms: None,
             video: false,
             room_camera: false,
+            failing_processors: false,
             sync_transcription: false,
             text_output_raises: false,
             lagging_output: false,

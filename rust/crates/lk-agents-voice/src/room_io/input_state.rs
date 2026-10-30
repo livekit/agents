@@ -239,8 +239,46 @@ pub fn replayed_head(head: Result<Vec<AudioFrame>>) -> Result<Vec<AudioFrame>> {
     }
 }
 
+/// Which of a stream's input processors are failing. A failure is reported when it opens its
+/// processor's span; the span ends at the first frame that processor handles cleanly, so each
+/// processor reports on its own and again after it recovers.
+#[derive(Debug, Default)]
+pub struct ProcessorSpans {
+    failing: BTreeSet<String>,
+    /// The processors that failed on the frame still to arrive.
+    failed: BTreeSet<String>,
+}
+
+impl ProcessorSpans {
+    /// `label` failed on the next frame: whether that opens its span, so is reported.
+    pub fn failed(&mut self, label: &str) -> bool {
+        self.failed.insert(label.to_owned());
+        !self.failing.contains(label)
+    }
+
+    /// A frame arrived: the processors that did not fail on it recovered.
+    pub fn frame(&mut self) {
+        self.failing = std::mem::take(&mut self.failed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    // Catches: a span kept per stream rather than per processor (AGC failing while noise
+    // cancellation's span is open went unreported) and a recovered processor never reporting again.
+    #[test]
+    fn each_processor_reports_once_per_failing_span() {
+        let mut spans = super::ProcessorSpans::default();
+        assert!(spans.failed("nc"));
+        spans.frame();
+        assert!(!spans.failed("nc"), "a span reports once");
+        assert!(spans.failed("agc"), "another processor's failure is its own span");
+        spans.frame();
+        spans.frame();
+        assert!(spans.failed("nc"), "a recovered processor reports its next span");
+        assert!(spans.failed("agc"));
+    }
+
     use super::*;
 
     fn owner(identity: &ParticipantIdentity) -> Owner<'_> {

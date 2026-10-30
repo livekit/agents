@@ -6,6 +6,7 @@ use super::output::{
     transcription::{ParticipantTranscriptionOutput, SegmentIds},
 };
 use super::pre_connect_audio::PreConnectAudioHandler;
+use crate::monotone::Monotone;
 use futures_util::FutureExt as _;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
@@ -22,14 +23,13 @@ use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt,
     TOPIC_CHAT, Ts,
 };
-use crate::monotone::Monotone;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
 use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf_of};
+use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use tokio::sync::{Notify, mpsc, watch};
 
 const ROOM_EVENT_CAPACITY: usize = 64;
@@ -94,6 +94,7 @@ impl RoomIo {
             )
         });
 
+        let (events_tx, events_rx) = mpsc::channel(ROOM_EVENT_CAPACITY);
         let audio_input = config.audio_input.as_ref().map(|a| {
             ParticipantAudioInput::new(
                 room.clone(),
@@ -101,6 +102,7 @@ impl RoomIo {
                 clock.clone(),
                 a.clone(),
                 pre_connect.clone(),
+                events_tx.clone(),
             )
         });
 
@@ -137,7 +139,6 @@ impl RoomIo {
             None => (None, None),
         };
 
-        let (events_tx, events_rx) = mpsc::channel(ROOM_EVENT_CAPACITY);
         let coordinator = RoomCoordinator::new(config.participant_identity.clone());
         Arc::new(RoomIo {
             coordinator: watch::channel(coordinator).0,
@@ -336,8 +337,13 @@ impl RoomIo {
             }
             RoomEvent::ParticipantConnected { participant } => {
                 let attrs = participant.attributes()?;
-                self.consider(participant.identity(), participant.sid(), participant.kind(), &attrs)
-                    .await?;
+                self.consider(
+                    participant.identity(),
+                    participant.sid(),
+                    participant.kind(),
+                    &attrs,
+                )
+                .await?;
             }
             RoomEvent::ParticipantDisconnected { participant, reason } => {
                 self.on_participant_disconnected(

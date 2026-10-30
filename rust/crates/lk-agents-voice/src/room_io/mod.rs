@@ -209,6 +209,18 @@ impl Driver {
                 let digit = crate::workflows::dtmf::DtmfTaskEvent::Digit(digit.clone());
                 return self.dtmf_step(digit, out);
             }
+            RoomIoEvent::InputProcessorFailed(failure) => {
+                let error = lk_agents_abi::errors::ApiError::new(failure.message.clone());
+                let ev = crate::events::ErrorEvent {
+                    source: crate::events::ErrorSource::AudioProcessing,
+                    recoverable: true,
+                    error: error.into(),
+                    speech: None,
+                    processor_failure: Some(failure.clone()),
+                };
+                out.machine().emit(crate::events::SessionEvent::Error(Box::new(ev)));
+                return;
+            }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }
         out.machine().push(crate::agent_session::effects::Effect::Host(HostEvent::Room(ev)));

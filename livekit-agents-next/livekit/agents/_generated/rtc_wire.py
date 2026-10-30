@@ -10,7 +10,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import get_type_hints
+from typing import TYPE_CHECKING, TypeAlias, get_type_hints
+
+if TYPE_CHECKING:
+    from livekit.rtc import AudioFrame
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -47,14 +50,38 @@ class AudioStreamOptions:
     """The host-side `rtc.FrameProcessor` / `rtc.NoiseCancellationOptions`, an opaque host object
     Rust never inspects.
     """
-    session: object | None
-    """The host's session the stream feeds, told when an input processor fails on a span; an
-    opaque host object Rust never inspects.
-    """
     auto_gain_control: bool
     """`AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream."""
     queue_capacity: int
     """Bounds the SDK queue before frames reach the core's equally bounded input queue."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ProcessorFailure:
+    """An input audio processor (noise cancellation, gain control) that raised on a frame."""
+
+    label: str
+    """The processor's class, `module.qualname`: what its failing span is tracked by."""
+    processor: object
+    error: object
+    """The exception it raised, handed back as `AudioProcessingError.error`."""
+    message: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class AudioStreamItemFrame:
+    frame: AudioFrame
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class AudioStreamItemProcessorFailed:
+    failure: ProcessorFailure
+
+
+AudioStreamItem: TypeAlias = AudioStreamItemFrame | AudioStreamItemProcessorFailed
+"""One item off an input audio stream: a frame, or a processor that failed on the frame that
+follows, which arrives as that processor received it.
+"""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -5,7 +5,7 @@ use crate::voice::room_io::{
     DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
 use crate::voice::rtc::capabilities::RtcRoom;
-use crate::voice::rtc::{ParticipantIdentity, RtcError, TrackSid};
+use crate::voice::rtc::{ParticipantIdentity, ProcessorFailure, RtcError, TrackSid};
 use crate::{AudioFrame, Clock, Closed, Spawner, VirtualClock};
 use std::any::Any;
 use std::sync::Arc;
@@ -19,6 +19,8 @@ pub enum RoomIoEvent {
     DeleteRoomRequested(DeleteRoomRequested),
     /// The linked participant pressed a keypad key: its symbol.
     KeyPressed(String),
+    /// An input processor's failing span started; the input goes on without it.
+    InputProcessorFailed(ProcessorFailure),
 }
 
 pub trait RoomAudioInputPort: AudioInput {

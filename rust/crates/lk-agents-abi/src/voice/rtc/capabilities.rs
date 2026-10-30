@@ -7,7 +7,8 @@ use super::VideoFrameRef;
 use super::events::RoomEventSink;
 use super::ports::{ByteStreamIngress, RpcCallback, TextStreamIngress};
 use super::{
-    AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity, ParticipantKind,
+    AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity,
+    ParticipantKind,
     PlaybackInfo, RtcError, StreamBytesOptions, StreamTextOptions, TrackPublishOptions, TrackSid,
     TrackSource, Transcription,
 };
@@ -378,13 +379,14 @@ pub trait TrackPublication: Send + Sync {
 #[crate::host(proxy(host = "livekit.agents.voice.room_io._AudioStream"))]
 pub trait AudioInputStream: Send + Sync {
     #[host(call, name = "_core_frames")]
-    fn frames(&self) -> Result<Box<dyn StreamSource<AudioFrame>>, RtcError>;
+    fn frames(&self) -> Result<Box<dyn StreamSource<AudioStreamItem>>, RtcError>;
 
+    /// The pre-connect head through the same processors as the live frames.
     #[host(await, name = "_core_process_audio")]
     fn process_audio<'a>(
         &'a self,
         frames: Vec<AudioFrame>,
-    ) -> crate::BoxFuture<'a, Result<Vec<AudioFrame>, RtcError>> {
-        Box::pin(async move { Ok(frames) })
+    ) -> crate::BoxFuture<'a, Result<Vec<AudioStreamItem>, RtcError>> {
+        Box::pin(async move { Ok(frames.into_iter().map(AudioStreamItem::Frame).collect()) })
     }
 }

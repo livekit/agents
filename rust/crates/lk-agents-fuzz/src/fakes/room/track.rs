@@ -1,11 +1,15 @@
 //! Track publications, local and remote, and the frame conversion a real `rtc.AudioStream` does.
 
+use lk_agents_abi::errors::{ProviderError, RefRegistry};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::voice::rtc::RtcError;
 use lk_agents_abi::voice::rtc::capabilities::TrackPublication;
 use lk_agents_abi::voice::rtc::{
-    AudioStreamOptions, AudioTrackFeature, TrackSid, TrackSource, VideoFrameRef,
+    AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ProcessorFailure, TrackSid,
+    TrackSource, VideoFrameRef,
 };
+use lk_agents_abi::{Closed, HostRef, Ts};
+use std::collections::VecDeque;
 type Result<T> = std::result::Result<T, RtcError>;
 use super::FakeRemoteParticipant;
 use lk_agents_abi::AudioFrame;
@@ -37,6 +41,8 @@ struct PublicationState {
     video_streams: Vec<LossyTx<VideoFrameRef>>,
     /// Kept past `close_streams`, so a test can inspect it after the track went away.
     requested: StreamRequests,
+    /// The side table of the failing processors' host objects, once they fail.
+    failing_processors: Option<Arc<dyn RefRegistry>>,
 }
 
 /// The options are kept because a real `rtc.AudioStream` converts to the requested rate and
@@ -88,6 +94,13 @@ impl FakeTrackPublication {
 
     pub fn set_audio_features(&self, features: Vec<AudioTrackFeature>) {
         self.state.lock().unwrap().features = features;
+    }
+
+    /// The processors of every stream opened from now on reject some audio: the gain control
+    /// (`auto_gain_control`) two frames of every eight, the denoiser (`noise_cancellation`) one
+    /// of every sixteen, by the frame's tag.
+    pub fn fail_processors(&self, refs: Arc<dyn RefRegistry>) {
+        self.state.lock().unwrap().failing_processors = Some(refs);
     }
 
     pub fn stream_requests(&self) -> StreamRequests {
@@ -214,7 +227,21 @@ impl TrackPublication for FakeTrackPublication {
     }
 
     fn open_audio_stream(&self, opts: AudioStreamOptions) -> Result<Arc<dyn AudioInputStream>> {
-        Ok(Arc::new(FakeAudioInputStream { frames: Mutex::new(Some(self.audio_stream(opts))) }))
+        let failing = self.state.lock().unwrap().failing_processors.clone();
+        let processors = failing.map_or_else(Vec::new, |refs| {
+            let processor = |id| HostRef::new(id, &refs);
+            let gain = opts.auto_gain_control.then(|| (GAIN_CONTROL, processor(1 << 40)));
+            let denoiser =
+                opts.noise_cancellation.is_some().then(|| (DENOISER, processor((1 << 40) + 1)));
+            gain.into_iter().chain(denoiser).collect()
+        });
+        let frames = self.audio_stream(opts);
+        let source = ProcessedFrames {
+            frames: super::LossySource(frames),
+            processors,
+            ready: VecDeque::new(),
+        };
+        Ok(Arc::new(FakeAudioInputStream { frames: Mutex::new(Some(source)) }))
     }
 
     fn open_video_stream(&self) -> Result<Box<dyn StreamSource<VideoFrameRef>>> {
@@ -244,14 +271,65 @@ impl FakeTrackPublication {
 }
 
 struct FakeAudioInputStream {
-    frames: Mutex<Option<BoundedLossy<AudioFrame>>>,
+    frames: Mutex<Option<ProcessedFrames>>,
 }
 
 impl AudioInputStream for FakeAudioInputStream {
-    fn frames(&self) -> Result<Box<dyn StreamSource<AudioFrame>>> {
+    fn frames(&self) -> Result<Box<dyn StreamSource<AudioStreamItem>>> {
         let frames =
             self.frames.lock().unwrap().take().ok_or(RtcError::Closed("audio input stream"))?;
-        Ok(Box::new(super::LossySource(frames)))
+        Ok(Box::new(frames))
+    }
+}
+
+const GAIN_CONTROL: &str = "fake.GainControl";
+const DENOISER: &str = "fake.Denoiser";
+
+/// A stream's frames through its processors, which run as each frame is read, after the SDK
+/// queue, as `_AudioStream` runs them: a failing one is reported ahead of its frame.
+struct ProcessedFrames {
+    frames: super::LossySource<AudioFrame>,
+    processors: Vec<(&'static str, HostRef)>,
+    ready: VecDeque<AudioStreamItem>,
+}
+
+impl ProcessedFrames {
+    /// Which processors reject this frame, by its tag's chunk number.
+    fn process(&mut self, frame: AudioFrame) {
+        let chunk = frame.data.get(..2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]) & 63);
+        for (label, processor) in &self.processors {
+            let fails = if *label == GAIN_CONTROL { chunk % 8 >= 6 } else { chunk % 16 == 5 };
+            if fails {
+                self.ready.push_back(AudioStreamItem::ProcessorFailed(ProcessorFailure {
+                    label: (*label).into(),
+                    processor: processor.clone(),
+                    error: processor.clone(),
+                    message: format!("{label} rejected the frame"),
+                }));
+            }
+        }
+        self.ready.push_back(AudioStreamItem::Frame(frame));
+    }
+}
+
+impl StreamSource<AudioStreamItem> for ProcessedFrames {
+    fn next<'a>(
+        &'a mut self,
+    ) -> lk_agents_abi::BoxFuture<'a, std::result::Result<Option<AudioStreamItem>, ProviderError>>
+    {
+        Box::pin(async move {
+            if self.ready.is_empty() {
+                let Some(frame) = self.frames.next().await? else { return Ok(None) };
+                self.process(frame);
+            }
+            Ok(self.ready.pop_front())
+        })
+    }
+    fn cancel_safe(&self) -> bool {
+        true
+    }
+    fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::new(self.frames).close(deadline)
     }
 }
 

@@ -4,15 +4,16 @@
 use crate::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
+use lk_agents_abi::voice::room_owner::RoomIoEvent;
 use lk_agents_abi::voice::rtc::{
-    AudioInputStream, AudioStreamOptions, AudioTrackFeature, ParticipantIdentity,
+    AudioInputStream, AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ParticipantIdentity,
     RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid, VideoFrameRef,
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamSource, Ts};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::input_state::{
-    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, Publication, TrackReaders, VIDEO_SOURCES,
-    end_of_track, replayed_head,
+    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ProcessorSpans, Publication, TrackReaders,
+    VIDEO_SOURCES, end_of_track, replayed_head,
 };
 use parking_lot::Mutex;
 use std::future::Future;
@@ -218,14 +219,16 @@ fn route<R: Reader>(reader: &Arc<R>, event: &RoomEvent) -> Result<()> {
     perform(reader, participant.as_ref(), &handles, open)
 }
 
-/// Reads a stream until voice retires its reader or it ends, then retires the stream.
-async fn pump<T: Send + 'static>(
+/// Reads a stream until voice retires its reader or it ends, then retires the stream. `admit`
+/// turns a stream item into the frame it delivers, if any.
+async fn pump<S: Send + 'static, T: Send + 'static>(
     readers: &Readers<T>,
     clock: &dyn Clock,
     generation: u64,
-    mut stream: Box<dyn StreamSource<T>>,
+    mut stream: Box<dyn StreamSource<S>>,
     replay: impl Future<Output = bool>,
     end: impl FnOnce() -> Option<T>,
+    mut admit: impl FnMut(S) -> Option<T>,
 ) {
     let reading = async {
         if !replay.await {
@@ -233,8 +236,10 @@ async fn pump<T: Send + 'static>(
         }
         loop {
             match stream.next().await {
-                Ok(Some(frame)) => {
-                    if !readers.deliver(generation, Ok(frame)) {
+                Ok(Some(item)) => {
+                    if let Some(frame) = admit(item)
+                        && !readers.deliver(generation, Ok(frame))
+                    {
                         return;
                     }
                 }
@@ -323,7 +328,8 @@ impl Reader for ParticipantVideoInput {
         let (owner, generation) = (self.clone(), open.generation);
         self.pumps.spawn(self.spawner.as_ref(), "video track pump", async move {
             let readers = &owner.readers;
-            pump(readers, owner.clock.as_ref(), generation, stream, async { true }, || None).await;
+            let clock = owner.clock.as_ref();
+            pump(readers, clock, generation, stream, async { true }, || None, Some).await;
         });
         Ok(())
     }
@@ -350,6 +356,8 @@ pub struct ParticipantAudioInput {
     clock: Arc<dyn Clock>,
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
+    /// The session's room events, where a processor's failing span is reported.
+    events: tokio::sync::mpsc::Sender<RoomIoEvent>,
     readers: Readers<AudioFrame>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
@@ -362,6 +370,7 @@ impl ParticipantAudioInput {
         clock: Arc<dyn Clock>,
         config: AudioInputConfig,
         pre_connect: Option<Arc<PreConnectAudioHandler>>,
+        events: tokio::sync::mpsc::Sender<RoomIoEvent>,
     ) -> Arc<Self> {
         Arc::new(Self {
             room,
@@ -369,6 +378,7 @@ impl ParticipantAudioInput {
             clock,
             config,
             pre_connect,
+            events,
             readers: Readers::new(AUDIO_SOURCES, lk_agents_abi::AUDIO_QUEUE_FRAMES),
             pumps: Arc::default(),
         })
@@ -386,6 +396,25 @@ impl ParticipantAudioInput {
         route(self, event)
     }
 
+    /// A frame to deliver, or a processor failure reported when it opens that processor's span.
+    fn admit(&self, spans: &Mutex<ProcessorSpans>, item: AudioStreamItem) -> Option<AudioFrame> {
+        match item {
+            AudioStreamItem::Frame(frame) => {
+                spans.lock().frame();
+                Some(frame)
+            }
+            AudioStreamItem::ProcessorFailed(failure) => {
+                if spans.lock().failed(&failure.label) {
+                    let label = failure.label.clone();
+                    if self.events.try_send(RoomIoEvent::InputProcessorFailed(failure)).is_err() {
+                        log::warn!(target: "livekit.agents", label = label.as_str(); "input processor failure not reported: room events full or closed");
+                    }
+                }
+                None
+            }
+        }
+    }
+
     /// The publisher's pre-connect head, through the track's processing, ahead of the live
     /// frames. `false` stops the reader.
     async fn replay(
@@ -393,6 +422,7 @@ impl ParticipantAudioInput {
         generation: u64,
         sid: &TrackSid,
         input_stream: Option<Arc<dyn AudioInputStream>>,
+        spans: &Mutex<ProcessorSpans>,
     ) -> bool {
         let (Some(input_stream), Some(handler)) = (input_stream, &self.pre_connect) else {
             return true;
@@ -406,8 +436,8 @@ impl ParticipantAudioInput {
         };
         for frame in frames {
             match input_stream.process_audio(vec![frame]).await {
-                Ok(frames) => {
-                    for frame in frames {
+                Ok(items) => {
+                    for frame in items.into_iter().filter_map(|item| self.admit(spans, item)) {
                         if !self.readers.deliver(generation, Ok(frame)) {
                             return false;
                         }
@@ -451,7 +481,6 @@ impl Reader for ParticipantAudioInput {
             num_channels: self.config.num_channels,
             frame_size_ms: Some(self.config.frame_size_ms),
             noise_cancellation: self.config.noise_cancellation.clone(),
-            session: self.config.session.clone(),
             auto_gain_control: self.config.auto_gain_control,
             participant_identity: participant.identity().clone(),
             queue_capacity: lk_agents_abi::AUDIO_QUEUE_FRAMES,
@@ -463,9 +492,12 @@ impl Reader for ParticipantAudioInput {
         let (input, generation, sid) = (self.clone(), open.generation, open.sid.clone());
         self.pumps.spawn(self.spawner.as_ref(), "audio track pump", async move {
             let (sample_rate, num_channels) = (input.config.sample_rate, input.config.num_channels);
-            let replay = input.replay(generation, &sid, replay.then_some(input_stream));
+            let spans = Mutex::new(ProcessorSpans::default());
+            let replay = input.replay(generation, &sid, replay.then_some(input_stream), &spans);
             let end = || Some(end_of_track(sample_rate, num_channels));
-            pump(&input.readers, input.clock.as_ref(), generation, stream, replay, end).await;
+            let admit = |item| input.admit(&spans, item);
+            pump(&input.readers, input.clock.as_ref(), generation, stream, replay, end, admit)
+                .await;
         });
         Ok(())
     }

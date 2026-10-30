@@ -3459,17 +3459,60 @@ pub mod rtc_wire {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn audio_stream_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::AudioStreamOptions) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::voice::rtc::AudioStreamOptions { participant_identity, sample_rate, num_channels, frame_size_ms, noise_cancellation, session, auto_gain_control, queue_capacity } = value;
+            let ::lk_agents_abi::voice::rtc::AudioStreamOptions { participant_identity, sample_rate, num_channels, frame_size_ms, noise_cancellation, auto_gain_control, queue_capacity } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("participant_identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(participant_identity, py)?)?;
             kwargs.set_item("sample_rate", ::pyo3::IntoPyObjectExt::into_bound_py_any(sample_rate, py)?)?;
             kwargs.set_item("num_channels", ::pyo3::IntoPyObjectExt::into_bound_py_any(num_channels, py)?)?;
             kwargs.set_item("frame_size_ms", match frame_size_ms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("noise_cancellation", match noise_cancellation { None => py.None().into_bound(py), Some(x) => crate::conversions::host_ref_to_py(py, x)? })?;
-            kwargs.set_item("session", match session { None => py.None().into_bound(py), Some(x) => crate::conversions::host_ref_to_py(py, x)? })?;
             kwargs.set_item("auto_gain_control", ::pyo3::IntoPyObjectExt::into_bound_py_any(auto_gain_control, py)?)?;
             kwargs.set_item("queue_capacity", ::pyo3::IntoPyObjectExt::into_bound_py_any(queue_capacity, py)?)?;
             crate::host::construct(AUDIO_STREAM_OPTIONS.import(py, "livekit.agents._generated.rtc_wire", "AudioStreamOptions")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static PROCESSOR_FAILURE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn processor_failure_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::rtc::ProcessorFailure> {
+        let py = obj.py();
+            if !obj.is_instance(PROCESSOR_FAILURE.import(py, "livekit.agents._generated.rtc_wire", "ProcessorFailure")?)? {
+                return Err(super::not_a(obj, "ProcessorFailure"));
+            }
+            Ok(::lk_agents_abi::voice::rtc::ProcessorFailure {
+                label: ::lk_agents_abi::python::attr_with(obj, "ProcessorFailure", "label", |v| v.extract::<::std::string::String>())?,
+                processor: ::lk_agents_abi::python::attr_with(obj, "ProcessorFailure", "processor", |v| crate::conversions::host_ref_from_py(v))?,
+                error: ::lk_agents_abi::python::attr_with(obj, "ProcessorFailure", "error", |v| crate::conversions::host_ref_from_py(v))?,
+                message: ::lk_agents_abi::python::attr_with(obj, "ProcessorFailure", "message", |v| v.extract::<::std::string::String>())?,
+            })
+    }
+
+    pub fn processor_failure_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::ProcessorFailure) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::ProcessorFailure { label, processor, error, message } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
+            kwargs.set_item("processor", crate::conversions::host_ref_to_py(py, processor)?)?;
+            kwargs.set_item("error", crate::conversions::host_ref_to_py(py, error)?)?;
+            kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+            crate::host::construct(PROCESSOR_FAILURE.import(py, "livekit.agents._generated.rtc_wire", "ProcessorFailure")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static AUDIO_STREAM_ITEM_FRAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static AUDIO_STREAM_ITEM_PROCESSOR_FAILED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn audio_stream_item_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::rtc::AudioStreamItem> {
+        let py = obj.py();
+            if obj.is_instance(AUDIO_STREAM_ITEM_FRAME.import(py, "livekit.agents._generated.rtc_wire", "AudioStreamItemFrame")?)? {
+                return Ok(::lk_agents_abi::voice::rtc::AudioStreamItem::Frame(::lk_agents_abi::python::attr_with(obj, "AudioStreamItemFrame", "frame", |v| crate::conversions::audio_frame_from_py(v))?));
+            }
+            if obj.is_instance(AUDIO_STREAM_ITEM_PROCESSOR_FAILED.import(py, "livekit.agents._generated.rtc_wire", "AudioStreamItemProcessorFailed")?)? {
+                return Ok(::lk_agents_abi::voice::rtc::AudioStreamItem::ProcessorFailed(::lk_agents_abi::python::attr_with(obj, "AudioStreamItemProcessorFailed", "failure", |v| crate::generated::records::rtc_wire::processor_failure_from_py(v))?));
+            }
+            Err(super::not_a(obj, "AudioStreamItemFrame | AudioStreamItemProcessorFailed"))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
@@ -4107,13 +4150,14 @@ pub mod session_wire {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn session_error_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SessionErrorWire) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::voice::events::SessionErrorWire { source, recoverable, label, error, speech_id } = value;
+            let ::lk_agents_abi::voice::events::SessionErrorWire { source, recoverable, label, error, speech_id, processor_failure } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
             kwargs.set_item("recoverable", ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable, py)?)?;
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
             kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("processor_failure", match processor_failure { None => py.None().into_bound(py), Some(x) => crate::generated::records::rtc_wire::processor_failure_to_py(py, x)? })?;
             crate::host::construct(SESSION_ERROR_WIRE.import(py, "livekit.agents._generated.session_wire", "SessionErrorWire")?.as_any(), (), Some(&kwargs))
     }
 

@@ -27,9 +27,6 @@ pub struct AudioInputConfig {
     pub frame_size_ms: u32,
     /// A [`HostRef`](lk_agents_abi::HostRef) so the side-table entry lives as long as the config.
     pub noise_cancellation: Option<lk_agents_abi::HostRef>,
-    /// The host's session this input feeds, told when one of its input processors fails; Rust
-    /// never inspects it.
-    pub session: Option<lk_agents_abi::HostRef>,
     /// Resolved by `_to_core`, applied host-side (`rtc.AudioProcessingModule`), forwarded as
     /// [`AudioStreamOptions::auto_gain_control`](crate::voice::rtc::AudioStreamOptions).
     pub auto_gain_control: bool,
@@ -45,7 +42,6 @@ impl Default for AudioInputConfig {
             num_channels: 1,
             frame_size_ms: 50,
             noise_cancellation: None,
-            session: None,
             auto_gain_control: true,
             pre_connect_audio: true,
             pre_connect_audio_timeout: Duration::from_secs(3),

@@ -641,7 +641,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 tools=frame["tools"],
                 tools_host=frame["tools_host"],
                 voice_agent=frame["voice_agent"],
-                room_io_config=options._to_core(self),
+                room_io_config=options._to_core(),
                 video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
                 using_default_vad=self._using_default_vad,
                 turn_detector=self._turn_detector,
@@ -1184,6 +1184,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
 
     def _error_record(self, wire: SessionErrorWire) -> tuple[Any, Any]:
         """The reference's payload: the provider's error record, and the provider that failed."""
+        if (failure := wire.processor_failure) is not None:
+            error = AudioProcessingError(label=failure.label, error=cast(Exception, failure.error))
+            return error, failure.processor
         record, leg = _ERROR_RECORDS[wire.source]
         source = getattr(_VoiceBinding(self, self.current_agent), leg)
         error = record(
@@ -1236,10 +1239,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         logger.error("session error", extra={"source": wire.source, "error": str(wire.error)})
         error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
-
-    def _on_audio_processing_error(self, error: AudioProcessingError, processor: object) -> None:
-        """One of this session's input processors started failing on a span."""
-        self.emit("error", ErrorEvent(error=error, source=processor))
 
     def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
         self.emit("overlapping_speech", wire.event)

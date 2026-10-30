@@ -546,11 +546,14 @@ pub struct SessionErrorWire {
     /// `ErrorSource::as_str`.
     pub source: String,
     pub recoverable: bool,
-    /// `"host"` when the error was captured off a plugin object, else `"engine"`.
+    /// The failing input processor's label; otherwise `"host"` when the error was captured off
+    /// a plugin object, else `"engine"`.
     pub label: String,
     /// The host's own exception when the provider raised one, else an `APIError`.
     pub error: crate::errors::ProviderError,
     pub speech_id: Option<String>,
+    /// An `audio_processing_error`'s processor (`ErrorEvent.source`) and the exception it raised.
+    pub processor_failure: Option<crate::voice::rtc::ProcessorFailure>,
 }
 
 // --- the interruption detector's verdict and its wire ----------------------------------------

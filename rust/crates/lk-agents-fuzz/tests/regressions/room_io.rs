@@ -10,11 +10,11 @@ use lk_agents_abi::voice::room_io::{
 };
 use lk_agents_abi::voice::room_owner::{RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::{
-    AudioInputStream, AudioSource, AudioStreamOptions, AudioTrackFeature, ByteStreamIngress,
-    ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity, ParticipantKind,
-    RemoteParticipant, RoomEvent, RoomEventSink, RtcError, RtcRoom, StreamInfo, StreamTextOptions,
-    TextStreamIngress, TextStreamWriter, TrackPublication, TrackPublishOptions, TrackSid,
-    TrackSource, Transcription, VideoFrameRef, silence_frame,
+    AudioInputStream, AudioSource, AudioStreamItem, AudioStreamOptions, AudioTrackFeature,
+    ByteStreamIngress, ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity,
+    ParticipantKind, RemoteParticipant, RoomEvent, RoomEventSink, RtcError, RtcRoom, StreamInfo,
+    StreamTextOptions, TextStreamIngress, TextStreamWriter, TrackPublication, TrackPublishOptions,
+    TrackSid, TrackSource, Transcription, VideoFrameRef, silence_frame,
 };
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
@@ -479,11 +479,11 @@ impl TrackPublication for Processed {
 
 struct Frames(BoundedLossy<AudioFrame>);
 
-impl StreamSource<AudioFrame> for Frames {
+impl StreamSource<AudioStreamItem> for Frames {
     fn next<'a>(
         &'a mut self,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<AudioFrame>, ProviderError>> {
-        Box::pin(async move { Ok(self.0.recv().await) })
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<AudioStreamItem>, ProviderError>> {
+        Box::pin(async move { Ok(self.0.recv().await.map(AudioStreamItem::Frame)) })
     }
     fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move { Closed::Clean })
@@ -505,13 +505,13 @@ impl Processor {
 }
 
 impl AudioInputStream for Processor {
-    fn frames(&self) -> Result<Box<dyn StreamSource<AudioFrame>>, RtcError> {
+    fn frames(&self) -> Result<Box<dyn StreamSource<AudioStreamItem>>, RtcError> {
         Ok(Box::new(Frames(self.live.lock().unwrap().take().expect("one live stream"))))
     }
     fn process_audio<'a>(
         &'a self,
         mut frames: Vec<AudioFrame>,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<AudioFrame>, RtcError>> {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<AudioStreamItem>, RtcError>> {
         Box::pin(async move {
             self.formats
                 .lock()
@@ -523,7 +523,7 @@ impl AudioInputStream for Processor {
             for frame in &mut frames {
                 frame.data = [11, 0].repeat(frame.samples_per_channel as usize).into();
             }
-            Ok(frames)
+            Ok(frames.into_iter().map(AudioStreamItem::Frame).collect())
         })
     }
 }
@@ -552,8 +552,68 @@ fn input(
     clock: Arc<VirtualClock>,
     handler: Option<Arc<PreConnectAudioHandler>>,
 ) -> Arc<ParticipantAudioInput> {
+    session_input(room, clock, AudioInputConfig::default(), handler).0
+}
+
+/// One session's microphone reader, and the room events it reports to.
+fn session_input(
+    room: &Arc<FakeRoom>,
+    clock: Arc<VirtualClock>,
+    config: AudioInputConfig,
+    handler: Option<Arc<PreConnectAudioHandler>>,
+) -> (Arc<ParticipantAudioInput>, tokio::sync::mpsc::Receiver<RoomIoEvent>) {
     let spawner = Arc::new(TokioSpawner::current());
-    ParticipantAudioInput::new(room.clone(), spawner, clock, AudioInputConfig::default(), handler)
+    let (events, reported) = tokio::sync::mpsc::channel(8);
+    (ParticipantAudioInput::new(room.clone(), spawner, clock, config, handler, events), reported)
+}
+
+// Catches: a processor failure reported to every session in the room or once per failed frame,
+// one never reaching the session's events, and a recovered processor never reported again.
+#[tokio::test(start_paused = true)]
+async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed() {
+    let (room, clock) = fake_room("processor-spans");
+    let user = room.add_participant("user", ParticipantKind::Standard);
+    let mic = user.publish_microphone("TR_mic");
+    mic.fail_processors(Arc::new(NoRefs));
+    let denoised = AudioInputConfig {
+        noise_cancellation: Some(lk_agents_abi::HostRef::new(1, &(Arc::new(NoRefs) as _))),
+        auto_gain_control: false,
+        pre_connect_audio: false,
+        ..Default::default()
+    };
+    let plain = AudioInputConfig { noise_cancellation: None, ..denoised.clone() };
+    let (failing, mut failing_events) = session_input(&room, clock.clone(), denoised, None);
+    let (healthy, mut healthy_events) = session_input(&room, clock, plain, None);
+    for input in [&failing, &healthy] {
+        input.set_participant(Some("user".into())).unwrap();
+        input.handle_event(&subscribed(&user, mic.clone())).unwrap();
+    }
+    yields(4).await;
+    // The denoiser rejects chunks 5 and 21: two spans, the second after a clean frame.
+    for chunk in [5i16, 21, 6, 21, 7] {
+        let data = chunk.to_le_bytes().repeat(480);
+        mic.push_frame(AudioFrame::new(data, 24000, 1, 480));
+        for input in [&failing, &healthy] {
+            assert!(input.next_frame().await.unwrap().is_some(), "the input stopped hearing");
+        }
+    }
+    let mut reported = Vec::new();
+    while let Ok(event) = failing_events.try_recv() {
+        reported.push(event);
+    }
+    assert_eq!(reported.len(), 2, "one report per failing span");
+    assert!(reported.iter().all(
+        |event| matches!(event, RoomIoEvent::InputProcessorFailed(f) if f.label == "fake.Denoiser")
+    ));
+    assert!(healthy_events.try_recv().is_err(), "another session's input never failed");
+    failing.aclose().await;
+    healthy.aclose().await;
+}
+
+struct NoRefs;
+
+impl lk_agents_abi::errors::RefRegistry for NoRefs {
+    fn release(&self, _: u64) {}
 }
 
 #[tokio::test]

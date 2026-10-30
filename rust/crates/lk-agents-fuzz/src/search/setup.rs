@@ -61,6 +61,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         connect_ms: rng.bool().then(|| ms(rng)),
         video: rng.bool(),
         room_camera: false,
+        failing_processors: false,
         sync_transcription: rng.bool(),
         text_output_raises: false,
         lagging_output: false,
@@ -195,5 +196,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.tools_refuse_cancel = rng.u8(0..100) < 10;
     // Drawn last: one setup in ten stores its lane and loses the lease at one of its first answers.
     setup.storage_lost_at = (rng.u8(0..100) < 10).then(|| rng.u32(1..6));
+    // Drawn last: a third of the room's microphones go through processors that reject some audio.
+    setup.failing_processors = setup.room_legs.is_some() && rng.u8(0..100) < 33;
     setup
 }

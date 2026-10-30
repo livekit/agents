@@ -136,12 +136,12 @@ fn armed(attempt: u32) -> Step {
 fn error(recoverable: bool) -> Step {
     use lk_agents_abi::errors::{ApiError, ProviderError};
     use lk_agents_voice::{agent_activity::scheduling::SpeechId, events::ErrorEvent};
-    Step::Emitted(SessionEvent::Error(Box::new(ErrorEvent {
-        source: ErrorSource::Llm,
+    Step::Emitted(SessionEvent::Error(Box::new(ErrorEvent::provider(
+        ErrorSource::Llm,
         recoverable,
-        error: ProviderError::Local(ApiError::new("injected")),
-        speech: Some(SpeechId(4)),
-    })))
+        ProviderError::Local(ApiError::new("injected")),
+        Some(SpeechId(4)),
+    ))))
 }
 
 /// One failure, reported recoverable, then the retry its budget allows.

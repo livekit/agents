@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from livekit import rtc
+from livekit.agents._generated import rtc_wire
 from livekit.agents.voice.room_io import (
     AudioProcessingError,
     LocalParticipant,
@@ -33,10 +34,18 @@ class FailingProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         pass
 
 
+def _frames(items: list[Any]) -> list[rtc.AudioFrame]:
+    return [item.frame for item in items if isinstance(item, rtc_wire.AudioStreamItemFrame)]
+
+
+def _failed(items: list[Any]) -> list[Any]:
+    return [i for i in items if isinstance(i, rtc_wire.AudioStreamItemProcessorFailed)]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replay", [False, True])
 @pytest.mark.parametrize("stage", ["processor", "agc"])
-async def test_processing_failure_reports_typed_error_and_keeps_original_audio(
+async def test_processing_failure_is_reported_ahead_of_its_frame_which_keeps_original_audio(
     replay: bool, stage: str
 ) -> None:
     original = bytes([1, 0]) * 480
@@ -73,74 +82,76 @@ async def test_processing_failure_reports_typed_error_and_keeps_original_audio(
 
     processor = FailsOnce() if stage == "processor" else None
     agc = Agc() if stage == "agc" else None
-    reported: list[tuple[AudioProcessingError, object]] = []
-    session = SimpleNamespace(_on_audio_processing_error=lambda e, p: reported.append((e, p)))
     source = _AudioStream(
-        cast(Any, session),
-        cast(rtc.AudioStream, Stream()),
-        processor,
-        cast(rtc.AudioProcessingModule, agc),
+        cast(rtc.AudioStream, Stream()), processor, cast(rtc.AudioProcessingModule, agc)
     )
     if replay:
-        recovered, following = await source._core_process_audio([frame, next_frame])
+        items = await source._core_process_audio([frame, next_frame])
     else:
-        recovered, following = await anext(source), await anext(source)
-    assert bytes(recovered.data) == original
-    assert bytes(following.data) == bytes([2, 0]) * 480
-    [(error, failed)] = reported
-    assert failed is (processor if stage == "processor" else agc)
-    assert error.recoverable and isinstance(error.error, RuntimeError)
+        items = [await anext(source) for _ in range(3)]
+    failed, recovered, following = items
+    assert isinstance(failed, rtc_wire.AudioStreamItemProcessorFailed)
+    assert bytes(recovered.frame.data) == original
+    assert bytes(following.frame.data) == bytes([2, 0]) * 480
+    assert failed.failure.processor is (processor if stage == "processor" else agc)
+    assert isinstance(failed.failure.error, RuntimeError)
 
 
 @pytest.mark.asyncio
-async def test_a_failing_span_is_one_error_on_the_session_whose_input_failed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents import VoiceSession
-    from livekit.agents.voice.events import ErrorEvent
-
+async def test_each_processor_reports_its_own_failure_and_the_other_still_runs() -> None:
     frame = rtc.AudioFrame(bytes(960), 24000, 1, 480)
+    processed = []
+
+    class Agc:
+        def process_stream(self, frame: rtc.AudioFrame) -> None:
+            processed.append(frame)
 
     class Stream:
         async def __anext__(self) -> rtc.AudioFrameEvent:
             return rtc.AudioFrameEvent(frame)
 
-        async def aclose(self) -> None:
-            pass
-
-    class Healthy(FailingProcessor):
-        def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-            return frame
-
-    monkeypatch.setattr(rtc.AudioStream, "from_track", lambda **kwargs: Stream())
-    publication = TrackPublication(
-        object.__new__(Room),
-        cast(rtc.TrackPublication, SimpleNamespace(sid="TR_input", track=object())),
+    nc = FailingProcessor()
+    source = _AudioStream(
+        cast(rtc.AudioStream, Stream()), nc, cast(rtc.AudioProcessingModule, Agc())
     )
-    errors: dict[str, list[ErrorEvent]] = {"failing": [], "healthy": []}
-    streams = []
-    for name, processor in (("failing", FailingProcessor()), ("healthy", Healthy())):
-        session: VoiceSession[Any] = VoiceSession()
-        session.on("error", errors[name].append)
-        options = SimpleNamespace(
-            participant_identity="user",
-            noise_cancellation=processor,
-            sample_rate=24000,
-            num_channels=1,
-            frame_size_ms=20,
-            auto_gain_control=False,
-            queue_capacity=50,
-            session=session,
+    items = [await anext(source) for _ in range(2)]
+    [failed] = _failed(items)
+    assert failed.failure.processor is nc
+    assert len(_frames(items)) == 1 and len(processed) == 1, "AGC skipped after NC failed"
+
+
+def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor() -> None:
+    from livekit.agents import VoiceSession
+    from livekit.agents._generated.session_wire import SessionErrorWire
+    from livekit.agents.voice.events import ErrorEvent
+
+    processor = FailingProcessor()
+    sessions: list[VoiceSession[Any]] = [VoiceSession(), VoiceSession()]
+    errors: list[list[ErrorEvent]] = [[], []]
+    for session, received in zip(sessions, errors, strict=True):
+        session.on("error", received.append)
+    cause = RuntimeError("processor failed")
+    failure = rtc_wire.ProcessorFailure(
+        label="plugin.Denoiser", processor=processor, error=cause, message=str(cause)
+    )
+    sessions[0]._on_error(
+        SessionErrorWire(
+            source="audio_processing_error",
+            recoverable=True,
+            label=failure.label,
+            error=RuntimeError(failure.message),
+            speech_id=None,
+            processor_failure=failure,
         )
-        streams.append(publication._core_open_audio_stream(options))
-    for _ in range(5):
-        for stream in streams:
-            await anext(stream)
-    [event] = errors["failing"]
+    )
+    [event] = errors[0]
     assert isinstance(event.error, AudioProcessingError)
-    assert errors["healthy"] == []
-    for stream in streams:
-        await stream.aclose()
+    assert (event.error.label, event.error.error, event.source) == (
+        "plugin.Denoiser",
+        cause,
+        processor,
+    )
+    assert errors[1] == []
 
 
 @pytest.mark.asyncio
@@ -184,14 +195,13 @@ async def test_preconnect_uses_its_captured_live_stream_agc_after_another_stream
         frame_size_ms=20,
         auto_gain_control=True,
         queue_capacity=50,
-        session=None,
     )
     original = publication._core_open_audio_stream(options)
     replacement = publication._core_open_audio_stream(options)
     try:
-        assert await original._core_process_audio([head]) == [head]
-        assert await anext(original._core_frames()) is live
-        assert await anext(replacement._core_frames()) is live
+        assert _frames(await original._core_process_audio([head])) == [head]
+        assert (await anext(original._core_frames())).frame is live
+        assert (await anext(replacement._core_frames())).frame is live
         assert processed == [(0, head), (0, live), (1, live)]
     finally:
         await original.aclose()
@@ -244,11 +254,10 @@ async def test_custom_processor_runs_once_and_only_its_owner_closes_it(
             frame_size_ms=20,
             auto_gain_control=False,
             queue_capacity=50,
-            session=None,
         )
     )
-    assert await source._core_process_audio([frame]) == [frame]
-    assert await anext(source) is frame
+    assert _frames(await source._core_process_audio([frame])) == [frame]
+    assert (await anext(source)).frame is frame
     assert processed == 2
     await source.aclose()
     await source.aclose()
@@ -403,10 +412,9 @@ async def test_stalled_sdk_media_retains_only_its_latest_bounded_window(
                 frame_size_ms=20,
                 auto_gain_control=False,
                 queue_capacity=capacity,
-                session=None,
             )
         )
-        frame = await anext(source._core_frames())
+        frame = (await anext(source._core_frames())).frame
         assert int.from_bytes(frame.data, "little") == 1000 - capacity
     else:
         source = publication._core_open_video_stream()
@@ -514,7 +522,6 @@ async def test_sdk_source_read_and_cleanup_failures_keep_their_causes(
                 frame_size_ms=20,
                 auto_gain_control=False,
                 queue_capacity=50,
-                session=None,
             )
         )
         if kind == "audio"

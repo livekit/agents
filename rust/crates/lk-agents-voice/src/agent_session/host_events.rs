@@ -125,7 +125,9 @@ impl HostEvent {
                 crate::room_io::RoomIoEvent::DeleteRoomRequested(e) => {
                     HostWire::DeleteRoomRequested(e.clone())
                 }
-                crate::room_io::RoomIoEvent::KeyPressed(_) => return None,
+                // A key press reaches the DTMF task; a processor failure is the session's error.
+                crate::room_io::RoomIoEvent::KeyPressed(_)
+                | crate::room_io::RoomIoEvent::InputProcessorFailed { .. } => return None,
             },
             HostEvent::Hook(_) | HostEvent::SpeechRetired(_) => return None,
         })
@@ -328,13 +330,14 @@ impl ErrorEvent {
         lk_agents_abi::voice::events::SessionErrorWire {
             source: self.source.as_str().to_owned(),
             recoverable: self.recoverable,
-            label: match self.error {
-                lk_agents_abi::errors::ProviderError::Host { .. } => "host",
-                _ => "engine",
-            }
-            .to_owned(),
+            label: match (&self.processor_failure, &self.error) {
+                (Some(p), _) => p.label.clone(),
+                (None, lk_agents_abi::errors::ProviderError::Host { .. }) => "host".to_owned(),
+                (None, _) => "engine".to_owned(),
+            },
             error: self.error.clone(),
             speech_id: self.speech.map(|id| id.to_string()),
+            processor_failure: self.processor_failure.clone(),
         }
     }
 }
@@ -372,12 +375,12 @@ mod tests {
     // the unrecoverable `error` event.
     #[test]
     fn an_error_close_carries_its_error() {
-        let error = ErrorEvent {
-            source: ErrorSource::Llm,
-            recoverable: false,
-            error: lk_agents_abi::errors::ApiError::new("boom").into(),
-            speech: None,
-        };
+        let error = ErrorEvent::provider(
+            ErrorSource::Llm,
+            false,
+            lk_agents_abi::errors::ApiError::new("boom").into(),
+            None,
+        );
         let close = SessionEvent::Close { reason: CloseReason::Error, error: Some(error) };
         let HostWire::Close(w) = close.wire(anchor(), &|_| unreachable!()) else { panic!("not a close") };
         let e = w.error.expect("the close's error");
