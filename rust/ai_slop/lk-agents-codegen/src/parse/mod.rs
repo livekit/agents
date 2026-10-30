@@ -4,7 +4,6 @@
 
 mod exposed;
 mod meta;
-mod provider;
 mod signature;
 
 use crate::ir::*;
@@ -85,7 +84,9 @@ pub fn constants(label: &str, text: &str) -> Res<Vec<Constant>> {
 /// A Rust literal as Python source.
 fn py_literal(at: &str, e: &syn::Expr) -> Res<String> {
     let bad = || {
-        format!("{at}: a #[host(constant)] is a string, integer, float or bool literal, or a slice of them")
+        format!(
+            "{at}: a #[host(constant)] is a string, integer, float or bool literal, or a slice of them"
+        )
     };
     match e {
         // `&[..]`: a tuple, immutable like the Rust slice.
@@ -608,7 +609,6 @@ fn targets(
                     })
                     .unwrap_or_default(),
                 typed_dict_from: str_arg(attrs, outer, "typed_dict_from")?,
-                from_items: flag(attrs, outer, "from_items"),
             });
         }
     }

@@ -973,7 +973,7 @@ cores nor runtime implementations declare a second export surface.
 | `#[derive(Host)]` | Boundary data: options, events, chat items, reports and error payloads | Generated models and conversions at the language boundary |
 | `#[host]` for a synchronous operation | Constructor, transition or synchronous API contract | Subject core for decisions; runtime or an async I/O crate for host views and resources |
 | `#[host(proxy)]` on a trait | Provider, user I/O, tool runner, hook or host SDK contract | Generated proxy in `lk-agents-py`, entered through HostInvoker |
-| `#[host(proxy)]` with `#[python(provider(..))]` | Provider contract and Python hook metadata | Generated provider base and generated proxy |
+| `#[host(proxy(base = "tts.py"))]` on a trait | Provider contract whose host class is a plugin base class, hand-written in that file beside the trait | Generated proxy; the base written into its generated module after the records, checked to define every declared call |
 | `#[host]` for an async operation, stream or awaitable | Operation awaited by the host | Runtime or async I/O implementation and generated async bridge |
 
 ABI contains contracts and data, not I/O or host-language implementations. It

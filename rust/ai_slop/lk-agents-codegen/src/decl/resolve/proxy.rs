@@ -15,7 +15,7 @@ impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
         let at = self.at;
-        voc::only(at, &proxy.nested, &["host", "view"])?;
+        voc::only(at, &proxy.nested, &["host", "view", "base", "generic"])?;
         let host = voc::text(at, &proxy.nested, "host")?.ok_or_else(|| {
             format!("{at}: proxy(host = \"module.Class\") names the class it calls")
         })?;
@@ -26,6 +26,11 @@ impl Resolver<'_> {
                 None => return Err(format!("{at}: view = \"{v}\" is a dotted class path")),
             },
         };
+        let base = voc::text(at, &proxy.nested, "base")?;
+        let generic = voc::find(&proxy.nested, "generic").is_some();
+        if generic && base.is_none() {
+            return Err(format!("{at}: `generic` is a plugin base class's (`base = \"..\"`)"));
+        }
         if !tr.generics.params.is_empty() {
             return Err(format!("{at}: a generic trait has no single proxy"));
         }
@@ -75,6 +80,8 @@ impl Resolver<'_> {
             source: module.file.clone(),
             host,
             view,
+            base,
+            generic,
             async_trait,
             handed_back: tr.supertraits.iter().any(|b| {
                 matches!(b, syn::TypeParamBound::Trait(t) if t.path.segments.last().is_some_and(|s| s.ident == "Any"))

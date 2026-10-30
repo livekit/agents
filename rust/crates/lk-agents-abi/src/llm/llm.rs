@@ -274,36 +274,27 @@ impl ChatRequest {
 }
 
 // A host `llm.LLM` is this trait through its generated proxy (`LlmProxy`), calling the `_core_*`
-// methods of the base class `lk-agents-codegen` writes from the `#[python]` markers; the request
-// crosses as a `_core.ChatRequest` handle.
+// methods of its hand-written base class (`llm.py`); the request crosses as a `_core.ChatRequest`
+// handle.
 /// A language model.
 ///
 /// Plugins implement `chat()`, returning an `LLMStream` whose `_run` sends the provider's chunks.
-#[crate::host(proxy(host = "livekit.agents.llm.LLM"))]
-#[python(provider(
-    module = "llm",
-    path = "livekit.agents.llm",
-    events = "metrics_collected, error",
-    error(name = "LLMError", kind = "llm_error")
-))]
+#[crate::host(proxy(host = "livekit.agents.llm.LLM", base = "llm.py", generic))]
 pub trait Llm: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.
-    #[python(value = "id(self)")]
     #[host(read_once, name = "_core_instance_id")]
     fn instance_id(&self) -> Option<usize> {
         None
     }
 
     /// The name logs and metrics give this instance: its class path.
-    #[python(label)]
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> String;
 
     // `LLM.model` (`llm/llm.py:120`): the model name, or `"unknown"`. Not derivable from
     // [`label`](Self::label) (`f"{module}.{classname}"`); an implementor that knows its model must
     // override this.
-    #[python(value = "self.model")]
     #[host(read_once, name = "_core_model")]
     fn model(&self) -> String {
         "unknown".to_owned()
@@ -311,7 +302,6 @@ pub trait Llm: Send + Sync {
 
     /// The model and provider labelling this instance's turn metrics.
     // `label`/`model`/`provider` as metrics and errors stamp them; `"unknown"` for missing names.
-    #[python(identity)]
     #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId {
@@ -333,13 +323,11 @@ pub trait Llm: Send + Sync {
     ///
     /// Args:
     /// - loop: Event loop to schedule the prewarm request on. Defaults to the running event loop.
-    #[python(hook = "prewarm", impl = "_prewarm_impl")]
     #[host(notify, name = "_core_prewarm")]
     fn prewarm(&self) {}
 
     // A view of this provider whose calls carry `conn` (a host plugin's `conn_options`: the
     // request's own are the chain's). See [`Stt::with_conn_options`](crate::Stt::with_conn_options).
-    #[python(conn)]
     #[host(bind)]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Llm>> {
         None
@@ -347,7 +335,6 @@ pub trait Llm: Send + Sync {
 
     // The framework's report of a failed attempt of a call it retries: the provider's `error`
     // event, `recoverable` while the call is retried. A wrapper forwards it.
-    #[python(report)]
     #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
@@ -362,14 +349,6 @@ pub trait Llm: Send + Sync {
     /// - extra_kwargs: Provider-specific request options.
     // `Result`: a plugin's `chat()` can raise before any chunk, which `FallbackChain` treats as
     // retryable. `async` for the reason on [`Tts`](crate::Tts).
-    #[python(
-        chat,
-        stream(
-            name = "LLMStream",
-            kind = "chat",
-            doc = "One completion: ``ChatChunk`` out.\n\nPlugins implement ``_run``, sending the provider's chunks to ``_event_ch``; its attempts are retried per ``conn_options``."
-        )
-    )]
     #[host(await, name = "_core_chat")]
     fn chat<'a>(
         &'a self,

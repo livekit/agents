@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
 # `#[host(record)]` declarations in:
+#     rust/crates/lk-agents-abi/src/tts/tts.py
 #     rust/crates/lk-agents-abi/src/tts/tts.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -169,7 +170,9 @@ class TTS(
             """The queryable markup matrix for this voice."""
             return _core.supported_nonverbals(self._provider_key())
 
-        def llm_instructions(self, *, speech_steering: SpeechSteeringOptions | None = None) -> str | None:
+        def llm_instructions(
+            self, *, speech_steering: SpeechSteeringOptions | None = None
+        ) -> str | None:
             """The instructions teaching the LLM this voice's markup, ``None`` without markup."""
             return self._core().llm_instructions(speech_steering=speech_steering)
 

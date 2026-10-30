@@ -224,6 +224,12 @@ pub struct Proxy {
     /// `view = "module.Class"`: the class whose instance over the host object the proxy calls,
     /// for host classes that do not carry the `_core_*` surface themselves (the io legs).
     pub view: Option<(String, String)>,
+    /// `base = "tts.py"`: the host class is a plugin base class, hand-written in that file beside
+    /// the declaring one (see `crate::bases`).
+    pub base: Option<String>,
+    /// `generic`: the base class is an `EventEmitter` generic over the plugin's own events; an
+    /// annotation names it `Class[Any]`.
+    pub generic: bool,
     /// `#[async_trait]` on the trait: the implementation carries it too.
     pub async_trait: bool,
     /// The trait declares `Any`: a proxy of it passed to a host call is handed back as the host
@@ -547,8 +553,8 @@ pub enum Ty {
     Proxy {
         rust: String,
         host: String,
-        /// A generated provider base (`#[python(provider(..))]`): generic over its event names, so
-        /// any instantiation is accepted.
+        /// `proxy(generic)`: a plugin base class generic over its event names, so any
+        /// instantiation is accepted.
         generic: bool,
         /// A declaration-model proxy: `(family, trait)`, generated as `<family>::<trait>Proxy`.
         /// `None`: the trait's in-place `HostProxy`.

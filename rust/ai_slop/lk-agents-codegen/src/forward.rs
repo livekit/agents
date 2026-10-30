@@ -5,62 +5,6 @@ use crate::ir::*;
 use crate::python::{Out, docstring};
 use crate::stub::signature_parts;
 
-/// A synchronous native class's methods projected for Python forwarding.
-pub(crate) struct ForwardMethod {
-    pub name: String,
-    pub doc: Vec<String>,
-    pub params: Vec<(String, bool)>,
-    pub ret: String,
-}
-
-pub(crate) struct ForwardClass {
-    pub doc: Vec<String>,
-    pub methods: Vec<ForwardMethod>,
-    pub imports: Vec<(String, String)>,
-}
-
-/// Both declaration forms use their stub's type/default renderer; callers emit one forwarding loop.
-pub(crate) fn class_methods(
-    decls: &[Decl],
-    x: &Exposed,
-    declared: &crate::decl::Declarations,
-    name: &str,
-) -> Result<ForwardClass, String> {
-    if let Some(object) = x.objects.iter().find(|object| object.name == name) {
-        let methods = object
-            .methods
-            .iter()
-            .filter(|method| method.kind == MethodKind::Method)
-            .map(|method| {
-                let (params, ret) = signature_parts(decls, x, &method.sig)?;
-                Ok(ForwardMethod {
-                    name: method.name.clone(),
-                    doc: method.doc.clone(),
-                    params,
-                    ret,
-                })
-            })
-            .collect::<Result<_, String>>()?;
-        return Ok(ForwardClass { doc: object.doc.clone(), methods, imports: Vec::new() });
-    }
-    let class = declared
-        .classes
-        .iter()
-        .find(|class| class.name == name)
-        .ok_or_else(|| format!("forwards to undeclared core class `{name}`"))?;
-    let mut imports = crate::class_stub::Imports::new(declared);
-    let methods = class
-        .methods
-        .iter()
-        .filter(|method| method.kind == crate::decl::MethodKind::Call)
-        .map(|method| {
-            let (params, ret) = crate::class_stub::signature_parts(class, method, &mut imports);
-            ForwardMethod { name: method.name.clone(), doc: method.doc.clone(), params, ret }
-        })
-        .collect();
-    Ok(ForwardClass { doc: class.doc.clone(), methods, imports: imports.entries().to_vec() })
-}
-
 pub fn emit(
     decls: &[Decl],
     x: &Exposed,

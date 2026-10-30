@@ -560,39 +560,29 @@ pub struct Truncate {
 }
 
 // A host `RealtimeModel`, as a session binds it to its tools: the model half, through the
-// `_core_*` surface of the base class `lk-agents-codegen` writes from the `#[python]` markers.
+// `_core_*` surface of its hand-written base class (`realtime.py`).
 /// A realtime model: speech in, speech out, over one live session.
 ///
 /// Plugins implement `session()`, returning a `RealtimeSession`.
-#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeModel"))]
-#[python(provider(
-    name = "RealtimeModel",
-    module = "realtime",
-    path = "livekit.agents.llm.realtime",
-    error(name = "RealtimeModelError", kind = "realtime_model_error")
-))]
+#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeModel", base = "realtime.py"))]
 pub trait HostRealtime: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.
-    #[python(value = "id(self)")]
     #[host(read_once, name = "_core_instance_id")]
     fn instance_id(&self) -> Option<usize> {
         None
     }
 
     /// The name logs and metrics give this instance: its class path.
-    #[python(label)]
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> String;
 
     /// What this instance supports, fixed at construction.
     // Read once: the audio path never takes the GIL to ask.
-    #[python(init)]
     #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> RealtimeCapabilities;
 
     /// The model and provider labelling this instance's turn metrics.
-    #[python(identity)]
     #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
@@ -607,19 +597,10 @@ pub trait HostRealtime: Send + Sync {
     ///   reporting `can_disable_turn_detection`.
     // Open the plugin session with the driver's `turn_detection_disabled`. The session's events and
     // commands cross through `HostRealtimeSession`, which the session class answers.
-    #[python(
-        hook,
-        stream(
-            name = "RealtimeSession",
-            kind = "realtime",
-            proxy = "HostRealtimeSession",
-            doc = "One live session of a realtime model.\n\nPlugins implement its commands (``push_audio``, ``generate_reply``, ``truncate``, the updates) and emit its events (``input_speech_started``, ``generation_created``, ``error``)."
-        )
-    )]
     #[host(await, name = "_core_session")]
     fn session(
         &self,
-        #[python(default = "False")] turn_detection_disabled: bool,
+        turn_detection_disabled: bool,
     ) -> crate::BoxFuture<
         '_,
         Result<std::sync::Arc<dyn HostRealtimeSession>, crate::errors::ProviderError>,
@@ -629,7 +610,7 @@ pub trait HostRealtime: Send + Sync {
 /// A host `RealtimeSession`, flattened: the leg orders the commands, the session's callbacks
 /// report one event at a time.
 // A dropped call cancels its host coroutine.
-#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeSession"))]
+#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeSession", base = "realtime.py"))]
 pub trait HostRealtimeSession: Send + Sync {
     /// A command that applies at once (`PushAudio`, `Interrupt`, `CommitAudio`, `ClearAudio`,
     /// `Truncate`), queued on the host loop in order.

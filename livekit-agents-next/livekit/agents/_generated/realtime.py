@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
 # `#[host(record)]` declarations in:
+#     rust/crates/lk-agents-abi/src/llm/realtime.py
 #     rust/crates/lk-agents-abi/src/llm/realtime.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a

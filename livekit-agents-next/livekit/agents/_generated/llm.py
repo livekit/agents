@@ -2,7 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
 # `#[host(record)]` declarations in:
-#     rust/crates/lk-agents-abi/src/llm/llm.rs
+#     rust/crates/lk-agents-abi/src/llm/llm.py
 #     rust/crates/lk-agents-abi/src/llm/events.rs
 #     rust/crates/lk-agents-abi/src/llm/provider_format/image.rs
 #

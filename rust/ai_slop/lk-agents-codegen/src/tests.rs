@@ -673,67 +673,86 @@ fn a_host_field_default_factory_is_a_dataclass_field_with_its_import() {
     assert!(out.contains("from dataclasses import dataclass, field"), "{out}");
 }
 
-/// A provider trait beside one record, as the generated module holds both.
-const PROVIDER: &str = r#"
-    #[derive(Host)]
-    #[python(dataclass, module = "m", path = "livekit.agents.m", name = "Caps")]
-    pub struct Caps { pub streaming: bool }
+/// A plugin base class as its file holds it: imports, then the classes.
+const BASE: &str = r#"from __future__ import annotations
 
-    /// A provider.
-    #[crate::host(proxy(host = "livekit.agents.m.P"))]
-    #[python(provider(module = "m", path = "livekit.agents.m", events = "error", error(name = "PError", kind = "p_error")))]
-    pub trait P: Send + Sync {
-        /// Its name.
-        #[python(label)]
-        fn label(&self) -> String;
-        /// What it can do.
-        #[python(init)]
-        fn capabilities(&self) -> Caps;
-        #[python(conn)]
-        fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn P>> { None }
-        /// Ask it.
-        #[python(hook = "ask", impl = "_ask_impl")]
-        async fn ask(&self, text: &str, language: Option<&str>) -> Result<Caps, ProviderError>;
-        MARKER
-    }
+import asyncio
+from abc import ABC
+from typing import TYPE_CHECKING
+
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+)
+from .m import Caps
+
+if TYPE_CHECKING:
+    from ..llm.tool_context import Tool
+
+
+class P(ABC):
+    def _core_label(self) -> str:
+        return "p"
+
+    async def _core_ask(self, text: str) -> Caps:
+        await asyncio.sleep(0)
+        return Caps(streaming=False)
+
+
+class _Helper:
+    pass
 "#;
 
-fn generate_provider(src: &str) -> Result<String, String> {
-    let decls = parse::file("test.rs", src)?;
-    let exposed = parse::exposed("test.rs", src)?;
-    let bases = crate::bases::emit(&decls, &exposed, &crate::decl::Declarations::default())?;
-    Ok(python::emit_with(&decls, &bases, &[])?.into_iter().map(|o| o.text).collect())
+fn base(text: &str) -> Result<crate::bases::Bases, String> {
+    let declared = crate::decl::tests::read(
+        r#"
+        use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.m.P", base = "m.py"))]
+        #[async_trait]
+        pub trait P: Send + Sync {
+            #[host(read_once, name = "_core_label")] fn label(&self) -> String;
+            #[host(await, name = "_core_ask")] async fn ask(&self, text: String) -> Result<u32, HostError>;
+        }
+    "#,
+    )?;
+    crate::bases::parse("src/m.py", text, &declared.proxies.iter().collect::<Vec<_>>())
 }
 
-// Catches: a trait method the base class does not answer reaching a runtime `AttributeError` on
-// `_core_<method>` instead of failing the codegen, which is what keeps the two from drifting.
+// Catches: a proxy call its hand-written base class does not define reaching a runtime
+// `AttributeError` on `_core_<method>` instead of failing the codegen, which is what keeps the
+// two from drifting.
 #[test]
-fn a_provider_method_without_a_python_role_is_refused() {
-    let err = generate_provider(&PROVIDER.replace("MARKER", "fn flush(&self);"))
-        .expect_err("an unanswered method is a codegen error");
-    assert!(err.contains("P::flush") && err.contains("what is this method"), "{err}");
+fn a_proxy_call_its_base_class_does_not_answer_is_refused() {
+    let err = base(&BASE.replace("def _core_ask", "def ask")).err().expect("refused");
+    assert!(err.contains("P::ask") && err.contains("_core_ask"), "{err}");
 }
 
-// Catches: a `_core_` method missing for a trait method, `conn_options` not reaching the plugin
-// through the conn view, or an optional core argument passed as `None` where the plugin API
-// takes `NOT_GIVEN`.
+// Catches: a base file's imports lost or doubled when merged into its records' module (the
+// parenthesized and `TYPE_CHECKING` forms, its own module's records), its classes not written
+// verbatim after the records, or a private class given a public path.
 #[test]
-fn every_provider_method_gets_its_core_surface() {
-    let out = generate_provider(&PROVIDER.replace("MARKER", "")).expect("generates");
-    // Wrapping aside.
-    let flat = out.split_whitespace().collect::<Vec<_>>().join(" ").replace("( ", "(");
-    for core in ["_core_label", "_core_capabilities", "_core_ask"] {
-        assert!(flat.contains(&format!("def {core}(self")), "{core}: {out}");
-    }
-    // The declared proxy binds `conn_options` itself: no view of the provider.
-    assert!(!out.contains("_core_with_conn_options") && !out.contains("class _PConn"), "{out}");
+fn a_base_file_follows_its_records_with_merged_imports() {
+    let decls = parse::file(
+        "test.rs",
+        r#"
+        #[derive(Host)]
+        #[python(dataclass, module = "m", path = "livekit.agents.m", name = "Caps")]
+        pub struct Caps { pub streaming: bool }
+    "#,
+    )
+    .expect("parses");
+    let bases = base(BASE).expect("answers every call");
+    let out = python::emit_with(&decls, &[bases], &[]).expect("emits");
+    let text = &out[0].text;
     for want in [
-        "async def _ask_impl(self, text: str, *, language: NotGivenOr[str] = NOT_GIVEN, conn_options: APIConnectOptions ) -> Caps: ...",
-        "return await self.ask(text, language=NOT_GIVEN if language is None else language, conn_options=conn )",
+        "import asyncio\nfrom abc import ABC\nfrom dataclasses import dataclass\nfrom typing import TYPE_CHECKING\n\n",
+        "from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions\n\nif TYPE_CHECKING:\n    from ..llm.tool_context import Tool\n",
+        &BASE[BASE.find("class P(").expect("a class")..],
         "P.__module__ = \"livekit.agents.m\"",
     ] {
-        assert!(flat.contains(want), "{want}: {out}");
+        assert!(text.contains(want), "{want}\n{text}");
     }
+    assert!(!text.contains("from .m import") && !text.contains("_Helper.__module__"), "{text}");
 }
 
 // Catches: a str class whose members are not the declared exports (a property named after the fn,
@@ -941,105 +960,6 @@ fn a_call_context_is_captured_at_entry_and_never_crosses() {
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     let stub = stubs.iter().map(|s| s.out.text.as_str()).collect::<String>();
     assert!(stub.contains("async def say(self, text: str) -> None"), "{stub}");
-}
-
-#[test]
-fn provider_markup_forwards_legacy_and_declared_classes_through_the_same_contract() {
-    let records = r#"
-        #[derive(Host)]
-        #[python(dataclass, module = "m", path = "livekit.agents.m", name = "MarkupInfo")]
-        pub struct MarkupInfo { pub nonverbals: String }
-        #[derive(Host)]
-        #[python(typed_dict, module = "expressive", path = "livekit.agents.m", name = "SpeechSteeringOptions")]
-        #[binding(extract, from_items)]
-        pub struct SpeechSteering { pub rate: f64 }
-    "#;
-    let provider =
-        PROVIDER.replace("MARKER", "#[python(markup)] fn provider_key(&self) -> String;");
-    let common = format!("{records}\n{provider}");
-    let legacy = r#"
-        /// Markup helper.
-        #[crate::host(object(name = "Markup"))]
-        impl Markup {
-            #[host(new)] pub fn new(provider: &str) -> Self { todo!() }
-            /// The dialect key.
-            #[host(method(name = "_provider_key"))]
-            pub fn provider_key(&self) -> String { todo!() }
-            /// Instructions for this voice.
-            #[host(method(kw_only))]
-            pub fn llm_instructions(&self, speech_steering: Option<&SpeechSteering>) -> Option<String> { todo!() }
-            #[host(method)] pub fn normalize(&self, text: &str) -> String { todo!() }
-            #[host(method)] pub fn convert(&self, text: &str) -> String { todo!() }
-        }
-    "#;
-    let declared = r#"
-        /// Markup helper.
-        #[crate::host(class(name = "Markup"))]
-        pub trait Markup: Sized {
-            #[host(new)] fn new(provider: String) -> Self;
-            /// The dialect key.
-            #[host(call, name = "_provider_key")] fn provider_key(&self) -> String;
-            /// Instructions for this voice.
-            #[host(call)] fn llm_instructions(&self, #[host(kw, default = None)] speech_steering: Option<SpeechSteering>) -> Option<String>;
-            #[host(call)] fn normalize(&self, text: String) -> String;
-            #[host(call)] fn convert(&self, text: String) -> String;
-        }
-    "#;
-    let records = parse::file("test.rs", &common).unwrap();
-    let legacy_exposed = parse::exposed("test.rs", &format!("{common}\n{legacy}")).unwrap();
-    let legacy_bases =
-        crate::bases::emit(&records, &legacy_exposed, &crate::decl::Declarations::default())
-            .unwrap();
-    let text = format!("{common}\n{declared}");
-    let tree = crate::decl::tree::Crate::from_files(
-        "lk_agents_abi",
-        &[("lib.rs", "pub mod tts;"), ("tts.rs", &text)],
-    )
-    .unwrap();
-    let declarations = crate::decl::resolve::declarations(&tree).unwrap();
-    let exposed = parse::exposed("test.rs", &common).unwrap();
-    let declared_bases = crate::bases::emit(&records, &exposed, &declarations).unwrap();
-    // Legacy dictionary extractors intentionally expose Any; the declaration keeps the
-    // record's TypedDict name. All forwarding, docs, defaults and calls must otherwise match.
-    let old_annotation = "speech_steering: Any | None = None";
-    assert_eq!(legacy_bases[0].body.matches(old_annotation).count(), 1);
-    assert_eq!(
-        legacy_bases[0].body.replacen(
-            old_annotation,
-            "speech_steering: SpeechSteeringOptions | None = None",
-            1
-        ),
-        declared_bases[0].body,
-        "switching declaration form must preserve the full forwarding body except the typed annotation"
-    );
-    let body = &declared_bases[0].body;
-    assert!(body.contains("def llm_instructions(self, *, speech_steering: SpeechSteeringOptions | None = None) -> str | None:"), "{body}");
-    assert!(
-        body.contains("return self._core().llm_instructions(speech_steering=speech_steering)"),
-        "{body}"
-    );
-    assert!(
-        body.contains("def normalize(self, text: str) -> str:")
-            && body.contains("return self._core().normalize(text)"),
-        "{body}"
-    );
-    assert_eq!(body.matches("def convert(").count(), 1, "each declared method forwards once");
-    assert_eq!(
-        declared_bases[0]
-            .imports
-            .iter()
-            .filter(|(module, name)| module == ".expressive" && name == "SpeechSteeringOptions")
-            .count(),
-        1,
-        "the declared record must import its canonical TypedDict exactly once"
-    );
-    assert!(
-        !declared_bases[0]
-            .imports
-            .iter()
-            .any(|(module, name)| module == ".m" && name == "SpeechSteeringOptions"),
-        "records already beside the base must not import their own module"
-    );
 }
 
 #[test]

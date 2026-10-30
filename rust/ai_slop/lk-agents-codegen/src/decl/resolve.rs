@@ -11,7 +11,6 @@ mod class;
 mod native;
 mod proxy;
 mod record;
-pub(crate) use proxy::boxed_future;
 use proxy::eager_future;
 use record::{check_default, record_entry, record_target, unit_enum};
 
@@ -799,20 +798,8 @@ impl Resolver<'_> {
             .ok_or_else(|| format!("{at}: `{}` is not a #[host(proxy)] trait", tr.ident))?;
         let host = voc::text(at, &proxy.nested, "host")?
             .ok_or_else(|| format!("{at}: proxy `{}` names no host class", tr.ident))?;
-        // A provider base with `events` is an `EventEmitter` generic over the plugin's own events.
-        type Metas = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;
-        let generic = tr.attrs.iter().any(|a| {
-            a.path().is_ident("python")
-                && a.parse_args_with(Metas::parse_terminated).is_ok_and(|metas| {
-                    metas.iter().any(|m| {
-                        let syn::Meta::List(provider) = m else { return false };
-                        provider.path.is_ident("provider")
-                            && provider
-                                .parse_args_with(Metas::parse_terminated)
-                                .is_ok_and(|args| args.iter().any(|a| a.path().is_ident("events")))
-                    })
-                })
-        });
+        // A plugin base class that is an `EventEmitter` generic over the plugin's own events.
+        let generic = voc::find(&proxy.nested, "generic").is_some();
         let declared = declares_calls(tr).then(|| {
             (k.modules[module].path.first().cloned().unwrap_or_default(), tr.ident.to_string())
         });

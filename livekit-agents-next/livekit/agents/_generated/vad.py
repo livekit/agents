@@ -2,8 +2,9 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
 # `#[host(record)]` declarations in:
-#     rust/crates/lk-agents-abi/src/vad/vad.rs
+#     rust/crates/lk-agents-abi/src/vad/vad.py
 #     rust/crates/lk-agents-abi/src/vad/events.rs
+#     rust/crates/lk-agents-abi/src/vad/vad.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.

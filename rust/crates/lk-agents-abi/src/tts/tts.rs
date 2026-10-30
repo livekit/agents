@@ -49,7 +49,13 @@ pub struct MarkupInfo {
 // `Agent.tts_node` yields (a bare frame). The reference has no class docstring.
 // Crosses by hand (`conversions::synthesized_audio_{from,to}_py`): two fields are the frame's
 // `userdata`.
-#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, extract(py), emit(py)))]
+#[crate::host(record(
+    module = "tts",
+    path = "livekit.agents.tts",
+    dataclass,
+    extract(py),
+    emit(py)
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SynthesizedAudio {
     /// Synthesized audio frame
@@ -114,64 +120,50 @@ pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
 // which needs the host loop's thread, so a host provider awaits them there.
 //
 // A host `tts.TTS` is this trait through its generated proxy (`TtsProxy`), calling the `_core_*`
-// methods of the base class `lk-agents-codegen` writes from the `#[python]` markers.
+// methods of its hand-written base class (`tts.py`).
 /// A text-to-speech provider.
 ///
 /// Plugins implement `synthesize()` for one-shot synthesis, and override `stream()` when the
 /// service synthesizes text as it arrives.
-#[crate::host(proxy(host = "livekit.agents.tts.TTS"))]
-#[python(provider(
-    module = "tts",
-    path = "livekit.agents.tts",
-    events = "metrics_collected, error",
-    error(name = "TTSError", kind = "tts_error")
-))]
+#[crate::host(proxy(host = "livekit.agents.tts.TTS", base = "tts.py", generic))]
 pub trait Tts: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.
-    #[python(value = "id(self)")]
     #[host(read_once, name = "_core_instance_id")]
     fn instance_id(&self) -> Option<usize> {
         None
     }
 
     /// The name logs and metrics give this instance: its class path.
-    #[python(label)]
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> String;
 
     /// What this instance supports, fixed at construction.
     // Read per instance, at construction. Not a class property.
-    #[python(init)]
     #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> TtsCapabilities;
 
     /// The model and provider labelling this instance's turn metrics.
     // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
-    #[python(identity)]
     #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
     /// Open the connection to the service early; a provider with nothing to warm ignores it.
-    #[python(hook)]
     #[host(notify, name = "_core_prewarm")]
     fn prewarm(&self) {}
 
     /// The rate of the audio the provider produces, which the framework resamples from.
-    #[python(init)]
     #[host(read_once, name = "_core_sample_rate")]
     fn sample_rate(&self) -> u32;
 
     /// The channels of the audio the provider produces.
-    #[python(init)]
     #[host(read_once, name = "_core_num_channels")]
     fn num_channels(&self) -> u16;
 
     /// Access TTS markup capabilities (instructions for LLM, text stripping).
     // `markup._provider_key()`: the markup dialect this TTS speaks, `""` for none.
-    #[python(markup)]
     #[host(read_once, name = "_core_markup_provider")]
     fn markup_provider(&self) -> String {
         String::new()
@@ -179,14 +171,12 @@ pub trait Tts: Send + Sync {
 
     // Whether the framework lowers this TTS's markup on a duplex path it owns (the gateway's
     // stream, a `StreamAdapter`); a natively streaming plugin owns its input and does not.
-    #[python(value = "False")]
     #[host(read_once, name = "_core_lowers_markup")]
     fn lowers_markup(&self) -> bool {
         false
     }
 
     // A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).
-    #[python(conn)]
     #[host(bind)]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Tts>> {
         None
@@ -194,7 +184,6 @@ pub trait Tts: Send + Sync {
 
     // The connection policy this provider was given at construction, which applies to the
     // calls of a session or run that supplies none (models.md); `None`: the defaults.
-    #[python(value = "None")]
     #[host(read_once, name = "_core_conn_options")]
     fn conn_options(&self) -> Option<ApiConnectOptions> {
         None
@@ -202,7 +191,6 @@ pub trait Tts: Send + Sync {
 
     // The framework's report of a failed attempt of a call it retries: the provider's `error`
     // event, `recoverable` while the call is retried. A wrapper forwards it.
-    #[python(report)]
     #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
@@ -212,14 +200,6 @@ pub trait Tts: Send + Sync {
     /// - text: What to say.
     /// - conn_options: The timeout and retries of the request.
     // Always present: `synthesize()` is the abstract method.
-    #[python(
-        hook,
-        stream(
-            name = "ChunkedStream",
-            kind = "chunked",
-            doc = "One synthesis of a whole text: ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, pushing the provider's audio into the ``AudioEmitter`` it is given; its attempts are retried per ``conn_options``."
-        )
-    )]
     #[host(await, name = "_core_synthesize")]
     fn synthesize<'a>(
         &'a self,
@@ -237,19 +217,10 @@ pub trait Tts: Send + Sync {
     //
     // `_expressive`: whether this synthesis carries expressive markup, set on the stream (a TTS
     // tokenizing its own input batches larger chunks when it does).
-    #[python(
-        hook,
-        unsupported = "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter",
-        stream(
-            name = "SynthesizeStream",
-            kind = "synthesize",
-            doc = "A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, reading ``input`` and pushing the provider's audio into the ``AudioEmitter`` it is given; its attempts are retried per ``conn_options``."
-        )
-    )]
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
-        #[python(attr)] _expressive: bool,
+        _expressive: bool,
     ) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
 }
 

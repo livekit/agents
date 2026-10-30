@@ -220,7 +220,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     }
     let class_stubs = class_stub::emit(&declared)?;
     let models = records::python(&declared)?;
-    let bases = bases::emit(&decls, &exposed, &declared)?;
+    let bases = bases::read(root, &declared)?;
     let with_bases = python::emit_with(&decls, &bases, &constants)?;
     let stub = stub::emit(&decls, &exposed)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter().chain(&stub))?;

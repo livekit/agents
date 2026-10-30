@@ -158,9 +158,7 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                     continue;
                 }
                 want_head(&format!("{label}: trait {}", tr.ident), &m, "proxy")?;
-                let host = meta_str(&m, "proxy.host");
-                out.providers.extend(super::provider::provider(label, tr, host.as_deref(), text)?);
-                out.proxies.push(proxy(label, tr)?);
+                out.proxies += 1;
             }
             _ => {}
         }
@@ -325,12 +323,7 @@ fn export_const(
             && !name.chars().any(|c| c.is_ascii_lowercase()),
         name,
         doc: doc(attrs),
-        sig: Sig {
-            params: Vec::new(),
-            ret,
-            defaults: Vec::new(),
-            kw_only: KwOnly::None,
-        },
+        sig: Sig { params: Vec::new(), ret, defaults: Vec::new(), kw_only: KwOnly::None },
         is_async: false,
     })
 }
@@ -448,7 +441,6 @@ fn object(label: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Aliases) -> Res<Obj
             kind,
             sig,
             reply,
-            doc: doc(&f.attrs),
         });
     }
     if methods.iter().filter(|x| x.kind == MethodKind::New).count() > 1 {
@@ -498,19 +490,4 @@ fn kw_record(label: &str, st: &syn::ItemStruct, al: &Aliases) -> Res<KwRecord> {
         });
     }
     Ok(KwRecord { name: st.ident.to_string(), fields })
-}
-
-fn proxy(label: &str, tr: &syn::ItemTrait) -> Res<Proxy> {
-    if !tr.generics.params.is_empty() {
-        return Err(format!("{label}: trait {}: a generic trait has no single proxy", tr.ident));
-    }
-    let methods = tr
-        .items
-        .iter()
-        .filter_map(|inner| match inner {
-            syn::TraitItem::Fn(f) => Some(f.sig.ident.to_string()),
-            _ => None,
-        })
-        .collect();
-    Ok(Proxy { trait_name: tr.ident.to_string(), methods })
 }
