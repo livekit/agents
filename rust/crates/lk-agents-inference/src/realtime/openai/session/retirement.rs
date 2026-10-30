@@ -21,9 +21,8 @@ impl Pump {
             let shared = Arc::downgrade(&self.shared);
             let wake = self.shared.retirement_wake.clone();
             let label = self.label.clone();
-            let media_pool = self.shared.media_pool.clone();
             self.shared.disposal.spawn(self.spawner.as_ref(), "realtime retirement", async move {
-                run(shared, wake, label, settled, media_pool).await;
+                run(shared, wake, label, settled, lk_agents_media::pool::media_pool()).await;
             });
         }
         self.shared.retirement_wake.notify_one();

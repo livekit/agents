@@ -48,7 +48,6 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
-        media_pool: lk_agents_media::pool::media_pool(),
         disposal: Arc::default(),
     });
     let (events, receiver) = super::super::queue::events();

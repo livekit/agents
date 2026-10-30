@@ -4,7 +4,6 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::media::emitter::{AudioEmitter as _, EmitterOutput};
 use lk_agents_abi::{AudioFrame, TimedString};
-use lk_agents_media::pool::MediaPool;
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::TokioSpawner;
 
@@ -77,7 +76,6 @@ fn emitter(output: &Arc<Output>) -> AudioEmitter {
     let env = EmitterEnv {
         spawner: Arc::new(TokioSpawner::current()),
         clock: Arc::new(RealClock::new()),
-        media_pool: MediaPool::new(Default::default()).unwrap(),
     };
     AudioEmitter::with_env("test".into(), output.clone(), env)
 }
@@ -211,18 +209,15 @@ fn opus(samples: usize) -> Vec<u8> {
 #[cfg(feature = "ffmpeg")]
 #[tokio::test]
 async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
-    let media_pool = MediaPool::new(lk_agents_media::pool::MediaPoolLimits {
-        decoders: 1,
-        ..Default::default()
-    })
-    .unwrap();
+    use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
+    let media_pool = MediaPool::new(MediaPoolLimits { decoders: 1, ..Default::default() }).unwrap();
     let output = Arc::new(Output::default());
     let env = EmitterEnv {
         spawner: Arc::new(TokioSpawner::current()),
         clock: Arc::new(RealClock::new()),
-        media_pool: media_pool.clone(),
     };
-    let emitter = AudioEmitter::with_env("test".into(), output.clone(), env);
+    let mut emitter = AudioEmitter::with_env("test".into(), output.clone(), env);
+    Arc::get_mut(&mut emitter.0).unwrap().media_pool = media_pool.clone();
     initialize(&emitter, "audio/ogg", 48_000, false);
     // A partial container leaves its decoder waiting for input.
     emitter.push(&opus(4800)[..64]).unwrap();

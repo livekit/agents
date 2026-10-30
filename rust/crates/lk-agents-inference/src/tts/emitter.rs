@@ -27,7 +27,6 @@ use lk_agents_net::env::ProcessEnv;
 pub struct EmitterEnv {
     pub spawner: Arc<dyn Spawner>,
     pub clock: Arc<dyn Clock>,
-    pub media_pool: MediaPool,
 }
 
 pub struct AudioEmitter(Arc<Inner>);
@@ -36,6 +35,8 @@ struct Inner {
     label: String,
     output: Arc<dyn EmitterOutput>,
     env: EmitterEnv,
+    /// Segments decode on the process's media pool.
+    media_pool: MediaPool,
     machine: Mutex<Machine>,
     outbox: Mutex<Outbox>,
     decode: OnceLock<Decode>,
@@ -105,6 +106,7 @@ impl AudioEmitter {
             label,
             output,
             env,
+            media_pool: lk_agents_media::pool::media_pool(),
             machine: Mutex::default(),
             outbox: Mutex::default(),
             decode: OnceLock::new(),
@@ -342,7 +344,7 @@ impl Inner {
     fn open_segment(&self, queue: &Queue) -> Result<Segment, EmitterError> {
         let (rate, channels) = self.format();
         let (output, input) = codecs::AudioDecoder::open_stream(
-            &self.env.media_pool,
+            &self.media_pool,
             &queue.mime,
             Some(rate),
             channels,
@@ -395,7 +397,6 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         let env = EmitterEnv {
             spawner: (env.spawner)().map_err(EmitterError::Unavailable)?,
             clock: env.clock.clone(),
-            media_pool: lk_agents_media::pool::media_pool(),
         };
         Ok(Self::with_env(label, dst_ch, env))
     }

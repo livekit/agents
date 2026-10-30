@@ -95,7 +95,6 @@ pub(super) async fn run(
     conn: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
-    media_pool: lk_agents_media::pool::MediaPool,
     generation: u64,
     receipts: mpsc::Sender<ResponseSent>,
 ) -> Result<(), ApiError> {
@@ -110,7 +109,7 @@ pub(super) async fn run(
         } else {
             lk_agents_media::pool::JobClass::Decoder
         };
-        let prepared = media_pool
+        let prepared = lk_agents_media::pool::media_pool()
             .try_spawn(class, move || {
                 let frames = encoder.encode(batch, worker_images.as_ref(), &worker_shape);
                 (encoder, frames)
