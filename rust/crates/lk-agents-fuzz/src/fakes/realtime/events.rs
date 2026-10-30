@@ -32,10 +32,6 @@ impl Socket {
         let active = |st: &State, r: u32| st.generation.as_ref().is_some_and(|g| g.r == r);
         match happening {
             Happening::Created { r } => {
-                let slot =
-                    self.registry.register(Kind::Generation, Detail::None, Control::Generation);
-                st.generations.insert(r, slot);
-                st.server.registered(r, slot.nth);
                 let (id, request) = {
                     let resp = &st.server.responses[r as usize];
                     (resp.id.clone(), resp.request.clone())
@@ -50,6 +46,10 @@ impl Socket {
                     }));
                     return;
                 }
+                let slot =
+                    self.registry.register(Kind::Generation, Detail::None, Control::Generation);
+                st.generations.insert(r, slot);
+                st.server.registered(r, slot.nth);
                 st.server.told_created(r, now);
                 st.close_generation(audio);
                 let req_id = request.filter(|req| st.asked.remove(req));
