@@ -239,6 +239,7 @@ class ModelUsageCollector:
             usage.output_text_tokens += metrics.output_token_details.text_tokens
             usage.output_audio_tokens += metrics.output_token_details.audio_tokens
             usage.output_tokens += metrics.output_tokens
+            usage.output_reasoning_tokens += metrics.reasoning_tokens or 0
             usage.session_duration += metrics.session_duration
 
         elif isinstance(metrics, TTSMetrics):

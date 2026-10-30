@@ -8,6 +8,7 @@ from livekit.agents.metrics import (
     LLMMetrics,
     LLMModelUsage,
     ModelUsageCollector,
+    RealtimeModelMetrics,
     STTMetrics,
     STTModelUsage,
 )
@@ -79,6 +80,34 @@ def test_collector_aggregates_reasoning_tokens() -> None:
     assert llm_usage.output_reasoning_tokens == 72
     # reasoning is a subset of the output tokens, never added on top of them
     assert llm_usage.output_tokens == 150
+
+
+def test_collector_aggregates_realtime_reasoning_tokens() -> None:
+    collector = ModelUsageCollector()
+    collector.collect(
+        RealtimeModelMetrics(
+            request_id="req-1",
+            timestamp=0.0,
+            input_tokens=500,
+            output_tokens=300,
+            reasoning_tokens=40,
+            total_tokens=800,
+            input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+            output_token_details=RealtimeModelMetrics.OutputTokenDetails(
+                text_tokens=200, audio_tokens=100
+            ),
+            metadata=Metadata(model_provider="openai", model_name="gpt-4o-realtime"),
+        )
+    )
+
+    usage = collector.flatten()
+    assert len(usage) == 1
+    llm_usage = usage[0]
+    assert isinstance(llm_usage, LLMModelUsage)
+    assert llm_usage.output_tokens == 300
+    assert llm_usage.output_text_tokens == 200
+    assert llm_usage.output_audio_tokens == 100
+    assert llm_usage.output_reasoning_tokens == 40
 
 
 def _stt_metrics(**overrides: object) -> STTMetrics:
