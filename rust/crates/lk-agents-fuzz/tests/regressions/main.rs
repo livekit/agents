@@ -74,6 +74,7 @@ mod realtime_server_onset_interrupts;
 mod realtime_tool_steps_bounded;
 mod realtime_tool_update_replies;
 mod realtime_transcript_forwarded;
+mod realtime_voiced_text_retries_told;
 mod realtime_waiter_journalled;
 mod recogniser_failed_speaking;
 mod refused_speech_announced;

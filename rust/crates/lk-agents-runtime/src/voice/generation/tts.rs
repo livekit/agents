@@ -64,24 +64,7 @@ pub(super) async fn perform_tts_inference(
         let (error, produced) = match tts.stream(expressive).await {
             Err(error) => (DriverError::Provider(error), false),
             Ok((sink, mut source)) => {
-                // A voice that does not stream retries its sentences itself: each retry is the
-                // session's recoverable error and a retry the journal waits out.
-                let (on, speech) = (Arc::clone(shared), handle.id());
-                source.report_retries(Arc::new(move |error, attempt, wait| {
-                    on.report(GenEvent::ProviderFailed {
-                        speech,
-                        leg: ProviderKind::Tts,
-                        recoverable: true,
-                        error: Box::new(error),
-                    });
-                    let at = on.time.now().saturating_add(wait);
-                    on.trace(GenerationStep::RetryArmed {
-                        speech,
-                        leg: ProviderKind::Tts,
-                        attempt,
-                        at,
-                    });
-                }));
+                report_retries(shared, handle, &mut source);
                 let aligned = aligned.as_deref_mut();
                 let tts_data = SynthesisMetrics::new(
                     tts.id(),
@@ -127,6 +110,26 @@ pub(super) async fn perform_tts_inference(
             return Err(lost);
         }
     }
+}
+
+/// A voice that does not stream retries its sentences itself: each retry is the session's
+/// recoverable error and a retry the journal waits out, whichever reply opened the stream.
+pub(super) fn report_retries(
+    shared: &Arc<SessionShared>,
+    handle: &SpeechHandle,
+    source: &mut lk_agents_abi::TtsSource,
+) {
+    let (on, speech) = (Arc::clone(shared), handle.id());
+    source.report_retries(Arc::new(move |error, attempt, wait| {
+        on.report(GenEvent::ProviderFailed {
+            speech,
+            leg: ProviderKind::Tts,
+            recoverable: true,
+            error: Box::new(error),
+        });
+        let at = on.time.now().saturating_add(wait);
+        on.trace(GenerationStep::RetryArmed { speech, leg: ProviderKind::Tts, attempt, at });
+    }));
 }
 
 /// One duplex stream: `end_input` is always sent, or a duplex stream never yields its final frame.

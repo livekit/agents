@@ -331,7 +331,7 @@ impl Generation<'_> {
             &self.shared.conn.tts.unwrap_or_default(),
             self.shared.time.now(),
         );
-        let (sink, source) = loop {
+        let (sink, mut source) = loop {
             let error = match tts.stream(self.ctx.request.expressive.is_some()).await {
                 Ok(pair) => break pair,
                 Err(error) => error,
@@ -346,6 +346,7 @@ impl Generation<'_> {
                 super::llm::Retried::GiveUp => return Err(DriverError::from(error)),
             }
         };
+        super::tts::report_retries(self.shared, self.handle, &mut source);
         let shared = self.shared;
         let mut transforms = (!shared.tts_transforms.is_empty())
             .then(|| lk_agents_voice::transcription::Pipeline::new(&shared.tts_transforms));
@@ -405,7 +406,19 @@ impl Generation<'_> {
                 self.unvoice().await;
                 None
             }
-            Err(e) => Some(Err(DriverError::from(e))),
+            // The voice is lost: the session's error, as a pipeline reply's spent synthesis is.
+            Err(error) => {
+                if let Some(tts) = &self.tts {
+                    tts.failed(error.clone(), false);
+                }
+                self.shared.report(GenEvent::ProviderFailed {
+                    speech: self.handle.id(),
+                    leg: lk_agents_voice::trace::ProviderKind::Tts,
+                    recoverable: false,
+                    error: Box::new(error.clone()),
+                });
+                Some(Err(DriverError::from(error)))
+            }
         }
     }
 
