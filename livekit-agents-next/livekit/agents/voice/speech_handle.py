@@ -118,8 +118,10 @@ class SpeechHandle:
         return _await().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
-        """``callback(handle)`` once the speech is done; soon, if it is already."""
-        if self.done():
+        """``callback(handle)`` once the speech is done; soon, if it is already. Callbacks run
+        in the order they were added: one added while earlier ones still wait for the session's
+        ``speech_done`` waits with them."""
+        if self.done() and not self._done_callbacks:
             asyncio.get_running_loop().call_soon(callback, self)
             return
         self._done_callbacks.append(callback)
