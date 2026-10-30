@@ -156,7 +156,6 @@ manifest-path = "../rust/crates/lk-agents-py/Cargo.toml"
 features = ["pyo3/extension-module", "pyo3/abi3-py311", "ffmpeg"]
 include = [
     { path = "livekit/agents/resources/*", format = "wheel" },
-    { path = "livekit/agents/debug/index.html", format = "wheel" },
 ]
 exclude = [
     { path = "**/__pycache__/**", format = "wheel" },
