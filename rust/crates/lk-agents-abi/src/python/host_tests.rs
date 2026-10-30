@@ -230,14 +230,14 @@ def _mod(name):
     m = _t.ModuleType(name); m.__path__ = []; sys.modules[name] = m; return m
 lk = sys.modules.get('livekit') or _mod('livekit')
 rtc = sys.modules.get('livekit.rtc') or _mod('livekit.rtc'); lk.rtc = rtc
-if not hasattr(rtc, 'AudioFrame'):
-    class AudioFrame:
-        def __init__(self, data, sample_rate, num_channels, samples_per_channel):
-            self.data = data; self.sample_rate = sample_rate
-            self.num_channels = num_channels
-            self.samples_per_channel = samples_per_channel
-            self.userdata = {}
-    rtc.AudioFrame = AudioFrame
+# Always the stub, even when the real SDK is importable: its frame keeps what it was given.
+class AudioFrame:
+    def __init__(self, data, sample_rate, num_channels, samples_per_channel):
+        self.data = data; self.sample_rate = sample_rate
+        self.num_channels = num_channels
+        self.samples_per_channel = samples_per_channel
+        self.userdata = {}
+rtc.AudioFrame = AudioFrame
 "#;
 
     fn attach_rtc<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
