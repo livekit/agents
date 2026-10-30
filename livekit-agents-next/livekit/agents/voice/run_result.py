@@ -551,15 +551,14 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
 
         if judged.usage is not None:
             usage = judged.usage
-            current_span.set_attributes(
-                {
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.prompt_cached_tokens,
-                }
-            )
+            attributes = {
+                trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.input_tokens,
+                trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.output_tokens,
+                trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.input_text_tokens,
+                trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.output_text_tokens,
+                trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.cache_read_tokens,
+            }
+            current_span.set_attributes({k: v for k, v in attributes.items() if v is not None})
 
         if not judged.success:
             self._fail(f"Judgement failed: {judged.reason}")

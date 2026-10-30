@@ -238,11 +238,11 @@ async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
         ({"cacheReadInputTokens": None, "cacheWriteInputTokens": None}, 100, 150),
     ],
 )
-def test_bedrock_prompt_tokens_include_cached_tokens(
+def test_bedrock_input_tokens_include_cached_tokens(
     usage: dict[str, int | None], prompt: int, total: int
 ) -> None:
-    """``CompletionUsage.prompt_tokens`` includes cached tokens and ``total_tokens`` is prompt +
-    completion. Bedrock's ``inputTokens`` is net of the cache (read or written, possibly sent as
+    """``TokenUsage.input_tokens`` includes cached tokens and ``total_tokens`` is input +
+    output. Bedrock's ``inputTokens`` is net of the cache (read or written, possibly sent as
     null), and its own ``totalTokens`` is not trusted."""
     chunk = {
         "metadata": {
@@ -251,6 +251,6 @@ def test_bedrock_prompt_tokens_include_cached_tokens(
     }
     result = LLMStream._parse_chunk(object.__new__(LLMStream), "req-1", chunk)
     assert result is not None and result.usage is not None
-    assert (result.usage.prompt_tokens, result.usage.total_tokens) == (prompt, total)
-    assert result.usage.cache_read_tokens == (usage.get("cacheReadInputTokens") or 0)
-    assert result.usage.cache_creation_tokens == (usage.get("cacheWriteInputTokens") or 0)
+    assert (result.usage.input_tokens, result.usage.total_tokens) == (prompt, total)
+    assert result.usage.cache_read_tokens == usage.get("cacheReadInputTokens")
+    assert result.usage.cache_write_tokens == usage.get("cacheWriteInputTokens")

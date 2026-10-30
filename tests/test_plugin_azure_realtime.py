@@ -659,7 +659,7 @@ async def test_audio_is_not_dropped_while_the_reply_waits(voice_live: _FakeVoice
         assert await message.modalities == ["audio", "text"]
 
         assert metrics[0].request_id == generation.response_id
-        assert metrics[0].output_tokens == 7
+        assert metrics[0].tokens.output_tokens == 7
         assert metrics[0].cancelled is False
 
 
@@ -1456,7 +1456,7 @@ async def test_text_fallback_of_an_audio_session_reports_ttft(
         assert await message.modalities == ["text"]
         assert "".join(await _collect(message.text_stream)) == "Hi there"
         await _wait_until(lambda: metrics)
-        assert metrics[0].ttft >= 0
+        assert metrics[0].ttft is not None and metrics[0].ttft >= 0
 
 
 async def test_default_credential_is_reused_and_closed(

@@ -108,8 +108,6 @@ class TtsMetricState:
         start: float,
         failed: bool,
         batch_text: str,
-        input_tokens: int,
-        output_tokens: int,
         acquire_time: float,
         connection_reused: bool,
         host: tuple[float, str, bool, str, str],

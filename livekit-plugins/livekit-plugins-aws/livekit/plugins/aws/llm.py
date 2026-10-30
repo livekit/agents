@@ -22,7 +22,7 @@ from aiobotocore.config import AioConfig
 from aiobotocore.session import AioSession
 from botocore.exceptions import ClientError
 
-from livekit.agents import APIConnectionError, APIStatusError, llm
+from livekit.agents import APIConnectionError, APIStatusError, TokenUsage, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -405,22 +405,19 @@ class LLMStream(llm.LLMStream):
         elif "metadata" in chunk:
             usage = chunk["metadata"]["usage"]
             # Bedrock reports inputTokens net of the cache and puts the cached tokens in
-            # their own fields, so they have to be added back for prompt_tokens to mean what
-            # CompletionUsage says it means ("includes cached tokens"). This mirrors what the
-            # anthropic plugin already does for the same models served directly.
-            cache_read_tokens = usage.get("cacheReadInputTokens") or 0
-            cache_creation_tokens = usage.get("cacheWriteInputTokens") or 0
-            prompt_tokens = usage["inputTokens"] + cache_read_tokens + cache_creation_tokens
-            completion_tokens = usage["outputTokens"]
+            # their own fields; our input total includes them. This mirrors what the
+            # anthropic plugin does for the same models served directly.
+            cache_read_tokens = usage.get("cacheReadInputTokens")
+            cache_write_tokens = usage.get("cacheWriteInputTokens")
             return llm.ChatChunk(
                 id=request_id,
-                usage=llm.CompletionUsage(
-                    completion_tokens=completion_tokens,
-                    prompt_tokens=prompt_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                    prompt_cached_tokens=cache_read_tokens,
-                    cache_creation_tokens=cache_creation_tokens,
+                usage=TokenUsage(
+                    input_tokens=usage["inputTokens"]
+                    + (cache_read_tokens or 0)
+                    + (cache_write_tokens or 0),
+                    output_tokens=usage["outputTokens"],
                     cache_read_tokens=cache_read_tokens,
+                    cache_write_tokens=cache_write_tokens,
                 ),
             )
         elif "contentBlockStop" in chunk:

@@ -99,7 +99,7 @@ impl StreamSource<LlmChunk> for Response {
 }
 
 /// The completion tokens every reply reports.
-pub const COMPLETION_TOKENS: u32 = 10;
+pub const COMPLETION_TOKENS: u64 = 10;
 
 /// One model delivery onto a registered chat request's stream, in the chunk shapes the inference
 /// gateway sends: each `LlmText` is one wire chunk naming the assistant role
@@ -156,8 +156,8 @@ pub(super) fn deliver(
             };
             let usage = LlmChunk {
                 id: response_id,
-                usage: Some(lk_agents_abi::CompletionUsage {
-                    completion_tokens: COMPLETION_TOKENS,
+                usage: Some(lk_agents_abi::usage::TokenUsage {
+                    output_tokens: COMPLETION_TOKENS,
                     ..Default::default()
                 }),
                 ..Default::default()

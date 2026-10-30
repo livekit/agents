@@ -48,6 +48,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
+    TokenUsage,
     llm,
     utils,
 )
@@ -1518,7 +1519,7 @@ class RealtimeSession(  # noqa: F811
 
         # Calculate metrics from timestamps
         duration = 0.0
-        ttft = 0.0
+        ttft: float | None = None
         tokens_per_second = 0.0
 
         if self._current_generation is not None:
@@ -1551,25 +1552,15 @@ class RealtimeSession(  # noqa: F811
             duration=duration,
             ttft=ttft,
             cancelled=False,
-            input_tokens=input_tokens.speechTokens + input_tokens.textTokens,
-            output_tokens=output_tokens.speechTokens + output_tokens.textTokens,
-            total_tokens=input_tokens.speechTokens
-            + input_tokens.textTokens
-            + output_tokens.speechTokens
-            + output_tokens.textTokens,
+            tokens=TokenUsage(
+                input_tokens=input_tokens.speechTokens + input_tokens.textTokens,
+                output_tokens=output_tokens.speechTokens + output_tokens.textTokens,
+                input_text_tokens=input_tokens.textTokens,
+                input_audio_tokens=input_tokens.speechTokens,
+                output_text_tokens=output_tokens.textTokens,
+                output_audio_tokens=output_tokens.speechTokens,
+            ),
             tokens_per_second=tokens_per_second,
-            input_token_details=RealtimeModelMetrics.InputTokenDetails(
-                text_tokens=input_tokens.textTokens,
-                audio_tokens=input_tokens.speechTokens,
-                image_tokens=0,
-                cached_tokens=0,
-                cached_tokens_details=None,
-            ),
-            output_token_details=RealtimeModelMetrics.OutputTokenDetails(
-                text_tokens=output_tokens.textTokens,
-                audio_tokens=output_tokens.speechTokens,
-                image_tokens=0,
-            ),
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),

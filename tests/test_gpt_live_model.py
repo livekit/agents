@@ -292,7 +292,7 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
             await sockets[0].close()
         await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
         await session._session_started_fut
-        assert [m.session_duration for m in metrics] == [5]
+        assert [m.connection_duration for m in metrics] == [5]
         assert not errors
         restored = sockets[1].sent[0]["session"]
         responses = restored["delegation"]["responses"]
@@ -315,7 +315,7 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
             {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 7}}
         )
         await asyncio.wait_for(close_task, timeout=1)
-        assert [m.session_duration for m in metrics] == [5, 7]
+        assert [m.connection_duration for m in metrics] == [5, 7]
     finally:
         if close_task is None:
             await session.aclose()
@@ -1345,16 +1345,15 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
         backend = [m for m in collected if isinstance(m, LLMMetrics)]
         assert [m.metadata.model_name for m in backend] == ["gpt-5.6-sol"]
         assert backend[0].request_id == "resp_1"
-        assert backend[0].prompt_tokens == 376
-        assert backend[0].prompt_cached_tokens == 100
-        assert backend[0].cache_creation_tokens == 20
-        assert backend[0].completion_tokens == 18
-        assert backend[0].reasoning_tokens == 5
+        tokens = backend[0].tokens
+        assert (tokens.input_tokens, tokens.output_tokens) == (376, 18)
+        assert (tokens.cache_read_tokens, tokens.cache_write_tokens) == (100, 20)
+        assert tokens.output_reasoning_tokens == 5
 
         # the session's own rows carry the duration deltas and none of the delegated tokens
         frontend = [m for m in collected if isinstance(m, RealtimeModelMetrics)]
-        assert [round(m.session_duration, 1) for m in frontend] == [14.0, 13.0]
-        assert all(m.input_tokens == 0 and m.output_tokens == 0 for m in frontend)
+        assert [round(m.connection_duration or 0, 1) for m in frontend] == [14.0, 13.0]
+        assert all(m.tokens.total_tokens == 0 for m in frontend)
         assert session._session_closed_fut.done()
     finally:
         await session.aclose()

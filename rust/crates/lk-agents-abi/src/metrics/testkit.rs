@@ -1,15 +1,14 @@
 //! Zeroed records the tests fill in field by field.
 //!
 //! The reference's models are pydantic with per-field defaults, so a Python test writes
-//! `LLMMetrics(prompt_tokens=7, ...)` and lets the rest default. Rust has no such thing for
+//! `LLMMetrics(duration=0.5, ...)` and lets the rest default. Rust has no such thing for
 //! structs with required fields, and spelling fifteen zeros at every call site would bury the one
 //! field a test is actually about -- which is precisely how a rollup test stops catching anything.
 
 use lk_agents_abi::metrics::base::{EotInferenceMetrics, InterruptionMetrics, Metadata};
 
 use crate::metrics::base::{
-    AvatarMetrics, EouMetrics, InputTokenDetails, LlmMetrics, OutputTokenDetails,
-    RealtimeModelMetrics, SttMetrics, TtsMetrics, VadMetrics,
+    AvatarMetrics, EouMetrics, LlmMetrics, RealtimeModelMetrics, SttMetrics, TtsMetrics, VadMetrics,
 };
 
 pub fn meta(provider: &str, model: &str) -> Option<Metadata> {
@@ -22,14 +21,9 @@ pub fn llm() -> LlmMetrics {
         request_id: String::new(),
         timestamp: 0.0,
         duration: 0.0,
-        ttft: 0.0,
+        ttft: None,
         cancelled: false,
-        completion_tokens: 0,
-        prompt_tokens: 0,
-        prompt_cached_tokens: 0,
-        cache_creation_tokens: 0,
-        reasoning_tokens: 0,
-        total_tokens: 0,
+        tokens: Default::default(),
         tokens_per_second: 0.0,
         speech_id: None,
         metadata: None,
@@ -42,12 +36,9 @@ pub fn stt() -> SttMetrics {
         request_id: String::new(),
         timestamp: 0.0,
         duration: 0.0,
-        audio_duration: 0.0,
+        audio_duration: None,
         streamed: false,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
-        input_audio_tokens: 0,
+        tokens: Default::default(),
         acquire_time: 0.0,
         connection_reused: false,
         metadata: None,
@@ -59,13 +50,12 @@ pub fn tts() -> TtsMetrics {
         label: String::new(),
         request_id: String::new(),
         timestamp: 0.0,
-        ttfb: 0.0,
+        ttfb: None,
         duration: 0.0,
         audio_duration: 0.0,
         cancelled: false,
         characters_count: 0,
-        input_tokens: 0,
-        output_tokens: 0,
+        tokens: Default::default(),
         streamed: false,
         acquire_time: 0.0,
         connection_reused: false,
@@ -103,15 +93,11 @@ pub fn realtime() -> RealtimeModelMetrics {
         request_id: String::new(),
         timestamp: 0.0,
         duration: 0.0,
-        session_duration: 0.0,
-        ttft: RealtimeModelMetrics::NO_TTFT,
+        connection_duration: None,
+        ttft: None,
         cancelled: false,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
+        tokens: Default::default(),
         tokens_per_second: 0.0,
-        input_token_details: InputTokenDetails::default(),
-        output_token_details: OutputTokenDetails::default(),
         acquire_time: 0.0,
         connection_reused: false,
         metadata: None,

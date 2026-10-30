@@ -24,7 +24,7 @@ from typing import cast
 import google.auth.credentials
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
-from livekit.agents import APIConnectionError, APIStatusError, llm, utils
+from livekit.agents import APIConnectionError, APIStatusError, TokenUsage, llm, utils
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -522,11 +522,14 @@ class LLMStream(llm.LLMStream):
                     self.send(
                         llm.ChatChunk(
                             id=request_id,
-                            usage=llm.CompletionUsage(
-                                completion_tokens=usage.candidates_token_count or 0,
-                                prompt_tokens=usage.prompt_token_count or 0,
-                                prompt_cached_tokens=usage.cached_content_token_count or 0,
-                                total_tokens=usage.total_token_count or 0,
+                            # Gemini counts thinking outside its candidates; our output
+                            # total includes it.
+                            usage=TokenUsage(
+                                input_tokens=usage.prompt_token_count or 0,
+                                output_tokens=(usage.candidates_token_count or 0)
+                                + (usage.thoughts_token_count or 0),
+                                cache_read_tokens=usage.cached_content_token_count,
+                                output_reasoning_tokens=usage.thoughts_token_count,
                             ),
                         )
                     )

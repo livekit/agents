@@ -117,14 +117,13 @@ impl SpeechData {
 
 // `stt/stt.py:106`.
 #[crate::host(record(module = "stt", path = "livekit.agents.stt", dataclass, extract, emit))]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecognitionUsage {
     /// Incremental audio duration/usage in seconds
     pub audio_duration: f64,
-    #[host(default = 0)]
-    pub input_tokens: u32,
-    #[host(default = 0)]
-    pub output_tokens: u32,
+    /// Token-based billing, when the provider reports tokens.
+    #[host(default = None)]
+    pub tokens: Option<crate::usage::TokenUsage>,
 }
 
 // `stt/stt.py:114`: one struct for all six kinds, as in the reference.

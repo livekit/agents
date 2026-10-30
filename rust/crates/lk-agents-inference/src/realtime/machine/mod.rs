@@ -15,8 +15,8 @@ use crate::realtime::remote::RemoteChatContext;
 use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, GenerationDone, GenerationStatus, InputTranscription, MessageDone,
     MessageModalities, Modalities, RealtimeCapabilities, RealtimeError, RealtimeModelError,
-    TokenUsage,
 };
+use lk_agents_abi::usage::TokenUsage;
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -222,15 +222,11 @@ impl RealtimeMachine {
             request_id: String::new(),
             timestamp: self.wall_secs(now),
             duration: 0.0,
-            session_duration: 0.0,
-            ttft: lk_agents_abi::metrics::base::RealtimeModelMetrics::NO_TTFT,
+            connection_duration: None,
+            ttft: None,
             cancelled: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: 0,
+            tokens: TokenUsage::default(),
             tokens_per_second: 0.0,
-            input_token_details: Default::default(),
-            output_token_details: Default::default(),
             acquire_time: acquire_time.as_secs_f64(),
             connection_reused: false,
             metadata: Some(self.metadata(&self.opts.model)),
@@ -251,13 +247,12 @@ impl RealtimeMachine {
             .as_ref()
             .and_then(|v| v.get("model"))
             .and_then(serde_json::Value::as_str);
-        let (audio_duration, input_tokens, output_tokens, total_tokens, input_audio_tokens) =
-            match *usage {
-                wire::TranscriptionUsage::Tokens { input, output, total, input_audio } => {
-                    (0.0, input, output, total, input_audio)
-                }
-                wire::TranscriptionUsage::Duration { seconds } => (seconds, 0, 0, 0, 0),
-            };
+        let (audio_duration, tokens) = match usage {
+            wire::TranscriptionUsage::Tokens(tokens) => (None, tokens.clone()),
+            wire::TranscriptionUsage::Duration { seconds } => {
+                (Some(*seconds), TokenUsage::default())
+            }
+        };
         let metrics = SttMetrics {
             label: self.label.clone(),
             request_id: t.event_id.clone(),
@@ -265,10 +260,7 @@ impl RealtimeMachine {
             duration: 0.0,
             audio_duration,
             streamed: true,
-            input_tokens,
-            output_tokens,
-            total_tokens,
-            input_audio_tokens,
+            tokens,
             acquire_time: 0.0,
             connection_reused: false,
             metadata: Some(lk_agents_abi::metrics::base::Metadata {
@@ -289,46 +281,24 @@ impl RealtimeMachine {
         status: GenerationStatus,
         usage: &TokenUsage,
     ) -> Option<Event> {
-        use lk_agents_abi::metrics::base::{
-            CachedTokenDetails, InputTokenDetails, OutputTokenDetails, RealtimeModelMetrics,
-        };
+        use lk_agents_abi::metrics::base::RealtimeModelMetrics;
         let created = self.response_created_at.take()?;
         let first = self.first_token_at.take();
         let duration = now.as_secs_f64() - created.as_secs_f64();
-        let tokens = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
         let metrics = RealtimeModelMetrics {
             label: self.label.clone(),
             request_id: response_id.to_owned(),
             timestamp: self.wall_secs(created),
             duration,
-            session_duration: 0.0,
-            ttft: first
-                .map_or(RealtimeModelMetrics::NO_TTFT, |f| f.as_secs_f64() - created.as_secs_f64()),
+            connection_duration: None,
+            ttft: first.map(|f| f.as_secs_f64() - created.as_secs_f64()),
             cancelled: status == GenerationStatus::Cancelled,
-            input_tokens: tokens(usage.input_tokens),
-            output_tokens: tokens(usage.output_tokens),
-            total_tokens: tokens(usage.total_tokens),
             tokens_per_second: if duration > 0.0 {
                 usage.output_tokens as f64 / duration
             } else {
                 0.0
             },
-            input_token_details: InputTokenDetails {
-                audio_tokens: tokens(usage.input_audio_tokens),
-                text_tokens: tokens(usage.input_text_tokens),
-                image_tokens: tokens(usage.input_image_tokens),
-                cached_tokens: tokens(usage.input_cached_tokens),
-                cached_tokens_details: Some(CachedTokenDetails {
-                    audio_tokens: tokens(usage.cached_audio_tokens),
-                    text_tokens: tokens(usage.cached_text_tokens),
-                    image_tokens: tokens(usage.cached_image_tokens),
-                }),
-            },
-            output_token_details: OutputTokenDetails {
-                text_tokens: tokens(usage.output_text_tokens),
-                audio_tokens: tokens(usage.output_audio_tokens),
-                image_tokens: tokens(usage.output_image_tokens),
-            },
+            tokens: usage.clone(),
             acquire_time: 0.0,
             connection_reused: false,
             metadata: Some(self.metadata(&self.opts.model)),

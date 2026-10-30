@@ -4,7 +4,7 @@ import httpx2 as httpx
 import openai as openai_sdk
 import pytest
 
-from livekit.agents import llm
+from livekit.agents import TokenUsage, llm
 from livekit.plugins import openai
 
 pytestmark = pytest.mark.unit
@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 # Some OpenAI-compatible proxies send a final chunk whose ``usage`` object is present
 # but has null numeric fields (rather than omitting ``usage`` entirely). The SDK-side
-# usage model is built leniently, so those nulls reach our ``CompletionUsage``
+# usage model is built leniently, so those nulls reach our ``TokenUsage``
 # construction as ``None``. See issue #6595.
 _STREAM_WITH_NULL_USAGE = b"""data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"ok","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"model":"m","object":"chat.completion.chunk"}
 
@@ -49,7 +49,7 @@ async def test_null_usage_fields_do_not_crash_stream() -> None:
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(role="user", content="hi")
 
-    usage_chunks: list[llm.CompletionUsage] = []
+    usage_chunks: list[TokenUsage] = []
     stream = model.chat(chat_ctx=chat_ctx)
     try:
         async for chunk in stream:
@@ -62,9 +62,7 @@ async def test_null_usage_fields_do_not_crash_stream() -> None:
 
     assert len(usage_chunks) == 1
     usage = usage_chunks[0]
-    assert usage.completion_tokens == 0
-    assert usage.prompt_tokens == 7
-    assert usage.total_tokens == 0
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (7, 0, 7)
 
 
 # The gateway reports Gemini's thinking tokens as ``completion_tokens_details.reasoning_tokens``
@@ -102,7 +100,7 @@ async def test_reasoning_tokens_are_reported_from_completion_tokens_details() ->
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(role="user", content="hi")
 
-    usage_chunks: list[llm.CompletionUsage] = []
+    usage_chunks: list[TokenUsage] = []
     stream = model.chat(chat_ctx=chat_ctx)
     try:
         async for chunk in stream:
@@ -115,12 +113,12 @@ async def test_reasoning_tokens_are_reported_from_completion_tokens_details() ->
 
     assert len(usage_chunks) == 1
     usage = usage_chunks[0]
-    assert usage.reasoning_tokens == 32
-    assert usage.completion_tokens == 40
+    assert usage.output_reasoning_tokens == 32
+    assert usage.output_tokens == 40
     assert usage.total_tokens == 47
 
 
-async def test_reasoning_tokens_default_to_zero_without_details() -> None:
+async def test_an_unreported_reasoning_breakdown_stays_absent() -> None:
     # Providers that don't break reasoning out omit ``completion_tokens_details`` entirely.
     client = openai_sdk.AsyncClient(
         api_key="test-key",
@@ -131,7 +129,7 @@ async def test_reasoning_tokens_default_to_zero_without_details() -> None:
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(role="user", content="hi")
 
-    usage_chunks: list[llm.CompletionUsage] = []
+    usage_chunks: list[TokenUsage] = []
     stream = model.chat(chat_ctx=chat_ctx)
     try:
         async for chunk in stream:
@@ -142,7 +140,7 @@ async def test_reasoning_tokens_default_to_zero_without_details() -> None:
         await model.aclose()
         await client.close()
 
-    assert usage_chunks[0].reasoning_tokens == 0
+    assert usage_chunks[0].output_reasoning_tokens is None
 
 
 # Catches: the quota fields returned as pairs, so the 429 handler's `**` raised TypeError

@@ -1048,7 +1048,7 @@ impl Writer<'_> {
             self.need(m, n);
         }
         let chunk = self.record("LlmChunk").ok_or("LlmChunk is not declared")?;
-        let usage = self.record("CompletionUsage").ok_or("CompletionUsage is not declared")?;
+        let usage = self.record("TokenUsage").ok_or("TokenUsage is not declared")?;
         let call = self.record("FunctionToolCall").ok_or("FunctionToolCall is not declared")?;
         let collected =
             self.record("CollectedResponse").ok_or("CollectedResponse is not declared")?;

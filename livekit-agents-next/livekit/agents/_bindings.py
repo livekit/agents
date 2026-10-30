@@ -24,7 +24,6 @@ from .types import APIConnectOptions, NotGivenOr
 if TYPE_CHECKING:
     from ._generated.chat_items import ChatMessage
     from ._generated.llm import ChatChunk
-    from ._generated.metrics import STTMetrics
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.usage import TokenUsage, Usage
     from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
@@ -35,7 +34,6 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 _InputT = TypeVar("_InputT")
 _OutputT = TypeVar("_OutputT", covariant=True)
-_MetricsT = TypeVar("_MetricsT", bound="STTMetrics")
 
 
 class _PumpStream(Protocol[_OutputT]):
@@ -373,12 +371,6 @@ def usage_output_tokens(usage: Usage) -> int:
 
 def usage_total_tokens(usage: Usage) -> int:
     return usage.tokens.input_tokens + usage.tokens.output_tokens
-
-
-def _default_total_tokens(metrics: _MetricsT) -> _MetricsT:
-    if "total_tokens" not in metrics.model_fields_set:
-        metrics.total_tokens = metrics.input_tokens + metrics.output_tokens
-    return metrics
 
 
 def speech_data_post_init(data: SpeechData) -> None:

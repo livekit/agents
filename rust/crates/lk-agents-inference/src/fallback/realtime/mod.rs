@@ -25,7 +25,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
 use lk_agents_abi::llm::fallback::AvailabilityChanged;
 use lk_agents_abi::llm::realtime::{
     Event, GenerationDone, GenerationStatus, HostRealtime, MessageDone, MessageModalities,
-    Modalities, RealtimeModelError, TokenUsage,
+    Modalities, RealtimeModelError,
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 

@@ -28,6 +28,7 @@ from .. import _bindings, _core
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .chat_items import ChatRole, MetricsMetadata
+from .usage import TokenUsage
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
@@ -36,31 +37,6 @@ if TYPE_CHECKING:
 
 
 # The declared records.
-
-
-class CompletionUsage(BaseModel):
-    completion_tokens: int
-    """The number of tokens in the completion."""
-    prompt_tokens: int
-    """The number of input tokens used (includes cached tokens)."""
-    prompt_cached_tokens: int = 0
-    """The number of cached input tokens used."""
-    cache_creation_tokens: int = 0
-    """The number of tokens used to create the cache."""
-    cache_read_tokens: int = 0
-    """The number of tokens read from the cache."""
-    reasoning_tokens: int = 0
-    """The number of completion tokens spent on hidden reasoning.
-    Already counted in ``completion_tokens``; do not add it to totals. Only reported by
-    providers that break reasoning out separately (e.g. OpenAI-compatible responses
-    carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
-    """
-    total_tokens: int
-    """The total number of tokens used (completion + prompt tokens)."""
-    service_tier: str | None = None
-    """The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
-    Returned by providers that support tiered processing (e.g. OpenAI).
-    """
 
 
 class FunctionToolCall(BaseModel):
@@ -83,7 +59,7 @@ class ChoiceDelta(BaseModel):
 class CollectedResponse(BaseModel):
     text: str = ""
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
-    usage: CompletionUsage | None = None
+    usage: TokenUsage | None = None
     extra: dict[str, JsonValue] = Field(default_factory=dict)
     """Provider-specific extra data accumulated across chunks
     (e.g., xAI encrypted reasoning, Google thought signatures).
@@ -93,7 +69,7 @@ class CollectedResponse(BaseModel):
 class ChatChunk(BaseModel):
     id: str
     delta: ChoiceDelta | None = None
-    usage: CompletionUsage | None = None
+    usage: TokenUsage | None = None
 
     def has_response(self) -> bool:
         """Whether this chunk delivered generation the caller can see.
@@ -113,7 +89,6 @@ class SerializedImage:
     external_url: str | None = None
 
 
-CompletionUsage.__module__ = "livekit.agents.llm"
 FunctionToolCall.__module__ = "livekit.agents.llm"
 ChoiceDelta.__module__ = "livekit.agents.llm"
 CollectedResponse.__module__ = "livekit.agents.llm"
@@ -402,7 +377,7 @@ class LLMStream(ABC):
         """
         text_parts: list[str] = []
         tool_calls: list[FunctionToolCall] = []
-        usage: CompletionUsage | None = None
+        usage: TokenUsage | None = None
         extra: dict[str, Any] = {}
 
         async with self:

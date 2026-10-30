@@ -86,9 +86,9 @@ pub struct TranscriptionCompleted {
 }
 
 /// `UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration`, told apart by `type`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptionUsage {
-    Tokens { input: u32, output: u32, total: u32, input_audio: u32 },
+    Tokens(lk_agents_abi::usage::TokenUsage),
     Duration { seconds: f64 },
 }
 
@@ -98,7 +98,7 @@ pub struct ResponseDone {
     pub status: lk_agents_abi::llm::realtime::GenerationStatus,
     pub error_type: Option<String>,
     pub error_code: Option<String>,
-    pub usage: lk_agents_abi::llm::realtime::TokenUsage,
+    pub usage: lk_agents_abi::usage::TokenUsage,
 }
 
 #[derive(Debug, Clone, PartialEq)]

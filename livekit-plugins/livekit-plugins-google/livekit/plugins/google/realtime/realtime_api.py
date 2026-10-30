@@ -16,7 +16,7 @@ import google.auth.credentials
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents import APIConnectionError, LanguageCode, TokenUsage, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -1691,25 +1691,20 @@ class RealtimeSession(llm.RealtimeSession):
 
         duration = (current_gen.completed_timestamp or time.time()) - current_gen.created_timestamp
 
-        def _token_details_map(
-            token_details: list[types.ModalityTokenCount] | None,
-        ) -> dict[str, int]:
-            token_details_map = {"audio_tokens": 0, "text_tokens": 0, "image_tokens": 0}
-            if not token_details:
-                return token_details_map
+        def by_modality(details: list[types.ModalityTokenCount] | None) -> dict[str, int]:
+            counts: dict[str, int] = {}
+            for detail in details or []:
+                if detail.modality is not None and detail.token_count is not None:
+                    key = detail.modality.value.lower()
+                    counts[key] = counts.get(key, 0) + detail.token_count
+            return counts
 
-            for token_detail in token_details:
-                if not token_detail.token_count:
-                    continue
-
-                if token_detail.modality == types.MediaModality.AUDIO:
-                    token_details_map["audio_tokens"] += token_detail.token_count
-                elif token_detail.modality == types.MediaModality.TEXT:
-                    token_details_map["text_tokens"] += token_detail.token_count
-                elif token_detail.modality == types.MediaModality.IMAGE:
-                    token_details_map["image_tokens"] += token_detail.token_count
-            return token_details_map
-
+        prompt = by_modality(usage_metadata.prompt_tokens_details)
+        cached = by_modality(usage_metadata.cache_tokens_details)
+        response = by_modality(usage_metadata.response_tokens_details)
+        thoughts = usage_metadata.thoughts_token_count
+        # Gemini counts thinking outside its response tokens; our output total includes it.
+        output_tokens = (usage_metadata.response_token_count or 0) + (thoughts or 0)
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
             request_id=current_gen.response_id,
@@ -1717,27 +1712,24 @@ class RealtimeSession(llm.RealtimeSession):
             duration=duration,
             # Gemini has no response-start event; generation creation can be triggered
             # by an input transcript or by the first output packet.
-            ttft=-1,
+            ttft=None,
             cancelled=False,
-            input_tokens=usage_metadata.prompt_token_count or 0,
-            output_tokens=usage_metadata.response_token_count or 0,
-            total_tokens=usage_metadata.total_token_count or 0,
-            tokens_per_second=(usage_metadata.response_token_count or 0) / duration
-            if duration > 0
-            else 0,
-            input_token_details=RealtimeModelMetrics.InputTokenDetails(
-                **_token_details_map(usage_metadata.prompt_tokens_details),
-                cached_tokens=sum(
-                    token_detail.token_count or 0
-                    for token_detail in usage_metadata.cache_tokens_details or []
-                ),
-                cached_tokens_details=RealtimeModelMetrics.CachedTokenDetails(
-                    **_token_details_map(usage_metadata.cache_tokens_details),
-                ),
+            tokens=TokenUsage(
+                input_tokens=usage_metadata.prompt_token_count or 0,
+                output_tokens=output_tokens,
+                cache_read_tokens=usage_metadata.cached_content_token_count,
+                output_reasoning_tokens=thoughts,
+                input_text_tokens=prompt.get("text"),
+                input_audio_tokens=prompt.get("audio"),
+                input_image_tokens=prompt.get("image"),
+                output_text_tokens=response.get("text"),
+                output_audio_tokens=response.get("audio"),
+                output_image_tokens=response.get("image"),
+                cache_read_text_tokens=cached.get("text"),
+                cache_read_audio_tokens=cached.get("audio"),
+                cache_read_image_tokens=cached.get("image"),
             ),
-            output_token_details=RealtimeModelMetrics.OutputTokenDetails(
-                **_token_details_map(usage_metadata.response_tokens_details),
-            ),
+            tokens_per_second=output_tokens / duration if duration > 0 else 0,
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),

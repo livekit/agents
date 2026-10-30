@@ -38,7 +38,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 use fastrand::Rng;
 use lk_agents_abi::{
     AudioFrame, ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts,
-    llm::realtime::{GenerationStatus, TokenUsage},
+    llm::realtime::GenerationStatus, usage::TokenUsage,
 };
 use lk_agents_inference::realtime::{
     Incoming, TurnDetection,
@@ -557,12 +557,12 @@ impl Server {
             confidence: None,
             in_progress: false,
             event_id: self.event_id(),
-            usage: Some(TranscriptionUsage::Tokens {
-                input: 20,
-                output,
-                total: 20 + output,
-                input_audio: 20,
-            }),
+            usage: Some(TranscriptionUsage::Tokens(TokenUsage {
+                input_tokens: 20,
+                output_tokens: output.into(),
+                input_audio_tokens: Some(20),
+                ..TokenUsage::default()
+            })),
         };
         self.after(now, lag, Incoming::TranscriptionCompleted(completed));
     }
@@ -718,11 +718,10 @@ impl Server {
             usage: TokenUsage {
                 input_tokens: input,
                 output_tokens: 40,
-                total_tokens: input + 40,
-                input_audio_tokens: audio,
-                input_text_tokens: text,
-                output_audio_tokens: 30,
-                output_text_tokens: 10,
+                input_audio_tokens: Some(audio),
+                input_text_tokens: Some(text),
+                output_audio_tokens: Some(30),
+                output_text_tokens: Some(10),
                 ..TokenUsage::default()
             },
         };

@@ -1,5 +1,7 @@
 //! `metrics/base.py`. A `///` on a declared type or field is API (it lands in the schema digest the
-//! gate compares); Rust-only notes go in `//`. Counts are `u32` here, `u64` in `usage`.
+//! gate compares); Rust-only notes go in `//`. Request metrics embed `usage`'s `TokenUsage`.
+
+use crate::usage::TokenUsage;
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "metrics", path = "livekit.agents.metrics"))]
@@ -106,25 +108,12 @@ pub struct LlmMetrics {
     pub request_id: String,
     pub timestamp: f64,
     pub duration: f64,
-    /// Time to first generated token in seconds. -1 if the response generated none.
-    pub ttft: f64,
+    /// Time to first generated token in seconds; ``None`` if the response generated none.
+    #[host(default = None)]
+    pub ttft: Option<f64>,
     pub cancelled: bool,
-    pub completion_tokens: u32,
-    pub prompt_tokens: u32,
-    // Cache *reads*. Already included in `prompt_tokens` by every provider that reports it.
-    pub prompt_cached_tokens: u32,
-    /// The number of tokens used to write to the prompt cache (e.g. Anthropic cache writes).
-    ///
-    /// Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
-    #[host(default = 0)]
-    pub cache_creation_tokens: u32,
-    /// The number of completion tokens spent on hidden reasoning.
-    ///
-    /// Already counted in ``completion_tokens``; do not add it to totals. Not all providers
-    /// break reasoning out separately, and it is 0 when they don't.
-    #[host(default = 0)]
-    pub reasoning_tokens: u32,
-    pub total_tokens: u32,
+    #[host(default_factory = "TokenUsage()")]
+    pub tokens: TokenUsage,
     pub tokens_per_second: f64,
     #[host(default = None)]
     pub speech_id: Option<String>,
@@ -142,7 +131,6 @@ impl LlmMetrics {
     name = "STTMetrics",
     pydantic,
     base = "_BaseMetrics",
-    validator = "_default_total_tokens",
     constant(type = "stt_metrics"),
     emit,
     extract,
@@ -154,24 +142,13 @@ pub struct SttMetrics {
     pub timestamp: f64,
     /// The request duration in seconds, 0.0 if the STT is streaming.
     pub duration: f64,
-    /// The duration of the pushed audio in seconds, or 0.0 when unknown.
-    pub audio_duration: f64,
+    /// The duration of the pushed audio in seconds; ``None`` when unknown.
+    #[host(default = None)]
+    pub audio_duration: Option<f64>,
     /// Whether the STT is streaming (e.g using websocket).
     pub streamed: bool,
-    /// Total input tokens, including both audio and text (for token-based billing).
-    #[host(default = 0)]
-    pub input_tokens: u32,
-    /// Total output tokens (for token-based billing).
-    #[host(default = 0)]
-    pub output_tokens: u32,
-    /// Sum of input and output tokens.
-    ///
-    /// Defaults to ``input_tokens + output_tokens`` when omitted.
-    #[host(default = 0)]
-    pub total_tokens: u32,
-    /// Audio input tokens, a subset of input_tokens when reported by the provider.
-    #[host(default = 0)]
-    pub input_audio_tokens: u32,
+    #[host(default_factory = "TokenUsage()")]
+    pub tokens: TokenUsage,
     /// Time in seconds to acquire the connection. (WebSocket only)
     #[host(default = 0.0)]
     pub acquire_time: f64,
@@ -201,18 +178,17 @@ pub struct TtsMetrics {
     pub label: String,
     pub request_id: String,
     pub timestamp: f64,
-    pub ttfb: f64,
+    /// Time to the first audio frame in seconds; ``None`` if no audio arrived.
+    #[host(default = None)]
+    pub ttfb: Option<f64>,
     pub duration: f64,
     pub audio_duration: f64,
     pub cancelled: bool,
     /// Number of characters synthesized (for character-based billing).
     pub characters_count: u32,
-    /// Input text tokens (for token-based billing, e.g., OpenAI TTS).
-    #[host(default = 0)]
-    pub input_tokens: u32,
-    /// Output audio tokens (for token-based billing, e.g., OpenAI TTS).
-    #[host(default = 0)]
-    pub output_tokens: u32,
+    /// Token-based billing (e.g., OpenAI TTS): text in, audio out.
+    #[host(default_factory = "TokenUsage()")]
+    pub tokens: TokenUsage,
     pub streamed: bool,
     /// Time in seconds to acquire the connection. (WebSocket only)
     #[host(default = 0.0)]
@@ -289,63 +265,6 @@ impl EouMetrics {
     pub const TYPE: &'static str = "eou_metrics";
 }
 
-#[crate::host(record(
-    module = "metrics",
-    nested_in = "RealtimeModelMetrics",
-    pydantic,
-    emit,
-    extract,
-))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CachedTokenDetails {
-    #[host(default = 0)]
-    pub audio_tokens: u32,
-    #[host(default = 0)]
-    pub text_tokens: u32,
-    #[host(default = 0)]
-    pub image_tokens: u32,
-}
-
-// A cached total without a breakdown adds nothing to the per-modality cached counters.
-#[crate::host(record(
-    module = "metrics",
-    nested_in = "RealtimeModelMetrics",
-    pydantic,
-    emit,
-    extract,
-))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct InputTokenDetails {
-    #[host(default = 0)]
-    pub audio_tokens: u32,
-    #[host(default = 0)]
-    pub text_tokens: u32,
-    #[host(default = 0)]
-    pub image_tokens: u32,
-    #[host(default = 0)]
-    pub cached_tokens: u32,
-    #[host(default = None)]
-    pub cached_tokens_details: Option<CachedTokenDetails>,
-}
-
-#[crate::host(record(
-    module = "metrics",
-    nested_in = "RealtimeModelMetrics",
-    pydantic,
-    emit,
-    extract,
-))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct OutputTokenDetails {
-    #[host(default = 0)]
-    pub text_tokens: u32,
-    #[host(default = 0)]
-    pub audio_tokens: u32,
-    // Deprecated upstream.
-    #[host(default = 0)]
-    pub image_tokens: u32,
-}
-
 // `metrics/base.py:136`. Its usage shares the `LLMUsage` entry of a text LLM of the same
 // provider/model.
 #[crate::host(record(
@@ -367,31 +286,20 @@ pub struct RealtimeModelMetrics {
     /// The duration of the response from created to done in seconds.
     #[host(default = 0.0)]
     pub duration: f64,
-    /// The duration of the session connection in seconds (for session-based billing like xAI).
-    #[host(default = 0.0)]
-    pub session_duration: f64,
-    /// Time to first audio token in seconds. -1 if no audio token was sent.
-    #[host(default = -1)]
-    pub ttft: f64,
+    /// Metered session-connection seconds (for session-based billing like xAI).
+    #[host(default = None)]
+    pub connection_duration: Option<f64>,
+    /// Time to first audio token in seconds; ``None`` if no audio token was sent.
+    #[host(default = None)]
+    pub ttft: Option<f64>,
     /// Whether the request was cancelled.
     #[host(default = false)]
     pub cancelled: bool,
-    /// The number of input tokens used in the Response, including text and audio tokens.
-    #[host(default = 0)]
-    pub input_tokens: u32,
-    /// The number of output tokens sent in the Response, including text and audio tokens.
-    #[host(default = 0)]
-    pub output_tokens: u32,
-    /// The total number of tokens in the Response.
-    #[host(default = 0)]
-    pub total_tokens: u32,
+    #[host(default_factory = "TokenUsage()")]
+    pub tokens: TokenUsage,
     /// The number of tokens per second.
     #[host(default = 0.0)]
     pub tokens_per_second: f64,
-    /// Details about the input tokens used in the Response.
-    pub input_token_details: InputTokenDetails,
-    /// Details about the output tokens used in the Response.
-    pub output_token_details: OutputTokenDetails,
     /// Time in seconds to acquire the connection. (WebSocket only)
     #[host(default = 0.0)]
     pub acquire_time: f64,
@@ -404,8 +312,6 @@ pub struct RealtimeModelMetrics {
 
 impl RealtimeModelMetrics {
     pub const TYPE: &'static str = "realtime_model_metrics";
-    /// The "no audio token was sent" sentinel.
-    pub const NO_TTFT: f64 = -1.0;
 }
 
 // `metrics/base.py:200`. `exclude_none` tells `Some(0.0)` from `None`.

@@ -11,7 +11,7 @@ from typing import Any
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 from pydantic import JsonValue, TypeAdapter
 
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, TokenUsage, llm
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -415,10 +415,9 @@ class LLMStream(llm.LLMStream):
                     self.send(
                         ChatChunk(
                             id=chunk.id,
-                            usage=llm.CompletionUsage(
-                                completion_tokens=chunk.usage.completion_tokens or 0,
-                                prompt_tokens=chunk.usage.prompt_tokens or 0,
-                                total_tokens=chunk.usage.total_tokens or 0,
+                            usage=TokenUsage(
+                                input_tokens=chunk.usage.prompt_tokens or 0,
+                                output_tokens=chunk.usage.completion_tokens or 0,
                             ),
                         )
                     )
@@ -515,10 +514,9 @@ class LLMStream(llm.LLMStream):
             chunks.append(
                 ChatChunk(
                     id=shortuuid("done_"),
-                    usage=llm.CompletionUsage(
-                        completion_tokens=usage.completion_tokens or 0,
-                        prompt_tokens=usage.prompt_tokens or 0,
-                        total_tokens=usage.total_tokens or 0,
+                    usage=TokenUsage(
+                        input_tokens=usage.prompt_tokens or 0,
+                        output_tokens=usage.completion_tokens or 0,
                     ),
                 )
             )

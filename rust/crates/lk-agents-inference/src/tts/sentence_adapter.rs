@@ -280,7 +280,7 @@ impl Ledger {
         let id = self.tts.id();
         let label = id.label.clone();
         let context = Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
-        let record = call.fold.finish(now, call.start, &call.text, 0, 0, 0.0, false, context);
+        let record = call.fold.finish(now, call.start, &call.text, 0.0, false, context);
         self.calls.extend(record.map(AgentMetrics::Tts));
     }
 

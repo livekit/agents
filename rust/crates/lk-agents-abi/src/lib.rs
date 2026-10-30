@@ -111,7 +111,7 @@ pub use llm::chat_context::{
     truncate_plan,
 };
 pub use llm::chat_context::{Extra, chat_message_raw_text_content};
-pub use llm::events::{ChoiceDelta, CompletionUsage, FunctionToolCall, LlmChunk};
+pub use llm::events::{ChoiceDelta, FunctionToolCall, LlmChunk};
 pub use stt::events::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType};
 pub use turn::events::EotPrediction;
 pub use types::connect::{

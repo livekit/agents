@@ -106,7 +106,7 @@ impl AgentRun {
             }
             Event::LlmChunk { request, chunk } if owed.request == Some(request) => {
                 if let Some(usage) = &chunk.usage {
-                    self.ledger.report(request.0, crate::usage::completion_tokens(usage));
+                    self.ledger.report(request.0, usage.into());
                 }
             }
             Event::LlmEnded { request } if owed.request == Some(request) => {

@@ -18,9 +18,10 @@ use std::time::Duration;
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{
-    ChatContext, ChatItem, ChatMessage, ChoiceDelta, CompletionUsage, FunctionToolCall, LlmChunk,
-    ProviderId, Role, ToolSpec, Ts, WallAnchor,
+    ChatContext, ChatItem, ChatMessage, ChoiceDelta, FunctionToolCall, LlmChunk, ProviderId, Role,
+    ToolSpec, Ts, WallAnchor,
 };
 use serde_json::{Map, Value, json};
 
@@ -163,8 +164,7 @@ impl Driver {
                 extra: None,
             })
             .collect();
-        let usage =
-            CompletionUsage { prompt_tokens: 10, completion_tokens: 3, ..Default::default() };
+        let usage = TokenUsage { input_tokens: 10, output_tokens: 3, ..Default::default() };
         self.send(Event::LlmChunk { request, chunk: chunk(None, calls, Some(usage)) });
         self.send(Event::LlmEnded { request })
     }
@@ -239,7 +239,7 @@ impl Driver {
 pub(super) fn chunk(
     text: Option<&str>,
     tool_calls: Vec<FunctionToolCall>,
-    usage: Option<CompletionUsage>,
+    usage: Option<TokenUsage>,
 ) -> LlmChunk {
     LlmChunk {
         id: "chunk".into(),

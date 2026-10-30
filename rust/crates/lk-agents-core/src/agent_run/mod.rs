@@ -45,7 +45,7 @@ use crate::agent::{self, AgentError, first_string_parameter};
 use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
 use crate::tool_outcome;
-use crate::usage::{Ledger, ModelKind, completion_tokens};
+use crate::usage::{Ledger, ModelKind};
 use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
 };
@@ -744,7 +744,7 @@ impl AgentRun {
             return;
         }
         if let Some(usage) = &chunk.usage {
-            self.ledger.report(request.0, completion_tokens(usage));
+            self.ledger.report(request.0, usage.into());
         }
         let added = step.chunk(chunk);
         let message_id = step.message_id.clone();

@@ -23,7 +23,7 @@ import httpx2 as httpx
 
 import anthropic
 from anthropic.types.beta import BetaMessageParam, BetaRawMessageStreamEvent
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, TokenUsage, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
@@ -341,8 +341,8 @@ class LLMStream(llm.LLMStream):
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
         self._input_tokens = 0
-        self._cache_creation_tokens = 0
-        self._cache_read_tokens = 0
+        self._cache_creation_tokens: int | None = None
+        self._cache_read_tokens: int | None = None
         self._output_tokens = 0
 
     async def _run(self) -> None:
@@ -355,20 +355,21 @@ class LLMStream(llm.LLMStream):
                         self.send(chat_chunk)
                         retryable = False
 
+                # Anthropic's input_tokens excludes cache reads and writes; ours includes them.
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
-                prompt_token = (
-                    self._input_tokens + self._cache_creation_tokens + self._cache_read_tokens
+                input_tokens = (
+                    self._input_tokens
+                    + (self._cache_creation_tokens or 0)
+                    + (self._cache_read_tokens or 0)
                 )
                 self.send(
                     llm.ChatChunk(
                         id=self._request_id,
-                        usage=llm.CompletionUsage(
-                            completion_tokens=self._output_tokens,
-                            prompt_tokens=prompt_token,
-                            total_tokens=prompt_token + self._output_tokens,
-                            prompt_cached_tokens=self._cache_read_tokens,
-                            cache_creation_tokens=self._cache_creation_tokens,
+                        usage=TokenUsage(
+                            input_tokens=input_tokens,
+                            output_tokens=self._output_tokens,
                             cache_read_tokens=self._cache_read_tokens,
+                            cache_write_tokens=self._cache_creation_tokens,
                         ),
                     )
                 )
@@ -389,10 +390,8 @@ class LLMStream(llm.LLMStream):
             self._request_id = event.message.id
             self._input_tokens = event.message.usage.input_tokens
             self._output_tokens = event.message.usage.output_tokens
-            if event.message.usage.cache_creation_input_tokens:
-                self._cache_creation_tokens = event.message.usage.cache_creation_input_tokens
-            if event.message.usage.cache_read_input_tokens:
-                self._cache_read_tokens = event.message.usage.cache_read_input_tokens
+            self._cache_creation_tokens = event.message.usage.cache_creation_input_tokens
+            self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
             self._output_tokens += event.usage.output_tokens
         elif event.type == "content_block_start":

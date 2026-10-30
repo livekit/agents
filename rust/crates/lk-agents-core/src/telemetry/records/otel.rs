@@ -147,37 +147,38 @@ pub fn usage_records(ev: &AgentMetrics) -> Vec<OtelRecord> {
     let mut out = Vec::new();
     let attrs = || model_attrs(ev.metadata());
 
-    let mut count = |instrument: &'static str, n: u32| {
-        if n != 0 {
-            out.push(OtelRecord::counter(instrument, OtelValue::Int(u64::from(n)), attrs()));
+    let mut count = |instrument: &'static str, n: Option<u64>| {
+        if let Some(n) = n.filter(|&n| n != 0) {
+            out.push(OtelRecord::counter(instrument, OtelValue::Int(n), attrs()));
         }
     };
 
     // Each arm's seconds counter comes after its token counts.
     let seconds = match ev {
         AgentMetrics::Llm(m) => {
-            count(LLM_INPUT_TOKENS, m.prompt_tokens);
-            count(LLM_INPUT_CACHED_TOKENS, m.prompt_cached_tokens);
-            count(LLM_OUTPUT_TOKENS, m.completion_tokens);
+            count(LLM_INPUT_TOKENS, Some(m.tokens.input_tokens));
+            count(LLM_INPUT_CACHED_TOKENS, m.tokens.cache_read_tokens);
+            count(LLM_OUTPUT_TOKENS, Some(m.tokens.output_tokens));
             None
         }
         AgentMetrics::RealtimeModel(m) => {
-            count(LLM_INPUT_TOKENS, m.input_tokens);
-            count(LLM_INPUT_CACHED_TOKENS, m.input_token_details.cached_tokens);
-            count(LLM_OUTPUT_TOKENS, m.output_tokens);
-            count(LLM_INPUT_AUDIO_TOKENS, m.input_token_details.audio_tokens);
-            count(LLM_INPUT_TEXT_TOKENS, m.input_token_details.text_tokens);
-            count(LLM_OUTPUT_AUDIO_TOKENS, m.output_token_details.audio_tokens);
-            count(LLM_OUTPUT_TEXT_TOKENS, m.output_token_details.text_tokens);
-            Some((LLM_SESSION_DURATION, m.session_duration))
+            let t = &m.tokens;
+            count(LLM_INPUT_TOKENS, Some(t.input_tokens));
+            count(LLM_INPUT_CACHED_TOKENS, t.cache_read_tokens);
+            count(LLM_OUTPUT_TOKENS, Some(t.output_tokens));
+            count(LLM_INPUT_AUDIO_TOKENS, t.input_audio_tokens);
+            count(LLM_INPUT_TEXT_TOKENS, t.input_text_tokens);
+            count(LLM_OUTPUT_AUDIO_TOKENS, t.output_audio_tokens);
+            count(LLM_OUTPUT_TEXT_TOKENS, t.output_text_tokens);
+            m.connection_duration.map(|secs| (LLM_SESSION_DURATION, secs))
         }
         AgentMetrics::Tts(m) => {
-            count(TTS_CHARACTERS, m.characters_count);
+            count(TTS_CHARACTERS, Some(m.characters_count.into()));
             Some((TTS_AUDIO_DURATION, m.audio_duration))
         }
-        AgentMetrics::Stt(m) => Some((STT_AUDIO_DURATION, m.audio_duration)),
+        AgentMetrics::Stt(m) => m.audio_duration.map(|secs| (STT_AUDIO_DURATION, secs)),
         AgentMetrics::Interruption(m) => {
-            count(INTERRUPTION_NUM_REQUESTS, m.num_requests);
+            count(INTERRUPTION_NUM_REQUESTS, Some(m.num_requests.into()));
             None
         }
         // VAD, EOU, EOT-inference and avatar metrics produce nothing, as in the reference.
@@ -245,8 +246,8 @@ mod tests {
     #[test]
     fn a_genuine_zero_token_count_records_nothing() {
         let mut m = tk::llm();
-        m.prompt_tokens = 0;
-        m.completion_tokens = 4;
+        m.tokens.cache_read_tokens = Some(0);
+        m.tokens.output_tokens = 4;
         let out = usage_records(&AgentMetrics::Llm(m));
         assert_eq!(names(&out), vec![LLM_OUTPUT_TOKENS]);
     }
@@ -321,26 +322,29 @@ mod tests {
         let declared: Vec<&str> = INSTRUMENTS.iter().map(|(n, _)| *n).collect();
 
         let mut realtime = tk::realtime();
-        realtime.input_tokens = 1;
-        realtime.output_tokens = 1;
-        realtime.session_duration = 1.0;
+        realtime.connection_duration = Some(1.0);
         realtime.acquire_time = 1.0;
-        realtime.input_token_details.cached_tokens = 1;
-        realtime.input_token_details.audio_tokens = 1;
-        realtime.input_token_details.text_tokens = 1;
-        realtime.output_token_details.audio_tokens = 1;
-        realtime.output_token_details.text_tokens = 1;
+        realtime.tokens = lk_agents_abi::usage::TokenUsage {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: Some(1),
+            input_audio_tokens: Some(1),
+            input_text_tokens: Some(1),
+            output_audio_tokens: Some(1),
+            output_text_tokens: Some(1),
+            ..Default::default()
+        };
         let mut tts = tk::tts();
         tts.characters_count = 1;
         tts.audio_duration = 1.0;
         let mut stt = tk::stt();
-        stt.audio_duration = 1.0;
+        stt.audio_duration = Some(1.0);
         let mut interruption = tk::interruption();
         interruption.num_requests = 1;
         let mut llm = tk::llm();
-        llm.prompt_tokens = 1;
-        llm.prompt_cached_tokens = 1;
-        llm.completion_tokens = 1;
+        llm.tokens.input_tokens = 1;
+        llm.tokens.cache_read_tokens = Some(1);
+        llm.tokens.output_tokens = 1;
 
         let mut emitted: Vec<&str> = Vec::new();
         for ev in [

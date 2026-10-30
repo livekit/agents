@@ -686,7 +686,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         created_ts = gen.created_timestamp
         first_token_ts = gen.first_token_timestamp
 
-        ttft = first_token_ts - created_ts if first_token_ts else -1
+        ttft = first_token_ts - created_ts if first_token_ts else None
         duration = completed_ts - created_ts
 
         metrics = RealtimeModelMetrics(
@@ -696,22 +696,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             duration=duration,
             cancelled=interrupted,
             label=self._realtime_model.label,
-            input_tokens=0,
-            output_tokens=0,
-            total_tokens=0,
             tokens_per_second=0,
-            input_token_details=RealtimeModelMetrics.InputTokenDetails(
-                audio_tokens=0,
-                cached_tokens=0,
-                text_tokens=0,
-                cached_tokens_details=None,
-                image_tokens=0,
-            ),
-            output_token_details=RealtimeModelMetrics.OutputTokenDetails(
-                text_tokens=0,
-                audio_tokens=0,
-                image_tokens=0,
-            ),
             metadata=Metadata(
                 model_name=self._realtime_model.model,
                 model_provider=self._realtime_model.provider,

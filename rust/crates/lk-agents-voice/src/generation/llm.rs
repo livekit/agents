@@ -40,7 +40,7 @@ pub struct LlmGenerationData {
     pub produced: bool,
     called: bool,
     open: bool,
-    completion_tokens: Option<u32>,
+    output_tokens: Option<u64>,
     window: Option<(f64, f64)>,
     visible: VisibleStream,
 }
@@ -55,7 +55,7 @@ impl LlmGenerationData {
             produced: false,
             called: false,
             open: false,
-            completion_tokens: None,
+            output_tokens: None,
             window: None,
             visible: VisibleStream::new(),
         }
@@ -76,7 +76,7 @@ impl LlmGenerationData {
             }
         }
         if let Some(usage) = &chunk.usage {
-            self.completion_tokens = Some(usage.completion_tokens);
+            self.output_tokens = Some(usage.output_tokens);
         }
         self.called |= !chunk.node_text;
         self.metrics.observe(chunk, || now);
@@ -90,9 +90,9 @@ impl LlmGenerationData {
     pub fn finish_stream(&mut self) -> Vec<WordEffect> {
         let mut effects = Vec::new();
         self.end_segment(&mut effects);
-        self.tps = match (self.completion_tokens, self.window) {
+        self.tps = match (self.output_tokens, self.window) {
             (Some(tokens), Some((first, last))) if last > first => {
-                Some(f64::from(tokens) / (last - first))
+                Some(tokens as f64 / (last - first))
             }
             _ => None,
         };

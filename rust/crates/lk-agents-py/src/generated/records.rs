@@ -1767,7 +1767,7 @@ pub mod evals {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("success", ::pyo3::IntoPyObjectExt::into_bound_py_any(success, py)?)?;
             kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
-            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::llm::completion_usage_to_py(py, x)? })?;
+            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)? })?;
             crate::host::construct(INTENT_JUDGMENT.import(py, "livekit.agents._generated.evals", "IntentJudgment")?.as_any(), (), Some(&kwargs))
     }
 
@@ -2135,41 +2135,6 @@ pub mod llm {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/llm/events.rs.
-    static COMPLETION_USAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn completion_usage_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::CompletionUsage> {
-        let py = obj.py();
-            if !obj.is_instance(COMPLETION_USAGE.import(py, "livekit.agents._generated.llm", "CompletionUsage")?)? {
-                return Err(super::not_a(obj, "CompletionUsage"));
-            }
-            Ok(::lk_agents_abi::CompletionUsage {
-                completion_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "completion_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.completion_tokens"))?,
-                prompt_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "prompt_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.prompt_tokens"))?,
-                prompt_cached_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "prompt_cached_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.prompt_cached_tokens"))?,
-                cache_creation_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "cache_creation_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.cache_creation_tokens"))?,
-                cache_read_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "cache_read_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.cache_read_tokens"))?,
-                reasoning_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "reasoning_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.reasoning_tokens"))?,
-                total_tokens: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "total_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "CompletionUsage.total_tokens"))?,
-                service_tier: ::lk_agents_abi::python::attr_with(obj, "CompletionUsage", "service_tier", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-            })
-    }
-
-    pub fn completion_usage_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::CompletionUsage) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::CompletionUsage { completion_tokens, prompt_tokens, prompt_cached_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens, service_tier } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("completion_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(completion_tokens, py)?)?;
-            kwargs.set_item("prompt_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt_tokens, py)?)?;
-            kwargs.set_item("prompt_cached_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt_cached_tokens, py)?)?;
-            kwargs.set_item("cache_creation_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(cache_creation_tokens, py)?)?;
-            kwargs.set_item("cache_read_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(cache_read_tokens, py)?)?;
-            kwargs.set_item("reasoning_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(reasoning_tokens, py)?)?;
-            kwargs.set_item("total_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_tokens, py)?)?;
-            kwargs.set_item("service_tier", match service_tier { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            crate::host::construct(COMPLETION_USAGE.import(py, "livekit.agents._generated.llm", "CompletionUsage")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/llm/events.rs.
     static FUNCTION_TOOL_CALL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2235,7 +2200,7 @@ pub mod llm {
             Ok(::lk_agents_abi::LlmChunk {
                 id: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "id", |v| v.extract::<::std::string::String>())?,
                 delta: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "delta", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::llm::choice_delta_from_py(v)).map(Some) })?,
-                usage: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "usage", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::llm::completion_usage_from_py(v)).map(Some) })?,
+                usage: ::lk_agents_abi::python::attr_with(obj, "ChatChunk", "usage", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::usage::token_usage_from_py(v)).map(Some) })?,
                 flush: ::std::default::Default::default(),
                 node_text: ::std::default::Default::default(),
             })
@@ -2246,7 +2211,7 @@ pub mod llm {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
             kwargs.set_item("delta", match delta { None => py.None().into_bound(py), Some(x) => crate::generated::records::llm::choice_delta_to_py(py, x)? })?;
-            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::llm::completion_usage_to_py(py, x)? })?;
+            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)? })?;
             crate::host::construct(CHAT_CHUNK.import(py, "livekit.agents._generated.llm", "ChatChunk")?.as_any(), (), Some(&kwargs))
     }
 
@@ -2436,14 +2401,9 @@ pub mod metrics {
                 request_id: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "request_id", |v| v.extract::<::std::string::String>())?,
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LLMMetrics.timestamp"))?,
                 duration: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LLMMetrics.duration"))?,
-                ttft: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "ttft", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LLMMetrics.ttft"))?,
+                ttft: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "ttft", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "LLMMetrics.ttft")).map(Some) })?,
                 cancelled: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "cancelled", |v| v.extract::<bool>())?,
-                completion_tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "completion_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "LLMMetrics.completion_tokens"))?,
-                prompt_tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "prompt_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "LLMMetrics.prompt_tokens"))?,
-                prompt_cached_tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "prompt_cached_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "LLMMetrics.prompt_cached_tokens"))?,
-                cache_creation_tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "cache_creation_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "LLMMetrics.cache_creation_tokens"))?,
-                reasoning_tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "reasoning_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "LLMMetrics.reasoning_tokens"))?,
-                total_tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "total_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "LLMMetrics.total_tokens"))?,
+                tokens: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "tokens", |v| crate::generated::records::usage::token_usage_from_py(v))?,
                 tokens_per_second: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "tokens_per_second", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LLMMetrics.tokens_per_second"))?,
                 speech_id: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "speech_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 metadata: ::lk_agents_abi::python::attr_with(obj, "LLMMetrics", "metadata", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::metrics::metadata_from_py(v)).map(Some) })?,
@@ -2451,20 +2411,15 @@ pub mod metrics {
     }
 
     pub fn llm_metrics_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::LlmMetrics) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::LlmMetrics { label, request_id, timestamp, duration, ttft, cancelled, completion_tokens, prompt_tokens, prompt_cached_tokens, cache_creation_tokens, reasoning_tokens, total_tokens, tokens_per_second, speech_id, metadata } = value;
+            let ::lk_agents_abi::metrics::LlmMetrics { label, request_id, timestamp, duration, ttft, cancelled, tokens, tokens_per_second, speech_id, metadata } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
             kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration, py)?)?;
-            kwargs.set_item("ttft", ::pyo3::IntoPyObjectExt::into_bound_py_any(ttft, py)?)?;
+            kwargs.set_item("ttft", match ttft { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("cancelled", ::pyo3::IntoPyObjectExt::into_bound_py_any(cancelled, py)?)?;
-            kwargs.set_item("completion_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(completion_tokens, py)?)?;
-            kwargs.set_item("prompt_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt_tokens, py)?)?;
-            kwargs.set_item("prompt_cached_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt_cached_tokens, py)?)?;
-            kwargs.set_item("cache_creation_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(cache_creation_tokens, py)?)?;
-            kwargs.set_item("reasoning_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(reasoning_tokens, py)?)?;
-            kwargs.set_item("total_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_tokens, py)?)?;
+            kwargs.set_item("tokens", crate::generated::records::usage::token_usage_to_py(py, tokens)?)?;
             kwargs.set_item("tokens_per_second", ::pyo3::IntoPyObjectExt::into_bound_py_any(tokens_per_second, py)?)?;
             kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::metadata_to_py(py, x)? })?;
@@ -2485,12 +2440,9 @@ pub mod metrics {
                 request_id: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "request_id", |v| v.extract::<::std::string::String>())?,
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "STTMetrics.timestamp"))?,
                 duration: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "STTMetrics.duration"))?,
-                audio_duration: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "audio_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "STTMetrics.audio_duration"))?,
+                audio_duration: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "audio_duration", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "STTMetrics.audio_duration")).map(Some) })?,
                 streamed: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "streamed", |v| v.extract::<bool>())?,
-                input_tokens: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "input_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "STTMetrics.input_tokens"))?,
-                output_tokens: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "output_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "STTMetrics.output_tokens"))?,
-                total_tokens: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "total_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "STTMetrics.total_tokens"))?,
-                input_audio_tokens: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "input_audio_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "STTMetrics.input_audio_tokens"))?,
+                tokens: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "tokens", |v| crate::generated::records::usage::token_usage_from_py(v))?,
                 acquire_time: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "acquire_time", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "STTMetrics.acquire_time"))?,
                 connection_reused: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "connection_reused", |v| v.extract::<bool>())?,
                 metadata: ::lk_agents_abi::python::attr_with(obj, "STTMetrics", "metadata", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::metrics::metadata_from_py(v)).map(Some) })?,
@@ -2498,18 +2450,15 @@ pub mod metrics {
     }
 
     pub fn stt_metrics_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::SttMetrics) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::SttMetrics { label, request_id, timestamp, duration, audio_duration, streamed, input_tokens, output_tokens, total_tokens, input_audio_tokens, acquire_time, connection_reused, metadata } = value;
+            let ::lk_agents_abi::metrics::SttMetrics { label, request_id, timestamp, duration, audio_duration, streamed, tokens, acquire_time, connection_reused, metadata } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
             kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration, py)?)?;
-            kwargs.set_item("audio_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_duration, py)?)?;
+            kwargs.set_item("audio_duration", match audio_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("streamed", ::pyo3::IntoPyObjectExt::into_bound_py_any(streamed, py)?)?;
-            kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
-            kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
-            kwargs.set_item("total_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_tokens, py)?)?;
-            kwargs.set_item("input_audio_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_audio_tokens, py)?)?;
+            kwargs.set_item("tokens", crate::generated::records::usage::token_usage_to_py(py, tokens)?)?;
             kwargs.set_item("acquire_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(acquire_time, py)?)?;
             kwargs.set_item("connection_reused", ::pyo3::IntoPyObjectExt::into_bound_py_any(connection_reused, py)?)?;
             kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::metadata_to_py(py, x)? })?;
@@ -2529,13 +2478,12 @@ pub mod metrics {
                 label: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "label", |v| v.extract::<::std::string::String>())?,
                 request_id: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "request_id", |v| v.extract::<::std::string::String>())?,
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "TTSMetrics.timestamp"))?,
-                ttfb: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "ttfb", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "TTSMetrics.ttfb"))?,
+                ttfb: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "ttfb", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "TTSMetrics.ttfb")).map(Some) })?,
                 duration: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "TTSMetrics.duration"))?,
                 audio_duration: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "audio_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "TTSMetrics.audio_duration"))?,
                 cancelled: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "cancelled", |v| v.extract::<bool>())?,
                 characters_count: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "characters_count", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "TTSMetrics.characters_count"))?,
-                input_tokens: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "input_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "TTSMetrics.input_tokens"))?,
-                output_tokens: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "output_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "TTSMetrics.output_tokens"))?,
+                tokens: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "tokens", |v| crate::generated::records::usage::token_usage_from_py(v))?,
                 streamed: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "streamed", |v| v.extract::<bool>())?,
                 acquire_time: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "acquire_time", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "TTSMetrics.acquire_time"))?,
                 connection_reused: ::lk_agents_abi::python::attr_with(obj, "TTSMetrics", "connection_reused", |v| v.extract::<bool>())?,
@@ -2546,18 +2494,17 @@ pub mod metrics {
     }
 
     pub fn tts_metrics_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::TtsMetrics) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::TtsMetrics { label, request_id, timestamp, ttfb, duration, audio_duration, cancelled, characters_count, input_tokens, output_tokens, streamed, acquire_time, connection_reused, segment_id, speech_id, metadata } = value;
+            let ::lk_agents_abi::metrics::TtsMetrics { label, request_id, timestamp, ttfb, duration, audio_duration, cancelled, characters_count, tokens, streamed, acquire_time, connection_reused, segment_id, speech_id, metadata } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
-            kwargs.set_item("ttfb", ::pyo3::IntoPyObjectExt::into_bound_py_any(ttfb, py)?)?;
+            kwargs.set_item("ttfb", match ttfb { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration, py)?)?;
             kwargs.set_item("audio_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_duration, py)?)?;
             kwargs.set_item("cancelled", ::pyo3::IntoPyObjectExt::into_bound_py_any(cancelled, py)?)?;
             kwargs.set_item("characters_count", ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count, py)?)?;
-            kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
-            kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
+            kwargs.set_item("tokens", crate::generated::records::usage::token_usage_to_py(py, tokens)?)?;
             kwargs.set_item("streamed", ::pyo3::IntoPyObjectExt::into_bound_py_any(streamed, py)?)?;
             kwargs.set_item("acquire_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(acquire_time, py)?)?;
             kwargs.set_item("connection_reused", ::pyo3::IntoPyObjectExt::into_bound_py_any(connection_reused, py)?)?;
@@ -2630,85 +2577,6 @@ pub mod metrics {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
-    static REALTIME_MODEL_METRICS_CACHED_TOKEN_DETAILS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn realtime_model_metrics_cached_token_details_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::metrics::CachedTokenDetails> {
-        let py = obj.py();
-            if !obj.is_instance(REALTIME_MODEL_METRICS_CACHED_TOKEN_DETAILS.get_or_try_init(py, || -> PyResult<_> { Ok(py.import("livekit.agents._generated.metrics")?.getattr("RealtimeModelMetrics")?.getattr("CachedTokenDetails")?.cast_into::<::pyo3::types::PyType>()?.unbind()) })?.bind(py))? {
-                return Err(super::not_a(obj, "RealtimeModelMetrics.CachedTokenDetails"));
-            }
-            Ok(::lk_agents_abi::metrics::CachedTokenDetails {
-                audio_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.CachedTokenDetails", "audio_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.CachedTokenDetails.audio_tokens"))?,
-                text_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.CachedTokenDetails", "text_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.CachedTokenDetails.text_tokens"))?,
-                image_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.CachedTokenDetails", "image_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.CachedTokenDetails.image_tokens"))?,
-            })
-    }
-
-    pub fn realtime_model_metrics_cached_token_details_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::CachedTokenDetails) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::CachedTokenDetails { audio_tokens, text_tokens, image_tokens } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("audio_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_tokens, py)?)?;
-            kwargs.set_item("text_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(text_tokens, py)?)?;
-            kwargs.set_item("image_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(image_tokens, py)?)?;
-            crate::host::construct(REALTIME_MODEL_METRICS_CACHED_TOKEN_DETAILS.get_or_try_init(py, || -> PyResult<_> { Ok(py.import("livekit.agents._generated.metrics")?.getattr("RealtimeModelMetrics")?.getattr("CachedTokenDetails")?.cast_into::<::pyo3::types::PyType>()?.unbind()) })?.bind(py).as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
-    static REALTIME_MODEL_METRICS_INPUT_TOKEN_DETAILS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn realtime_model_metrics_input_token_details_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::metrics::InputTokenDetails> {
-        let py = obj.py();
-            if !obj.is_instance(REALTIME_MODEL_METRICS_INPUT_TOKEN_DETAILS.get_or_try_init(py, || -> PyResult<_> { Ok(py.import("livekit.agents._generated.metrics")?.getattr("RealtimeModelMetrics")?.getattr("InputTokenDetails")?.cast_into::<::pyo3::types::PyType>()?.unbind()) })?.bind(py))? {
-                return Err(super::not_a(obj, "RealtimeModelMetrics.InputTokenDetails"));
-            }
-            Ok(::lk_agents_abi::metrics::InputTokenDetails {
-                audio_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.InputTokenDetails", "audio_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.InputTokenDetails.audio_tokens"))?,
-                text_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.InputTokenDetails", "text_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.InputTokenDetails.text_tokens"))?,
-                image_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.InputTokenDetails", "image_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.InputTokenDetails.image_tokens"))?,
-                cached_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.InputTokenDetails", "cached_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.InputTokenDetails.cached_tokens"))?,
-                cached_tokens_details: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.InputTokenDetails", "cached_tokens_details", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::metrics::realtime_model_metrics_cached_token_details_from_py(v)).map(Some) })?,
-            })
-    }
-
-    pub fn realtime_model_metrics_input_token_details_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::InputTokenDetails) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::InputTokenDetails { audio_tokens, text_tokens, image_tokens, cached_tokens, cached_tokens_details } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("audio_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_tokens, py)?)?;
-            kwargs.set_item("text_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(text_tokens, py)?)?;
-            kwargs.set_item("image_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(image_tokens, py)?)?;
-            kwargs.set_item("cached_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(cached_tokens, py)?)?;
-            kwargs.set_item("cached_tokens_details", match cached_tokens_details { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::realtime_model_metrics_cached_token_details_to_py(py, x)? })?;
-            crate::host::construct(REALTIME_MODEL_METRICS_INPUT_TOKEN_DETAILS.get_or_try_init(py, || -> PyResult<_> { Ok(py.import("livekit.agents._generated.metrics")?.getattr("RealtimeModelMetrics")?.getattr("InputTokenDetails")?.cast_into::<::pyo3::types::PyType>()?.unbind()) })?.bind(py).as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
-    static REALTIME_MODEL_METRICS_OUTPUT_TOKEN_DETAILS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn realtime_model_metrics_output_token_details_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::metrics::OutputTokenDetails> {
-        let py = obj.py();
-            if !obj.is_instance(REALTIME_MODEL_METRICS_OUTPUT_TOKEN_DETAILS.get_or_try_init(py, || -> PyResult<_> { Ok(py.import("livekit.agents._generated.metrics")?.getattr("RealtimeModelMetrics")?.getattr("OutputTokenDetails")?.cast_into::<::pyo3::types::PyType>()?.unbind()) })?.bind(py))? {
-                return Err(super::not_a(obj, "RealtimeModelMetrics.OutputTokenDetails"));
-            }
-            Ok(::lk_agents_abi::metrics::OutputTokenDetails {
-                text_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.OutputTokenDetails", "text_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.OutputTokenDetails.text_tokens"))?,
-                audio_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.OutputTokenDetails", "audio_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.OutputTokenDetails.audio_tokens"))?,
-                image_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics.OutputTokenDetails", "image_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.OutputTokenDetails.image_tokens"))?,
-            })
-    }
-
-    pub fn realtime_model_metrics_output_token_details_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::OutputTokenDetails) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::OutputTokenDetails { text_tokens, audio_tokens, image_tokens } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("text_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(text_tokens, py)?)?;
-            kwargs.set_item("audio_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_tokens, py)?)?;
-            kwargs.set_item("image_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(image_tokens, py)?)?;
-            crate::host::construct(REALTIME_MODEL_METRICS_OUTPUT_TOKEN_DETAILS.get_or_try_init(py, || -> PyResult<_> { Ok(py.import("livekit.agents._generated.metrics")?.getattr("RealtimeModelMetrics")?.getattr("OutputTokenDetails")?.cast_into::<::pyo3::types::PyType>()?.unbind()) })?.bind(py).as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
     static REALTIME_MODEL_METRICS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2722,15 +2590,11 @@ pub mod metrics {
                 request_id: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "request_id", |v| v.extract::<::std::string::String>())?,
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.timestamp"))?,
                 duration: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.duration"))?,
-                session_duration: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "session_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.session_duration"))?,
-                ttft: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "ttft", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.ttft"))?,
+                connection_duration: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "connection_duration", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.connection_duration")).map(Some) })?,
+                ttft: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "ttft", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.ttft")).map(Some) })?,
                 cancelled: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "cancelled", |v| v.extract::<bool>())?,
-                input_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "input_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.input_tokens"))?,
-                output_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "output_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.output_tokens"))?,
-                total_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "total_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RealtimeModelMetrics.total_tokens"))?,
+                tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "tokens", |v| crate::generated::records::usage::token_usage_from_py(v))?,
                 tokens_per_second: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "tokens_per_second", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.tokens_per_second"))?,
-                input_token_details: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "input_token_details", |v| crate::generated::records::metrics::realtime_model_metrics_input_token_details_from_py(v))?,
-                output_token_details: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "output_token_details", |v| crate::generated::records::metrics::realtime_model_metrics_output_token_details_from_py(v))?,
                 acquire_time: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "acquire_time", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeModelMetrics.acquire_time"))?,
                 connection_reused: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "connection_reused", |v| v.extract::<bool>())?,
                 metadata: ::lk_agents_abi::python::attr_with(obj, "RealtimeModelMetrics", "metadata", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::metrics::metadata_from_py(v)).map(Some) })?,
@@ -2738,21 +2602,17 @@ pub mod metrics {
     }
 
     pub fn realtime_model_metrics_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::RealtimeModelMetrics) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::metrics::RealtimeModelMetrics { label, request_id, timestamp, duration, session_duration, ttft, cancelled, input_tokens, output_tokens, total_tokens, tokens_per_second, input_token_details, output_token_details, acquire_time, connection_reused, metadata } = value;
+            let ::lk_agents_abi::metrics::RealtimeModelMetrics { label, request_id, timestamp, duration, connection_duration, ttft, cancelled, tokens, tokens_per_second, acquire_time, connection_reused, metadata } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
             kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration, py)?)?;
-            kwargs.set_item("session_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(session_duration, py)?)?;
-            kwargs.set_item("ttft", ::pyo3::IntoPyObjectExt::into_bound_py_any(ttft, py)?)?;
+            kwargs.set_item("connection_duration", match connection_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("ttft", match ttft { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("cancelled", ::pyo3::IntoPyObjectExt::into_bound_py_any(cancelled, py)?)?;
-            kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
-            kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
-            kwargs.set_item("total_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_tokens, py)?)?;
+            kwargs.set_item("tokens", crate::generated::records::usage::token_usage_to_py(py, tokens)?)?;
             kwargs.set_item("tokens_per_second", ::pyo3::IntoPyObjectExt::into_bound_py_any(tokens_per_second, py)?)?;
-            kwargs.set_item("input_token_details", crate::generated::records::metrics::realtime_model_metrics_input_token_details_to_py(py, input_token_details)?)?;
-            kwargs.set_item("output_token_details", crate::generated::records::metrics::realtime_model_metrics_output_token_details_to_py(py, output_token_details)?)?;
             kwargs.set_item("acquire_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(acquire_time, py)?)?;
             kwargs.set_item("connection_reused", ::pyo3::IntoPyObjectExt::into_bound_py_any(connection_reused, py)?)?;
             kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::metadata_to_py(py, x)? })?;
@@ -4762,17 +4622,15 @@ pub mod stt {
             }
             Ok(::lk_agents_abi::RecognitionUsage {
                 audio_duration: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "audio_duration", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "RecognitionUsage.audio_duration"))?,
-                input_tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "input_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RecognitionUsage.input_tokens"))?,
-                output_tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "output_tokens", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "RecognitionUsage.output_tokens"))?,
+                tokens: ::lk_agents_abi::python::attr_with(obj, "RecognitionUsage", "tokens", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::usage::token_usage_from_py(v)).map(Some) })?,
             })
     }
 
     pub fn recognition_usage_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::RecognitionUsage) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::RecognitionUsage { audio_duration, input_tokens, output_tokens } = value;
+            let ::lk_agents_abi::RecognitionUsage { audio_duration, tokens } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("audio_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_duration, py)?)?;
-            kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
-            kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
+            kwargs.set_item("tokens", match tokens { None => py.None().into_bound(py), Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)? })?;
             crate::host::construct(RECOGNITION_USAGE.import(py, "livekit.agents._generated.stt", "RecognitionUsage")?.as_any(), (), Some(&kwargs))
     }
 

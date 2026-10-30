@@ -187,7 +187,7 @@ pub struct DetectionPass {
     provider: lk_agents_abi::ProviderId,
     started_at: f64,
     arguments: Option<String>,
-    usage: Option<lk_agents_abi::CompletionUsage>,
+    usage: Option<lk_agents_abi::usage::TokenUsage>,
     request_id: String,
     ttft: Option<f64>,
     settled: bool,
@@ -253,26 +253,21 @@ impl DetectionPass {
 
     fn finish(&mut self, failed: bool, now: f64) -> GenEvent {
         let duration = (now - self.started_at).max(0.0);
-        let usage = self.usage.take().unwrap_or_default();
+        let tokens = self.usage.take().unwrap_or_default();
         let metrics = (!failed).then(|| {
             Box::new(LlmMetrics {
                 label: self.provider.label.clone(),
                 request_id: std::mem::take(&mut self.request_id),
                 timestamp: now,
                 duration,
-                ttft: self.ttft.unwrap_or(-1.0),
+                ttft: self.ttft,
                 cancelled: false,
-                completion_tokens: usage.completion_tokens,
-                prompt_tokens: usage.prompt_tokens,
-                prompt_cached_tokens: usage.prompt_cached_tokens,
-                cache_creation_tokens: usage.cache_creation_tokens,
-                reasoning_tokens: usage.reasoning_tokens,
-                total_tokens: usage.total_tokens,
-                tokens_per_second: if duration > 0.0 && usage.completion_tokens > 0 {
-                    f64::from(usage.completion_tokens) / duration
+                tokens_per_second: if duration > 0.0 && tokens.output_tokens > 0 {
+                    tokens.output_tokens as f64 / duration
                 } else {
                     0.0
                 },
+                tokens,
                 speech_id: None,
                 metadata: Some(self.provider.metadata()),
             })

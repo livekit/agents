@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
-    from .llm import CompletionUsage
+    from .usage import TokenUsage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -69,7 +69,7 @@ class IntentJudgment:
 
     success: bool
     reason: str
-    usage: CompletionUsage | None
+    usage: TokenUsage | None
     """The judge request's usage, when the model reported it."""
 
 

@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, FunctionCallReady, GenerateReplyFailed, GenerationCreated, GenerationDone,
     GenerationStatus, MessageDone, MessageModalities, MessageStarted, Modalities, RealtimeError,
-    RealtimeModelError, SessionReconnected, TextDelta, TokenUsage, TranscriptAttribution,
+    RealtimeModelError, SessionReconnected, TextDelta, TranscriptAttribution,
 };
 use lk_agents_abi::{
     AudioFrame, ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, Role, Ts,
@@ -553,7 +553,7 @@ impl Segmenter {
         out.push(Event::GenerationDone(GenerationDone {
             response_id: burst.id.clone(),
             status: GenerationStatus::Completed,
-            usage: TokenUsage::default(),
+            usage: Default::default(),
         }));
         if !burst.transcript.is_empty() {
             self.chat_ctx.insert(ChatItem::Message(ChatMessage::text(

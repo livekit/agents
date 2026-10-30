@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, model_validator
-from typing_extensions import Self
+from pydantic import BaseModel, Field
 
 from .. import _bindings
+from .usage import TokenUsage
 
 
 class Metadata(BaseModel):
@@ -67,24 +67,10 @@ class LLMMetrics(_BaseMetrics):
     request_id: str
     timestamp: float
     duration: float
-    ttft: float
-    """Time to first generated token in seconds. -1 if the response generated none."""
+    ttft: float | None = None
+    """Time to first generated token in seconds; ``None`` if the response generated none."""
     cancelled: bool
-    completion_tokens: int
-    prompt_tokens: int
-    prompt_cached_tokens: int
-    cache_creation_tokens: int = 0
-    """The number of tokens used to write to the prompt cache (e.g. Anthropic cache writes).
-
-    Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
-    """
-    reasoning_tokens: int = 0
-    """The number of completion tokens spent on hidden reasoning.
-
-    Already counted in ``completion_tokens``; do not add it to totals. Not all providers
-    break reasoning out separately, and it is 0 when they don't.
-    """
-    total_tokens: int
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
     tokens_per_second: float
     speech_id: str | None = None
     metadata: Metadata | None = None
@@ -97,30 +83,16 @@ class STTMetrics(_BaseMetrics):
     timestamp: float
     duration: float
     """The request duration in seconds, 0.0 if the STT is streaming."""
-    audio_duration: float
-    """The duration of the pushed audio in seconds, or 0.0 when unknown."""
+    audio_duration: float | None = None
+    """The duration of the pushed audio in seconds; ``None`` when unknown."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
-    input_tokens: int = 0
-    """Total input tokens, including both audio and text (for token-based billing)."""
-    output_tokens: int = 0
-    """Total output tokens (for token-based billing)."""
-    total_tokens: int = 0
-    """Sum of input and output tokens.
-
-    Defaults to ``input_tokens + output_tokens`` when omitted.
-    """
-    input_audio_tokens: int = 0
-    """Audio input tokens, a subset of input_tokens when reported by the provider."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
     acquire_time: float = 0.0
     """Time in seconds to acquire the connection. (WebSocket only)"""
     connection_reused: bool = False
     """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None
-
-    @model_validator(mode="after")
-    def _default_total_tokens(self) -> Self:
-        return _bindings._default_total_tokens(self)
 
 
 class TTSMetrics(_BaseMetrics):
@@ -128,16 +100,15 @@ class TTSMetrics(_BaseMetrics):
     label: str
     request_id: str
     timestamp: float
-    ttfb: float
+    ttfb: float | None = None
+    """Time to the first audio frame in seconds; ``None`` if no audio arrived."""
     duration: float
     audio_duration: float
     cancelled: bool
     characters_count: int
     """Number of characters synthesized (for character-based billing)."""
-    input_tokens: int = 0
-    """Input text tokens (for token-based billing, e.g., OpenAI TTS)."""
-    output_tokens: int = 0
-    """Output audio tokens (for token-based billing, e.g., OpenAI TTS)."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
+    """Token-based billing (e.g., OpenAI TTS): text in, audio out."""
     streamed: bool
     acquire_time: float = 0.0
     """Time in seconds to acquire the connection. (WebSocket only)"""
@@ -176,23 +147,6 @@ class EOUMetrics(_BaseMetrics):
 
 
 class RealtimeModelMetrics(_BaseMetrics):
-    class CachedTokenDetails(BaseModel):
-        audio_tokens: int = 0
-        text_tokens: int = 0
-        image_tokens: int = 0
-
-    class InputTokenDetails(BaseModel):
-        audio_tokens: int = 0
-        text_tokens: int = 0
-        image_tokens: int = 0
-        cached_tokens: int = 0
-        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None = None
-
-    class OutputTokenDetails(BaseModel):
-        text_tokens: int = 0
-        audio_tokens: int = 0
-        image_tokens: int = 0
-
     type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
     label: str = ""
     request_id: str
@@ -200,24 +154,15 @@ class RealtimeModelMetrics(_BaseMetrics):
     """The timestamp of the response creation."""
     duration: float = 0.0
     """The duration of the response from created to done in seconds."""
-    session_duration: float = 0.0
-    """The duration of the session connection in seconds (for session-based billing like xAI)."""
-    ttft: float = -1
-    """Time to first audio token in seconds. -1 if no audio token was sent."""
+    connection_duration: float | None = None
+    """Metered session-connection seconds (for session-based billing like xAI)."""
+    ttft: float | None = None
+    """Time to first audio token in seconds; ``None`` if no audio token was sent."""
     cancelled: bool = False
     """Whether the request was cancelled."""
-    input_tokens: int = 0
-    """The number of input tokens used in the Response, including text and audio tokens."""
-    output_tokens: int = 0
-    """The number of output tokens sent in the Response, including text and audio tokens."""
-    total_tokens: int = 0
-    """The total number of tokens in the Response."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
     tokens_per_second: float = 0.0
     """The number of tokens per second."""
-    input_token_details: RealtimeModelMetrics.InputTokenDetails
-    """Details about the input tokens used in the Response."""
-    output_token_details: RealtimeModelMetrics.OutputTokenDetails
-    """Details about the output tokens used in the Response."""
     acquire_time: float = 0.0
     """Time in seconds to acquire the connection. (WebSocket only)"""
     connection_reused: bool = False
@@ -259,8 +204,5 @@ STTMetrics.__module__ = "livekit.agents.metrics"
 TTSMetrics.__module__ = "livekit.agents.metrics"
 VADMetrics.__module__ = "livekit.agents.metrics"
 EOUMetrics.__module__ = "livekit.agents.metrics"
-RealtimeModelMetrics.CachedTokenDetails.__module__ = "livekit.agents.metrics"
-RealtimeModelMetrics.InputTokenDetails.__module__ = "livekit.agents.metrics"
-RealtimeModelMetrics.OutputTokenDetails.__module__ = "livekit.agents.metrics"
 RealtimeModelMetrics.__module__ = "livekit.agents.metrics"
 AvatarMetrics.__module__ = "livekit.agents.metrics"

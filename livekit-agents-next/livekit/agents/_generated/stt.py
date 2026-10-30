@@ -35,6 +35,7 @@ from ..types import (
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
 from .language import LanguageCode
+from .usage import TokenUsage
 
 # The declared records.
 
@@ -107,8 +108,8 @@ class SpeechData:
 class RecognitionUsage:
     audio_duration: float
     """Incremental audio duration/usage in seconds"""
-    input_tokens: int = 0
-    output_tokens: int = 0
+    tokens: TokenUsage | None = None
+    """Token-based billing, when the provider reports tokens."""
 
 
 @dataclass

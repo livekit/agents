@@ -1,6 +1,7 @@
 //! `metrics/utils.py`'s `log_metrics`: Rust decides what to record, the host owns the logger.
 
 use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::usage::TokenUsage;
 
 /// Ints and floats stay distinct, as in the reference.
 #[derive(Debug, Clone, PartialEq)]
@@ -42,60 +43,56 @@ fn metadata_fields(m: &AgentMetrics) -> Vec<(&'static str, LogValue)> {
     }
 }
 
+/// A measurement, rounded to two digits; an unavailable one is not logged.
+fn seconds(key: &'static str, value: Option<f64>) -> Option<(&'static str, LogValue)> {
+    value.map(|v| (key, LogValue::Float(round_to(v, 2))))
+}
+
+/// usage.md's token names; a breakdown the provider did not report is not logged.
+fn token_fields(t: &TokenUsage) -> Vec<(&'static str, LogValue)> {
+    let mut fields = vec![
+        ("input_tokens", LogValue::Int(t.input_tokens)),
+        ("output_tokens", LogValue::Int(t.output_tokens)),
+        ("total_tokens", LogValue::Int(t.total_tokens())),
+    ];
+    let breakdowns = [
+        ("cache_read_tokens", t.cache_read_tokens),
+        ("cache_write_tokens", t.cache_write_tokens),
+        ("output_reasoning_tokens", t.output_reasoning_tokens),
+        ("input_text_tokens", t.input_text_tokens),
+        ("input_audio_tokens", t.input_audio_tokens),
+        ("input_image_tokens", t.input_image_tokens),
+        ("output_text_tokens", t.output_text_tokens),
+        ("output_audio_tokens", t.output_audio_tokens),
+        ("output_image_tokens", t.output_image_tokens),
+        ("cache_read_text_tokens", t.cache_read_text_tokens),
+        ("cache_read_audio_tokens", t.cache_read_audio_tokens),
+        ("cache_read_image_tokens", t.cache_read_image_tokens),
+    ];
+    fields.extend(breakdowns.into_iter().filter_map(|(k, v)| Some((k, LogValue::Int(v?)))));
+    fields
+}
+
 /// `None` for `VADMetrics` and `EOTInferenceMetrics`, which the reference silently ignores.
 pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
     let mut fields = metadata_fields(metrics);
     let message = match metrics {
         AgentMetrics::Llm(m) => {
-            fields.extend([
-                ("ttft", LogValue::Float(round_to(m.ttft, 2))),
-                ("prompt_tokens", LogValue::Int(u64::from(m.prompt_tokens))),
-                ("prompt_cached_tokens", LogValue::Int(u64::from(m.prompt_cached_tokens))),
-                ("cache_creation_tokens", LogValue::Int(u64::from(m.cache_creation_tokens))),
-                ("completion_tokens", LogValue::Int(u64::from(m.completion_tokens))),
-                ("reasoning_tokens", LogValue::Int(u64::from(m.reasoning_tokens))),
-                ("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))),
-            ]);
+            fields.extend(seconds("ttft", m.ttft));
+            fields.extend(token_fields(&m.tokens));
+            fields.push(("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))));
             "LLM metrics"
         }
         AgentMetrics::RealtimeModel(m) => {
-            let input = &m.input_token_details;
-            let cached = input.cached_tokens_details.unwrap_or_default();
-            fields.extend([
-                ("ttft", LogValue::Float(round_to(m.ttft, 2))),
-                ("input_tokens", LogValue::Int(u64::from(m.input_tokens))),
-                // Spelled the other way round from its siblings, as the reference.
-                ("cached_input_tokens", LogValue::Int(u64::from(input.cached_tokens))),
-                ("input_text_tokens", LogValue::Int(u64::from(input.text_tokens))),
-                ("input_cached_text_tokens", LogValue::Int(u64::from(cached.text_tokens))),
-                ("input_image_tokens", LogValue::Int(u64::from(input.image_tokens))),
-                ("input_cached_image_tokens", LogValue::Int(u64::from(cached.image_tokens))),
-                ("input_audio_tokens", LogValue::Int(u64::from(input.audio_tokens))),
-                ("input_cached_audio_tokens", LogValue::Int(u64::from(cached.audio_tokens))),
-                ("output_tokens", LogValue::Int(u64::from(m.output_tokens))),
-                (
-                    "output_text_tokens",
-                    LogValue::Int(u64::from(m.output_token_details.text_tokens)),
-                ),
-                (
-                    "output_audio_tokens",
-                    LogValue::Int(u64::from(m.output_token_details.audio_tokens)),
-                ),
-                (
-                    "output_image_tokens",
-                    LogValue::Int(u64::from(m.output_token_details.image_tokens)),
-                ),
-                ("total_tokens", LogValue::Int(u64::from(m.total_tokens))),
-                ("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))),
-            ]);
+            fields.extend(seconds("ttft", m.ttft));
+            fields.extend(token_fields(&m.tokens));
+            fields.push(("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))));
             "RealtimeModel metrics"
         }
         AgentMetrics::Tts(m) => {
-            fields.extend([
-                // `ttfb` is the one duration in the whole function that is *not* rounded.
-                ("ttfb", LogValue::Float(m.ttfb)),
-                ("audio_duration", LogValue::Float(round_to(m.audio_duration, 2))),
-            ]);
+            // `ttfb` is the one duration in the whole function that is *not* rounded.
+            fields.extend(m.ttfb.map(|ttfb| ("ttfb", LogValue::Float(ttfb))));
+            fields.push(("audio_duration", LogValue::Float(round_to(m.audio_duration, 2))));
             "TTS metrics"
         }
         AgentMetrics::Eou(m) => {
@@ -107,13 +104,8 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
             "EOU metrics"
         }
         AgentMetrics::Stt(m) => {
-            fields.extend([
-                ("audio_duration", LogValue::Float(round_to(m.audio_duration, 2))),
-                ("input_tokens", LogValue::Int(u64::from(m.input_tokens))),
-                ("output_tokens", LogValue::Int(u64::from(m.output_tokens))),
-                ("total_tokens", LogValue::Int(u64::from(m.total_tokens))),
-                ("input_audio_tokens", LogValue::Int(u64::from(m.input_audio_tokens))),
-            ]);
+            fields.extend(seconds("audio_duration", m.audio_duration));
+            fields.extend(token_fields(&m.tokens));
             "STT metrics"
         }
         AgentMetrics::Interruption(m) => {
@@ -150,9 +142,7 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::metrics::base::{
-        CachedTokenDetails, InputTokenDetails, Metadata, OutputTokenDetails,
-    };
+    use lk_agents_abi::metrics::base::Metadata;
     use lk_agents_abi::metrics::testkit as tk;
 
     fn keys(l: &MetricsLog) -> Vec<&'static str> {
@@ -176,16 +166,7 @@ mod tests {
     fn absent_metadata_omits_both_keys_while_empty_strings_become_unknown() {
         let mut m = tk::stt();
         let none = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
-        assert_eq!(
-            keys(&none),
-            [
-                "audio_duration",
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "input_audio_tokens"
-            ]
-        );
+        assert_eq!(keys(&none), ["input_tokens", "output_tokens", "total_tokens"]);
 
         m.metadata = Some(Metadata { model_name: Some(String::new()), model_provider: None });
         let empty = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
@@ -198,37 +179,28 @@ mod tests {
         assert_eq!(get(&named, "model_provider"), Some(LogValue::Str("deepgram".into())));
     }
 
-    // Catches: normalising `cached_input_tokens` to `input_cached_tokens`.
+    // Catches: an unreported breakdown logged as a zero, or a reported zero dropped.
     #[test]
-    fn the_realtime_cached_input_key_keeps_its_odd_spelling() {
+    fn only_reported_token_breakdowns_are_logged() {
         let mut m = tk::realtime();
-        m.input_token_details = InputTokenDetails { cached_tokens: 9, ..Default::default() };
+        m.tokens = TokenUsage {
+            input_tokens: 9,
+            cache_read_tokens: Some(0),
+            input_text_tokens: Some(4),
+            ..Default::default()
+        };
         let l = log_fields(&AgentMetrics::RealtimeModel(m)).unwrap();
-        assert_eq!(get(&l, "cached_input_tokens"), Some(LogValue::Int(9)));
-        assert_eq!(get(&l, "input_cached_tokens"), None);
-    }
-
-    // Catches: reading the cached breakdown unconditionally.
-    #[test]
-    fn realtime_cached_breakdown_defaults_to_zero_per_modality() {
-        let mut m = tk::realtime();
-        m.input_token_details =
-            InputTokenDetails { cached_tokens: 9, text_tokens: 4, ..Default::default() };
-        let l = log_fields(&AgentMetrics::RealtimeModel(m.clone())).unwrap();
-        assert_eq!(get(&l, "input_cached_text_tokens"), Some(LogValue::Int(0)));
+        assert_eq!(get(&l, "cache_read_tokens"), Some(LogValue::Int(0)));
         assert_eq!(get(&l, "input_text_tokens"), Some(LogValue::Int(4)));
-
-        m.input_token_details.cached_tokens_details =
-            Some(CachedTokenDetails { text_tokens: 3, ..Default::default() });
-        let l = log_fields(&AgentMetrics::RealtimeModel(m)).unwrap();
-        assert_eq!(get(&l, "input_cached_text_tokens"), Some(LogValue::Int(3)));
+        assert_eq!(get(&l, "input_audio_tokens"), None);
+        assert_eq!(get(&l, "ttft"), None, "no audio token was sent");
     }
 
     // Catches: rounding `ttfb`, the one duration the reference leaves raw.
     #[test]
     fn tts_ttfb_is_the_one_unrounded_duration() {
         let mut m = tk::tts();
-        m.ttfb = 0.18437;
+        m.ttfb = Some(0.18437);
         m.audio_duration = 1.23456;
         let l = log_fields(&AgentMetrics::Tts(m)).unwrap();
         assert_eq!(get(&l, "ttfb"), Some(LogValue::Float(0.18437)));
@@ -239,14 +211,14 @@ mod tests {
     #[test]
     fn rounding_breaks_ties_to_even_like_python() {
         let mut m = tk::stt();
-        m.audio_duration = 0.125;
+        m.audio_duration = Some(0.125);
         assert_eq!(
             get(&log_fields(&AgentMetrics::Stt(m)).unwrap(), "audio_duration"),
             Some(LogValue::Float(0.12))
         );
         // A non-tie, so "always round down" fails.
         let mut m = tk::stt();
-        m.audio_duration = 0.135;
+        m.audio_duration = Some(0.135);
         assert_eq!(
             get(&log_fields(&AgentMetrics::Stt(m)).unwrap(), "audio_duration"),
             Some(LogValue::Float(0.14))
@@ -284,21 +256,5 @@ mod tests {
         let l = log_fields(&AgentMetrics::Eou(eou)).unwrap();
         assert_eq!(l.message, "EOU metrics");
         assert_eq!(keys(&l), ["end_of_utterance_delay", "transcription_delay"]);
-    }
-
-    // Catches: an output-token key wired to the wrong source in the fifteen-field realtime block.
-    #[test]
-    fn realtime_output_keys_read_their_own_fields() {
-        let mut m = tk::realtime();
-        m.output_tokens = 10;
-        m.total_tokens = 30;
-        m.output_token_details =
-            OutputTokenDetails { text_tokens: 6, audio_tokens: 3, image_tokens: 1 };
-        let l = log_fields(&AgentMetrics::RealtimeModel(m)).unwrap();
-        assert_eq!(get(&l, "output_tokens"), Some(LogValue::Int(10)));
-        assert_eq!(get(&l, "output_text_tokens"), Some(LogValue::Int(6)));
-        assert_eq!(get(&l, "output_audio_tokens"), Some(LogValue::Int(3)));
-        assert_eq!(get(&l, "output_image_tokens"), Some(LogValue::Int(1)));
-        assert_eq!(get(&l, "total_tokens"), Some(LogValue::Int(30)));
     }
 }

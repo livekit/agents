@@ -18,9 +18,10 @@ use lk_agents_abi::evals::{
     EvaluationHost, EvaluationScore, Evaluations, IntentFailure, IntentJudgment, InvalidJudgment,
     JudgeOutcome, JudgeRunner, JudgeSpec, Judgment,
 };
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{
-    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, ChatRequest, Clock, CompletionUsage,
+    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, ChatRequest, Clock,
     DEFAULT_API_CONNECT_OPTIONS, HOST_TEARDOWN_TIMEOUT, Llm, LlmChunk, Role, StreamSource,
     ToolChoice, ToolSpec,
 };
@@ -185,7 +186,7 @@ impl Judges {
         prompt: String,
         tool: ToolSpec,
         conn_options: ApiConnectOptions,
-    ) -> Result<(Option<String>, Option<CompletionUsage>), ProviderError> {
+    ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
         // Sent once and never kept: fixed ids and creation times.
         let at = SystemTime::UNIX_EPOCH;
         let req = ChatRequest {
@@ -212,7 +213,7 @@ impl Judges {
 
 async fn first_call(
     stream: &mut dyn StreamSource<LlmChunk>,
-) -> Result<(Option<String>, Option<CompletionUsage>), ProviderError> {
+) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
     let (mut arguments, mut usage) = (None, None);
     while let Some(chunk) = stream.next().await? {
         if chunk.usage.is_some() {

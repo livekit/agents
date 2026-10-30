@@ -277,8 +277,8 @@ class TestChatCompletionsMode:
 
             usage_chunks = [c for c in chunks if c.usage]
             assert len(usage_chunks) == 1
-            assert usage_chunks[0].usage.completion_tokens == 10
-            assert usage_chunks[0].usage.prompt_tokens == 5
+            assert usage_chunks[0].usage.output_tokens == 10
+            assert usage_chunks[0].usage.input_tokens == 5
             assert usage_chunks[0].usage.total_tokens == 15
         finally:
             await model.aclose()

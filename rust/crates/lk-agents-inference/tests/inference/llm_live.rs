@@ -87,7 +87,7 @@ async fn a_streamed_completion_round_trips() {
     }
     assert!(!text.trim().is_empty(), "no text");
     let usage = usage.expect("include_usage produces a usage chunk");
-    assert!(usage.prompt_tokens > 0 && usage.total_tokens > 0, "{usage:?}");
+    assert!(usage.input_tokens > 0 && usage.output_tokens > 0, "{usage:?}");
     eprintln!("live: {text:?} usage={usage:?}");
 }
 

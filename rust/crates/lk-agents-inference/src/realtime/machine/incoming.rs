@@ -510,16 +510,13 @@ impl RealtimeMachine {
             }
         }
 
+        let metrics = self.response_metrics(now, &done.response_id, done.status, &done.usage);
         step.events.push(Event::GenerationDone(GenerationDone {
             response_id: done.response_id.clone(),
             status: done.status,
             usage: done.usage,
         }));
-        if let Some(metrics) =
-            self.response_metrics(now, &done.response_id, done.status, &done.usage)
-        {
-            step.events.push(metrics);
-        }
+        step.events.extend(metrics);
 
         if done.status == GenerationStatus::Failed {
             // "failures are largely undocumented by openai, so we assume optimistically

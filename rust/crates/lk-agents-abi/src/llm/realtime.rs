@@ -169,7 +169,7 @@ pub struct GenerationDone {
     pub status: GenerationStatus,
     /// Not reported by a host session: it reports usage through its own metrics events.
     #[host(skip)]
-    pub usage: TokenUsage,
+    pub usage: crate::usage::TokenUsage,
 }
 
 /// A generation the server started by itself (`generation_created` with `user_initiated=False`):
@@ -300,24 +300,6 @@ pub enum GenerationStatus {
     Cancelled,
     Incomplete,
     Failed,
-}
-
-/// Only the fields `response.done` fills; the host stamps the rest.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TokenUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
-    pub input_audio_tokens: u64,
-    pub input_text_tokens: u64,
-    pub input_cached_tokens: u64,
-    pub input_image_tokens: u64,
-    pub cached_text_tokens: u64,
-    pub cached_audio_tokens: u64,
-    pub cached_image_tokens: u64,
-    pub output_audio_tokens: u64,
-    pub output_text_tokens: u64,
-    pub output_image_tokens: u64,
 }
 
 /// `MessageStarted` through `GenerationDone` are the inside of the host's one `"generation_created"`.

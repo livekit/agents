@@ -2,42 +2,11 @@
 //! reference's docstring verbatim; notes for a Rust reader are `//`.
 
 use crate::llm::chat_context::{Extra, Role};
+use crate::usage::TokenUsage;
 
 // The Python `module` and `path` of every record here.
 #[crate::host(file(module = "llm", path = "livekit.agents.llm"))]
 const _: () = ();
-
-// `llm/llm.py:35`. Field `///`s are the reference's, verbatim.
-#[crate::host(record(module = "llm", pydantic, emit, extract))]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CompletionUsage {
-    /// The number of tokens in the completion.
-    pub completion_tokens: u32,
-    /// The number of input tokens used (includes cached tokens).
-    pub prompt_tokens: u32,
-    /// The number of cached input tokens used.
-    #[host(default = 0)]
-    pub prompt_cached_tokens: u32,
-    /// The number of tokens used to create the cache.
-    #[host(default = 0)]
-    pub cache_creation_tokens: u32,
-    /// The number of tokens read from the cache.
-    #[host(default = 0)]
-    pub cache_read_tokens: u32,
-    /// The number of completion tokens spent on hidden reasoning.
-    /// Already counted in ``completion_tokens``; do not add it to totals. Only reported by
-    /// providers that break reasoning out separately (e.g. OpenAI-compatible responses
-    /// carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
-    #[host(default = 0)]
-    pub reasoning_tokens: u32,
-    /// The total number of tokens used (completion + prompt tokens).
-    // Reported by the provider, not derived: providers disagree on cache reads.
-    pub total_tokens: u32,
-    /// The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
-    /// Returned by providers that support tiered processing (e.g. OpenAI).
-    #[host(default = None)]
-    pub service_tier: Option<String>,
-}
 
 // `llm/llm.py:53`. `arguments` is the raw, possibly partial JSON text; validated after the stream.
 #[crate::host(record(module = "llm", pydantic, constant(type = "function"), emit, extract))]
@@ -76,7 +45,7 @@ pub struct CollectedResponse {
     #[host(default_factory = "list")]
     pub tool_calls: Vec<FunctionToolCall>,
     #[host(default = None)]
-    pub usage: Option<CompletionUsage>,
+    pub usage: Option<TokenUsage>,
     /// Provider-specific extra data accumulated across chunks
     /// (e.g., xAI encrypted reasoning, Google thought signatures).
     #[host(default_factory = "dict")]
@@ -100,7 +69,7 @@ pub struct LlmChunk {
     #[host(default = None)]
     pub delta: Option<ChoiceDelta>,
     #[host(default = None)]
-    pub usage: Option<CompletionUsage>,
+    pub usage: Option<TokenUsage>,
     /// `FlushSentinel`: finish the current TTS segment at this point in the stream.
     ///
     /// Only an `Agent.llm_node` override produces one; never crosses as a field.
@@ -143,7 +112,7 @@ mod tests {
 
         let usage_only = LlmChunk {
             id: "c1".into(),
-            usage: Some(CompletionUsage { total_tokens: 42, ..Default::default() }),
+            usage: Some(TokenUsage { output_tokens: 42, ..Default::default() }),
             ..Default::default()
         };
         assert!(!usage_only.has_response());

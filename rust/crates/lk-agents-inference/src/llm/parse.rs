@@ -3,6 +3,7 @@
 
 use super::thinking::{FilterState, strip_thinking_tokens};
 use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChoiceDelta, Extra, FunctionToolCall, LlmChunk, Role};
 use serde::Deserialize;
 
@@ -26,9 +27,6 @@ pub struct WireChunk {
     pub choices: Vec<WireChoice>,
     #[serde(default)]
     pub usage: Option<WireUsage>,
-    /// `getattr(chunk, "service_tier", None)` -- read off the chunk, not off `usage`.
-    #[serde(default)]
-    pub service_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -77,8 +75,6 @@ pub struct WireUsage {
     pub completion_tokens: Option<u32>,
     #[serde(default)]
     pub prompt_tokens: Option<u32>,
-    #[serde(default)]
-    pub total_tokens: Option<u32>,
     #[serde(default)]
     pub prompt_tokens_details: Option<WirePromptTokensDetails>,
     #[serde(default)]
@@ -235,24 +231,23 @@ impl ChoiceAccumulator {
 /// The usage chunk, present because the request set `stream_options={"include_usage": True}`.
 pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
     let usage = chunk.usage.as_ref()?;
-    let cached = usage.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens).unwrap_or(0);
+    let n = |n: Option<u32>| n.map(u64::from);
     Some(LlmChunk {
         id: chunk.id.clone(),
         delta: None,
-        usage: Some(lk_agents_abi::CompletionUsage {
-            completion_tokens: usage.completion_tokens.unwrap_or(0),
-            prompt_tokens: usage.prompt_tokens.unwrap_or(0),
-            prompt_cached_tokens: cached,
-            // OpenAI's schema has no cache-creation/read equivalent.
-            cache_creation_tokens: 0,
-            cache_read_tokens: 0,
-            reasoning_tokens: usage
+        // OpenAI's prompt tokens include the cached ones; its schema reports no cache writes.
+        usage: Some(TokenUsage {
+            input_tokens: n(usage.prompt_tokens).unwrap_or(0),
+            output_tokens: n(usage.completion_tokens).unwrap_or(0),
+            cache_read_tokens: n(usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)),
+            output_reasoning_tokens: n(usage
                 .completion_tokens_details
                 .as_ref()
-                .and_then(|d| d.reasoning_tokens)
-                .unwrap_or(0),
-            total_tokens: usage.total_tokens.unwrap_or(0),
-            service_tier: chunk.service_tier.clone(),
+                .and_then(|d| d.reasoning_tokens)),
+            ..TokenUsage::default()
         }),
         ..Default::default()
     })
@@ -493,25 +488,27 @@ mod tests {
         );
     }
 
-    // Catches: service_tier read off `usage`, or missing cached-token details not read as 0.
+    // Catches: details a provider omits read as reported zeros (usage.md: absent stays `None`).
     #[test]
     fn usage_tolerates_a_provider_that_omits_the_token_details() {
         let c = chunk(json!({
             "id": "c1",
-            "service_tier": "flex",
             "usage": {"completion_tokens": 7, "prompt_tokens": 11, "total_tokens": 18}
         }));
         let u = usage_chunk(&c).unwrap().usage.unwrap();
-        assert_eq!((u.completion_tokens, u.prompt_tokens, u.total_tokens), (7, 11, 18));
-        assert_eq!(u.prompt_cached_tokens, 0);
-        assert_eq!(u.reasoning_tokens, 0);
-        assert_eq!(u.service_tier.as_deref(), Some("flex"));
+        assert_eq!((u.output_tokens, u.input_tokens, u.total_tokens()), (7, 11, 18));
+        assert_eq!((u.cache_read_tokens, u.output_reasoning_tokens), (None, None));
 
         let c = chunk(json!({
             "id": "c1",
-            "usage": {"completion_tokens": 9, "completion_tokens_details": {"reasoning_tokens": 4}}
+            "usage": {
+                "completion_tokens": 9,
+                "prompt_tokens_details": {"cached_tokens": 0},
+                "completion_tokens_details": {"reasoning_tokens": 4}
+            }
         }));
-        assert_eq!(usage_chunk(&c).unwrap().usage.unwrap().reasoning_tokens, 4);
+        let u = usage_chunk(&c).unwrap().usage.unwrap();
+        assert_eq!((u.cache_read_tokens, u.output_reasoning_tokens), (Some(0), Some(4)));
 
         assert!(usage_chunk(&chunk(json!({"id": "c1"}))).is_none(), "no usage, no chunk");
     }

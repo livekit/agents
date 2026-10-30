@@ -469,7 +469,7 @@ async fn the_usage_record_reports_the_real_audio_duration() {
     let usage = events
         .iter()
         .find(|e| e.kind == SpeechEventType::RecognitionUsage)
-        .and_then(|e| e.recognition_usage)
+        .and_then(|e| e.recognition_usage.clone())
         .expect("a usage record");
     assert!((usage.audio_duration - 0.2).abs() < 1e-9, "got {}", usage.audio_duration);
 }

@@ -5,8 +5,9 @@
 use std::sync::Arc;
 
 use crate::errors::HostError;
+use crate::usage::TokenUsage;
 use crate::utils::host_ref::HostRef;
-use crate::{ChatItem, CompletionUsage, Llm};
+use crate::{ChatItem, Llm};
 
 /// One judge's decision; `verdict` is `"pass"`, `"fail"` or `"maybe"`.
 #[crate::host(record(module = "evals", emit, extract))]
@@ -50,7 +51,7 @@ pub struct IntentJudgment {
     pub success: bool,
     pub reason: String,
     /// The judge request's usage, when the model reported it.
-    pub usage: Option<CompletionUsage>,
+    pub usage: Option<TokenUsage>,
 }
 
 /// The aggregates of a set of judgments: pass scores 1, maybe 0.5 and fail 0.

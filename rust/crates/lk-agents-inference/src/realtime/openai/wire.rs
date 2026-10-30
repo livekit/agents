@@ -7,6 +7,7 @@
 
 use base64::Engine as _;
 use lk_agents_abi::llm::provider_format::ImageResolver;
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput, Role};
 use serde_json::{Map, Value, json};
 use std::time::SystemTime;
@@ -459,17 +460,13 @@ fn transcription_usage(v: Option<&Value>) -> Result<Option<TranscriptionUsage>, 
     let Some(v) = v.filter(|value| !value.is_null()) else {
         return Ok(None);
     };
-    let n = |path: &[&str]| -> Result<u32, String> {
-        u32::try_from(u(v, path)?)
-            .map_err(|_| format!("{} exceeds the transcription token range", path.join(".")))
-    };
     let usage = match required_string(v, "type")?.as_str() {
-        "tokens" => TranscriptionUsage::Tokens {
-            input: n(&["input_tokens"])?,
-            output: n(&["output_tokens"])?,
-            total: n(&["total_tokens"])?,
-            input_audio: n(&["input_token_details", "audio_tokens"])?,
-        },
+        "tokens" => TranscriptionUsage::Tokens(TokenUsage {
+            input_tokens: u(v, &["input_tokens"])?,
+            output_tokens: u(v, &["output_tokens"])?,
+            input_audio_tokens: opt_u(v, &["input_token_details", "audio_tokens"])?,
+            ..TokenUsage::default()
+        }),
         "duration" => TranscriptionUsage::Duration {
             seconds: v
                 .get("seconds")
@@ -500,18 +497,49 @@ fn s(v: &Value, k: &str) -> Option<String> {
 }
 
 fn u(v: &Value, path: &[&str]) -> Result<u64, String> {
+    Ok(opt_u(v, path)?.unwrap_or(0))
+}
+
+/// `None` when the provider did not report the count (usage.md: absent is not zero).
+fn opt_u(v: &Value, path: &[&str]) -> Result<Option<u64>, String> {
     let mut cur = v;
     for part in path {
-        if cur.is_null() {
-            return Ok(0);
-        }
         match cur.get(part) {
             Some(next) => cur = next,
-            None if cur.is_object() => return Ok(0),
+            None if cur.is_null() || cur.is_object() => return Ok(None),
             None => return Err(format!("{} must be an unsigned integer", path.join("."))),
         }
     }
-    cur.as_u64().ok_or_else(|| format!("{} must be an unsigned integer", path.join(".")))
+    match cur {
+        Value::Null => Ok(None),
+        _ => cur
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("{} must be an unsigned integer", path.join("."))),
+    }
+}
+
+/// `response.done`'s usage. OpenAI's input total includes its cached tokens.
+fn response_usage(r: &Value) -> Result<TokenUsage, String> {
+    let at = |path: &[&str]| opt_u(r, &[&["usage"], path].concat());
+    let input = |k: &str| at(&["input_token_details", k]);
+    let cached = |k: &str| at(&["input_token_details", "cached_tokens_details", k]);
+    let output = |k: &str| at(&["output_token_details", k]);
+    Ok(TokenUsage {
+        input_tokens: at(&["input_tokens"])?.unwrap_or(0),
+        output_tokens: at(&["output_tokens"])?.unwrap_or(0),
+        cache_read_tokens: input("cached_tokens")?,
+        input_text_tokens: input("text_tokens")?,
+        input_audio_tokens: input("audio_tokens")?,
+        input_image_tokens: input("image_tokens")?,
+        output_text_tokens: output("text_tokens")?,
+        output_audio_tokens: output("audio_tokens")?,
+        output_image_tokens: output("image_tokens")?,
+        cache_read_text_tokens: cached("text_tokens")?,
+        cache_read_audio_tokens: cached("audio_tokens")?,
+        cache_read_image_tokens: cached("image_tokens")?,
+        ..TokenUsage::default()
+    })
 }
 
 /// A malformed provider frame retains its operation and correlated event identity.
@@ -666,63 +694,7 @@ pub fn decode_at(ev: &Value, created_at: SystemTime) -> Result<Incoming, DecodeE
                     },
                     error_type: error.and_then(|e| s(e, "type")),
                     error_code: error.and_then(|e| s(e, "code")),
-                    usage: lk_agents_abi::llm::realtime::TokenUsage {
-                        input_tokens: u(r, &["usage", "input_tokens"])?,
-                        output_tokens: u(r, &["usage", "output_tokens"])?,
-                        total_tokens: u(r, &["usage", "total_tokens"])?,
-                        input_audio_tokens: u(
-                            r,
-                            &["usage", "input_token_details", "audio_tokens"],
-                        )?,
-                        input_text_tokens: u(r, &["usage", "input_token_details", "text_tokens"])?,
-                        input_cached_tokens: u(
-                            r,
-                            &["usage", "input_token_details", "cached_tokens"],
-                        )?,
-                        input_image_tokens: u(
-                            r,
-                            &["usage", "input_token_details", "image_tokens"],
-                        )?,
-                        cached_text_tokens: u(
-                            r,
-                            &[
-                                "usage",
-                                "input_token_details",
-                                "cached_tokens_details",
-                                "text_tokens",
-                            ],
-                        )?,
-                        cached_audio_tokens: u(
-                            r,
-                            &[
-                                "usage",
-                                "input_token_details",
-                                "cached_tokens_details",
-                                "audio_tokens",
-                            ],
-                        )?,
-                        cached_image_tokens: u(
-                            r,
-                            &[
-                                "usage",
-                                "input_token_details",
-                                "cached_tokens_details",
-                                "image_tokens",
-                            ],
-                        )?,
-                        output_audio_tokens: u(
-                            r,
-                            &["usage", "output_token_details", "audio_tokens"],
-                        )?,
-                        output_text_tokens: u(
-                            r,
-                            &["usage", "output_token_details", "text_tokens"],
-                        )?,
-                        output_image_tokens: u(
-                            r,
-                            &["usage", "output_token_details", "image_tokens"],
-                        )?,
-                    },
+                    usage: response_usage(r)?,
                 })
             }
             "error" => {
@@ -947,10 +919,10 @@ mod tests {
         }});
         let Incoming::ResponseDone(d) = decode(&ev) else { panic!("wrong variant") };
         assert_eq!(d.usage.input_tokens, 100);
-        assert_eq!(d.usage.input_cached_tokens, 64);
-        assert_eq!(d.usage.cached_audio_tokens, 60);
-        assert_eq!(d.usage.cached_image_tokens, 0);
-        assert_eq!(d.usage.output_audio_tokens, 18);
+        assert_eq!(d.usage.cache_read_tokens, Some(64));
+        assert_eq!(d.usage.cache_read_audio_tokens, Some(60));
+        assert_eq!(d.usage.cache_read_image_tokens, None, "not reported");
+        assert_eq!(d.usage.output_audio_tokens, Some(18));
         assert_eq!(d.status, lk_agents_abi::llm::realtime::GenerationStatus::Completed);
     }
 

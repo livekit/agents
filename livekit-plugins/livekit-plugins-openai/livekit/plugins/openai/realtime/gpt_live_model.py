@@ -14,7 +14,7 @@ from urllib.parse import urlparse, urlunparse
 import aiohttp
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents import APIConnectionError, APIError, TokenUsage, llm, utils
 from livekit.agents.metrics import LLMMetrics, Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -928,14 +928,14 @@ class GPTVoiceSession(
                         request_id=response.id or "",
                         timestamp=time.time(),
                         duration=0,
-                        ttft=-1,
                         cancelled=False,
-                        prompt_tokens=usage.input_tokens,
-                        prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
-                        cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
-                        completion_tokens=usage.output_tokens,
-                        reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
-                        total_tokens=usage.total_tokens,
+                        tokens=TokenUsage(
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                            cache_read_tokens=usage.input_tokens_details.cached_tokens,
+                            cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+                            output_reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
+                        ),
                         tokens_per_second=0,
                         metadata=Metadata(
                             model_name=response.model
@@ -1002,17 +1002,11 @@ class GPTVoiceSession(
             RealtimeModelMetrics(
                 timestamp=time.time(),
                 request_id=self._session_id or "",
-                ttft=-1,
                 duration=0,
-                session_duration=max(0.0, usage.seconds - previous.seconds),
+                connection_duration=max(0.0, usage.seconds - previous.seconds),
                 cancelled=False,
                 label=self._live_model.label,
-                input_tokens=0,
-                output_tokens=0,
-                total_tokens=0,
                 tokens_per_second=0,
-                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
-                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
                 metadata=Metadata(
                     model_name=self._live_model.model, model_provider=self._live_model.provider
                 ),

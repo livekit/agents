@@ -4,7 +4,8 @@ use std::collections::VecDeque;
 
 use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, SttMetrics, TtsMetrics};
 use lk_agents_abi::telemetry::provider::{HostContext, RecognitionUsageMissing};
-use lk_agents_abi::{CompletionUsage, LlmChunk, SpeechEvent, SpeechEventType, SynthesizedAudio};
+use lk_agents_abi::usage::TokenUsage;
+use lk_agents_abi::{LlmChunk, SpeechEvent, SpeechEventType, SynthesizedAudio};
 
 impl Context {
     pub fn from_host((timestamp, label, cancelled, model, provider): HostContext) -> Self {
@@ -33,12 +34,9 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
             request_id: event.request_id,
             timestamp: context.timestamp,
             duration: now - start,
-            audio_duration: audio_durations.iter().sum(),
+            audio_duration: Some(audio_durations.iter().sum()),
             streamed: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: 0,
-            input_audio_tokens: 0,
+            tokens: TokenUsage::default(),
             acquire_time: 0.0,
             connection_reused: false,
             metadata: context.metadata,
@@ -64,12 +62,9 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
                 request_id: event.request_id.clone(),
                 timestamp: context.timestamp,
                 duration: 0.0,
-                audio_duration: usage.audio_duration,
+                audio_duration: Some(usage.audio_duration),
                 streamed: true,
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                total_tokens: usage.input_tokens + usage.output_tokens,
-                input_audio_tokens: 0,
+                tokens: usage.tokens.clone().unwrap_or_default(),
                 acquire_time: 0.0,
                 connection_reused: false,
                 metadata: context.metadata,
@@ -91,7 +86,7 @@ pub struct LlmMetricState {
     first: Option<f64>,
     received: bool,
     request_id: String,
-    usage: Option<CompletionUsage>,
+    usage: Option<TokenUsage>,
 }
 /// `LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`).
 impl lk_agents_abi::telemetry::provider::LlmMetricState for LlmMetricState {
@@ -146,27 +141,22 @@ impl LlmMetricState {
         }
         let (now, context) = stamp();
         let duration = now - self.start;
-        let usage = self.usage.clone().unwrap_or_default();
+        let tokens = self.usage.clone().unwrap_or_default();
         Some(LlmMetrics {
             label: context.label,
             request_id: self.request_id.clone(),
             timestamp: context.timestamp,
             duration,
-            ttft: self.first.unwrap_or(-1.0),
+            ttft: self.first,
             cancelled: context.cancelled,
-            completion_tokens: usage.completion_tokens,
-            prompt_tokens: usage.prompt_tokens,
-            prompt_cached_tokens: usage.prompt_cached_tokens,
-            cache_creation_tokens: usage.cache_creation_tokens,
-            reasoning_tokens: usage.reasoning_tokens,
-            total_tokens: usage.total_tokens,
             // The reference divides unguarded (`completion_tokens / duration`); zero is "no
             // interval".
             tokens_per_second: if duration > 0.0 {
-                usage.completion_tokens as f64 / duration
+                tokens.output_tokens as f64 / duration
             } else {
                 0.0
             },
+            tokens,
             speech_id: None,
             metadata: context.metadata,
         })
@@ -201,8 +191,6 @@ impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
         start: f64,
         failed: bool,
         batch_text: String,
-        input_tokens: u32,
-        output_tokens: u32,
         acquire_time: f64,
         connection_reused: bool,
         host: HostContext,
@@ -212,17 +200,7 @@ impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
         }
         let text = if self.streamed { self.texts.pop_front()? } else { batch_text };
         let context = Context::from_host(host);
-        TtsMetricState::finish(
-            self,
-            now,
-            start,
-            &text,
-            input_tokens,
-            output_tokens,
-            acquire_time,
-            connection_reused,
-            context,
-        )
+        TtsMetricState::finish(self, now, start, &text, acquire_time, connection_reused, context)
     }
 }
 
@@ -257,14 +235,11 @@ impl TtsMetricState {
     }
 
     /// The record for `text`, then the figures reset. A streamed segment with no text has none.
-    #[allow(clippy::too_many_arguments)]
     pub fn finish(
         &mut self,
         now: f64,
         start: f64,
         text: &str,
-        input_tokens: u32,
-        output_tokens: u32,
         acquire_time: f64,
         connection_reused: bool,
         context: Context,
@@ -276,13 +251,12 @@ impl TtsMetricState {
             label: context.label,
             request_id: self.request_id.clone(),
             timestamp: context.timestamp,
-            ttfb: self.first.unwrap_or(-1.0),
+            ttfb: self.first,
             duration: now - start,
             audio_duration: self.audio,
             cancelled: context.cancelled,
             characters_count: text.chars().count() as u32,
-            input_tokens,
-            output_tokens,
+            tokens: TokenUsage::default(),
             streamed: self.streamed,
             acquire_time,
             connection_reused,
@@ -328,7 +302,10 @@ mod tests {
         assert!(!fold.observe(&chunk("req-1", Some(text)), || unreachable!("read once")));
         fold.observe(&chunk("", None), || unreachable!());
         let record = fold.finish(false, || (3.0, context())).expect("a chunk arrived");
-        assert_eq!((record.request_id.as_str(), record.ttft, record.duration), ("", 0.5, 2.0));
+        assert_eq!(
+            (record.request_id.as_str(), record.ttft, record.duration),
+            ("", Some(0.5), 2.0)
+        );
     }
 
     // Catches: a metadata-only delta (a gateway deployment stamp) starting the clock, or a
@@ -338,11 +315,13 @@ mod tests {
         let mut fold = LlmMetricState::new(1.0);
         let stamp = ChoiceDelta { extra: Some(Default::default()), ..ChoiceDelta::default() };
         assert!(!fold.observe(&chunk("req-1", Some(stamp)), || unreachable!("not a response")));
-        let usage =
-            CompletionUsage { completion_tokens: 7, total_tokens: 18, ..Default::default() };
+        let usage = TokenUsage { input_tokens: 11, output_tokens: 7, ..Default::default() };
         fold.observe(&LlmChunk { usage: Some(usage), ..chunk("req-1", None) }, || unreachable!());
         let record = fold.finish(false, || (3.0, context())).expect("chunks arrived");
-        assert_eq!((record.ttft, record.completion_tokens, record.total_tokens), (-1.0, 7, 18));
+        assert_eq!(
+            (record.ttft, record.tokens.output_tokens, record.tokens.total_tokens()),
+            (None, 7, 18)
+        );
     }
 
     // Catches: empty ids keeping the previous request's, or an empty segment id dropped to `None`
@@ -357,9 +336,9 @@ mod tests {
         };
         fold.observe(&first, || 0.25);
         fold.observe(&SynthesizedAudio::new(frame(), ""), || unreachable!("read once"));
-        let record = fold.finish(2.0, 1.0, "hello", 0, 0, 0.0, false, context()).expect("text fed");
+        let record = fold.finish(2.0, 1.0, "hello", 0.0, false, context()).expect("text fed");
         assert_eq!((record.request_id.as_str(), record.segment_id.as_deref()), ("", Some("")));
-        assert_eq!((record.ttfb, record.characters_count), (0.25, 5));
-        assert!(fold.finish(2.0, 1.0, "", 0, 0, 0.0, false, context()).is_none(), "no text");
+        assert_eq!((record.ttfb, record.characters_count), (Some(0.25), 5));
+        assert!(fold.finish(2.0, 1.0, "", 0.0, false, context()).is_none(), "no text");
     }
 }

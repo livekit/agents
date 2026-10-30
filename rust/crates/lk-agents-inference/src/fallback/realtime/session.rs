@@ -86,7 +86,7 @@ impl FallbackSession {
         st.events.push_back(Event::GenerationDone(GenerationDone {
             response_id: g.response_id,
             status: GenerationStatus::Cancelled,
-            usage: TokenUsage::default(),
+            usage: Default::default(),
         }));
     }
 

@@ -26,7 +26,7 @@ use lk_agents_abi::{
     llm::realtime::{
         AudioDelta, Event, GenerateReplyFailed, GenerationCreated, GenerationDone,
         GenerationStatus, MessageDone, MessageModalities, MessageStarted, Modalities,
-        RealtimeCapabilities, RealtimeError, TextDelta, TokenUsage, TranscriptAttribution,
+        RealtimeCapabilities, RealtimeError, TextDelta, TranscriptAttribution,
     },
 };
 
@@ -216,7 +216,7 @@ impl State {
             Event::GenerationDone(GenerationDone {
                 response_id,
                 status: GenerationStatus::Completed,
-                usage: TokenUsage::default(),
+                usage: Default::default(),
             }),
         ]);
         if !transcript.is_empty() {

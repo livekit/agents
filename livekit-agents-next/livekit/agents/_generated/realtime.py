@@ -216,8 +216,6 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
                 timestamp=time.time(),
                 acquire_time=acquire_time,
                 connection_reused=False,
-                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
-                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
                 metadata=Metadata(
                     model_name=self._realtime_model.model,
                     model_provider=self._realtime_model.provider,

@@ -206,8 +206,7 @@ impl SynthesisMetrics {
             cancelled: interrupted,
             metadata: Some(self.provider.metadata()),
         };
-        let mut record =
-            self.metrics.finish(now, self.started_at, text, 0, 0, 0.0, false, context)?;
+        let mut record = self.metrics.finish(now, self.started_at, text, 0.0, false, context)?;
         record.speech_id = Some(speech_id.to_owned());
         Some(lk_agents_abi::metrics::base::AgentMetrics::Tts(record))
     }

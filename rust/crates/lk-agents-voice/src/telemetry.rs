@@ -717,8 +717,8 @@ impl SessionTrace {
                 let node = Attrs::new()
                     .set("lk.tts.streaming", m.streamed)
                     .set("lk.tts.label", m.label.as_str())
-                    .set("lk.response.ttfb", m.ttfb);
-                let request = model_attrs(m.metadata.as_ref()).set("lk.response.ttfb", m.ttfb);
+                    .opt("lk.response.ttfb", m.ttfb);
+                let request = model_attrs(m.metadata.as_ref()).opt("lk.response.ttfb", m.ttfb);
                 let attempt = Attrs::new().set("lk.retry_count", 0);
                 let chain = vec![
                     ("tts_node", node),
@@ -731,15 +731,16 @@ impl SessionTrace {
                 let inference = model_attrs(m.metadata.as_ref())
                     .set("gen_ai.operation.name", "generate_content")
                     .set("gen_ai.response.id", m.request_id.as_str())
-                    .set("lk.response.ttft", m.ttft);
+                    .opt("lk.response.ttft", m.ttft);
+                let t = &m.tokens;
                 let usage = Attrs::new()
-                    .set("gen_ai.usage.input_tokens", m.input_tokens)
-                    .set("gen_ai.usage.output_tokens", m.output_tokens)
-                    .set("gen_ai.usage.input_cached_tokens", m.input_token_details.cached_tokens)
-                    .set("gen_ai.usage.audio.input_tokens", m.input_token_details.audio_tokens)
-                    .set("gen_ai.usage.text.input_tokens", m.input_token_details.text_tokens)
-                    .set("gen_ai.usage.audio.output_tokens", m.output_token_details.audio_tokens)
-                    .set("gen_ai.usage.text.output_tokens", m.output_token_details.text_tokens);
+                    .set("gen_ai.usage.input_tokens", t.input_tokens)
+                    .set("gen_ai.usage.output_tokens", t.output_tokens)
+                    .opt("gen_ai.usage.input_cached_tokens", t.cache_read_tokens)
+                    .opt("gen_ai.usage.audio.input_tokens", t.input_audio_tokens)
+                    .opt("gen_ai.usage.text.input_tokens", t.input_text_tokens)
+                    .opt("gen_ai.usage.audio.output_tokens", t.output_audio_tokens)
+                    .opt("gen_ai.usage.text.output_tokens", t.output_text_tokens);
                 let chain = vec![("realtime_inference", inference), ("realtime_metrics", usage)];
                 ((m.timestamp - m.duration.max(0.0), m.timestamp), chain)
             }
@@ -763,17 +764,18 @@ impl SessionTrace {
 /// `llm_node > llm_request > llm_request_run` for one LLM request (`set_request_attributes`,
 /// `set_usage_attributes`).
 fn llm_request(m: &LlmMetrics) -> Vec<(&'static str, Attrs)> {
-    let node = Attrs::new().set("lk.response.ttft", m.ttft);
+    let node = Attrs::new().opt("lk.response.ttft", m.ttft);
+    let t = &m.tokens;
     let request = model_attrs(m.metadata.as_ref())
         .set("gen_ai.operation.name", "chat")
         .set("gen_ai.request.stream", true)
         .set("gen_ai.response.id", m.request_id.as_str())
-        .set("gen_ai.usage.input_tokens", m.prompt_tokens)
-        .set("gen_ai.usage.output_tokens", m.completion_tokens)
-        .set("gen_ai.usage.cache_read.input_tokens", m.prompt_cached_tokens)
-        .set("gen_ai.usage.cache_write.input_tokens", m.cache_creation_tokens)
-        .set("gen_ai.usage.reasoning.output_tokens", m.reasoning_tokens)
-        .set("gen_ai.response.time_to_first_chunk", m.ttft);
+        .set("gen_ai.usage.input_tokens", t.input_tokens)
+        .set("gen_ai.usage.output_tokens", t.output_tokens)
+        .opt("gen_ai.usage.cache_read.input_tokens", t.cache_read_tokens)
+        .opt("gen_ai.usage.cache_write.input_tokens", t.cache_write_tokens)
+        .opt("gen_ai.usage.reasoning.output_tokens", t.output_reasoning_tokens)
+        .opt("gen_ai.response.time_to_first_chunk", m.ttft);
     let attempt = model_attrs(m.metadata.as_ref()).set("lk.retry_count", 0);
     vec![("llm_node", node), ("llm_request", request), ("llm_request_run", attempt)]
 }

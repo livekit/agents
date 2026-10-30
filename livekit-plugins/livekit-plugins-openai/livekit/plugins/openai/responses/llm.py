@@ -18,6 +18,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    TokenUsage,
     _bindings,
     llm,
     utils,
@@ -729,14 +730,15 @@ class LLMStream(llm.LLMStream):
         if usage := event.response.usage:
             chunk = llm.ChatChunk(
                 id=self._response_id,
-                usage=llm.CompletionUsage(
-                    completion_tokens=usage.output_tokens,
-                    prompt_tokens=usage.input_tokens,
-                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens
+                usage=TokenUsage(
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cache_read_tokens=usage.input_tokens_details.cached_tokens
                     if usage.input_tokens_details
-                    else 0,
-                    total_tokens=usage.total_tokens,
-                    service_tier=event.response.service_tier,
+                    else None,
+                    output_reasoning_tokens=usage.output_tokens_details.reasoning_tokens
+                    if usage.output_tokens_details
+                    else None,
                 ),
             )
         return chunk

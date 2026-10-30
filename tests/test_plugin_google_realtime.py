@@ -257,9 +257,9 @@ async def test_ttft_is_unavailable_without_a_response_start_event(
         )
 
         assert len(collected) == 1
-        assert collected[0].ttft == -1
-        assert collected[0].input_tokens == 10
-        assert collected[0].output_tokens == 5
+        assert collected[0].ttft is None
+        assert collected[0].tokens.input_tokens == 10
+        assert collected[0].tokens.output_tokens == 5
         assert collected[0].duration >= 0
 
 

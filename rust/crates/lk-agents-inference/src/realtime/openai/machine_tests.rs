@@ -887,12 +887,13 @@ fn a_finished_response_reports_its_realtime_metrics() {
     assert_eq!(r.request_id, "r1");
     assert!((r.timestamp - 1.0).abs() < 1e-9);
     assert!((r.duration - 2.0).abs() < 1e-9);
-    assert!((r.ttft - 0.25).abs() < 1e-9, "ttft {}", r.ttft);
+    assert!((r.ttft.unwrap() - 0.25).abs() < 1e-9, "ttft {:?}", r.ttft);
     assert!(!r.cancelled);
-    assert_eq!((r.input_tokens, r.output_tokens, r.total_tokens), (10, 20, 30));
+    let t = &r.tokens;
+    assert_eq!((t.input_tokens, t.output_tokens, t.total_tokens()), (10, 20, 30));
     assert!((r.tokens_per_second - 10.0).abs() < 1e-9);
-    assert_eq!(r.input_token_details.audio_tokens, 4);
-    assert_eq!(r.output_token_details.audio_tokens, 15);
+    assert_eq!((t.input_audio_tokens, t.cache_read_tokens), (Some(4), Some(2)));
+    assert_eq!((t.output_audio_tokens, t.cache_read_audio_tokens), (Some(15), None));
     let md = r.metadata.as_ref().unwrap();
     assert_eq!(md.model_provider.as_deref(), Some("api.openai.com"));
 }
@@ -929,10 +930,8 @@ fn a_transcription_with_usage_reports_stt_metrics() {
         .collect();
     assert_eq!(stt.len(), 1, "{:?}", step.events);
     assert_eq!(stt[0].request_id, "event_7");
-    assert_eq!(
-        (stt[0].input_tokens, stt[0].output_tokens, stt[0].total_tokens, stt[0].input_audio_tokens),
-        (12, 3, 15, 12)
-    );
+    let t = &stt[0].tokens;
+    assert_eq!((t.input_tokens, t.output_tokens, t.input_audio_tokens), (12, 3, Some(12)));
     assert!(stt[0].streamed);
     let md = stt[0].metadata.as_ref().unwrap();
     assert_eq!(md.model_name.as_deref(), Some("gpt-4o-mini-transcribe"), "the transcription model");

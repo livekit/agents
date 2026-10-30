@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 
-use lk_agents_abi::CompletionUsage;
 use lk_agents_abi::metrics::base::{AgentMetrics, Metadata};
 use lk_agents_abi::usage::{
     EotUsage, InterruptionUsage, LlmUsage, ModelUsage, SttUsage, TokenUsage, TtsUsage, Usage,
@@ -26,6 +25,12 @@ pub struct Measurement {
     pub connection_duration: Option<f64>,
     pub audio_duration: Option<f64>,
     pub characters_count: Option<u64>,
+}
+
+impl From<&TokenUsage> for Measurement {
+    fn from(tokens: &TokenUsage) -> Self {
+        Measurement { tokens: tokens.clone(), ..Measurement::default() }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -113,86 +118,37 @@ impl Ledger {
     /// A provider metrics record: one measured request (EOT and interruption records count their
     /// own). VAD, end-of-utterance and avatar records are performance metrics, not usage.
     pub fn observe(&mut self, metrics: &AgentMetrics) {
-        let some = |n: u32| (n != 0).then_some(u64::from(n));
-        match metrics {
-            AgentMetrics::Llm(m) => {
-                let tokens = TokenUsage {
-                    input_tokens: m.prompt_tokens.into(),
-                    output_tokens: m.completion_tokens.into(),
-                    cache_read_tokens: some(m.prompt_cached_tokens),
-                    cache_write_tokens: some(m.cache_creation_tokens),
-                    output_reasoning_tokens: some(m.reasoning_tokens),
-                    ..TokenUsage::default()
-                };
-                self.measured(
-                    ModelKind::Llm,
-                    m.metadata.as_ref(),
-                    1,
-                    Measurement { tokens, ..Default::default() },
-                );
-            }
-            AgentMetrics::RealtimeModel(m) => {
-                let (input, output) = (&m.input_token_details, &m.output_token_details);
-                let cached = input.cached_tokens_details;
-                let tokens = TokenUsage {
-                    input_tokens: m.input_tokens.into(),
-                    output_tokens: m.output_tokens.into(),
-                    cache_read_tokens: Some(input.cached_tokens.into()),
-                    input_text_tokens: Some(input.text_tokens.into()),
-                    input_audio_tokens: Some(input.audio_tokens.into()),
-                    input_image_tokens: Some(input.image_tokens.into()),
-                    output_text_tokens: Some(output.text_tokens.into()),
-                    output_audio_tokens: Some(output.audio_tokens.into()),
-                    output_image_tokens: some(output.image_tokens),
-                    cache_read_text_tokens: cached.map(|c| c.text_tokens.into()),
-                    cache_read_audio_tokens: cached.map(|c| c.audio_tokens.into()),
-                    cache_read_image_tokens: cached.map(|c| c.image_tokens.into()),
-                    ..TokenUsage::default()
-                };
-                let connection_duration = (m.session_duration > 0.0).then_some(m.session_duration);
-                let measurement = Measurement { tokens, connection_duration, ..Default::default() };
-                self.measured(ModelKind::Llm, m.metadata.as_ref(), 1, measurement);
-            }
-            AgentMetrics::Stt(m) => {
-                let tokens = TokenUsage {
-                    input_tokens: m.input_tokens.into(),
-                    output_tokens: m.output_tokens.into(),
-                    input_audio_tokens: some(m.input_audio_tokens),
-                    ..TokenUsage::default()
-                };
-                let audio_duration = Some(m.audio_duration);
-                let measurement = Measurement { tokens, audio_duration, ..Default::default() };
-                self.measured(ModelKind::Stt, m.metadata.as_ref(), 1, measurement);
-            }
-            AgentMetrics::Tts(m) => {
-                let tokens = TokenUsage {
-                    input_tokens: m.input_tokens.into(),
-                    output_tokens: m.output_tokens.into(),
-                    ..TokenUsage::default()
-                };
-                let measurement = Measurement {
-                    tokens,
+        let tokens = Measurement::from;
+        let (kind, requests, measurement) = match metrics {
+            AgentMetrics::Llm(m) => (ModelKind::Llm, 1, tokens(&m.tokens)),
+            AgentMetrics::RealtimeModel(m) => (
+                ModelKind::Llm,
+                1,
+                Measurement { connection_duration: m.connection_duration, ..tokens(&m.tokens) },
+            ),
+            AgentMetrics::Stt(m) => (
+                ModelKind::Stt,
+                1,
+                Measurement { audio_duration: m.audio_duration, ..tokens(&m.tokens) },
+            ),
+            AgentMetrics::Tts(m) => (
+                ModelKind::Tts,
+                1,
+                Measurement {
                     audio_duration: Some(m.audio_duration),
                     characters_count: Some(m.characters_count.into()),
-                    ..Default::default()
-                };
-                self.measured(ModelKind::Tts, m.metadata.as_ref(), 1, measurement);
-            }
+                    ..tokens(&m.tokens)
+                },
+            ),
             AgentMetrics::EotInference(m) => {
-                let n = m.num_requests.into();
-                self.measured(ModelKind::Eot, m.metadata.as_ref(), n, Measurement::default());
+                (ModelKind::Eot, m.num_requests.into(), Measurement::default())
             }
             AgentMetrics::Interruption(m) => {
-                let n = m.num_requests.into();
-                self.measured(
-                    ModelKind::Interruption,
-                    m.metadata.as_ref(),
-                    n,
-                    Measurement::default(),
-                );
+                (ModelKind::Interruption, m.num_requests.into(), Measurement::default())
             }
-            AgentMetrics::Vad(_) | AgentMetrics::Eou(_) | AgentMetrics::Avatar(_) => {}
-        }
+            AgentMetrics::Vad(_) | AgentMetrics::Eou(_) | AgentMetrics::Avatar(_) => return,
+        };
+        self.measured(kind, metrics.metadata(), requests, measurement);
     }
 
     /// The operation finished local execution and accounting cleanup.
@@ -316,23 +272,8 @@ pub fn combined(usages: &[Usage]) -> Usage {
     ledger.snapshot()
 }
 
-/// A chat response's reported usage. The reported zeros of this record are indistinguishable from
-/// absent breakdowns, so they stay absent.
-pub fn completion_tokens(usage: &CompletionUsage) -> Measurement {
-    let some = |n: u32| (n != 0).then_some(u64::from(n));
-    let tokens = TokenUsage {
-        input_tokens: usage.prompt_tokens.into(),
-        output_tokens: usage.completion_tokens.into(),
-        cache_read_tokens: some(usage.prompt_cached_tokens.max(usage.cache_read_tokens)),
-        cache_write_tokens: some(usage.cache_creation_tokens),
-        output_reasoning_tokens: some(usage.reasoning_tokens),
-        ..TokenUsage::default()
-    };
-    Measurement { tokens, ..Default::default() }
-}
-
 fn parts(m: &ModelUsage) -> (ModelKind, Option<String>, Option<String>, u64, u64, Measurement) {
-    let tokens = |t: &TokenUsage| Measurement { tokens: t.clone(), ..Measurement::default() };
+    let tokens = Measurement::from;
     match m {
         ModelUsage::Llm(u) => (
             ModelKind::Llm,

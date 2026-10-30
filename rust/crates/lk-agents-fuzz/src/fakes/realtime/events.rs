@@ -10,9 +10,10 @@ use lk_agents_abi::{
         AudioDelta, Event, FunctionCallReady, GenerateReplyFailed, GenerationCreated,
         GenerationDone, GenerationStatus, InputSpeechStarted, InputSpeechStopped,
         InputTranscription, MessageDone, MessageModalities, MessageStarted, Modalities,
-        RealtimeError, RealtimeMetrics, RealtimeModelError, RemoteItemAdded, TextDelta, TokenUsage,
+        RealtimeError, RealtimeMetrics, RealtimeModelError, RemoteItemAdded, TextDelta,
     },
     metrics::base::{AgentMetrics, Metadata, RealtimeModelMetrics, SttMetrics},
+    usage::TokenUsage,
 };
 
 use super::{
@@ -188,18 +189,18 @@ impl Socket {
                 let usage = TokenUsage {
                     input_tokens: input,
                     output_tokens: output,
-                    total_tokens: input + output,
-                    input_text_tokens: input,
-                    output_audio_tokens: 30,
-                    output_text_tokens: 10,
+                    input_text_tokens: Some(input),
+                    output_audio_tokens: Some(30),
+                    output_text_tokens: Some(10),
                     ..TokenUsage::default()
                 };
+                let metrics = self.response_metrics(&g, now, status, &usage);
                 st.events.push_back(Event::GenerationDone(GenerationDone {
                     response_id: g.id.clone(),
                     status,
                     usage,
                 }));
-                st.events.push_back(self.response_metrics(&g, now, status, &usage));
+                st.events.push_back(metrics);
                 if status == GenerationStatus::Failed {
                     let message =
                         format!("{PROVIDER} response failed with error type: server_error");
@@ -310,15 +311,11 @@ impl Socket {
             request_id: String::new(),
             timestamp: self.wall_secs(),
             duration: 0.0,
-            session_duration: 0.0,
-            ttft: RealtimeModelMetrics::NO_TTFT,
+            connection_duration: None,
+            ttft: None,
             cancelled: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: 0,
+            tokens: TokenUsage::default(),
             tokens_per_second: 0.0,
-            input_token_details: Default::default(),
-            output_token_details: Default::default(),
             acquire_time: acquire.as_secs_f64(),
             connection_reused: false,
             metadata: Some(Self::metadata()),
@@ -336,34 +333,20 @@ impl Socket {
     ) -> Event {
         let secs = |t: Ts| t.as_nanos() as f64 / 1e9;
         let duration = secs(now) - secs(g.created_at);
-        let tokens = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
         let metrics = RealtimeModelMetrics {
             label: LABEL.into(),
             request_id: g.id.clone(),
             timestamp: self.wall_secs() - duration,
             duration,
-            session_duration: 0.0,
-            ttft: g
-                .first_token
-                .map_or(RealtimeModelMetrics::NO_TTFT, |f| secs(f) - secs(g.created_at)),
+            connection_duration: None,
+            ttft: g.first_token.map(|f| secs(f) - secs(g.created_at)),
             cancelled: status == GenerationStatus::Cancelled,
-            input_tokens: tokens(usage.input_tokens),
-            output_tokens: tokens(usage.output_tokens),
-            total_tokens: tokens(usage.total_tokens),
             tokens_per_second: if duration > 0.0 {
                 usage.output_tokens as f64 / duration
             } else {
                 0.0
             },
-            input_token_details: lk_agents_abi::metrics::base::InputTokenDetails {
-                text_tokens: tokens(usage.input_text_tokens),
-                ..Default::default()
-            },
-            output_token_details: lk_agents_abi::metrics::base::OutputTokenDetails {
-                text_tokens: tokens(usage.output_text_tokens),
-                audio_tokens: tokens(usage.output_audio_tokens),
-                image_tokens: 0,
-            },
+            tokens: usage.clone(),
             acquire_time: 0.0,
             connection_reused: false,
             metadata: Some(Self::metadata()),
@@ -379,12 +362,14 @@ impl Socket {
             request_id: String::new(),
             timestamp: self.wall_secs(),
             duration: 0.0,
-            audio_duration: 0.0,
+            audio_duration: None,
             streamed: true,
-            input_tokens: 20,
-            output_tokens: output,
-            total_tokens: 20 + output,
-            input_audio_tokens: 20,
+            tokens: TokenUsage {
+                input_tokens: 20,
+                output_tokens: output.into(),
+                input_audio_tokens: Some(20),
+                ..TokenUsage::default()
+            },
             acquire_time: 0.0,
             connection_reused: false,
             metadata: Some(Metadata {

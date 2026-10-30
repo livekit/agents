@@ -15,6 +15,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    TokenUsage,
     VADEventType,
     VADStream,
     stt,
@@ -421,8 +422,10 @@ class SpeechStream(stt.RecognizeStream):
                         request_id=self._request_id,
                         recognition_usage=stt.RecognitionUsage(
                             audio_duration=event.usage.prompt_audio_seconds or 0,
-                            input_tokens=event.usage.prompt_tokens or 0,
-                            output_tokens=event.usage.completion_tokens or 0,
+                            tokens=TokenUsage(
+                                input_tokens=event.usage.prompt_tokens or 0,
+                                output_tokens=event.usage.completion_tokens or 0,
+                            ),
                         ),
                     )
                 )

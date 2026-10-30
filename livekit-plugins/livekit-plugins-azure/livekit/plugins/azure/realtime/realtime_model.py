@@ -52,7 +52,7 @@ from azure.ai.voicelive.models import (
 from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents import APIConnectionError, APIError, TokenUsage, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -1256,10 +1256,10 @@ class RealtimeSession(
         ttft = (
             generation.first_token_timestamp - created_timestamp
             if generation.first_token_timestamp
-            else -1
+            else None
         )
         duration = time.time() - created_timestamp
-        output_tokens = _token_count(usage, "output_tokens")
+        output_tokens = _token_count(usage, "output_tokens") or 0
 
         self.emit(
             "metrics_collected",
@@ -1270,22 +1270,17 @@ class RealtimeSession(
                 duration=duration,
                 cancelled=getattr(response, "status", None) == "cancelled",
                 label=self._realtime_model.label,
-                input_tokens=_token_count(usage, "input_tokens"),
-                output_tokens=output_tokens,
-                total_tokens=_token_count(usage, "total_tokens"),
+                tokens=TokenUsage(
+                    input_tokens=_token_count(usage, "input_tokens") or 0,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=_token_count(input_details, "cached_tokens"),
+                    input_text_tokens=_token_count(input_details, "text_tokens"),
+                    input_audio_tokens=_token_count(input_details, "audio_tokens"),
+                    input_image_tokens=_token_count(input_details, "image_tokens"),
+                    output_text_tokens=_token_count(output_details, "text_tokens"),
+                    output_audio_tokens=_token_count(output_details, "audio_tokens"),
+                ),
                 tokens_per_second=output_tokens / duration if duration > 0 else 0,
-                input_token_details=RealtimeModelMetrics.InputTokenDetails(
-                    audio_tokens=_token_count(input_details, "audio_tokens"),
-                    text_tokens=_token_count(input_details, "text_tokens"),
-                    image_tokens=_token_count(input_details, "image_tokens"),
-                    cached_tokens=_token_count(input_details, "cached_tokens"),
-                    cached_tokens_details=None,
-                ),
-                output_token_details=RealtimeModelMetrics.OutputTokenDetails(
-                    text_tokens=_token_count(output_details, "text_tokens"),
-                    audio_tokens=_token_count(output_details, "audio_tokens"),
-                    image_tokens=0,
-                ),
                 metadata=Metadata(
                     model_name=self._realtime_model.model,
                     model_provider=self._realtime_model.provider,
@@ -1647,9 +1642,10 @@ class RealtimeSession(
             self._credential = None
 
 
-def _token_count(obj: object, name: str) -> int:
+def _token_count(obj: object, name: str) -> int | None:
+    """A count the provider reported, or ``None``."""
     value = getattr(obj, name, None)
-    return value if isinstance(value, int) else 0
+    return value if isinstance(value, int) else None
 
 
 def _decoded_size(data: str) -> int:

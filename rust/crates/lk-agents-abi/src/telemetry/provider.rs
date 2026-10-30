@@ -70,8 +70,6 @@ pub trait TtsMetricState: Send + Sized + 'static {
         start: f64,
         failed: bool,
         batch_text: String,
-        input_tokens: u32,
-        output_tokens: u32,
         acquire_time: f64,
         connection_reused: bool,
         host: HostContext,

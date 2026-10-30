@@ -45,7 +45,7 @@ fn the_rate_is_completion_tokens_over_the_streaming_window() {
         .collect();
     // Each chunk's wall stamp is a microsecond past the last (wall time strictly increases), and
     // the model streams a word a chunk, so the window reads a hair over 0.5 s.
-    let expected = f64::from(COMPLETION_TOKENS) / 0.5;
+    let expected = COMPLETION_TOKENS as f64 / 0.5;
     assert!(
         matches!(rates.as_slice(), [Some(rate)] if (rate - expected).abs() < 1e-3),
         "{rates:?}, expected {expected}"

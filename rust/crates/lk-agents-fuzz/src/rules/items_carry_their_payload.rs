@@ -158,7 +158,7 @@ fn stt_open(r: &Recording, at: &Observed) -> bool {
 }
 
 /// A model's metrics record is whole: labelled, stamped on the wall clock within the session,
-/// durations not negative (a missing first token is the documented `-1`), attributed by id.
+/// durations not negative (a missing first token or audio duration is `None`), attributed by id.
 fn metrics_are_whole(
     check: &mut Check,
     metrics: &AgentMetrics,
@@ -169,14 +169,14 @@ fn metrics_are_whole(
     let secs =
         |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let (from, to) = (secs(epoch - SLACK), secs(wall));
-    let ttft_ok = |t: f64| t >= 0.0 || t == RealtimeModelMetrics::NO_TTFT;
+    let non_negative = |t: Option<f64>| t.is_none_or(|t| t >= 0.0);
     let (kind, label, request, timestamp, durations, id) = match metrics {
         AgentMetrics::Llm(m) => (
             "llm",
             &m.label,
             &m.request_id,
             m.timestamp,
-            m.duration >= 0.0 && ttft_ok(m.ttft),
+            m.duration >= 0.0 && non_negative(m.ttft),
             Some(&m.speech_id),
         ),
         AgentMetrics::Tts(m) => (
@@ -184,7 +184,7 @@ fn metrics_are_whole(
             &m.label,
             &m.request_id,
             m.timestamp,
-            m.duration >= 0.0 && m.audio_duration >= 0.0 && ttft_ok(m.ttfb),
+            m.duration >= 0.0 && m.audio_duration >= 0.0 && non_negative(m.ttfb),
             Some(&m.speech_id),
         ),
         AgentMetrics::Stt(m) => (
@@ -192,7 +192,7 @@ fn metrics_are_whole(
             &m.label,
             &m.request_id,
             m.timestamp,
-            m.duration >= 0.0 && m.audio_duration >= 0.0,
+            m.duration >= 0.0 && non_negative(m.audio_duration),
             None,
         ),
         AgentMetrics::RealtimeModel(m) => (
@@ -200,7 +200,7 @@ fn metrics_are_whole(
             &m.label,
             &m.request_id,
             m.timestamp,
-            m.duration >= 0.0 && ttft_ok(m.ttft),
+            m.duration >= 0.0 && non_negative(m.ttft),
             None,
         ),
         _ => return,
@@ -279,15 +279,11 @@ fn metrics_on_another_clock() -> Recording {
         request_id: "resp_1".into(),
         timestamp: 5.1,
         duration: 1.0,
-        session_duration: 0.0,
-        ttft: 0.5,
+        connection_duration: None,
+        ttft: Some(0.5),
         cancelled: false,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
+        tokens: Default::default(),
         tokens_per_second: 0.0,
-        input_token_details: Default::default(),
-        output_token_details: Default::default(),
         acquire_time: 0.0,
         connection_reused: false,
         metadata: None,
