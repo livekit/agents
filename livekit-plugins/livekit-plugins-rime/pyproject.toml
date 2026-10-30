@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.8.8", "protobuf>=6.33.5", "rime-api>=0.0.1"]
+dependencies = ["livekit-agents[codecs]>=1.8.10", "protobuf>=6.33.5", "rime-api>=0.3.0"]
 
 [project.optional-dependencies]
 stt = ["rimelabs-sdk>=0.1.0a18; python_version >= '3.11'"]

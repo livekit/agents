@@ -51,7 +51,7 @@ class STT(stt.STT):
         *,
         language: str = "en",
         mode: Literal["written", "verbatim"] = "written",
-        context_terms: Sequence[str] = (),
+        context_terms: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: str | None = None,
         vad: vad_module.VAD | None = None,
         output_contract: Literal["revised_hypotheses", "append_fragments"] = "revised_hypotheses",
@@ -99,13 +99,18 @@ class STT(stt.STT):
         self._sdk = rimelabs_sdk
         self._language = language
         self._mode = rimelabs_sdk.TranscriptionMode(mode)
-        self._context_terms = _copy_context_terms(context_terms)
+        self._context_terms = _copy_context_terms(context_terms if is_given(context_terms) else ())
         self._session_keyterms: tuple[str, ...] = ()
         self._client = rimelabs_sdk.Rime(api_key=api_key)
         if not callable(getattr(self._client.stt, "transcribe", None)):
             raise ImportError(
                 "Rime STT requires a rimelabs-sdk build with stt.transcribe() support"
             )
+
+    @property
+    def model(self) -> str:
+        """Stable model name used in recognition telemetry."""
+        return "rime-stt"
 
     @property
     def provider(self) -> str:
@@ -116,7 +121,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         mode: NotGivenOr[Literal["written", "verbatim"]] = NOT_GIVEN,
-        context_terms: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        context_terms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Update defaults for subsequent recognition requests."""
         if is_given(language):

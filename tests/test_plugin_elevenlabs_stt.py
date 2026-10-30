@@ -892,3 +892,29 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+async def test_recognize_language_override_applies_to_one_call() -> None:
+    # StreamAdapter passes its stream's language to every recognize() call, so an
+    # override must not leak into the STT's own configuration
+    sent_languages: list[str] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        form = await request.post()
+        sent_languages.append(str(form.get("language_code")))
+        return web.json_response({"text": "hello", "words": []})
+
+    app = web.Application()
+    app.router.add_post("/speech-to-text", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        url = str(server.make_url(""))
+        batch_stt = elevenlabs_stt.STT(
+            api_key="test-key", base_url=url, language_code="en", http_session=session
+        )
+        overridden = await batch_stt.recognize([_frame(100)], language="fr")
+        default = await batch_stt.recognize([_frame(100)])
+
+    assert sent_languages == ["fr", "en"]
+    assert overridden.alternatives[0].language == "fr"
+    assert default.alternatives[0].language == "en"
+    assert batch_stt._opts.language_code == "en"

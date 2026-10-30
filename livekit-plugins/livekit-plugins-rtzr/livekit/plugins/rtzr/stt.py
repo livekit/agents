@@ -173,7 +173,7 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._rtzr_stt._client.connect_websocket(config),
+                self._rtzr_stt._client.connect_websocket(config, autoping=False),
                 timeout=self._conn_options.timeout,
             )
             logger.debug(
@@ -417,7 +417,9 @@ class SpeechStream(stt.SpeechStream):
         in_speech = False
         speech_started_at: float | None = None
 
-        async for msg in ws:
+        async for msg in utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        ):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
@@ -430,6 +432,8 @@ class SpeechStream(stt.SpeechStream):
                 events, in_speech, speech_started_at = self._process_transcript_event(
                     data, in_speech, speech_started_at
                 )
+                if "alternatives" in data:
+                    self._mark_provider_progress()
                 for event in events:
                     self._event_ch.send_nowait(event)
 

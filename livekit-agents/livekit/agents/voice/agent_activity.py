@@ -58,6 +58,7 @@ from .audio_recognition import (
     RecognitionHooks,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
+    _PreflightStaleInfo,
     _STTPipeline,
 )
 from .endpointing import create_endpointing
@@ -101,7 +102,12 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
-from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
+from .tool_executor import (
+    _reply_tool_choice,
+    _resolve_async_tool_options,
+    _RunningTasks,
+    _ToolExecutor,
+)
 from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
@@ -347,6 +353,8 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        # set while scheduling runs, and once the activity has closed
+        self._scheduling_resumed = asyncio.Event()
         self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
@@ -1425,6 +1433,7 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
+        self._scheduling_resumed.clear()
         # a parked preemptive generation is never scheduled, so the wait below would never
         # end. drop it here rather than in the callers: the flag above is what stops a new
         # one from being created, and it is only true from this point on.
@@ -1514,6 +1523,7 @@ class AgentActivity(RecognitionHooks):
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
+        self._scheduling_resumed.set()
 
     async def resume(
         self,
@@ -1645,6 +1655,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            self._scheduling_resumed.set()
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
@@ -2396,8 +2407,10 @@ class AgentActivity(RecognitionHooks):
                 )
 
             if self._pause_enabled():
-                assert (timeout := interruption_options["false_interruption_timeout"]) is not None
-                assert (audio_output := self._session.output.audio) is not None
+                timeout = interruption_options["false_interruption_timeout"]
+                assert timeout is not None
+                audio_output = self._session.output.audio
+                assert audio_output is not None
 
                 # EOS arms false-interruption resume. A final transcript or a
                 # replying turn commit interrupts the paused handle.
@@ -2446,7 +2459,8 @@ class AgentActivity(RecognitionHooks):
         ):
             # EOS arms false-interruption resume. A final transcript or a
             # replying turn commit interrupts the paused handle.
-            assert (audio_output := self._session.output.audio) is not None
+            audio_output = self._session.output.audio
+            assert audio_output is not None
 
             self._update_paused_speech(current_speech, timeout=0)
             audio_output.pause()
@@ -2661,6 +2675,21 @@ class AgentActivity(RecognitionHooks):
             tool_choice=self._tool_choice,
             created_at=time.time(),
         )
+
+    def on_preflight_stale(self, info: _PreflightStaleInfo) -> None:
+        """Cancel the preemptive generation once the transcript has moved past the preflight.
+
+        Called for each non-empty interim transcript that arrives while a preflight is pending.
+        A reply whose transcript is no longer equivalent cannot be adopted at the end of turn,
+        so it is stopped now instead of at the next preflight or final transcript.
+
+        Args:
+            info: Carries the current turn transcript, including the interim text.
+        """
+        if (preemptive := self._preemptive_generation) is not None and not _transcripts_equivalent(
+            preemptive.info.new_transcript, info.new_transcript
+        ):
+            self._cancel_preemptive_generation()
 
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None:
         if (host := self._session._session_host) is not None:
@@ -4131,7 +4160,12 @@ class AgentActivity(RecognitionHooks):
                             # a final text response instead of silently stopping.
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
+                            )
+                            or "auto",
                         ),
                         # the tool reply answers whatever user turn is still unanswered: this
                         # one if the reply only generated tools, or the last turn of a
@@ -4915,7 +4949,12 @@ class AgentActivity(RecognitionHooks):
                             # passing tool response back to the LLM
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
+                            )
+                            or "auto",
                         ),
                         tool_reply=True,
                     ),

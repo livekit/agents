@@ -93,6 +93,8 @@ async def test_audio_and_result_mapping(
     assert metrics[0].request_id == "request-123"
     assert metrics[0].audio_duration == pytest.approx(0.2)
     assert metrics[0].metadata.model_provider == "Rime"
+    assert metrics[0].metadata.model_name == "rime-stt"
+    assert client.stt.transcribe.call_args.kwargs["context_terms"] == ()
     assert not recognizer.capabilities.streaming
     assert not recognizer.capabilities.interim_results
 
