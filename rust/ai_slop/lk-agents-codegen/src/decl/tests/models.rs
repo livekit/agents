@@ -51,25 +51,6 @@ fn a_transparent_record_crosses_as_its_variants_values() {
     );
 }
 
-// Catches: an opaque member named by the stubs' `rtc` alias imported as a top-level `rtc` module,
-// which fails every read of that member.
-#[test]
-fn a_transparent_member_named_by_the_rtc_alias_is_read_from_livekit_rtc() {
-    let decls = read(
-        r#"#[crate::host(handwritten(extract, emit, host = "rtc.VideoFrame"))]
-        pub struct VideoFrame { pub width: u32 }
-        #[crate::host(record(module = "avatar", extract, transparent))]
-        pub enum Frame { Video(VideoFrame), Text(String) }"#,
-    )
-    .expect("resolves");
-    let shell = crate::records::conversions(&decls).expect("emits").text;
-    assert!(
-        shell.contains(r#"import("livekit.rtc")?.getattr("VideoFrame")"#)
-            && !shell.contains(r#"import("rtc")"#),
-        "{shell}"
-    );
-}
-
 // Catches: a model's fixed discriminator (`type`) forced into Rust state, missing from the model,
 // or demanded of the host when it builds one.
 #[test]

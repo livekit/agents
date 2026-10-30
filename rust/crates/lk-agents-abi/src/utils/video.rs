@@ -6,7 +6,7 @@
 use crate::AudioFrame;
 
 /// `rtc.VideoFrame(width, height, type, data)`.
-#[crate::host(handwritten(extract, emit, host = "rtc.VideoFrame"))]
+#[crate::host(handwritten(extract, emit, host = "livekit.rtc.VideoFrame"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoFrame {
     pub width: u32,
