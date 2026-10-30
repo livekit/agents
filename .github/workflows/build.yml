@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     if: inputs.package != 'livekit-blockguard' && inputs.package != 'livekit-durable'
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           lfs: true
@@ -37,10 +37,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.10"
+          python-version: "3.15"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -49,7 +49,7 @@ jobs:
         run: uv build --package ${{inputs.package}}
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ inputs.artifact_name }}
           path: dist/
@@ -73,12 +73,12 @@ jobs:
       run:
         working-directory: livekit-plugins/livekit-durable
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.11"
+          python-version: "3.15"
 
       - name: Install cibuildwheel
         run: |
@@ -92,7 +92,7 @@ jobs:
           CIBW_ARCHS: ${{ matrix.archs }}
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ inputs.artifact_name }}-${{ matrix.os }}
           path: livekit-plugins/livekit-durable/dist/
@@ -116,12 +116,12 @@ jobs:
       run:
         working-directory: livekit-plugins/livekit-blockguard
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.11"
+          python-version: "3.15"
 
       - name: Install cibuildwheel
         run: |
@@ -135,7 +135,7 @@ jobs:
           CIBW_ARCHS: ${{ matrix.archs }}
 
       - name: Upload distribution package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ inputs.artifact_name }}-${{ matrix.os }}
           path: livekit-plugins/livekit-blockguard/dist/
@@ -146,7 +146,7 @@ jobs:
     needs: [build_blockguard, build_durable]
     steps:
       - name: Download all platform wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: ${{ inputs.artifact_name }}-*
           path: all_dists
@@ -155,7 +155,7 @@ jobs:
       - run: ls -R all_dists
 
       - name: Upload unified wheel artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ inputs.artifact_name }}
           path: all_dists/
