@@ -1,16 +1,18 @@
 //! The host conversions no declaration expresses: a type declared `handwritten(.., py)` in ABI
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
-use lk_agents_abi::{AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef};
 use lk_agents_abi::python::MaybeNull;
+use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
 use lk_agents_abi::voice::session_options::{
-    BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions,
-    SessionConnOptions, TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
+    BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions, SessionConnOptions,
+    TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
 };
+use lk_agents_abi::{AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
-use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyMapping, PySequence, PyString, PyType};
+use pyo3::types::{
+    PyBool, PyBytes, PyDict, PyFloat, PyInt, PyMapping, PySequence, PyString, PyType,
+};
 
 /// A scalar applies to both edges.
 pub fn backchannel_boundary_from_py(obj: &Bound<'_, PyAny>) -> PyResult<BackchannelBoundary> {
@@ -123,9 +125,7 @@ fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<TelemetryValue> {
         return Ok(TelemetryValue::Bool(b.is_true()));
     }
     if obj.is_instance_of::<PyInt>() {
-        return Ok(obj
-            .extract::<i64>()
-            .map_or(TelemetryValue::Unsupported, TelemetryValue::Int));
+        return Ok(obj.extract::<i64>().map_or(TelemetryValue::Unsupported, TelemetryValue::Int));
     }
     if obj.is_instance_of::<PyFloat>() {
         return Ok(TelemetryValue::Float(obj.extract()?));
@@ -137,12 +137,21 @@ fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<TelemetryValue> {
         return Ok(TelemetryValue::Bytes(b.as_bytes().to_vec()));
     }
     if let Ok(d) = obj.cast::<PyDict>() {
+        if d.len() > MAX_COLLECTION {
+            return Ok(TelemetryValue::Unsupported);
+        }
         return map(d.items().into_iter().collect(), depth);
     }
     if let Some(entries) = record_fields(obj)? {
-        return map(entries, depth);
+        return match entries {
+            Some(entries) => map(entries, depth),
+            None => Ok(TelemetryValue::Unsupported),
+        };
     }
     if let Ok(m) = obj.cast::<PyMapping>() {
+        if m.len()? > MAX_COLLECTION {
+            return Ok(TelemetryValue::Unsupported);
+        }
         return map(m.items()?.into_iter().collect(), depth);
     }
     if let Ok(seq) = obj.cast::<PySequence>() {
@@ -156,6 +165,8 @@ fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<TelemetryValue> {
     Ok(TelemetryValue::Unsupported)
 }
 
+/// A mapping with a key that is not a string has no attribute form: it is refused as a whole,
+/// charged like any other unsupported value, rather than losing the entry silently.
 fn map(entries: Vec<Bound<'_, PyAny>>, depth: usize) -> PyResult<TelemetryValue> {
     if entries.len() > MAX_COLLECTION {
         return Ok(TelemetryValue::Unsupported);
@@ -163,47 +174,60 @@ fn map(entries: Vec<Bound<'_, PyAny>>, depth: usize) -> PyResult<TelemetryValue>
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries {
         let (key, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = entry.extract()?;
-        if let Ok(key) = key.cast::<PyString>() {
-            out.push((key.to_cow()?.into_owned(), read(&value, depth + 1)?));
-        }
+        let Ok(key) = key.cast::<PyString>() else {
+            return Ok(TelemetryValue::Unsupported);
+        };
+        out.push((key.to_cow()?.into_owned(), read(&value, depth + 1)?));
     }
     Ok(TelemetryValue::Map(out))
 }
 
-/// A pydantic model's fields, extra and private attributes, or a dataclass's fields, as
-/// `(name, value)` tuples; `None` for any other object.
-fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+/// A pydantic model's fields and declared extra, or a dataclass's public fields, as
+/// `(name, value)` tuples (`Some(None)` past the collection limit, counted before any value is
+/// read); `None` for any other object. Private attributes (`_cache`, provider state) are never
+/// read: they are private and may be large.
+#[allow(clippy::type_complexity, reason = "not a record, past the limit, or its fields")]
+fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Option<Vec<Bound<'py, PyAny>>>>> {
     if obj.is_instance_of::<PyType>() {
         return Ok(None);
     }
     let py = obj.py();
     if obj.hasattr("__pydantic_fields__")? {
-        let mut entries = Vec::new();
-        for name in ["__dict__", "__pydantic_extra__", "__pydantic_private__"] {
+        let mut parts = Vec::new();
+        for name in ["__dict__", "__pydantic_extra__"] {
             if let Ok(d) = obj.getattr(name)?.cast_into::<PyDict>() {
-                entries.extend(d.items().into_iter());
+                parts.push(d);
             }
         }
-        return Ok(Some(entries));
+        if parts.iter().map(|d| d.len()).sum::<usize>() > MAX_COLLECTION {
+            return Ok(Some(None));
+        }
+        return Ok(Some(Some(parts.iter().flat_map(|d| d.items()).collect())));
     }
     if let Ok(fields) = obj.getattr("__dataclass_fields__") {
-        // what the instance retains: its `__dict__`, and slot fields outside it
-        let storage = obj.getattr("__dict__").ok().and_then(|d| d.cast_into::<PyDict>().ok());
-        let mut entries: Vec<_> =
-            storage.as_ref().map(|d| d.items().into_iter().collect()).unwrap_or_default();
+        let mut names = Vec::new();
         for name in fields.cast_into::<PyDict>()?.keys() {
-            if storage.as_ref().is_some_and(|d| d.contains(&name).unwrap_or(false)) {
-                continue;
+            if !name.cast::<PyString>()?.to_cow()?.starts_with('_') {
+                names.push(name);
             }
+        }
+        if names.len() > MAX_COLLECTION {
+            return Ok(Some(None));
+        }
+        let mut entries = Vec::with_capacity(names.len());
+        for name in names {
             let value = obj.getattr(name.cast::<PyString>()?)?;
             entries.push((name, value).into_pyobject(py)?.into_any());
         }
-        return Ok(Some(entries));
+        return Ok(Some(Some(entries)));
     }
     Ok(None)
 }
 
-pub fn telemetry_value_to_py<'py>(py: Python<'py>, value: TelemetryValue) -> PyResult<Bound<'py, PyAny>> {
+pub fn telemetry_value_to_py<'py>(
+    py: Python<'py>,
+    value: TelemetryValue,
+) -> PyResult<Bound<'py, PyAny>> {
     Ok(match value {
         TelemetryValue::None | TelemetryValue::Unsupported => py.None().into_bound(py),
         TelemetryValue::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
@@ -213,7 +237,10 @@ pub fn telemetry_value_to_py<'py>(py: Python<'py>, value: TelemetryValue) -> PyR
         TelemetryValue::Bytes(b) => PyBytes::new(py, &b).into_any(),
         TelemetryValue::Array(items) => pyo3::types::PyList::new(
             py,
-            items.into_iter().map(|item| telemetry_value_to_py(py, item)).collect::<PyResult<Vec<_>>>()?,
+            items
+                .into_iter()
+                .map(|item| telemetry_value_to_py(py, item))
+                .collect::<PyResult<Vec<_>>>()?,
         )?
         .into_any(),
         TelemetryValue::Map(entries) => {

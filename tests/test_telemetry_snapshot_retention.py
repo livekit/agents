@@ -139,3 +139,27 @@ def test_destination_redacts_forged_safe_bodies_and_native_report_content_indepe
     finally:
         private.shutdown()
         consenting.shutdown()
+
+
+# Catches: a log body reading a model's private state (pydantic private attributes, a
+# dataclass's `_` fields) or silently dropping a mapping's non-string key.
+def test_a_log_body_reads_public_fields_only_and_refuses_non_string_keys() -> None:
+    from dataclasses import dataclass, field
+
+    from pydantic import BaseModel, ConfigDict, PrivateAttr
+
+    class Model(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        text: str
+        _cache: dict[str, bytes] = PrivateAttr(default_factory=dict)
+
+    @dataclass
+    class Record:
+        text: str
+        _state: bytes = field(default=b"private")
+
+    model = Model(text="hi", note="extra")
+    model._cache["encoded"] = b"x" * 1024
+    assert _redaction._source_snapshot(model) == {"text": "hi", "note": "extra"}
+    assert _redaction._source_snapshot(Record("hi")) == {"text": "hi"}
+    assert _redaction._source_snapshot({"ok": 1, 2: "two"}) is None
