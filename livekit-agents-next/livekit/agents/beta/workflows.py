@@ -18,6 +18,7 @@ from livekit import api
 
 from .. import _core, llm, stt, tts, utils
 from .._generated.vad import VAD
+from .._generated.workflows import IoEnableState, SipParticipantRequest
 from .._generated.workflows import WorkflowInstructions as WorkflowInstructions
 from ..job import JobContext, _server_credentials, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
@@ -484,17 +485,17 @@ class _TransferHost:
     def _core_stop_hold(self, hold: PlayHandle) -> None:
         hold.stop()
 
-    def _core_io_state(self) -> dict[str, bool]:
+    def _core_io_state(self) -> IoEnableState:
         return {
             "audio_input": self._session.input.audio_enabled,
             "audio_output": self._session.output.audio_enabled,
             "transcription_output": self._session.output.transcription_enabled,
         }
 
-    def _core_set_io(self, state: dict[str, bool]) -> None:
-        self._session.input.set_audio_enabled(state["audio_input"])
-        self._session.output.set_audio_enabled(state["audio_output"])
-        self._session.output.set_transcription_enabled(state["transcription_output"])
+    def _core_set_io(self, state: IoEnableState) -> None:
+        self._session.input.set_audio_enabled(state.get("audio_input", True))
+        self._session.output.set_audio_enabled(state.get("audio_output", True))
+        self._session.output.set_transcription_enabled(state.get("transcription_output", True))
 
     async def _core_connect_human(self, room_name: str, identity: str) -> _core._core_RoomSession:
         _, api_key, api_secret = _server_credentials()
@@ -520,10 +521,18 @@ class _TransferHost:
     async def _core_disconnect_human(self) -> None:
         await self._room.disconnect()
 
-    async def _core_create_sip_participant(self, request: dict[str, Any]) -> None:
-        ringing_timeout = request.pop("ringing_timeout")
-        sip = api.CreateSIPParticipantRequest(**request)
-        if ringing_timeout is not None:
+    async def _core_create_sip_participant(self, request: SipParticipantRequest) -> None:
+        sip = api.CreateSIPParticipantRequest(
+            sip_trunk_id=request["sip_trunk_id"],
+            sip_call_to=request["sip_call_to"],
+            room_name=request["room_name"],
+            participant_identity=request["participant_identity"],
+            wait_until_answered=request["wait_until_answered"],
+            sip_number=request["sip_number"],
+            headers=request["headers"],
+            dtmf=request["dtmf"],
+        )
+        if (ringing_timeout := request["ringing_timeout"]) is not None:
             sip.ringing_timeout.FromNanoseconds(int(ringing_timeout * 1e9))
         if self._transfer._sip_connection is not None:
             sip.trunk.CopyFrom(self._transfer._sip_connection)

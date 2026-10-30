@@ -2,13 +2,12 @@
 //! reference's `beta/workflows/` modules publish. The workflows are `lk-agents-voice`'s.
 
 use crate::utils::dates::Date;
-use lk_agents_host_derive::Host;
 use std::collections::BTreeMap;
 
 /// `CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`
 /// when empty and `dtmf` `""` when absent, as in the reference.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, from_items)]
+#[crate::host(record(module = "workflows", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SipParticipantRequest {
     pub sip_trunk_id: Option<String>,
     pub sip_call_to: String,
@@ -23,14 +22,14 @@ pub struct SipParticipantRequest {
 
 /// The caller session's io legs the warm transfer turns off while the caller is on hold, read
 /// and restored. Absent or `None` reads as `true`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(extract, emit, from_items)]
+#[crate::host(record(module = "workflows", typed_dict, extract, emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IoEnableState {
-    #[binding(default = true)]
+    #[host(default = true)]
     pub audio_input: bool,
-    #[binding(default = true)]
+    #[host(default = true)]
     pub audio_output: bool,
-    #[binding(default = true)]
+    #[host(default = true)]
     pub transcription_output: bool,
 }
 
@@ -43,16 +42,16 @@ impl Default for IoEnableState {
 /// How `TwilioConnectorWarmTransfer` reaches the human agent: Twilio's Calls API, streaming into
 /// the LiveKit Twilio connector. `call_token` (with `original_caller_number`) places the call from
 /// the caller's own number.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items)]
+#[crate::host(record(module = "workflows", typed_dict, extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TwilioDial {
     pub phone_number: String,
     pub from_number: String,
     pub account_sid: String,
     pub auth_token: String,
-    #[binding(default)]
+    #[host(default = None, annotation = "str | None")]
     pub call_token: Option<String>,
-    #[binding(default)]
+    #[host(default = None, annotation = "str | None")]
     pub original_caller_number: Option<String>,
 }
 

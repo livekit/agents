@@ -47,7 +47,7 @@ from .tool_report import ToolReport
 from .turn import InterruptionMode
 from .usage import Usage
 from .voice_session import UpdateAgentArgs, VoiceSessionArgs
-from .workflows import InstructionsArg
+from .workflows import InstructionsArg, TwilioDial
 
 def amd_constants() -> AmdConstants:
     """These are the reference's, not tuning knobs: the default models are what the benchmark
@@ -802,7 +802,7 @@ class WarmTransfer:
         conversation: Sequence[tuple[str, str]] | None = None,
         env_sip_trunk: str | None = None,
         env_sip_number: str = "",
-        twilio: dict[str, object] | None = None,
+        twilio: TwilioDial | None = None,
     ) -> Self: ...
     @property
     def instructions(self) -> str: ...

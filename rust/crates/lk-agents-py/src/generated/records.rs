@@ -5892,6 +5892,16 @@ pub mod tool_report {
 pub mod tts {
     use pyo3::prelude::*;
 
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup/expr.rs.
+
+    pub fn expressive_tag_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::tts::markup::ExpressiveTag) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::tts::markup::ExpressiveTag { kind, value } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("type", ::pyo3::IntoPyObjectExt::into_bound_py_any(kind, py)?)?;
+            dict.set_item("value", ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)?)?;
+            Ok(dict.into_any())
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
     static TTS_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
@@ -7067,6 +7077,57 @@ pub mod worker_server {
 
 pub mod workflows {
     use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+
+    pub fn sip_participant_request_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::workflows::SipParticipantRequest) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::workflows::SipParticipantRequest { sip_trunk_id, sip_call_to, room_name, participant_identity, wait_until_answered, sip_number, headers, dtmf, ringing_timeout } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("sip_trunk_id", match sip_trunk_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("sip_call_to", ::pyo3::IntoPyObjectExt::into_bound_py_any(sip_call_to, py)?)?;
+            dict.set_item("room_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(room_name, py)?)?;
+            dict.set_item("participant_identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(participant_identity, py)?)?;
+            dict.set_item("wait_until_answered", ::pyo3::IntoPyObjectExt::into_bound_py_any(wait_until_answered, py)?)?;
+            dict.set_item("sip_number", match sip_number { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("headers", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in headers { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() })?;
+            dict.set_item("dtmf", ::pyo3::IntoPyObjectExt::into_bound_py_any(dtmf, py)?)?;
+            dict.set_item("ringing_timeout", match ringing_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+
+    pub fn io_enable_state_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::workflows::IoEnableState> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::voice::workflows::IoEnableState {
+                audio_input: match obj.get_item("audio_input")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; (v.extract::<bool>())? }, _ => true },
+                audio_output: match obj.get_item("audio_output")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; (v.extract::<bool>())? }, _ => true },
+                transcription_output: match obj.get_item("transcription_output")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; (v.extract::<bool>())? }, _ => true },
+            })
+    }
+
+    pub fn io_enable_state_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::workflows::IoEnableState) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::workflows::IoEnableState { audio_input, audio_output, transcription_output } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("audio_input", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_input, py)?)?;
+            dict.set_item("audio_output", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_output, py)?)?;
+            dict.set_item("transcription_output", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcription_output, py)?)?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+
+    pub fn twilio_dial_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::workflows::TwilioDial> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::voice::workflows::TwilioDial {
+                phone_number: { let v = &obj.get_item("phone_number")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.phone_number"))?; (v.extract::<::std::string::String>())? },
+                from_number: { let v = &obj.get_item("from_number")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.from_number"))?; (v.extract::<::std::string::String>())? },
+                account_sid: { let v = &obj.get_item("account_sid")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.account_sid"))?; (v.extract::<::std::string::String>())? },
+                auth_token: { let v = &obj.get_item("auth_token")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("TwilioDial.auth_token"))?; (v.extract::<::std::string::String>())? },
+                call_token: match obj.get_item("call_token")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
+                original_caller_number: match obj.get_item("original_caller_number")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
+            })
+    }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
     static WORKFLOW_INSTRUCTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =

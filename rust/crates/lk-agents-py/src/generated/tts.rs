@@ -34,9 +34,9 @@ pub fn supported_nonverbals<'py>(py: Python<'py>, provider: ::std::string::Strin
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn split_all_markup(py: Python<'_>, text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
+pub fn split_all_markup<'py>(py: Python<'py>, text: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_all_markup(text));
-    Ok(out)
+    Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::types::PyList::new(py, x1.into_iter().map(|x| PyResult::Ok(crate::generated::records::tts::expressive_tag_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()])?.into_any() })
 }
 
 #[pyfunction]
@@ -55,9 +55,9 @@ pub fn strip_expr_markup(py: Python<'_>, text: ::std::string::String) -> PyResul
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn split_expr_markup(py: Python<'_>, text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
+pub fn split_expr_markup<'py>(py: Python<'py>, text: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_expr_markup(text));
-    Ok(out)
+    Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::types::PyList::new(py, x1.into_iter().map(|x| PyResult::Ok(crate::generated::records::tts::expressive_tag_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()])?.into_any() })
 }
 
 #[pyfunction]
@@ -158,9 +158,9 @@ impl TranscriptMarkupStripper {
     }
 
     #[getter]
-    fn tags(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>> {
+    fn tags<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::tts::expressive_tag_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     fn expression_attribute(&self) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>> {

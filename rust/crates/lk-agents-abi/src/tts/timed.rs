@@ -1,15 +1,12 @@
-//! `TimedString` (`types.py:152`). The Python type stays a `str` subclass (pyo3 cannot subclass
-//! `str`). An explicit `start_time=None` from the host reads as not given.
-
-use lk_agents_host_derive::Host;
+//! `TimedString` (`types.py:152`). The Python type stays a `str` subclass, crossing by
+//! `lk-agents-py`'s conversions. An explicit `start_time=None` from the host reads as not given.
 
 /// A word (or chunk) with optional start/end times for alignment.
 ///
 /// Built as the host's own `TimedString`, an absent timing an absent keyword. Read with
 /// `NOT_GIVEN`, `None` and anything unreadable folded to `None`; `speaker_id` may be missing on
-/// older subclasses. Declared for the Node binding's record; the Python crossing is
-/// `lk-agents-py`'s `conversions::timed_string_{from,to}_py`.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
+/// older subclasses.
+#[derive(Debug, Clone, Default, PartialEq)]
 #[crate::host(handwritten(extract, emit, host = "..types.TimedString", py))]
 pub struct TimedString {
     /// The text itself: `TimedString(text=word, ..)` out, and the `str` the object is on the way in.

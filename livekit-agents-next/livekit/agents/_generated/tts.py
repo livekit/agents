@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
 # `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/tts/tts.py
+#     rust/crates/lk-agents-abi/src/tts/markup/expr.rs
 #     rust/crates/lk-agents-abi/src/tts/tts.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -19,7 +20,7 @@ from types import TracebackType
 from typing import Generic, Literal, Never, Self, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypeVar
+from typing_extensions import TypeVar, TypedDict
 
 from livekit import rtc
 from livekit.rtc import AudioFrame
@@ -37,6 +38,17 @@ from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
 
 # The declared records.
+
+
+class ExpressiveTag(TypedDict):
+    """An expressive markup tag stripped from a transcript: the tag name (or the expr marker's type)
+    and its payload (the ``value`` attribute, the expr ``label`` or the inner text).
+    """
+
+    type: str
+    """The markup tag name (``"emotion"``, ``"sound"``, ...) or the expr marker type."""
+    value: str
+    """The payload: the ``value="..."`` attribute, the expr ``label``, or the tag's inner text."""
 
 
 @dataclass
@@ -69,6 +81,7 @@ class SynthesizedAudio:
     """Current segment of the synthesized audio (streaming only)"""
 
 
+ExpressiveTag.__module__ = "livekit.agents.tts"
 TTSCapabilities.__annotations__ = get_type_hints(TTSCapabilities)
 TTSCapabilities.__module__ = "livekit.agents.tts"
 MarkupInfo.__annotations__ = get_type_hints(MarkupInfo)

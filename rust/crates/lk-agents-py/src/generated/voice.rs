@@ -2001,10 +2001,11 @@ pub struct WarmTransfer(pub(crate) ::std::sync::Arc<WarmTransferImpl>);
 impl WarmTransfer {
     #[new]
     #[pyo3(signature = (*, sip_call_to = None, sip_trunk_id = ::lk_agents_abi::Maybe::NotGiven, has_sip_connection = false, sip_number = ::lk_agents_abi::Maybe::NotGiven, sip_headers = None, dtmf = None, ringing_timeout = None, instructions = ::lk_agents_abi::Maybe::NotGiven, conversation = None, env_sip_trunk = None, env_sip_number = "".to_owned(), twilio = None))]
-    fn new(py: Python<'_>, sip_call_to: ::std::option::Option<::std::string::String>, sip_trunk_id: ::lk_agents_abi::Maybe<::std::option::Option<::std::string::String>>, has_sip_connection: bool, sip_number: ::lk_agents_abi::Maybe<::std::string::String>, sip_headers: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>, dtmf: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_warm_transfer_new_ringing_timeout)] ringing_timeout: ::std::option::Option<f64>, instructions: ::lk_agents_abi::Maybe<Bound<'_, PyAny>>, conversation: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>, env_sip_trunk: ::std::option::Option<::std::string::String>, env_sip_number: ::std::string::String, twilio: ::std::option::Option<::lk_agents_abi::voice::workflows::TwilioDial>) -> PyResult<WarmTransfer> {
+    fn new(py: Python<'_>, sip_call_to: ::std::option::Option<::std::string::String>, sip_trunk_id: ::lk_agents_abi::Maybe<::std::option::Option<::std::string::String>>, has_sip_connection: bool, sip_number: ::lk_agents_abi::Maybe<::std::string::String>, sip_headers: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>, dtmf: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_warm_transfer_new_ringing_timeout)] ringing_timeout: ::std::option::Option<f64>, instructions: ::lk_agents_abi::Maybe<Bound<'_, PyAny>>, conversation: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>, env_sip_trunk: ::std::option::Option<::std::string::String>, env_sip_number: ::std::string::String, twilio: Option<Bound<'_, PyAny>>) -> PyResult<WarmTransfer> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let instructions = match instructions { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((crate::generated::records::workflows::instructions_arg_from_py(&value))?) };
+        let twilio = twilio.map(|v| crate::generated::records::workflows::twilio_dial_from_py(&v)).transpose()?;
         let out = py.detach(|| <WarmTransferImpl as ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer>::new(&env, sip_call_to, sip_trunk_id, has_sip_connection, sip_number, sip_headers, dtmf, ringing_timeout, instructions, conversation, env_sip_trunk, env_sip_number, twilio)).map_err(|e: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused| <::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(WarmTransfer(::std::sync::Arc::new(out)))
     }
@@ -5286,7 +5287,7 @@ impl TransferHostProxy {
         };
         let io_state = {
             let v = crate::host::read(obj, "_core_io_state")?;
-            v.extract::<::lk_agents_abi::voice::workflows::IoEnableState>()?
+            crate::generated::records::workflows::io_enable_state_from_py(&v)?
         };
         Ok(TransferHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), io_state })
     }
@@ -5332,7 +5333,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
         let host = ::std::sync::Arc::clone(&self.host);
         let state_arg = state;
         ::lk_agents_runtime::host::notify(&self.notifier, "TransferHost._core_set_io", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(state_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::workflows::io_enable_state_to_py(py, state_arg)?];
                 Ok((host.bind(py).getattr("_core_set_io")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }
@@ -5418,7 +5419,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
         let host = ::std::sync::Arc::clone(&self.host);
         let request_arg = request;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "TransferHost._core_create_sip_participant", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(request_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::workflows::sip_participant_request_to_py(py, request_arg)?];
                 Ok((host.bind(py).getattr("_core_create_sip_participant")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

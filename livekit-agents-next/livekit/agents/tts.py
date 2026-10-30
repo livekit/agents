@@ -9,7 +9,7 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import trace
 
@@ -20,6 +20,7 @@ from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.tts import (
     TTS,
     ChunkedStream,
+    ExpressiveTag,
     MarkupInfo,
     SynthesizedAudio,
     SynthesizeStream,
@@ -94,18 +95,9 @@ class _EmitterOutput:
         return self._ch.closed
 
 
-class ExpressiveTag(TypedDict):
-    """An expressive markup tag stripped from a transcript: the tag name (or the expr marker's
-    type) and its payload (the ``value`` attribute, the expr ``label`` or the inner text)."""
-
-    type: str
-    value: str
-
-
 def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     """Strip every provider's expressive XML markup; brackets are prose and stay."""
-    clean, tags = _core.split_all_markup(text)
-    return clean, [ExpressiveTag(type=t["type"], value=t["value"]) for t in tags]
+    return _core.split_all_markup(text)
 
 
 def strip_all_markup(text: str) -> str:
@@ -115,8 +107,7 @@ def strip_all_markup(text: str) -> str:
 def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     """Strip only the ``<expr/>`` dialect, returning the clean text and its markers; the
     provider-native tags stay in the words."""
-    clean, tags = _core.split_expr_markup(text)
-    return clean, [ExpressiveTag(type=t["type"], value=t["value"]) for t in tags]
+    return _core.split_expr_markup(text)
 
 
 def strip_expr_markup(text: str) -> str:
