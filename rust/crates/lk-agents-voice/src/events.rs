@@ -456,6 +456,9 @@ pub enum SessionEvent {
     MetricsCollected {
         metrics: Box<lk_agents_abi::metrics::base::AgentMetrics>,
         speech: Option<crate::agent_activity::scheduling::SpeechId>,
+        /// Already in the session's usage: a recognition stream's report, added to its request
+        /// where it was built.
+        counted: bool,
     },
     /// A provider failed (`AgentActivity._on_error`), one per failed attempt, before the close policy.
     Error(Box<ErrorEvent>),

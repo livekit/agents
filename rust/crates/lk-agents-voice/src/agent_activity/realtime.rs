@@ -217,8 +217,11 @@ impl Driver {
             Event::HostError(_) | Event::ServerGeneration(_) => {}
             // `_on_metrics_collected`: into the session's metrics and usage, attributed to no speech.
             Event::Metrics(rt::RealtimeMetrics { metrics }) => {
-                out.machine()
-                    .emit(crate::events::SessionEvent::MetricsCollected { metrics, speech: None });
+                out.machine().emit(crate::events::SessionEvent::MetricsCollected {
+                    metrics,
+                    speech: None,
+                    counted: false,
+                });
             }
             // The session replays its conversation, instructions and tools onto the new connection
             // itself (`_reconnect`); replaying them again from here re-created every item the

@@ -343,7 +343,10 @@ async fn until_stopped<T>(
 }
 
 pub(super) fn report_metrics(shared: &SessionShared, handle: &SpeechHandle, record: AgentMetrics) {
-    let ev =
-        SessionEvent::MetricsCollected { metrics: Box::new(record), speech: Some(handle.id()) };
+    let ev = SessionEvent::MetricsCollected {
+        metrics: Box::new(record),
+        speech: Some(handle.id()),
+        counted: false,
+    };
     shared.report(GenEvent::Emit(Box::new(ev)));
 }

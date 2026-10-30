@@ -86,12 +86,17 @@ impl Driver {
                 connection_reused: false,
                 metadata: Some(id.metadata()),
             };
-            if let Some(&request) = self.session.stt_requests.get(&stream) {
-                self.session.stt_reports.push_back((request, record.clone()));
+            let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record));
+            // The stream's request takes the report here; one from a stream already ended counts
+            // as its own measured request.
+            let request = self.session.stt_requests.get(&stream).copied();
+            if let Some(request) = request {
+                self.session.usage.report_delta(request, &metrics);
             }
             out.machine().emit(crate::events::SessionEvent::MetricsCollected {
-                metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record)),
+                metrics,
                 speech: None,
+                counted: request.is_some(),
             });
             return;
         }
@@ -220,6 +225,7 @@ impl Driver {
                 out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                     metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Vad(record)),
                     speech: None,
+                    counted: false,
                 });
             }
         }

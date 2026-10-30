@@ -96,7 +96,7 @@ impl Rule for ItemsCarryTheirPayload {
                         });
                     }
                 }
-                Step::Emitted(SessionEvent::MetricsCollected { metrics, speech }) => {
+                Step::Emitted(SessionEvent::MetricsCollected { metrics, speech, .. }) => {
                     let id = speech.and_then(|s| speech_ids.get(&s.0).map(String::as_str));
                     metrics_are_whole(check, metrics, id, epoch, wall(at));
                 }
@@ -294,6 +294,7 @@ fn metrics_on_another_clock() -> Recording {
         .journal(Step::Emitted(SessionEvent::MetricsCollected {
             metrics: Box::new(AgentMetrics::RealtimeModel(metrics)),
             speech: None,
+            counted: false,
         }))
         .done()
 }

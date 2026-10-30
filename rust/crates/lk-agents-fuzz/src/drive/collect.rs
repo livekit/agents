@@ -335,7 +335,7 @@ impl Run {
         }
         // A request's own metrics name its speech exactly, so they have the last word.
         for position in from_host..self.record.host().len() {
-            let Host::Session(SessionEvent::MetricsCollected { metrics, speech: Some(speech) }) =
+            let Host::Session(SessionEvent::MetricsCollected { metrics, speech: Some(speech), .. }) =
                 &self.record.host()[position].1
             else {
                 continue;

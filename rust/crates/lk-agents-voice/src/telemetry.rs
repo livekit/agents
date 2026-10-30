@@ -614,7 +614,7 @@ impl SessionTrace {
                     self.end_turn(now, tool.speech, outcome, out);
                 }
             }
-            SessionEvent::MetricsCollected { metrics, speech: Some(speech) } => {
+            SessionEvent::MetricsCollected { metrics, speech: Some(speech), .. } => {
                 if let Some(parent) = self.turn(*speech) {
                     self.inference(metrics, parent, out);
                 }

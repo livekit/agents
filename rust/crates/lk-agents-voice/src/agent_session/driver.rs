@@ -510,6 +510,7 @@ impl Driver {
                 out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                     metrics: record,
                     speech: None,
+                    counted: false,
                 });
             }
             Command::SetStaticKeyterms(terms) => {

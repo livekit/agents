@@ -394,6 +394,7 @@ impl Driver {
                     m.clone(),
                 )),
                 speech: None,
+                counted: false,
             });
         }
         // A verdict for an overlap no longer open changes nothing; one inside the boundary

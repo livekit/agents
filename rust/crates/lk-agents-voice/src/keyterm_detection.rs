@@ -836,6 +836,7 @@ impl Driver {
             out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                 metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm((**m).clone())),
                 speech: None,
+                counted: false,
             });
         }
         if failed {

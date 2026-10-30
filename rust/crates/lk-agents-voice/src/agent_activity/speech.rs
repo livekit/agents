@@ -517,6 +517,7 @@ impl Driver {
         out.machine().emit(SessionEvent::MetricsCollected {
             metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Eou(record)),
             speech,
+            counted: false,
         });
     }
 

@@ -284,7 +284,11 @@ impl AmdSystem {
             Msg::Answer { req, transcript, calls, failed, metrics } => {
                 if let Some(m) = metrics {
                     let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m));
-                    self.peer.emit(SessionEvent::MetricsCollected { metrics, speech: None });
+                    self.peer.emit(SessionEvent::MetricsCollected {
+                        metrics,
+                        speech: None,
+                        counted: false,
+                    });
                 }
                 self.on_answer(now, req, transcript, calls, failed)
             }
