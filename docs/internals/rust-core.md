@@ -1032,8 +1032,8 @@ with `core_names.json`.
 
 ### The GIL boundary
 
-A thread holding Python's GIL never waits on a Rust lock, and Rust never calls
-the host while holding a lock, so no lock and the GIL wait on each other:
+No lock holder waits for the GIL: Rust never calls the host while holding a
+lock, so no lock and the GIL wait on each other:
 
 - Every generated synchronous entry (constructor, method, getter, setter,
   function, an eager await's call, a duplex stream's `push`/`flush`/`end_input`)
@@ -1047,6 +1047,8 @@ the host while holding a lock, so no lock and the GIL wait on each other:
   guard drops; host objects taken out of a locked queue are dropped after it.
   Log lines are queued and never wait for the GIL, so logging under a lock is
   allowed.
+- A pyclass's `Drop` runs with the GIL, so it may take only locks whose
+  holders never call the host.
 - `lk-agents-py` holds no lock while Python code runs; a lock that must is
   PyO3's `MutexExt::lock_py_attached` or a `PyOnceLock`.
 - Locks are plain `parking_lot` locks; std's poisoning `Mutex`/`RwLock` stay
