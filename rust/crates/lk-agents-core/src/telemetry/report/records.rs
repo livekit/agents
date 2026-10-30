@@ -1,25 +1,24 @@
-//! `telemetry/traces.py`'s `_upload_session_report` records, its `_UploadGate`, and
-//! `observability.py`'s `Tagger`. The records are built here as [`LogRecord`]s and emitted by the
-//! host's SDK as ABI's `LogRecordWire`.
+//! The session report's records: `telemetry/traces.py`'s `_upload_session_report` records, its
+//! `_UploadGate`, and `observability.py`'s `Tagger` state. The records are built here as
+//! [`LogRecord`]s and emitted by the host's SDK as ABI's `LogRecordWire`.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::time::SystemTime;
 
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::ChatItem;
 use lk_agents_abi::telemetry::policy;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection;
 use lk_agents_abi::telemetry::report::{
-    ChatItemProjection, EvaluationRecord, LogRecordWire, Outcome, RecordingOptions,
-    SessionReportInput, TAG_FAIL, TAG_SUCCESS, Tagger as _,
+    EvaluationRecord, LogRecordWire, Outcome, RecordingOptions, SessionReportInput, TAG_FAIL,
+    TAG_SUCCESS,
 };
 use lk_agents_abi::usage::ModelUsage;
-use lk_agents_abi::{ChatItem, Clock};
-use lk_agents_core::telemetry::report::{
+use serde_json::{Map, Value, json};
+
+use super::{
     HrTime, LogRecord, LoggerName, ReportProjection, attribute_report_record, hr_seconds, hr_time,
     record, report_value_bytes, report_value_fits,
 };
-use serde_json::{Map, Value, json};
 
 // -----------------------------------------------------------------------------------------
 // log records and their timestamps
@@ -71,7 +70,7 @@ pub fn session_chat_record(
 ) -> Option<LogRecordWire> {
     if disabled
         || !options.transcript
-        || !lk_agents_core::telemetry::policy::content_allowed(capture_content, options.redaction)
+        || !crate::telemetry::policy::content_allowed(capture_content, options.redaction)
     {
         return None;
     }
@@ -362,91 +361,67 @@ pub struct TagEntry {
     pub timestamp: SystemTime,
 }
 
-/// `observability.py:17`.
+/// `observability.py:17`: the session's tags, judgments and outcome. Times are supplied by the
+/// caller from the session clock.
+#[derive(Debug, Default)]
 pub struct Tagger {
-    clock: Arc<dyn Clock>,
     tags: Vec<(String, TagEntry)>,
     evaluation_results: Vec<EvaluationRecord>,
     outcome_reason: Option<String>,
 }
 
-impl std::fmt::Debug for Tagger {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tagger")
-            .field("tags", &self.tags)
-            .field("evaluation_results", &self.evaluation_results)
-            .field("outcome_reason", &self.outcome_reason)
-            .finish()
-    }
-}
-
 impl Tagger {
-    pub fn new(clock: Arc<dyn Clock>) -> Self {
-        Tagger { clock, tags: Vec::new(), evaluation_results: Vec::new(), outcome_reason: None }
-    }
-}
-
-impl lk_agents_abi::telemetry::report::Tagger for Tagger {
-    type Env = crate::env::ProcessEnv;
-
-    /// Timestamps are strictly increasing, so same-instant tags keep insertion order.
-    fn new(env: &crate::env::ProcessEnv) -> Self {
-        Tagger::new(env.clock.clone())
-    }
-
-    // Clears any existing `lk.fail` first.
-    fn success(&mut self, reason: Option<String>) {
-        self.remove(TAG_FAIL.to_owned());
-        self.add(TAG_SUCCESS.to_owned(), None);
+    /// Clears any existing `lk.fail` first.
+    pub fn success(&mut self, reason: Option<String>, at: SystemTime) {
+        self.remove(TAG_FAIL);
+        self.add(TAG_SUCCESS.to_owned(), None, at);
         self.outcome_reason = reason;
     }
 
-    fn fail(&mut self, reason: Option<String>) {
-        self.remove(TAG_SUCCESS.to_owned());
-        self.add(TAG_FAIL.to_owned(), None);
+    pub fn fail(&mut self, reason: Option<String>, at: SystemTime) {
+        self.remove(TAG_SUCCESS);
+        self.add(TAG_FAIL.to_owned(), None, at);
         self.outcome_reason = reason;
     }
 
     /// Python `dict` assignment: replace in place (keeping position), else append.
-    fn add(&mut self, tag: String, metadata: Option<Value>) {
-        let entry = TagEntry { metadata, timestamp: self.clock.wall() };
+    pub fn add(&mut self, tag: String, metadata: Option<Value>, at: SystemTime) {
+        let entry = TagEntry { metadata, timestamp: at };
         match self.tags.iter_mut().find(|(k, _)| *k == tag) {
             Some(slot) => slot.1 = entry,
             None => self.tags.push((tag, entry)),
         }
     }
 
-    fn remove(&mut self, tag: String) {
-        self.tags.retain(|(k, _)| *k != tag);
+    pub fn remove(&mut self, tag: &str) {
+        self.tags.retain(|(k, _)| k != tag);
     }
 
-    fn tags(&self) -> BTreeSet<String> {
+    pub fn tags(&self) -> BTreeSet<String> {
         self.tags.iter().map(|(k, _)| k.clone()).collect()
     }
 
-    fn sorted_tags(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.tags.iter().map(|(k, _)| k.clone()).collect();
-        v.sort_unstable();
-        v
+    pub fn sorted_tags(&self) -> Vec<String> {
+        self.tags().into_iter().collect()
     }
 
-    fn entries(&self) -> Vec<(String, Option<Value>, f64)> {
+    pub fn entries(&self) -> Vec<(String, Option<Value>, f64)> {
         self.tags
             .iter()
             .map(|(k, e)| (k.clone(), e.metadata.clone(), lk_agents_abi::unix_secs(e.timestamp)))
             .collect()
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.tags.is_empty()
     }
 
-    fn evaluations(&self) -> Vec<EvaluationRecord> {
-        self.evaluation_results.clone()
+    pub fn evaluations(&self) -> &[EvaluationRecord] {
+        &self.evaluation_results
     }
 
-    // From tag presence; `lk.success` wins if both are set.
-    fn outcome(&self) -> Option<Outcome> {
+    /// From tag presence; `lk.success` wins if both are set.
+    pub fn outcome(&self) -> Option<Outcome> {
         if self.tags.iter().any(|(k, _)| k == TAG_SUCCESS) {
             Some(Outcome::Success)
         } else if self.tags.iter().any(|(k, _)| k == TAG_FAIL) {
@@ -456,20 +431,21 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
         }
     }
 
-    // Only another `success`/`fail` overwrites it.
-    fn outcome_reason(&self) -> Option<String> {
-        self.outcome_reason.clone()
+    /// Only another `success`/`fail` overwrites it.
+    pub fn outcome_reason(&self) -> Option<&str> {
+        self.outcome_reason.as_deref()
     }
 
-    fn _core_record_judgment(
+    pub fn record_judgment(
         &mut self,
         name: String,
         verdict: String,
         reasoning: String,
         instructions: String,
+        at: SystemTime,
     ) {
         let tag = format!("lk.judge.{name}:{verdict}");
-        self.add(tag.clone(), None);
+        self.add(tag.clone(), None, at);
         self.evaluation_results.push(EvaluationRecord {
             name,
             tag,
@@ -480,33 +456,8 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
     }
 
     /// `has_evals` at `job.py:320`: `bool(self._tagger.evaluations or self._tagger.outcome)`.
-    fn has_evals(&self) -> bool {
+    pub fn has_evals(&self) -> bool {
         !self.evaluation_results.is_empty() || self.outcome().is_some()
-    }
-
-    fn _core_session_records(
-        &self,
-        report: SessionReportInput,
-        disabled: bool,
-        project_item: Arc<dyn ChatItemProjection>,
-        capture_content: bool,
-    ) -> Result<Vec<LogRecordWire>, HostError> {
-        // A failing projection cannot unwind through the walk: the first is kept and returned.
-        let failure = std::cell::RefCell::new(None::<HostError>);
-        let project = |item: &ChatItem| -> Value {
-            if failure.borrow().is_some() {
-                return Value::Null;
-            }
-            project_item.project(item.clone()).unwrap_or_else(|error| {
-                *failure.borrow_mut() = Some(error);
-                Value::Null
-            })
-        };
-        let records = session_records(disabled, &report, self, &project, capture_content);
-        match failure.into_inner() {
-            Some(error) => Err(error),
-            None => Ok(records.into_iter().map(LogRecordWire::from).collect()),
-        }
     }
 }
 

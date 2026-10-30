@@ -1795,9 +1795,10 @@ propagation. Export follows the host SDK boundary, just like a host provider:
 the host's own SDK processors export, and no Rust worker pool runs host export
 callbacks. Destination policy and metric admission are
 synchronous decisions in `lk_agents_core::telemetry`; the host applies them.
-The LiveKit Cloud session report and recording upload is not user telemetry: it
-is ordinary async Rust in `lk-agents-net`, triggered at session end with its
-own bounded admission.
+The LiveKit Cloud session report and recording upload is not user telemetry: its
+records, tags and upload gate are built in `lk_agents_core::telemetry::report`,
+and the upload is ordinary async Rust in `lk-agents-net`, triggered at session
+end with its own bounded admission.
 
 Adopt the application's configured tracer provider by default. An explicitly
 configured framework provider is also used when activating framework invocation

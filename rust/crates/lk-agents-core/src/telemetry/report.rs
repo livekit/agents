@@ -1,6 +1,6 @@
 //! The session report's privacy projection and record shape: which events and fields a report
-//! may retain, and the bounded log records the host SDK emits. `lk-agents-net` builds and uploads
-//! the report.
+//! may retain, and the bounded log records the host SDK emits ([`records`]). `lk-agents-net`
+//! uploads the report.
 
 use lk_agents_abi::telemetry::policy::{
     REPORT_EVENT_BYTES, REPORT_EVENT_ITEMS, REPORT_EVENT_RECORD_BYTES, SDK_RECORD_BYTES,
@@ -12,6 +12,8 @@ use lk_agents_abi::telemetry::report::{LogRecordWire, RecordingOptions};
 use lk_agents_abi::voice::events::{AgentStateChanged, UserStateChanged, UserTranscriptionTimeout};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+pub mod records;
 
 /// OTel JS's `HrTime`: epoch nanos do not fit a JS `number`.
 pub type HrTime = (i64, u32);

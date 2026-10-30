@@ -1,7 +1,7 @@
 //! Telemetry on supplied data: GenAI provider names ([`gen_ai`]), destination redaction and SDK
 //! retention charges ([`policy`]), metric series admission ([`metrics`]), provider metric folds
 //! ([`provider`]), the records a metrics event becomes ([`records`]), the session report's
-//! privacy projection and record shape ([`report`]) and the W3C parents transports carry
+//! privacy projection, records and tags ([`report`]) and the W3C parents transports carry
 //! ([`transport`]).
 //! Recording and delivery go through the host's OpenTelemetry SDK.
 

@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::usage::{LlmUsage, ModelUsage, TokenUsage, Usage};
-use lk_agents_abi::{ChatItem, ChatMessage, Role, VirtualClock};
+use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use serde_json::{Value, json};
 
 use lk_agents_abi::telemetry::report::UploadGate as _;
@@ -34,8 +34,10 @@ fn all_on() -> RecordingOptions {
 }
 
 fn tagger() -> Tagger {
-    Tagger::new(std::sync::Arc::new(VirtualClock::new()))
+    Tagger::default()
 }
+
+const AT: SystemTime = SystemTime::UNIX_EPOCH;
 
 fn find<'a>(recs: &'a [LogRecord], body: &str) -> Vec<&'a LogRecord> {
     recs.iter().filter(|r| r.body == body).collect()
@@ -67,14 +69,9 @@ fn report_usage_omits_absent_fields_and_keeps_reported_zeros() {
 #[test]
 fn denied_content_never_reaches_session_projection_or_report_records() {
     let mut t = tagger();
-    t.add("customer-tag".into(), Some(json!({"private": "customer metadata"})));
-    t.fail(Some("customer outcome reason".into()));
-    t._core_record_judgment(
-        "booking".into(),
-        "fail".into(),
-        "customer reasoning".into(),
-        "".into(),
-    );
+    t.add("customer-tag".into(), Some(json!({"private": "customer metadata"})), AT);
+    t.fail(Some("customer outcome reason".into()), AT);
+    t.record_judgment("booking".into(), "fail".into(), "customer reasoning".into(), "".into(), AT);
     let at = SystemTime::UNIX_EPOCH;
     let items = [ChatItem::Message(ChatMessage::text("i", Role::User, "customer transcript", at))];
     for (capture_content, redaction) in [(false, false), (true, true)] {
@@ -112,9 +109,9 @@ fn denied_content_never_reaches_session_projection_or_report_records() {
 #[test]
 fn a_failing_verdict_bumps_the_evaluation_severity() {
     let mut t = tagger();
-    t._core_record_judgment("politeness".into(), "pass".into(), "fine".into(), "".into());
-    t._core_record_judgment("booked".into(), "fail".into(), "never booked".into(), "".into());
-    t._core_record_judgment("unsure".into(), "maybe".into(), "hmm".into(), "".into());
+    t.record_judgment("politeness".into(), "pass".into(), "fine".into(), "".into(), AT);
+    t.record_judgment("booked".into(), "fail".into(), "never booked".into(), "".into(), AT);
+    t.record_judgment("unsure".into(), "maybe".into(), "hmm".into(), "".into(), AT);
 
     let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let evals = find(&recs, "evaluation");
@@ -132,7 +129,7 @@ fn a_failing_verdict_bumps_the_evaluation_severity() {
 #[test]
 fn a_failed_outcome_bumps_severity_and_an_empty_reason_is_omitted() {
     let mut t = tagger();
-    t.fail(Some("user hung up".into()));
+    t.fail(Some("user hung up".into()), AT);
     let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let o = find(&recs, "outcome");
     assert_eq!(o.len(), 1);
@@ -140,7 +137,7 @@ fn a_failed_outcome_bumps_severity_and_an_empty_reason_is_omitted() {
     assert_eq!(attr(o[0], "outcome"), &json!({"outcome": "fail", "reason": "user hung up"}));
 
     let mut t = tagger();
-    t.success(None);
+    t.success(None, AT);
     let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let o = find(&recs, "outcome");
     assert_eq!(o[0].severity_number, 0);
@@ -160,9 +157,9 @@ fn empty_tags_and_usage_are_null_not_empty_lists() {
 #[test]
 fn session_tags_are_sorted() {
     let mut t = tagger();
-    t.add("zebra:1".into(), None);
-    t.add("apple:2".into(), None);
-    t.add("mango:3".into(), None);
+    t.add("zebra:1".into(), None, AT);
+    t.add("apple:2".into(), None, AT);
+    t.add("mango:3".into(), None, AT);
     let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let s = find(&recs, "session report")[0];
     assert_eq!(attr(s, "session.tags"), &json!(["apple:2", "mango:3", "zebra:1"]));
@@ -195,8 +192,8 @@ fn the_summary_and_transcript_gates_are_independent() {
 #[test]
 fn tag_and_outcome_records_are_emitted_with_recording_off() {
     let mut t = tagger();
-    t.add("voicemail:true".into(), Some(json!({"slot_id": "abc"})));
-    t.fail(Some("no answer".into()));
+    t.add("voicemail:true".into(), Some(json!({"slot_id": "abc"})), AT);
+    t.fail(Some("no answer".into()), AT);
     let recs = session_records(
         false,
         &view(&[], &[], RecordingOptions::default()),
@@ -214,9 +211,9 @@ fn tag_and_outcome_records_are_emitted_with_recording_off() {
 #[test]
 fn only_tags_with_non_empty_metadata_produce_a_record() {
     let mut t = tagger();
-    t.add("plain:1".into(), None);
-    t.add("empty:1".into(), Some(json!({})));
-    t.add("rich:1".into(), Some(json!({"k": "v"})));
+    t.add("plain:1".into(), None, AT);
+    t.add("empty:1".into(), Some(json!({})), AT);
+    t.add("rich:1".into(), Some(json!({"k": "v"})), AT);
     let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let tags = find(&recs, "tag");
     assert_eq!(tags.len(), 1, "{tags:?}");
@@ -243,37 +240,23 @@ fn the_summary_timestamp_falls_through_a_zero_started_at() {
 #[test]
 fn the_outcome_tags_are_mutually_exclusive() {
     let mut t = tagger();
-    t.success(Some("done".into()));
-    t.fail(Some("actually no".into()));
+    t.success(Some("done".into()), AT);
+    t.fail(Some("actually no".into()), AT);
     assert_eq!(t.sorted_tags(), vec![TAG_FAIL]);
     assert_eq!(t.outcome(), Some(Outcome::Fail));
-    assert_eq!(t.outcome_reason().as_deref(), Some("actually no"));
+    assert_eq!(t.outcome_reason(), Some("actually no"));
 }
 
 // Catches: re-adding a tag moving it to the end of the insertion order.
 #[test]
 fn re_adding_a_tag_keeps_its_position() {
     let mut t = tagger();
-    t.add("a:1".into(), Some(json!({"v": 1})));
-    t.add("b:1".into(), Some(json!({"v": 2})));
-    t.add("a:1".into(), Some(json!({"v": 3})));
+    t.add("a:1".into(), Some(json!({"v": 1})), AT);
+    t.add("b:1".into(), Some(json!({"v": 2})), AT);
+    t.add("a:1".into(), Some(json!({"v": 3})), AT);
     let names: Vec<String> = t.entries().into_iter().map(|(n, _, _)| n).collect();
     assert_eq!(names, vec!["a:1", "b:1"]);
     assert_eq!(t.entries()[0].1, Some(json!({"v": 3})));
-}
-
-// Catches: tag timestamps from the wall clock rather than the session clock.
-#[test]
-fn tag_timestamps_come_from_the_session_clock() {
-    let clock = std::sync::Arc::new(VirtualClock::new());
-    let mut t = Tagger::new(clock.clone());
-    t.add("a:1".into(), None);
-    clock.advance(Duration::from_secs(10));
-    t.add("b:1".into(), None);
-    let ts: Vec<SystemTime> = t.tags.iter().map(|(_, e)| e.timestamp).collect();
-    // Not exactly 10s: `Clock::wall` nudges by 1 µs per read.
-    let delta = ts[1].duration_since(ts[0]).unwrap();
-    assert!(delta > Duration::from_millis(9_990) && delta < Duration::from_secs(11), "{ts:?}");
 }
 
 // ============================================================================================
@@ -351,12 +334,11 @@ fn incremental_chat_records_keep_supplied_identity_time_and_enforce_recording_co
 
 #[test]
 fn large_tag_state_cannot_create_an_unbounded_sdk_report_or_remove_the_business_outcome() {
-    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    let mut tagger = Tagger::new(clock);
+    let mut tagger = Tagger::default();
     for index in 0..1_000 {
-        tagger.add(format!("tag-{index}"), Some(json!({"detail": "value"})));
+        tagger.add(format!("tag-{index}"), Some(json!({"detail": "value"})), AT);
     }
-    tagger.success(Some("completed".into()));
+    tagger.success(Some("completed".into()), AT);
     let report = SessionReportInput {
         recording_options: RecordingOptions { logs: true, ..Default::default() },
         ..Default::default()

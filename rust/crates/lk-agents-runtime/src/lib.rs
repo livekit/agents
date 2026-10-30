@@ -21,6 +21,7 @@ pub mod cores {
     };
     pub use lk_agents_core::telemetry::records::MetricsRecords;
     pub use lk_agents_core::telemetry::report::ReportProjection;
+    pub use lk_agents_core::telemetry::report::records::{ReportRecords, UploadGate};
     pub use lk_agents_core::telemetry::transport::TraceParents;
     pub use lk_agents_core::text::Languages;
     pub use lk_agents_core::tokenize::{

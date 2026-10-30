@@ -4,11 +4,12 @@
 //!
 //! - [`admission`]: the process's preparation, upload and event retention capacity.
 //! - [`events`]: a session's retained event snapshots.
+//! - [`tagger`]: the session's tags, stamped by the process clock.
 //! - [`transcript`]: the bounded transcript and console report.
 
 mod admission;
 pub mod events;
-pub mod records;
+pub mod tagger;
 pub mod transcript;
 
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::UploadGate as UploadGateApi;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
+use lk_agents_core::telemetry::report::records::UploadGate;
 use prost::Message;
 use reqwest::multipart::{Form, Part};
 
@@ -200,7 +202,7 @@ impl SessionReportUploader {
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = response_body(response).await?;
-                    if <records::UploadGate as UploadGateApi>::is_disabled_response(
+                    if <UploadGate as UploadGateApi>::is_disabled_response(
                         status,
                         body.clone(),
                     ) {
