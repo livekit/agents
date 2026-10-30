@@ -1,0 +1,3809 @@
+{
+  "archive": "blingfire.tar.gz",
+  "archive_bytes": 570462,
+  "archive_sha256": "829c4ee86653ff29e229568a33c8993a9a147cb35146c5227d586f6645789734",
+  "commit": "18e9a19e586095fb60d629fa850fb610d5bca605",
+  "description": "Selected tracked files from the immutable public Microsoft Git commit; this projection is not the complete upstream archive or unpublished LiveKit native source.",
+  "file_count": 539,
+  "files": [
+    {
+      "bytes": 5987,
+      "git_blob_oid": "e1c8a508b777cb0e6fb437dd4ac9b10488fefd33",
+      "git_mode": "100644",
+      "path": "CMakeLists.txt",
+      "sha256": "0c8eaba1ad4d6bfc049d6ea40554be101357d4f7b95830460ada10b0a1757bed"
+    },
+    {
+      "bytes": 1183,
+      "git_blob_oid": "4b1ad51b2f0efc36f38aa3349a9f30fbd9217547",
+      "git_mode": "100644",
+      "path": "LICENSE",
+      "sha256": "dea9265341829002e2c23a7372393eb2ed6e26085fb623f38a4ba0af833f30a6"
+    },
+    {
+      "bytes": 1729,
+      "git_blob_oid": "fb0d0ef44f51dfde649ccafc0dcaa0b639b25f53",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAAllocator.h",
+      "sha256": "d47f58a960d13b131def4e41bea06f297de02b5f47babf0884bc8dd823c04e61"
+    },
+    {
+      "bytes": 1719,
+      "git_blob_oid": "75848eff6301c8039af2519db028b3d8019908ab",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAAllocatorA.h",
+      "sha256": "3537e1ba3d52d3267648ef61055ebf393ff4ff7e5e1e0bc3b9aef611fc948e94"
+    },
+    {
+      "bytes": 535,
+      "git_blob_oid": "c9bc00b524cc58d2f3178ccc9568291e69bef071",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAArrayCA.h",
+      "sha256": "7dee305276a577ee211c9cd9d2fca15c98345780006e9f694c3850af28e8d619"
+    },
+    {
+      "bytes": 5408,
+      "git_blob_oid": "27ed4822aa999fb90c410d68736fb60e84e9f931",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAArray_cont_t.h",
+      "sha256": "4cc807bed346f81b3a5a9207be58536d5950689d90e60582920575910fe3ce4e"
+    },
+    {
+      "bytes": 1062,
+      "git_blob_oid": "d167706179b922c32fe52842933ab4fdad1c69d7",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAArray_pack.h",
+      "sha256": "c4ae63e887a195d672ed9b13e8a92fa5f19a08b482e62a2f4361cc8d16d8d882"
+    },
+    {
+      "bytes": 1041,
+      "git_blob_oid": "bb3664c592709b3448f00994544a835e0cbde048",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FABrResultCA.h",
+      "sha256": "5e3f2fe8a0ac1f0d866657f38a71792b02c70438dade4a6393c7879c2dc6f3ba"
+    },
+    {
+      "bytes": 8922,
+      "git_blob_oid": "34d9335ebc0ade33038f6e0dcd329066c62c8f01",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAChains_pack_triv.h",
+      "sha256": "601826597ecbd3007304f18f3b170164a5df96719dcf5b9b4539dbe77ee0c549"
+    },
+    {
+      "bytes": 2503,
+      "git_blob_oid": "8dfa36e28efcd48249f1e7d1252f50e4d1f25752",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAConfig.h",
+      "sha256": "33e5bdc3a1355da258d39d1cd0c4feeab66217df92691268df1b75b500b7fd9b"
+    },
+    {
+      "bytes": 2930,
+      "git_blob_oid": "35cb1744efe64b83264655313669fe70d4e5f2b4",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FADictConfKeeper.h",
+      "sha256": "e0a0883b672de7992af25e521be3da22e5f9c6b1e691422321d40cdacce2aa8b"
+    },
+    {
+      "bytes": 10618,
+      "git_blob_oid": "93e152501eb2728583fbc261aacd621d34a75d4a",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FADictInterpreter_t.h",
+      "sha256": "567bd9bc142e377a065c79bf304737c1b87e5dd72b55cdf81a13a952fbc2a735"
+    },
+    {
+      "bytes": 2681,
+      "git_blob_oid": "737e98d055b9d48e938340556adb5f23562fd8a6",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FADigitizer_dct_t.h",
+      "sha256": "c997087921e64abf0dfe22c8276194fea1b47ad1c9718fb781af43df8784f1ea"
+    },
+    {
+      "bytes": 4632,
+      "git_blob_oid": "c8b97a37a227e55f6298e1fdc72b0ec2272b7625",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FADigitizer_t.h",
+      "sha256": "70fddf9306add61ecd90ea406d1dcb1f89a529e775073c2450d408bcce9ae242"
+    },
+    {
+      "bytes": 27415,
+      "git_blob_oid": "24bd962a15c5a42dcb40b9c854a84b0d397cdfe1",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAEncodeUtils.h",
+      "sha256": "1ba916539886687b1d82bb7bcbd0e9245eebddb0c55ebd2f988e68c0eb312576"
+    },
+    {
+      "bytes": 1688,
+      "git_blob_oid": "827cd0095fac018112f27d21eb77d171cf6e8799",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAException.h",
+      "sha256": "59d2eb9c9a36d3ca8536848a9687674e16a8832e425f8872126de759e6572ff4"
+    },
+    {
+      "bytes": 16938,
+      "git_blob_oid": "709fd8e6dfa5893400b243bd1b9d3b3bf95090d6",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAFsmConst.h",
+      "sha256": "607ed5bc22a8361c385a4e933964d228c5d31ab6aca6ee28e3999c9edce37d2a"
+    },
+    {
+      "bytes": 616,
+      "git_blob_oid": "8285c7fc4819c0ece1d23ea22731103e40241d26",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAGetIWsCA.h",
+      "sha256": "7ce435ab48c5be1b1d66ebccf929939a95cb14958a0e97cf39eb13f44b24d9a8"
+    },
+    {
+      "bytes": 1025,
+      "git_blob_oid": "fd1404f42fdb96bd16adf25e2df21454c74422da",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAGetIWs_pack_triv.h",
+      "sha256": "e502e9193039c9b452bd8f276b83e650146f64708a5589631b4e7611373cf92c"
+    },
+    {
+      "bytes": 1121,
+      "git_blob_oid": "a3a76a0db4f3ec9964505de57cbe6560d484ab7c",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAGlobalConfKeeper_packaged.h",
+      "sha256": "8de45bf9f50eb7512aa8dd75a77976b98dff373c4c596e0ef8d91560b20831c9"
+    },
+    {
+      "bytes": 3486,
+      "git_blob_oid": "b5755d16aa75149cad7adfbf1d97c8e26650b770",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAHmmTagger_l1.h",
+      "sha256": "0059f7d77941f9d44fd06bcd3aeb08ed765cb58f13868542a641ddc7f48a3529"
+    },
+    {
+      "bytes": 1840,
+      "git_blob_oid": "500b2faa313862287e75b31f73be4adf73e7c4cf",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAHyphConfKeeper_packaged.h",
+      "sha256": "85fc7b118056bd2f79ce07b0c5629f496f4a14d2a960416ce099d24645523e79"
+    },
+    {
+      "bytes": 1350,
+      "git_blob_oid": "a090bdda39a98f05288475fd4db25ca708480d6e",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAImageDump.h",
+      "sha256": "38151786adbd629255e3894633a181de483de04edfa4b735ed712b3260dbc29f"
+    },
+    {
+      "bytes": 2838,
+      "git_blob_oid": "f34f5060b9328ead41b210502d480e9ce11fb53e",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAIwMap_pack.h",
+      "sha256": "fc2f9ddbcdb6eee948bbc02b132e4b2f2c9c93a6e027d78ebfddf57d3a14937e"
+    },
+    {
+      "bytes": 1730,
+      "git_blob_oid": "eed2fbba1c073129e7d83ad7a691b1850318ae16",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FALDB.h",
+      "sha256": "13acd1c538f5cb840e0b420ec3c57c427fe0cf3ce99203bedc9500dba13d536c"
+    },
+    {
+      "bytes": 13398,
+      "git_blob_oid": "19274dae07c4f183915596762355c9c3dda91402",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FALexTools_t.h",
+      "sha256": "106529d862bbd29a09f42e6b03566c37f20c7e686dc0a013051a7fe7fade07be"
+    },
+    {
+      "bytes": 1405,
+      "git_blob_oid": "4eab1dd9ede3bfd37ae28cfc51c14f6d7cd2801c",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FALimits.h",
+      "sha256": "b39fd08420b5c513515a2ded58c1db849b720c7d2ab72865e0e4686d2a9feea8"
+    },
+    {
+      "bytes": 594,
+      "git_blob_oid": "aa29f7628f53451adc7eba7f0edede275293a38e",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMealyDfaCA.h",
+      "sha256": "660b7fae3291f62f425093b452ec389a783bbfdb7e9f255a374ee67ac3165c62"
+    },
+    {
+      "bytes": 1036,
+      "git_blob_oid": "768966b0055e1072fcc954c638ab74377be2c9cc",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMealyDfa_pack_triv.h",
+      "sha256": "7b53b0a3a77f764aa28e5b9d2880ff1802f16921452a088893557c3f3eec8aa9"
+    },
+    {
+      "bytes": 595,
+      "git_blob_oid": "fdb0a4a5f963857378eda05f630ea43387ceca64",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMealyNfaCA.h",
+      "sha256": "e8a7e7d6f188aa416ab7dbe304d1a36c85055d378308686c333ce09e24621945"
+    },
+    {
+      "bytes": 14994,
+      "git_blob_oid": "1d4770deba11e00aef44dc63ecc2da5da94abf4d",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMorphLDB_t_packaged.h",
+      "sha256": "124ee1a51c1735c48a6ef94a77cf7d5f3a224e44fbf5c93693477d4de203687a"
+    },
+    {
+      "bytes": 3660,
+      "git_blob_oid": "f3c661292dbd67ba04ff7d0f8d05f1da4b32cb7b",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMphInterpretTools_t.h",
+      "sha256": "0b8f21e62af815d3d451a8a6dae7223744a39a9cf56f5371fc839d90a91e52d3"
+    },
+    {
+      "bytes": 857,
+      "git_blob_oid": "7a26d68142d65ec970595f7651fc8d6859b09d6f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMsg.h",
+      "sha256": "348796b4132aed6ef07deea9f48c4bd09a9ddffaf3e699b468ee91c5b0121685"
+    },
+    {
+      "bytes": 1651,
+      "git_blob_oid": "9c42e088f9ddcdad45182a4183850348ef0f9492",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMultiMapCA.h",
+      "sha256": "0df623cfe34faa77e5323687c8ed45f9a14d1464dc067aafaa47a2865c1f9e62"
+    },
+    {
+      "bytes": 1264,
+      "git_blob_oid": "9db378f1dd890d54a99d6a8a2f12df4b82c0204a",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMultiMap_pack.h",
+      "sha256": "ddc2fa44fc806bd549117c2d18eb1f33077c637bdb422a3244eef474d110b30f"
+    },
+    {
+      "bytes": 1210,
+      "git_blob_oid": "5250f5b2857ff613edb142fa8437721ae0fce4b0",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMultiMap_pack_fixed.h",
+      "sha256": "8ecaedb0de53995d76059e483a03be41f5e2607d4f2556e6588a326df1df0724"
+    },
+    {
+      "bytes": 1299,
+      "git_blob_oid": "74b8fd562841064859fba1a3bced97a5d6fa75b0",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAMultiMap_pack_mph.h",
+      "sha256": "fb371b93d870e37b53993a77886b206b7b7be2692ac996b2c9be499e347c9549"
+    },
+    {
+      "bytes": 921,
+      "git_blob_oid": "9620159042c8d0b3b245cfafba0896578626daa8",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAOffsetTable_pack.h",
+      "sha256": "8b5253efac7ac08372eb98274aa58d4c910ca47ba5eb95aa15b25aa861f38e21"
+    },
+    {
+      "bytes": 893,
+      "git_blob_oid": "ade6ab0e8240338d5bc59dfd16bb6e95e0205eb3",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAOw2IwCA.h",
+      "sha256": "4b3cb11870bdb3c10e25b690657dcff3ffe0fccbf9590486a00b11d34f7773e3"
+    },
+    {
+      "bytes": 1042,
+      "git_blob_oid": "789c9a32c88041e59791ffe0b9cb623e5f5478b6",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAOw2Iw_pack_triv.h",
+      "sha256": "9d8b8f43b6eb2503367387faa9ba4bb82575bc907140d3d609ff3ba588f70fa9"
+    },
+    {
+      "bytes": 1210,
+      "git_blob_oid": "e0b44a3623bb903b13bd7662c354ed3c979776cd",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAParseTreeA.h",
+      "sha256": "20d4d17cf6fcf42a7ae53109e15efd59bd07e4fe2e239c5f24156deb7af259b2"
+    },
+    {
+      "bytes": 2676,
+      "git_blob_oid": "7000b7fd7576cf8dd7f6eca1ff138323dc0ac353",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAParseTree_memlfp.h",
+      "sha256": "461a787d0d272bd7bbb2c6edbdaebb73247dc83067cc91557fda174322ddf3e8"
+    },
+    {
+      "bytes": 2663,
+      "git_blob_oid": "28d990d3e7766ae2dc92202733c32ec1e9eb490b",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAParserConfKeeper.h",
+      "sha256": "55bcfbb02d9082fb7533d94bb973dfca0513ca226cba3df57e5db21319dda837"
+    },
+    {
+      "bytes": 894,
+      "git_blob_oid": "2c175b51feb9ca21983afe79e272ebc6cb4ef988",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FARSDfaCA.h",
+      "sha256": "6329a09288bebc897528c3bdb56890d7ced4e278701ff3d28f23d2ac11eb6917"
+    },
+    {
+      "bytes": 1420,
+      "git_blob_oid": "894bd2c3a692fd08d28e9d30d5b7ad0364b4f597",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FARSDfa_pack_triv.h",
+      "sha256": "790392eaf75f601f9990d886ef98f2a230b18450f66ed0e5622ffe370fb0a775"
+    },
+    {
+      "bytes": 899,
+      "git_blob_oid": "0718385cd4570c708eafcae6a640d8cff2d52e39",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FARSNfaCA.h",
+      "sha256": "82e358c3275b628c22b8d0142c712bf433c695dd31e12de03a128a9c5b830cca"
+    },
+    {
+      "bytes": 9296,
+      "git_blob_oid": "74659d28af92f941cdaab085ddad7c2fde16689f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FARegexpTags_t.h",
+      "sha256": "1d423d03aa17587454ca26fbf0066a6f6f12ba2af5eafdab93fab6d8f623db1a"
+    },
+    {
+      "bytes": 1336,
+      "git_blob_oid": "06f20a193cf7e44c7e7707161dbce9b79fdd57ef",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAResolveMatchA.h",
+      "sha256": "21014d672ae1a29f1fcc2794185f7037a7a5eb0a6fdc87981470c8a12ca7310b"
+    },
+    {
+      "bytes": 361,
+      "git_blob_oid": "5b9b672aa6cee7b2c6df4d44eba8614b14e0cdbe",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FASecurity.h",
+      "sha256": "8e9d07c4cd4918becd4d05086b93df5e352a25af552195587772ae114c2b176b"
+    },
+    {
+      "bytes": 422,
+      "git_blob_oid": "b79e316901da9b961ddce6025715e7652d9e83f5",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FASetImageA.h",
+      "sha256": "5f96526ebb69246a896657b49565e1ec9d1bd42128d4c240b85468d5a1bf230a"
+    },
+    {
+      "bytes": 497,
+      "git_blob_oid": "374e65cf31adb66e4b19783fc1a9689085513e4b",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAState2OwCA.h",
+      "sha256": "66178abea738aae492a4368b9575996099d84acccae0a40bbde4d30f0d258906"
+    },
+    {
+      "bytes": 834,
+      "git_blob_oid": "39e2355bc6f305e28119cff80b3b15aa8ee5331b",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAState2Ow_pack_triv.h",
+      "sha256": "92e90f2e66463700643be4f1392486709d4eaf5b60f2bf20bec063fa8a8f67a1"
+    },
+    {
+      "bytes": 868,
+      "git_blob_oid": "d421a664c5bd28d0d016e7253507e00a2b7632fb",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAState2OwsCA.h",
+      "sha256": "ee124d4a112cfc23b6385eb72e7b5d774faf11d6b4f6a81bfbb54ea4fdbb6834"
+    },
+    {
+      "bytes": 1189,
+      "git_blob_oid": "c6fd242545116d30b399d486776ca740d57d0703",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAState2Ows_pack_triv.h",
+      "sha256": "6c602b2037692a73aee291deea5cf5209788aed58a647a8578fd9d5a0498cc37"
+    },
+    {
+      "bytes": 16289,
+      "git_blob_oid": "f85ea3cd555ad280016ade41659309b6a3ad1319",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAStemmerConst_t.h",
+      "sha256": "710ebbb286917792a82d7e0b7582b1786d0f84263999c84b360f5442bd844bd8"
+    },
+    {
+      "bytes": 1248,
+      "git_blob_oid": "41dcaaa9e37d9bf2f74eea43fcba8b997c2a1d9f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAStemmerLDB.h",
+      "sha256": "c043bdacb42a8d832bbfeb6e3f9bd51637a013bd529f431f2ad80e77709600be"
+    },
+    {
+      "bytes": 15597,
+      "git_blob_oid": "b0f44b7c5790621ecb18ecc3e19d46daeb1aa842",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAStemmer_t.h",
+      "sha256": "b1fc971fdc3b0929d6cc24917be78a0e9e3c08dafb48b45dc26cb4b1b04f9e11"
+    },
+    {
+      "bytes": 1358,
+      "git_blob_oid": "a923177cb47bff5183fd7a41e16ae8e36ad0f749",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAStringArray_pack.h",
+      "sha256": "af9938f365076c639917c0fd18a1db54498eca97d196984b2b0534afd1487d25"
+    },
+    {
+      "bytes": 19008,
+      "git_blob_oid": "c43926f6131fe19ed9946e1ff6ee312d18e84f40",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FASuffixInterpretToolsConst_t.h",
+      "sha256": "4c89c4c0a7178f22221d30945e20541b1847b0ccc41bdddcd08eedfb345e6252"
+    },
+    {
+      "bytes": 18878,
+      "git_blob_oid": "586387ff17348f96743df8e1d62eca559fc29b38",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FASuffixInterpretTools_t.h",
+      "sha256": "2a9a8e33131e60da9ca95c3bc5b81e725b6535982da78d704479c12287d6ae6d"
+    },
+    {
+      "bytes": 835,
+      "git_blob_oid": "93a1c4fdbf53c19bdb047a1aff17a4fd8af22602",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAT2PTable.h",
+      "sha256": "d761d0c32fad3823b23d046c7daadb9d038fba1c2ce8c4542dfb34cd7d19425f"
+    },
+    {
+      "bytes": 667,
+      "git_blob_oid": "813e19862ad2bbd979320de290943cafb1819e26",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATaggedTextCA.h",
+      "sha256": "83352d263956d792085cb5610770f0029c2acb1474c596c238d49329189b1575"
+    },
+    {
+      "bytes": 706,
+      "git_blob_oid": "17e00929d7eeffbf8238a286b0509a838b9a0a81",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATokenSegmentationToolsCA_t.h",
+      "sha256": "a95abf12982906b9877518517d30bc6ffe7d12cc3e8db807ee90e271efa4c44d"
+    },
+    {
+      "bytes": 9799,
+      "git_blob_oid": "79b9726e05357998e3a6002d7a47ee5111dd6151",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATokenSegmentationTools_1best_bpe_t.h",
+      "sha256": "c443cc71690fdc45b2aa0a59074f04f6b2c5e083d00282bf5c5e665081a0fe27"
+    },
+    {
+      "bytes": 10211,
+      "git_blob_oid": "191fe1da4e5cbdb1fe2d96ac6b6f8d016c5a9a4a",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATokenSegmentationTools_1best_bpe_with_merges_t.h",
+      "sha256": "1cc222569ce796588d6125c49b31e8b4954125e4e83b9b9195f7a6f8f33369fa"
+    },
+    {
+      "bytes": 8240,
+      "git_blob_oid": "cff9ef4a7ce8c80cf6044c6ef5dec856448e2ecb",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATokenSegmentationTools_1best_t.h",
+      "sha256": "f183f4b088d7648ce187f348aa10a089074bdbf83c867d1faaa94277f5a91248"
+    },
+    {
+      "bytes": 527,
+      "git_blob_oid": "33b844cd7a33ccfc1de5bf2ff15735c4f0c53a25",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransformCA_t.h",
+      "sha256": "9f05c1b19458462791d126a9a9df8f3fc7b7054282e6a73be5f36fc16c47c36e"
+    },
+    {
+      "bytes": 2738,
+      "git_blob_oid": "7a1dd7a6eaee357c78ab88bfdbf21c8c5220766f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_capital_rev_t.h",
+      "sha256": "ce163d6deb9dbf2619cc9c5590fd65fedd5ac19c0b73067c3a7bd5b8f76fbb6f"
+    },
+    {
+      "bytes": 2997,
+      "git_blob_oid": "f65dfa0d66dfac62de419db42563852d5b2e96ad",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_capital_t.h",
+      "sha256": "7805c7757a33be8c2e1cd1f5d563f8fc22e8b6f5a55150ef95754186be2d95a7"
+    },
+    {
+      "bytes": 3363,
+      "git_blob_oid": "6859c51ec40502e88f97fe74848fd2baf8ed44f4",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_cascade_t.h",
+      "sha256": "9a5619577b9112c6dc73b47a72891f06af543add82192bd4272768b89d0c3275"
+    },
+    {
+      "bytes": 4314,
+      "git_blob_oid": "d8697bfb12e95ecbf089a068b4d345f348d45a73",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_hyph_redup_rev_t.h",
+      "sha256": "d12bbcdfcf47ae69a1a1bd15fb081482c3c33de441b9ef4de3b1318085ce26a6"
+    },
+    {
+      "bytes": 5286,
+      "git_blob_oid": "1b261d496289b88dab8fd4163a3706bbcc1bfe64",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_hyph_redup_t.h",
+      "sha256": "26d848d0b2d9ff986e886e4d6f8fda644d2f5ce385cc6021ee4af682511771ff"
+    },
+    {
+      "bytes": 4085,
+      "git_blob_oid": "a9e8b1519b065ada95f4e290291b8848497efd5f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_prefix_rev_t.h",
+      "sha256": "40b7954ed56dd1b8e0df5e98297346bc6471076a3c177695adcfcbc2bdd1549b"
+    },
+    {
+      "bytes": 5216,
+      "git_blob_oid": "eb092f17393d428db5d45570fef8a0413224d5f6",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_prefix_t.h",
+      "sha256": "a40e5bd25c989ce7a2073925495e9ed0a8fe088cc685687006c66ff2931b4940"
+    },
+    {
+      "bytes": 8198,
+      "git_blob_oid": "294c278f9ba303d1f76f64c7b1fc5aa616669a43",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATransform_unescape_t.h",
+      "sha256": "710c681d1b6cc7412436bccc8b84b34350f277df578d1a0c2ad9eb36ae9509e3"
+    },
+    {
+      "bytes": 10140,
+      "git_blob_oid": "3ef72b9498f70aa30d2776b0729f32c2ddd4fa37",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATrsConfKeeper_t.h",
+      "sha256": "d82a4384421776ab4104f0af5e1706a88667c7afa2eb9d36959306360764cb05"
+    },
+    {
+      "bytes": 3218,
+      "git_blob_oid": "8704074e6865483c142bfeef30b5512b872e6de8",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATs2PTable.h",
+      "sha256": "92245c66ca60f7720b4b5ce9567213e3049bd9d12c08c612070a61d1feebb871"
+    },
+    {
+      "bytes": 1699,
+      "git_blob_oid": "f239e78fb25c10bfb1c2fb1ef20441781263d15b",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FATsConfKeeper.h",
+      "sha256": "acf287ba632eeb5f2402654c927910b468fc18eca12a76bf31f96f61c8701ab2"
+    },
+    {
+      "bytes": 1289,
+      "git_blob_oid": "260506b9407e46664de415cb7208f7dabf54c9bd",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAUtf32Utils.h",
+      "sha256": "ae0ffa05ede6e1f1da93a499e327388563a302d9eaf1617c285475e237bdb024"
+    },
+    {
+      "bytes": 5756,
+      "git_blob_oid": "ea61c87a7f5bfd7c65a86bac18e9df29e555e455",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAUtf8Utils.h",
+      "sha256": "f65ba73a71db07f298d3d6f681f9a53215fa0263ea0d54957514ecbb4877ad06"
+    },
+    {
+      "bytes": 11970,
+      "git_blob_oid": "435888d6994f5c6b0c522cb7a155d7616e0ecb64",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAUtils_cl.h",
+      "sha256": "49318d622c83c2396a0d3020e3088ccf29451a40e6d94ba54c1b21fdbbd47e9b"
+    },
+    {
+      "bytes": 1515,
+      "git_blob_oid": "a1541db240d60ed0ff39832fb2803f53debed695",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAW2PConfKeeper.h",
+      "sha256": "d09bf3ab7e72505e9ea889e2737661781c1be2d774396b6b78a9550f544b0532"
+    },
+    {
+      "bytes": 1347,
+      "git_blob_oid": "23fd146b6450f2df29fe482526b4c1776379294d",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAW2SConfKeeper.h",
+      "sha256": "4f1416be40aae755cb1433724d0cb252502d6b497d138177a9574f6a2311da4c"
+    },
+    {
+      "bytes": 1671,
+      "git_blob_oid": "579966926280c25acd0bdd4d4772247e0173622e",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWREConfCA.h",
+      "sha256": "be9d2b65c853fe9d520e0fd2cd73203bcd20ef88cc73da7e15d35daa3650a4c7"
+    },
+    {
+      "bytes": 1693,
+      "git_blob_oid": "ec01028e977abaf0f7078e4f04248dbee5441729",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWREConf_pack.h",
+      "sha256": "af1fc49949b8a774ec3e08fcef7ac9341ec55b3f1b0863870f3c5bf44ddf1603"
+    },
+    {
+      "bytes": 3584,
+      "git_blob_oid": "86dcea0ac3e8a856124d29441372284eb9b07bf6",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWbdConfKeeper.h",
+      "sha256": "3debdad11c1b8568a2cce1495dabc53697a61784f5eb898e5fcb1d06ebac551b"
+    },
+    {
+      "bytes": 1782,
+      "git_blob_oid": "40659e15d8e33271012b21d76fce1b9724c7ed45",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWftConfKeeper.h",
+      "sha256": "b3470e166e814b47ac9a425a431b6d80638cc40e5cf20f1d35013e2fd96c5db4"
+    },
+    {
+      "bytes": 2151,
+      "git_blob_oid": "b76608d194070a817491038e22dfcd9c76129104",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWgConfKeeper.h",
+      "sha256": "0fb2c661240ce9bcd8d5ff966f3f39a5e5d7c3d382bfc5079a44117bdb49138d"
+    },
+    {
+      "bytes": 9608,
+      "git_blob_oid": "e1843a936cbea80d5fee046bb211240a29858bee",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWordGuesser_prob_t.h",
+      "sha256": "c1de28e2302e93f342dbe37188533c93baebca3d0cd9d970ba8255489e4496a3"
+    },
+    {
+      "bytes": 9800,
+      "git_blob_oid": "6af4972b8862df778676fbf48398b5eb2958b6c1",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWordGuesser_t.h",
+      "sha256": "28dcca46e2965d06aacf8ee05aaf7051b5ac47087758cf99d8dab4ef19c862c7"
+    },
+    {
+      "bytes": 6647,
+      "git_blob_oid": "0ad78b2a20f481153aa68e5a4c1c756232597d2a",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWordToProb_t.h",
+      "sha256": "2fc767122cae92e6bdaaa76b6db6edf5df66679a96961726b408c8b1422fcd76"
+    },
+    {
+      "bytes": 18412,
+      "git_blob_oid": "1e441964716e6e9738a46f5eea8251d139703de7",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/FAWreLexTools_t.h",
+      "sha256": "cdffe978852f2bba01bd48a18a5154bbd1d514d03233a0a06b6bac5fb57c6d18"
+    },
+    {
+      "bytes": 39,
+      "git_blob_oid": "aebb1915c7c64e2caed3544927f2cf38583e47a5",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/inc/blingfire-client_src_pch.h",
+      "sha256": "79f0eabee7628a8766591b5794738e9b22df581072766cc6666fe1c0136f4bdc"
+    },
+    {
+      "bytes": 3176,
+      "git_blob_oid": "b19da2c8f6325a42047e88fc9281906c43b9d3b0",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAAllocator.cpp",
+      "sha256": "3eaba82435f99f71693429c64e30186d4301a62b17f8795f1823855dc8ee4993"
+    },
+    {
+      "bytes": 2325,
+      "git_blob_oid": "b2f29904c6a16109905fec1f18b802cd66996c05",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAArray_pack.cpp",
+      "sha256": "4f199481b1733aa067c587b55fc96a8e1c0db143ad3bdf83233d1a0e813e928a"
+    },
+    {
+      "bytes": 600,
+      "git_blob_oid": "f3d3597f777a5a1b1e069a707afb212021dcabba",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAChains_pack_triv.cpp",
+      "sha256": "912684ea5c75526f9e9ad5974b4e60da937fae6276018d14ec67817e2f4796c2"
+    },
+    {
+      "bytes": 8500,
+      "git_blob_oid": "16e2b765f0d0cc02e058bb0e30b87de22abf39eb",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FADictConfKeeper.cpp",
+      "sha256": "f12ca4af1ae54a439c7826998856612834a6069c246a19ee339c643515569202"
+    },
+    {
+      "bytes": 1164,
+      "git_blob_oid": "fdb441917c6c3aa73514964d51f001845ba79c66",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAException.cpp",
+      "sha256": "8421c402f76c0020894daa66c0e2369832e657d3d9519ce526d67372e0844c11"
+    },
+    {
+      "bytes": 8608,
+      "git_blob_oid": "c7ab7ecf7109110bf386e10ce672e42c764c7527",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAGetIWs_pack_triv.cpp",
+      "sha256": "d74b771b2f70325ea1537cca3066f21e39af5c1bee46b4045df12bc264f752df"
+    },
+    {
+      "bytes": 2565,
+      "git_blob_oid": "4c6086b3fc04b0cb76e7e46123333abff47f1340",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAGlobalConfKeeper.cpp",
+      "sha256": "504c0ae844a8dc11a1e070e16516bcce591996b22dc36fae20019fe4e479221d"
+    },
+    {
+      "bytes": 10903,
+      "git_blob_oid": "1550fe7341cfd7dd538464c61661c4cb13812ec4",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAHmmTagger_l1.cpp",
+      "sha256": "990e70ad90302ddfb266e2c90cb322e1fefef7459817f4b019a5c4636cb26547"
+    },
+    {
+      "bytes": 5864,
+      "git_blob_oid": "2ddbecc94970202a5050ea284e4121d5803617dc",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAHyphConfKeeper.cpp",
+      "sha256": "c4d7bcf0c7594c89a80a0ea0375d61fadb1dce401f6dd600b803229bfd915042"
+    },
+    {
+      "bytes": 3734,
+      "git_blob_oid": "ab95b8956fb3921c9249297d73da5eccc470c5fa",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAImageDump.cpp",
+      "sha256": "732aee9f41f2dcf676d58504764ca54c98018dab4cfc7a14d2fbbb128341a528"
+    },
+    {
+      "bytes": 2507,
+      "git_blob_oid": "4419623668f73bcc027dba03831bf3cb4fc2402f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAIwMap_pack.cpp",
+      "sha256": "2f22a9429545b3a1b1e04c04fa04250eceaca13a8dfa48785d6d658ce0df1184"
+    },
+    {
+      "bytes": 5173,
+      "git_blob_oid": "e64bbafa84de6ef473a25ef637b47fa53c627505",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FALDB.cpp",
+      "sha256": "b06245c19ffc4ac7b3f849b18d9f056c3e8ee1f41833a04f3f3e90191deb6c39"
+    },
+    {
+      "bytes": 7153,
+      "git_blob_oid": "b1501441210483c4c54d1b75ab3a80b65fc01f93",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAMealyDfa_pack_triv.cpp",
+      "sha256": "1e427905ee59a76a685ad8d33f640d1d2451d9202e2d803e59984585d08f3927"
+    },
+    {
+      "bytes": 1225,
+      "git_blob_oid": "3e042b2f6482c77d053fbf3661748573f6939295",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAMsg.cpp",
+      "sha256": "3ea5815a77e8f98a3d764bcaf96c944f819b965642e5a1a05bd658cb4c5de606"
+    },
+    {
+      "bytes": 2852,
+      "git_blob_oid": "e566ebb3982403ef4e83a272e9a38de04b773331",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAMultiMap_pack.cpp",
+      "sha256": "44640ddae9dff2546ddb205d0cab431d82789a7909377d4e1576a033478f00c8"
+    },
+    {
+      "bytes": 4476,
+      "git_blob_oid": "8831cff06069c7918b8d273022ee5a3d17b13677",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAMultiMap_pack_fixed.cpp",
+      "sha256": "ce939d1dfb84dd8bcb426c602a3225a8d1053b81627fe25957ac5c54c6b8895f"
+    },
+    {
+      "bytes": 2226,
+      "git_blob_oid": "e60b3d00f0d5d1d9400e492359f93c43b6c0db89",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAMultiMap_pack_mph.cpp",
+      "sha256": "f201ac3d6fb06f9a05edc948c6913f5d52968adc18afd45501ef29f5c7222680"
+    },
+    {
+      "bytes": 733752,
+      "git_blob_oid": "19c9ce9538f26ca09afb7f2f6cd7ebd091969178",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FANormalizeDiacriticsMapPreserve.cxx",
+      "sha256": "faa3784a10d448148378d3bb07bba07bd765cd4157680237640b827e3b6050b0"
+    },
+    {
+      "bytes": 733803,
+      "git_blob_oid": "a96983d26685bb8b98844f0f5ab62e97cad5c0e5",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FANormalizeDiacriticsMapProd.cxx",
+      "sha256": "c45d673b7a5ad63782d2414d65a4c644d9db8a4a26da05ec38c596d7099d9f72"
+    },
+    {
+      "bytes": 733860,
+      "git_blob_oid": "ff34b7150a74adcda6424ccb1abb38028aa479a3",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FANormalizeDiacriticsMapRemove.cxx",
+      "sha256": "cac0862bff1939dc856d651e6729a4e98f334747c878554a1fb0f1441f1a32f0"
+    },
+    {
+      "bytes": 1995,
+      "git_blob_oid": "ca204a0dfc99ae3c8daceabcf2c3fdca2ae5a11f",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAOffsetTable_pack.cpp",
+      "sha256": "6025a62057d3a4f05866c3be17c749b33e6dfc0b8bc79605360c2cb4f00ca356"
+    },
+    {
+      "bytes": 7833,
+      "git_blob_oid": "f6c2e4b9cdd384fc90b663375ad5746c5a3718ed",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAOw2Iw_pack_triv.cpp",
+      "sha256": "2b56e446f547211a1829194b3ae202fdd7e622a7cc5c1b1a8b97e4c38088d97a"
+    },
+    {
+      "bytes": 5527,
+      "git_blob_oid": "eb2815aa34439394c8f27b59f7513cf8d3f502ff",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAParseTree_memlfp.cpp",
+      "sha256": "2a7e88448e2212b7045c8c80083c85db300a7df57c799f9cab9864ec27484245"
+    },
+    {
+      "bytes": 9678,
+      "git_blob_oid": "ffc30ef49fcf3f25103a22ffd530421936b6ade8",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAParserConfKeeper.cpp",
+      "sha256": "4d155959a0a9b1cc90f99ead9c3b2bd389e163dfc14d4d1c31fdc1f5f1f8bc84"
+    },
+    {
+      "bytes": 11568,
+      "git_blob_oid": "34b76e3c2e819e1384cdb5e82f9a729b69b97ee7",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FARSDfa_pack_triv.cpp",
+      "sha256": "d9150b7203284a8ce88f9190ed237e6ecc4dec38717ca4fc38d6abe7d9d560ae"
+    },
+    {
+      "bytes": 3366,
+      "git_blob_oid": "d0f0ecc86d1f1afc5a9f5dcd7c101b4bdca6b1f7",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAState2Ow_pack_triv.cpp",
+      "sha256": "722ce8cc7f6ede9e70ac5671ef0604fc685050b45ee10d4fc865b80955310a0c"
+    },
+    {
+      "bytes": 4443,
+      "git_blob_oid": "c7838e79b93f223c102b95f719b08ca29f39c8dd",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAState2Ows_pack_triv.cpp",
+      "sha256": "e5875db682d65d650a582b69db6a2006428208115d7ac9ec1ef623a3cb5e510c"
+    },
+    {
+      "bytes": 2458,
+      "git_blob_oid": "d4439923174624fb899531c9f601b8cd2744db17",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAStemmerLDB.cpp",
+      "sha256": "323447b608057a5a3bd1a7f28c5240488162f426cf851c70df3678a154e2ee0d"
+    },
+    {
+      "bytes": 2291,
+      "git_blob_oid": "0d7448405cae1a9c598d1961ffca515421b80b93",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAStringArray_pack.cpp",
+      "sha256": "495f84116649b587e65c22f652ef7af192eac1ca605bc84e7919954088cdbafc"
+    },
+    {
+      "bytes": 598,
+      "git_blob_oid": "7dfacd3cee9f079d075039bf12a68095bc4ac3a8",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAT2PTable.cpp",
+      "sha256": "2e059bfa5767fbf07dba489d1bf8bc45e532f622ad43e4a960842cda34660e8a"
+    },
+    {
+      "bytes": 2869,
+      "git_blob_oid": "961177b7ae062f0f2b6b56e516caad1643064ec1",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FATs2PTable.cpp",
+      "sha256": "7c0010f2089fd3696dc8a08a1d122c26ba7247f2232b8af06772836c3f53e32a"
+    },
+    {
+      "bytes": 3094,
+      "git_blob_oid": "91215c7d0bee7afe9701d1289399406defa3499e",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FATsConfKeeper.cpp",
+      "sha256": "9880edd9d32c9bd1bf5dec14948218991d5246747879d16c0d968dbec9089c42"
+    },
+    {
+      "bytes": 60135,
+      "git_blob_oid": "5969cacbb626ad64af98f2ff20466640c016bfe0",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAUtf32ToLower.cpp",
+      "sha256": "cfab6e02990459acd1f28d5f1c08750552eb5c4864f4f20a9d1a2e8396ff13cc"
+    },
+    {
+      "bytes": 60135,
+      "git_blob_oid": "695ff9ec8714453e454abd175de465e593ff0efc",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAUtf32ToUpper.cpp",
+      "sha256": "a380ec3e16b593ac5cdf5971399bcf68938be40c14885974d96821e34e556177"
+    },
+    {
+      "bytes": 5822,
+      "git_blob_oid": "4211db2ec48044441ee6a0b73b92611a041255f0",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAUtf32Utils.cpp",
+      "sha256": "b4277a20b39caec4200642c76ca01faaf122f6cc9a6b40e34721ba60bee8eb66"
+    },
+    {
+      "bytes": 16906,
+      "git_blob_oid": "6914d362b096d3425d94a9d3d86876f3fea3c205",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAUtf8Utils.cpp",
+      "sha256": "50637ef6af892bc3ff084f0c732a84187738f52040f80dcdff0086c99d2d74d0"
+    },
+    {
+      "bytes": 5666,
+      "git_blob_oid": "e6c2e6f3315a01224554aa9741767118950dcf55",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAUtils_cl.cpp",
+      "sha256": "640bcc1b064239db4d468c660d9c7d047cf18544e4b428a7aefd953be36c6198"
+    },
+    {
+      "bytes": 3927,
+      "git_blob_oid": "db58649eb72e3b26ca3599420d23040dc6da1ec3",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAW2PConfKeeper.cpp",
+      "sha256": "af5152803880ae40b4021ef566cdbcd2f1f8b7aa73f39673255b2a3be50dd72d"
+    },
+    {
+      "bytes": 3409,
+      "git_blob_oid": "cc941d893483afd772d6effd605688cc3e242665",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAW2SConfKeeper.cpp",
+      "sha256": "d0c029d8438bde61066e81067b9d395db19a6e594b92cebc0a3679066b4ec6df"
+    },
+    {
+      "bytes": 5577,
+      "git_blob_oid": "996bf76b0a51af0ae0acda1199f3b47f7a1962dd",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAWREConf_pack.cpp",
+      "sha256": "cc1551a3b47e591dbd83bdcfaf91bdb6570710d57f84af54621627878fc1aa0b"
+    },
+    {
+      "bytes": 12197,
+      "git_blob_oid": "d490cfcedfaa37df5bfbe9d5ecc233925a8e24f2",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAWbdConfKeeper.cpp",
+      "sha256": "2ef95fc4fd81ac4d1e578c24a51c07bedd080d86d3aeffcc4feaa5cee910bbc7"
+    },
+    {
+      "bytes": 5801,
+      "git_blob_oid": "abc78691c6b78569faecc32dd78f6a75e0f51a84",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAWftConfKeeper.cpp",
+      "sha256": "0920dc96e2188ddc11ee66d47f5b0024ae59f7a1805388270d8f81c2b668e248"
+    },
+    {
+      "bytes": 6048,
+      "git_blob_oid": "5d8b4f6326e1953caa0f9dbc9f492ea6eb3ec2c1",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/FAWgConfKeeper.cpp",
+      "sha256": "2b7132ed4ab1c4381baf370bc4efbba5e24787743f3e99e0899a8f4a67218f1d"
+    },
+    {
+      "bytes": 39,
+      "git_blob_oid": "d4a2f65a94c4626803d85bc20a3c69e324945a05",
+      "git_mode": "100644",
+      "path": "blingfireclient.library/src/blingfire-client_src_pch.cpp",
+      "sha256": "188f4591c467e997cbbdf80efcc251cd501639af680b0ced9a09ec46e265ae8b"
+    },
+    {
+      "bytes": 386,
+      "git_blob_oid": "a1a10c1bb9f0b7c36cab8d66a9ba712a8babf048",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/ext/sample.makefile.inc",
+      "sha256": "7a123158b2a99023533bda027250f5b0682b7b8529d238ad0b28c12d4291b953"
+    },
+    {
+      "bytes": 4334,
+      "git_blob_oid": "4eee34149329c49bf3c949e3266b9eb249310fca",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/ext/sample.sources",
+      "sha256": "a3f09fe4f7e0a53b6018ba9f5d5091ab6696683b2418186ceddd734db3859ad9"
+    },
+    {
+      "bytes": 253,
+      "git_blob_oid": "9ac2be294d8405fafaa8833e45a8656f07dc996e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/ext/y2cpp.cmd",
+      "sha256": "28d7173d300792c9bd045819becb42becd61279c5ef3e47a17e9f63de8379e3a"
+    },
+    {
+      "bytes": 110681,
+      "git_blob_oid": "4811c2f9c38fb7f5dfa5a22cf8db9e39aadfa381",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/ext/yacc.exe",
+      "sha256": "29d99fd87a9433a8e8c8066da1d19e409485c74a0efde4f9e74c36b51dddd963"
+    },
+    {
+      "bytes": 8380,
+      "git_blob_oid": "769a0b526cb120bc687ca257e249be2a5686c3bb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/ext/yypars.cxx",
+      "sha256": "6ecec54b4ccd503f5b3f55b1aa2d2f81c563ec813120004321100d53e326eed7"
+    },
+    {
+      "bytes": 815,
+      "git_blob_oid": "3446474d93dcd9894c9107e175e349fb0f270696",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAct2ArrA.h",
+      "sha256": "83ae25eef388fb59168f41eb4d1c44f96539119fa16906df96f6726be3c11d65"
+    },
+    {
+      "bytes": 1342,
+      "git_blob_oid": "79d58d49798d57eb5676d76981d476c09f42d733",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAct2Arr_css.h",
+      "sha256": "471b2d1fcc2e5d8f92ee370f874ba77eeae042df16212c7562bf0c898d39dab4"
+    },
+    {
+      "bytes": 2332,
+      "git_blob_oid": "045bdb568c600fddfdc584b9f39e7540d85c0a12",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAct2Arr_data.h",
+      "sha256": "f2c215c18ef6e4583beaac88c07790bb3bd91f12d45ecc47662f926599498dbe"
+    },
+    {
+      "bytes": 1082,
+      "git_blob_oid": "239e9b55760cdfea4121e684178443aaf4ddfbb3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAct2Arr_score_tag.h",
+      "sha256": "227673b00fee70525b9a4b387984c9433dee8c5aa6a0135dec9d361070235485"
+    },
+    {
+      "bytes": 697,
+      "git_blob_oid": "a910fd127437ce5e3444574181e98c04eede5741",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAActionsA.h",
+      "sha256": "587ef683704134e69b5432cdf38a12e748eb96681ac6ae29ff90a73e532c5b89"
+    },
+    {
+      "bytes": 573,
+      "git_blob_oid": "d755084588e21907ea1ec2ecb19971d2d1e08612",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAActionsArrayA.h",
+      "sha256": "ebcf8a124e72435b711758513c106133ac460632b3dfe23fc0ac0e21bc513f7e"
+    },
+    {
+      "bytes": 703,
+      "git_blob_oid": "67816fb7fa4b8d08581bcd98f9d5a681d4a48351",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAActionsArray_static.h",
+      "sha256": "6cfec03ce7328e74d303393583c7dacd822058aba909046979923ed4f79117a8"
+    },
+    {
+      "bytes": 1729,
+      "git_blob_oid": "fb0d0ef44f51dfde649ccafc0dcaa0b639b25f53",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAllocator.h",
+      "sha256": "d47f58a960d13b131def4e41bea06f297de02b5f47babf0884bc8dd823c04e61"
+    },
+    {
+      "bytes": 1719,
+      "git_blob_oid": "75848eff6301c8039af2519db028b3d8019908ab",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAllocatorA.h",
+      "sha256": "3537e1ba3d52d3267648ef61055ebf393ff4ff7e5e1e0bc3b9aef611fc948e94"
+    },
+    {
+      "bytes": 8374,
+      "git_blob_oid": "86b053303958b7689e4672d50bd8ee3e06959fb4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAny2AnyOther_global_t.h",
+      "sha256": "03ca84c372ce959bc465aae97c9994229135aa7dfdc1e9c4d85356cc37b2ba04"
+    },
+    {
+      "bytes": 7892,
+      "git_blob_oid": "9447595fa4b6bc6224928a1a410bd106f2fd0683",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAny2AnyOther_t.h",
+      "sha256": "43cc6e3c774ba48acd310f387c35f3d7c49852d4c67d951e082d91286f4e7500"
+    },
+    {
+      "bytes": 2542,
+      "git_blob_oid": "db91b3b4a36ef61eb3fe00a61e8d4b2e1e3c58c0",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAArrayPack.h",
+      "sha256": "6f44c633000217ad717f9c934234e5f8b59c5b8116461ed1893222113993901b"
+    },
+    {
+      "bytes": 5408,
+      "git_blob_oid": "27ed4822aa999fb90c410d68736fb60e84e9f931",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAArray_cont_t.h",
+      "sha256": "4cc807bed346f81b3a5a9207be58536d5950689d90e60582920575910fe3ce4e"
+    },
+    {
+      "bytes": 568,
+      "git_blob_oid": "95c9423ed5907d1a9b1f63dcb38394d38f7324de",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAArray_p2ca.h",
+      "sha256": "07caf38a8ff1e404c1b37c4bbb3d77ff3d0c870b131299ce60ad6a13029a247d"
+    },
+    {
+      "bytes": 5851,
+      "git_blob_oid": "ea14b5629ab6602fce1ce6a3b3f6c6496e583417",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAArray_t.h",
+      "sha256": "f1f50438a12d8d631d8a50bfbdc3097feaebd556d7983b5771b68ded47ac80b8"
+    },
+    {
+      "bytes": 2385,
+      "git_blob_oid": "3e9836644d7eb11909ad42dddee2b084b1c4b9b6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAutIOTools.h",
+      "sha256": "87ed0a5a52e7b11166604983debe483869d90364d414d0a12cc39e7e359d4514"
+    },
+    {
+      "bytes": 11511,
+      "git_blob_oid": "1b2700c57f44757598df0286231d874598cfc21b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAutInterpretTools2_trbr_t.h",
+      "sha256": "c5abe4935c02698570eb8012440226aef51616d330b37f7a7b15c4f8a23b0069"
+    },
+    {
+      "bytes": 9904,
+      "git_blob_oid": "f4039f2aadd562db340ec48bdd6654553602d249",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAutInterpretTools_fnfa_t.h",
+      "sha256": "b0ab703700c0bc3d5a2b8b718720dd6b70c94555cbd8710f1f8d3cfb2fed1191"
+    },
+    {
+      "bytes": 12981,
+      "git_blob_oid": "3d17783b833abb902d8548776d5a626f28ed37b2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAutInterpretTools_pos_t.h",
+      "sha256": "2c92bfdc7244966ebddeeb4bc201369c98a547108ecc6102ef7428791b687476"
+    },
+    {
+      "bytes": 7786,
+      "git_blob_oid": "37d7fda714b270defca80c9a81de7da3f6d3adf4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAutInterpretTools_t.h",
+      "sha256": "d6ac1fd0b377def98e3a2250f9ba75fa6f38f631062649d11b3417c48d3863b1"
+    },
+    {
+      "bytes": 6166,
+      "git_blob_oid": "504a86ea1387e6b14bcf7b739bc6faae26e9159c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAAutInterpretTools_trbr_t.h",
+      "sha256": "458bf9388beb10718c45a60ea976730c078c40c7c71ff0c3d285c056f8bda0cc"
+    },
+    {
+      "bytes": 3000,
+      "git_blob_oid": "812f84af30c7721c8914b8ff8d970983389cbca3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FABitArray.h",
+      "sha256": "ca11ff482bafb91e79563b144925d877333b38cef67d9303128dbec7877d537b"
+    },
+    {
+      "bytes": 5226,
+      "git_blob_oid": "a07e9bc2d768f4a48b827dc67dca649fd7bf5f93",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FABitMatrix_t.h",
+      "sha256": "2d0402b110cda0cf4fb8a1b4d458d4efecdcbf560c77d9f3645feb5f1d2206f6"
+    },
+    {
+      "bytes": 1107,
+      "git_blob_oid": "1bfee429b080c0b63d0ca17e6f5fe2663f531914",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FABrResult.h",
+      "sha256": "3981dcd252baf44ae87d1928d8fec9064ba0818dc37d37b67f315054f3cdde59"
+    },
+    {
+      "bytes": 444,
+      "git_blob_oid": "1a00f45122783d6c7cc91b28c658ed4a937b26cd",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FABrResultA.h",
+      "sha256": "40947d65e54fa9bbed91c4dab8142f30b772f695579335cca1f5fba6602fc093"
+    },
+    {
+      "bytes": 2498,
+      "git_blob_oid": "a20b4d7983cde1088d04a02ad31e66a0790b44ea",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FACalcIwEqClasses.h",
+      "sha256": "6947c27b30ae287fb849cbab0e1bbddb9382445e0341b30408dfb37cdd6a3c7c"
+    },
+    {
+      "bytes": 1922,
+      "git_blob_oid": "3a5081d5bc95630f4545f07de944d79cb2a6d28a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FACalcMealy1.h",
+      "sha256": "4279cdf39981e6899a585137bec36e817d85e2b361716dc2a1601e70640631fd"
+    },
+    {
+      "bytes": 2012,
+      "git_blob_oid": "5c96562efd04fb067113a009af3981dcce017eb1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FACalcMealy2.h",
+      "sha256": "bb91c4d9b0c1827aa8cb30a7b65fa7bd0a8460f720137a7dafd134fd0e9b0184"
+    },
+    {
+      "bytes": 1164,
+      "git_blob_oid": "1768bdf79b3811e46e4bbcf446b80d3e14775e28",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAChain2NumA.h",
+      "sha256": "777e118ad3bd1d407d889ea9f9b8e9a9e4481fadc887533099279a9c64ca3d47"
+    },
+    {
+      "bytes": 2947,
+      "git_blob_oid": "7bf19e504dac191c0ee23d3706aa1739e8ac3d92",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAChain2Num_hash.h",
+      "sha256": "3286d80c441a87d1f9cee8901a8790ead06492b4df5bb20e9586f49f9adf8c31"
+    },
+    {
+      "bytes": 1866,
+      "git_blob_oid": "734d3af67c365fb9150b0c7beffa75626cfd310d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAChain2Num_judy.h",
+      "sha256": "872eb4471aa5f2427595acc4db39ba22a985b9b385ef7fa91bb564b40f1c141a"
+    },
+    {
+      "bytes": 1710,
+      "git_blob_oid": "f3c17a21336d257ec306209f57e2f96889834a58",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAChains2MinDfa.h",
+      "sha256": "80aed44beddbec4f6e382fbfbfed13716d84f82eb5e812b57168c3a9edbf4cdc"
+    },
+    {
+      "bytes": 5142,
+      "git_blob_oid": "361d5a4da008490a6bf2bd89657473efa329bfd6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAChains2MinDfa_sort.h",
+      "sha256": "1655421dc93777804a6b50c0039f4847622a9bbb9a45808d0362927265131f4a"
+    },
+    {
+      "bytes": 2509,
+      "git_blob_oid": "f2fba88622cab6fb98e9b016da3ac3847cc6dcb0",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAChainsPack_triv.h",
+      "sha256": "cdbef6cdd48545dba8219bf57ada6d3cfe722d748cea3a7f1efa385ad154daf9"
+    },
+    {
+      "bytes": 1028,
+      "git_blob_oid": "44659f9c17a88e6c8991e9cc9036b66ceeb2b4d6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FACmpTrBrOws_greedy.h",
+      "sha256": "55016365b7f1dacc3d29c2da7f1b6113b2b20f239f907819287cb65213e3f7c9"
+    },
+    {
+      "bytes": 5420,
+      "git_blob_oid": "840732074c0fe5d5800858f8a8402eb5d85c9947",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAColorGraph_t.h",
+      "sha256": "49b118974d7d5cffce490ce8513266c3fb1a607b27cbb255922822e55cd80645"
+    },
+    {
+      "bytes": 2330,
+      "git_blob_oid": "11e1806ddf475b525ad3a00f8527e04a342f7756",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAConfParser.h",
+      "sha256": "d16ff88991a73013e11e80327c4b9b318118e8aada852b02612c41b377ee15be"
+    },
+    {
+      "bytes": 1494,
+      "git_blob_oid": "9ab42e03a6e65712fd9dc4c645b42160c8c8a4a7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FACorpusIOTools_utf8.h",
+      "sha256": "4533983bca9936133bbb3d00930dc15f699bea9afefb888f40936c5a7128dcdf"
+    },
+    {
+      "bytes": 1867,
+      "git_blob_oid": "9b4cb6f44b3179bb4cec39fe865efe8f6a35a91d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FACssLDB.h",
+      "sha256": "e9fb46f4ecb0cffb5e3dd5ada037b9daaf18c458a6578c05dd40649c6dad3528"
+    },
+    {
+      "bytes": 973,
+      "git_blob_oid": "a7add8d2a30d061d85263297794e6495e35b92d7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADfa2MealyNfa.h",
+      "sha256": "fe13d3c810b931f240645ce4d5ebb6d9b6601777c96e384c8e6acd9e303daf4d"
+    },
+    {
+      "bytes": 26506,
+      "git_blob_oid": "c8a74d3a9332e91ac50aeb86ecd08e34cac3fc45",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADfa2MinDfa_hg_t.h",
+      "sha256": "eb4254a848ac940b9456ecf796bbe8d5cac7afbf03b83cf8518a464e1d1ad15f"
+    },
+    {
+      "bytes": 10402,
+      "git_blob_oid": "44655db3414a7ee403f20bdb3c8edf348b18f3b7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADfaPack_triv.h",
+      "sha256": "3ea790c08d212cc84a4cf4d86f86810df0b20fdabf9c1218c7cf01dd14064fd9"
+    },
+    {
+      "bytes": 804,
+      "git_blob_oid": "fb68102af7fcbaa2f41ae8e8f5db1ac0497eee8c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADfaTopoGraph.h",
+      "sha256": "e4522ee238f5ed0547ee4ccca47cd7781880cfcb4146270d2b20baf8d0bc343a"
+    },
+    {
+      "bytes": 1540,
+      "git_blob_oid": "6fdd6ecac768a104e3cefde56162bea53490c667",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADfas2CommonNfa.h",
+      "sha256": "43075859afee2d967127abd260572fa5eeb1752082edd7e9149a5b2fbc6cd572"
+    },
+    {
+      "bytes": 4529,
+      "git_blob_oid": "7a4e3fe21977f9519e7ef6beda96c38d63f7f954",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADict2Classifier.h",
+      "sha256": "19ae689b59e024b2906d07ed10b7c27318d568a55733d1ca23da85fedadf5797"
+    },
+    {
+      "bytes": 3087,
+      "git_blob_oid": "b80548835794c12360fff998394d9b4ec65d0812",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADictSplit.h",
+      "sha256": "537da0f10664342ff383112127838eb89cf04683f3ce4487e147813496f1e10d"
+    },
+    {
+      "bytes": 2851,
+      "git_blob_oid": "9da9feafb7e2c357a69198521f22f69f81ad7ce5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FADictStr2SuffixRule.h",
+      "sha256": "2ee4602b802827c76bd6210f8a5841e6bec373ee9c0f6193a8490f6fbe77dfc0"
+    },
+    {
+      "bytes": 621,
+      "git_blob_oid": "15ba319b95b3820b6143b824d98d731ec8055b86",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoderA.h",
+      "sha256": "f59dbe2a8c9c3762cd1332d24274538de652ad250c53557feec7406cda078da5"
+    },
+    {
+      "bytes": 728,
+      "git_blob_oid": "b42b58f34fc937147b40b54e5184ca15ee7b577f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoder_delta_pref.h",
+      "sha256": "87588c873a62c181c20a9ba72e1d62f2c997d4884ade40919b3faec1a09dfec6"
+    },
+    {
+      "bytes": 803,
+      "git_blob_oid": "42e71765e5ad7dd697d1574794ef05402746fdf7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoder_delta_pref_mask.h",
+      "sha256": "87f17843e8c85831523e2cfca755e7bf2434cd50e5211554c26b5540bded8de7"
+    },
+    {
+      "bytes": 646,
+      "git_blob_oid": "aa36b46313411cd728ab3299b291dfdb5ff41199",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoder_mask.h",
+      "sha256": "bcbf7c8fbfba894e84bec5116eda93415257651cc1cce49354c24c15fd35e030"
+    },
+    {
+      "bytes": 874,
+      "git_blob_oid": "123478debb9d50f06c2fa64d0534c4901b12ab97",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoder_pm_dpm.h",
+      "sha256": "98bbf6c04a18e16c54e6ab6d10ef2b9d7304d42c743c377ac3e5a537b80f7be7"
+    },
+    {
+      "bytes": 872,
+      "git_blob_oid": "48a2bb94224365c3f6c83731ba6d2278410ac022",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoder_pref.h",
+      "sha256": "37d7a5e143214491e31d9711257d45596f62eef729432310f016fdd74a575ed1"
+    },
+    {
+      "bytes": 724,
+      "git_blob_oid": "010d3046cf02fae2fde89fb87122da5f86a0635c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEncoder_pref_mask.h",
+      "sha256": "5373e06b71aa3be8820f7a43d99a7a69dc820e642f77267d0949bbe2f60c5725"
+    },
+    {
+      "bytes": 2148,
+      "git_blob_oid": "686e730dd452c165702e80913ad065d67e22e807",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEpsilonGraph.h",
+      "sha256": "f270aef65f6be880478319223856bc0480114b52cc1de7b94e5bd2560a9f151c"
+    },
+    {
+      "bytes": 1783,
+      "git_blob_oid": "fb4fa98a71ec8558f6223ca2b6494670911fe9b9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEpsilonGraph_mealy.h",
+      "sha256": "0a95547f98970002ae66600234bc55864a1ca11800b7e7e05086242512fe2905"
+    },
+    {
+      "bytes": 2694,
+      "git_blob_oid": "da8e1d54d79c2ee46b4cf5d3b6201ec384ac8480",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAEpsilonRemoval.h",
+      "sha256": "1fa1b32c8622e5a1cac98c7c8dd384f5cdf41a617694adcd81b74136d73374b8"
+    },
+    {
+      "bytes": 1688,
+      "git_blob_oid": "827cd0095fac018112f27d21eb77d171cf6e8799",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAException.h",
+      "sha256": "59d2eb9c9a36d3ca8536848a9687674e16a8832e425f8872126de759e6572ff4"
+    },
+    {
+      "bytes": 2066,
+      "git_blob_oid": "907952049ebae0850ea536b7d3757b02242cd212",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAExtendClassifier_cxp.h",
+      "sha256": "027f601a526e6a312f1adf5e18621aa56222dd947d789d16e821c9c00b2c8ecd"
+    },
+    {
+      "bytes": 1026,
+      "git_blob_oid": "9bebaaa148d46f0f9b478c3ce45e18731b3f721e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAFloatArrayPack.h",
+      "sha256": "17167ff7fe6e9c783e326fa312d35bc5f3dba97abdd3d264d3c77c9cc5f73206"
+    },
+    {
+      "bytes": 2343,
+      "git_blob_oid": "de9aecc32ad9886339359f45255c747b4148cc79",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAFsmRenum.h",
+      "sha256": "c39752b02400713eb2260b7fa4964e36935072efb9214695866678ad78c25d26"
+    },
+    {
+      "bytes": 15151,
+      "git_blob_oid": "6f27a3bfe8c0ac30d64b89dc5810e01ffa8327e0",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAGcInterpreter_t.h",
+      "sha256": "5a7b1db818800819ec75604ffc1aa9382637ecbee37238d14c30baccd8c49dd3"
+    },
+    {
+      "bytes": 880,
+      "git_blob_oid": "c4e2f1ead9578b430555b7e94edd2eeb02ad9c86",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAGcLDB.h",
+      "sha256": "c35dba03b1a53d5a85e63917dff5626058348f3146e02fe0706ece0a70cf42de"
+    },
+    {
+      "bytes": 4099,
+      "git_blob_oid": "cb4ed365abdfb8d69de286775d6aa46c63b10ef3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAHeap_t.h",
+      "sha256": "a4ad789ffc7b88cbd408f1e9905c45b13ef9b1f78386c09d4835f037c6593f3b"
+    },
+    {
+      "bytes": 7119,
+      "git_blob_oid": "bbf8dddcbeb2b617d2e394e8c3463853856f8e2a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAHyphInterpreter_core_t.h",
+      "sha256": "8b1826dd6cc74b5a3cec9b10424ea5eb5d062527efbd8bc6fb7b6da101a6d3e5"
+    },
+    {
+      "bytes": 11010,
+      "git_blob_oid": "9d0427c054f45d4b9c793621c1b580b9bddb5136",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAHyphInterpreter_t.h",
+      "sha256": "159ec149d520cf29381efc0365298f1037d225212acd7e4e6073395bdd981cc8"
+    },
+    {
+      "bytes": 1566,
+      "git_blob_oid": "8080029e96e27c7dc5de982da2d62b65b80765c9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAIsDotNfa.h",
+      "sha256": "7c2e64873763ec56feb76e4fc8e42ac5d7aa496959491227d7d9bc70422ab5aa"
+    },
+    {
+      "bytes": 2874,
+      "git_blob_oid": "75f5f8dc7a72a12d4d3763ddcc83e504f3ac621a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAIwMapPack.h",
+      "sha256": "da55eb0da47ae9537f8d0ddd398c7320b53917f2031bac023e55939765993dd1"
+    },
+    {
+      "bytes": 3532,
+      "git_blob_oid": "317f7d6e8428b48e331699d603a5ac290dd664e2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAIwOwSuffArr2Patterns.h",
+      "sha256": "16785c4723c344fe64a217253cb05afa594dfc60a9bf490d4224039092f198c8"
+    },
+    {
+      "bytes": 4083,
+      "git_blob_oid": "d16873166f9017f7a1317754b71adce260f49cd9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FALad.h",
+      "sha256": "e0a7b96eb23977fa32a77986176bfdd0befb7a4bee8f9d6fe94c28dde39f94e6"
+    },
+    {
+      "bytes": 1767,
+      "git_blob_oid": "06fc6fa59b6ac79bf772711c10ad29c06ee7828e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FALadConfKeeper.h",
+      "sha256": "d87bd3c7248afdc7ac4d9294b1db10d11abc4f9146bea0672d8015d47fe40e6f"
+    },
+    {
+      "bytes": 1187,
+      "git_blob_oid": "b210c49cd9bd2228bdc2aac0e95b0ae110dcab5f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FALadLDB.h",
+      "sha256": "b6e1e9f0af0eb339ab2597c597e0604cfffe16910e6f8f3fdd5b74b2da5945c2"
+    },
+    {
+      "bytes": 3858,
+      "git_blob_oid": "d1aeaf65013d6f235bb2dc4d4c971f030f1feb76",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FALad_dist.h",
+      "sha256": "e9c9d3fd504a0fd7643ec1d29172decb72a81aa3ccec6e0742acc9877c984188"
+    },
+    {
+      "bytes": 331,
+      "git_blob_oid": "034a4a0abf63f401f4d5c1a66cd4a013ece7a573",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FALessA.h",
+      "sha256": "a3826b95ed897ff2a6031fe9e233ab544d9f76caa29fc2cf1f33c10b3b387a1e"
+    },
+    {
+      "bytes": 4504,
+      "git_blob_oid": "ee8560e885fd6404f333745f91d9d5f8c3de5981",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FALexBreaker.h",
+      "sha256": "db2d14a0afaf6c9a90c3ea46168c5388cc92c62c3ed35c4a8541e2cd9620d2ed"
+    },
+    {
+      "bytes": 932,
+      "git_blob_oid": "db4324c56fb288b52282a0b9ac59d16f7ebf3fa6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMapA.h",
+      "sha256": "ebaba63f831a7599c8187e1fedab34ce6f82636a40fe6c78dc34e8a8f15fa91f"
+    },
+    {
+      "bytes": 2839,
+      "git_blob_oid": "bd48c0f507040e91628f516e2a5c9205605718db",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMapIOTools.h",
+      "sha256": "c1af3a1457a10f5ea3c75428e913d994b97f76b3b39d243ba6fb0f76a7533837"
+    },
+    {
+      "bytes": 1095,
+      "git_blob_oid": "c823ce6d5158638ce2b9e1c7fd5db3246e5af6f4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMap_judy.h",
+      "sha256": "47442d2653023f4e5ac21284d985760e63ab4467b769e7f99130bc233141916e"
+    },
+    {
+      "bytes": 879,
+      "git_blob_oid": "56c29fd3fda3b980b73f09af2097aa46eb4301a7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMap_std.h",
+      "sha256": "fcb1379904f9fb9a7e0f72acc3cc92ca1dfedbb8846121911b5fa60b0ff30834"
+    },
+    {
+      "bytes": 1021,
+      "git_blob_oid": "6f8ef4add15df38a0c131fda7308b35ce2756575",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMealyDfa.h",
+      "sha256": "79a20bddfe0ce29959b9e8c613ffb4772541ec7fd08f9f62edbf56e22fea11cd"
+    },
+    {
+      "bytes": 969,
+      "git_blob_oid": "b36e996e765c2a85ba5bd9f9db5007d221d76ca8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMealyDfaA.h",
+      "sha256": "db837c23d1cd702bfc742f3fd70461cd800dbdd68aec3ed6a6eef66fec102d98"
+    },
+    {
+      "bytes": 1786,
+      "git_blob_oid": "34d501255ed88aaf1a70637f9d767d557aba0664",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMealyDfa_ro.h",
+      "sha256": "8ac7066962f5fb9ee3f1422483fe97ed5f3d22bc6d8bc74af0aaefc479771ca5"
+    },
+    {
+      "bytes": 790,
+      "git_blob_oid": "e985d8e15bdc4248fc75cbd14780a8d96da7a23f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMealyNfa.h",
+      "sha256": "fae62f0a2303ae1d204cb85a9eebf5d0e223e2bba0d7c0704b9a9fc882cf5e6c"
+    },
+    {
+      "bytes": 3666,
+      "git_blob_oid": "001f57c6221f686307e017295c60d9238e62d63e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMealyNfa2Dfa.h",
+      "sha256": "be62ef6323a4649564b8b68d90d19580fb271357fc37023ae73636f443a9149a"
+    },
+    {
+      "bytes": 866,
+      "git_blob_oid": "0a91fa7f5e849a7ac07b86c5398695c65295bcb5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMealyNfaA.h",
+      "sha256": "76776d45aa5a0e889bb25ecb018651763e2165eaa27fa7d92d42e54bc3693392"
+    },
+    {
+      "bytes": 1019,
+      "git_blob_oid": "55b1f04104d2f5e2652f997773aa58537e5098c8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMergeDumps.h",
+      "sha256": "bbc7079028637fbdaeae9f2948ddaad70c7f07658d55a7f3b8ee9ab06308ef04"
+    },
+    {
+      "bytes": 1077,
+      "git_blob_oid": "df80333cf340966a4c611222da6f15f3dc2728d7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMergeMwe.h",
+      "sha256": "5a32f598bb6c51c6efbe3630acaec7909280a60401ad8c3ff96a849ffcfaeab5"
+    },
+    {
+      "bytes": 1086,
+      "git_blob_oid": "842319c789a9827fc77a76d36834fe0519c44e9a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMergeSets.h",
+      "sha256": "fa8ebe1fceadaef10b33cf3790bfbcf6d39b0c400e7bfc4b7a617155a94e0309"
+    },
+    {
+      "bytes": 857,
+      "git_blob_oid": "7a26d68142d65ec970595f7651fc8d6859b09d6f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMsg.h",
+      "sha256": "348796b4132aed6ef07deea9f48c4bd09a9ddffaf3e699b468ee91c5b0121685"
+    },
+    {
+      "bytes": 1442,
+      "git_blob_oid": "8b70e356fa7f5a2f24b56d5f1127dec035eb5759",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMapA.h",
+      "sha256": "e0e84e3a535f5c0b2f61da4dcc0a282ab147d35156338f8447282be1e7f56589"
+    },
+    {
+      "bytes": 1762,
+      "git_blob_oid": "379d7b335344f3eb997ca3d7da5eb18ec643c793",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMapPack.h",
+      "sha256": "d0e05b74076cb407e31896346d43ad1beab9d24c11662272f9d0e80794c782c4"
+    },
+    {
+      "bytes": 1210,
+      "git_blob_oid": "cfb9f2c978e3a0901ce9ee3ac986fdacdde8b9f6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMapPack_fixed.h",
+      "sha256": "515fbb04db85ef2660ac660be9d2fc331cdf2a6a67de032cca6ba0500a96a275"
+    },
+    {
+      "bytes": 2696,
+      "git_blob_oid": "e14da6606e6c088b204243f72292fec274cd4fe2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMapPack_mph.h",
+      "sha256": "ae639d431368d8ca8b6691c5ebbc4aeb6c99707d1f534a8af99574ff10933131"
+    },
+    {
+      "bytes": 1734,
+      "git_blob_oid": "4766d154aae06fb4d245a253197d62851f335117",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMap_ar.h",
+      "sha256": "db4bdc9117c5d02a6222fc87448ee83a761da671a3fc103c453c22225dfaeb22"
+    },
+    {
+      "bytes": 2219,
+      "git_blob_oid": "8b27ef1a6f1b000b23db43a7a92bfb16a8944bdf",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMap_ar_uniq.h",
+      "sha256": "f925dd3d675929f2cf83b4ab63049b57e14cf110c9b59711e52b71540b5d6734"
+    },
+    {
+      "bytes": 1885,
+      "git_blob_oid": "903d0b462a56fd75be18f1b9eb708a1b59558fb7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAMultiMap_judy.h",
+      "sha256": "d8b26e2f27d13e6b605e04f55deecadafa2fffb12fe8e9c3caf8777390240d13"
+    },
+    {
+      "bytes": 22474,
+      "git_blob_oid": "377485a413d9d935fd79b76659d0500568be30f9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfa2Dfa_t.h",
+      "sha256": "416a2f01a4f6a20eb18943ce989fa4b9696e85380f13ffc4f5e42e1ad28ce533"
+    },
+    {
+      "bytes": 2055,
+      "git_blob_oid": "01fa59754a7858605181788c32d0ce918e9dde83",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfa2EqPairs.h",
+      "sha256": "3eae3229b6f7e234943512fe9c1e9a9f18cec61293e3161eeef11c8775439808"
+    },
+    {
+      "bytes": 2504,
+      "git_blob_oid": "545fc41b0f2ebd353d24ce0912f2337754d1a1c7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfaCreator_base.h",
+      "sha256": "b2bd7b9b7c9900ec0ca31d08a8999688a46a740381ba05ca1b8f11518266c9ba"
+    },
+    {
+      "bytes": 2122,
+      "git_blob_oid": "e1dbd6f61943c9fc922e9a801417c13d82296ed5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfaCreator_char.h",
+      "sha256": "f633a0e59a8231ba6d5b480f1a0c900e347db83ad9852450dec0f69a9267ee7c"
+    },
+    {
+      "bytes": 624,
+      "git_blob_oid": "377452cbcd5524f971eb8b635ef1313a60c11846",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfaCreator_digit.h",
+      "sha256": "99e42861d0982f0a759f7bd4ed7e696b42d8b474eb4a7b20891594afae174cd4"
+    },
+    {
+      "bytes": 1215,
+      "git_blob_oid": "8f5575acdfcb182ba47251e24147ad73435ee01c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfaCreator_wre.h",
+      "sha256": "c76df1f0dae7aef847490dc64d0140a6a107a6b41f3079ce45f221066802ecf5"
+    },
+    {
+      "bytes": 1771,
+      "git_blob_oid": "8a114390564e58677e97a13671499713432b39c5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfaDelta_ro.h",
+      "sha256": "2d2e3349a1d5531d32a7d3f92962f75d0372ce77d32705561f1fa811a979aef2"
+    },
+    {
+      "bytes": 2095,
+      "git_blob_oid": "91ef578daac4e9a8acb1727e32e8abd8bfb25a32",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfaDelta_wo_ro.h",
+      "sha256": "e9c09eb721e78847699c10ba18538e54a210832728e1ded303effa0bcfcd380a"
+    },
+    {
+      "bytes": 2274,
+      "git_blob_oid": "96620afc0fb2030d8ea2894f22f4afcbd0e0624b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfas2CommonENfa.h",
+      "sha256": "513fa49da58da894967a1dc7800a623e6144480b2c940b97ff9cf77ba4a6f2f6"
+    },
+    {
+      "bytes": 2818,
+      "git_blob_oid": "3588d408049c11c124366f3ac5d5672fb490a185",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfas2TupleNfa.h",
+      "sha256": "d756f672a260f752ae24a92ab2810cdbdb8339d9bb2250eeb5faaaea324ef7c5"
+    },
+    {
+      "bytes": 11237,
+      "git_blob_oid": "2b01cc7d31a50e69c777366e9e5173cd5c7e11cd",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FANfstLookupTools_t.h",
+      "sha256": "a29d4c136b1f4559d660de9caf4e2d3c7f5a8ca18c936f871ace9c9fd74e9121"
+    },
+    {
+      "bytes": 1888,
+      "git_blob_oid": "3184944b9fdebc23f55e79ef73d88736ae5fdfb2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAOffsetTablePack.h",
+      "sha256": "5de15dd1f0b295bd60bf9ae2805b7b17d84306f37d845fd49174d5c90140973e"
+    },
+    {
+      "bytes": 1844,
+      "git_blob_oid": "7697b04d6f3ece0f05456335444e10ae219f6e8a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParseTree.h",
+      "sha256": "1315a957443b2e23c371b515aec136b9309ee1839497dec3f8e45193193e143f"
+    },
+    {
+      "bytes": 2148,
+      "git_blob_oid": "844b45bd9c77419e95c954303fe14504e6fe9169",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParseTree_rbt.h",
+      "sha256": "abf26363a03c8c1f373fbb3e7d145b61b5204930e0eb7de8ea3701eba684e61e"
+    },
+    {
+      "bytes": 2114,
+      "git_blob_oid": "b22dc5aaee2db8fbb7027efe74c32cb6a201b0ff",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParsedRegexp2TrBrMaps.h",
+      "sha256": "ff7c1ad44a7c7c2ab6bd270497a9883458d5316a5d57262288e19eddab8297ec"
+    },
+    {
+      "bytes": 6015,
+      "git_blob_oid": "28dbb715df96d005ec7f2860cc9887facfa487cc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParser2WRE.h",
+      "sha256": "d616c9b3b224f81b3114fdc03d42ab55c5458bae4411a16fdf12e5419844929d"
+    },
+    {
+      "bytes": 13569,
+      "git_blob_oid": "7af41b75492f9f28c6b2a3bab063ae79c30e4877",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParser_base_t.h",
+      "sha256": "7889f85cd741e37fa8e5243bb58c5e365ea23cfa668f9433380715cd51e3119f"
+    },
+    {
+      "bytes": 3144,
+      "git_blob_oid": "b59e804fe9abcb76a08fb3a3d3469f2977995f68",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParser_nest_t.h",
+      "sha256": "1a042e430d1a18c95a7e83267a4ab09cc3f7ade404a3cc7ef15da41b091ff8b5"
+    },
+    {
+      "bytes": 8801,
+      "git_blob_oid": "1e3da9ebb1ecaedf49babf570c4320067bbedd1f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAParser_triv_t.h",
+      "sha256": "086ad2bf8d614afcbf11dcc57ceeb0c8cbb87d896c108b2ef10d6b42d7a64c16"
+    },
+    {
+      "bytes": 6659,
+      "git_blob_oid": "437d1374c7ce3bef07b7f9408dfa5f8f6e8f9319",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAPosNfaPack_triv.h",
+      "sha256": "749ed7ef4ce9ed029747b58a7665d2838a17799a084bf55368daf93558c4e615"
+    },
+    {
+      "bytes": 1375,
+      "git_blob_oid": "a51087919a127c0def08de1500739d61fa6606fe",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAPosNfa_pack_triv.h",
+      "sha256": "684b21baf88ec82740e00f09ff767ee3c2dbd348831c214771f9345ecdfe4dc2"
+    },
+    {
+      "bytes": 3555,
+      "git_blob_oid": "878157e809bbc8cc00e915a946cd29d25adaffbb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAPrintUtils.h",
+      "sha256": "d720294027f1ffcd184c00df1385dc33854bf3497258449b2019e14c65cda518"
+    },
+    {
+      "bytes": 24062,
+      "git_blob_oid": "ada01fe6de3163b11c5158fd9542d53594c7b649",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAPrmInterpreter_t.h",
+      "sha256": "0452421b72dbec9f2d11ab2ed0967620123119b6de4d6f19af4e5d699d50a649"
+    },
+    {
+      "bytes": 2185,
+      "git_blob_oid": "b01d5604f931d345d28b7578ab24c62e1b08e873",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa2MooreDfa.h",
+      "sha256": "dd73ed3904d60594dd33c21345b31fbd2ca628060b3e65a826ab960373b784a4"
+    },
+    {
+      "bytes": 1619,
+      "git_blob_oid": "b49a0800f7f4e348bc830896f84b16b941a9d43b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa2PerfHash.h",
+      "sha256": "9d2d5c66a470a0eaf0549b3010f49ebceba66472b7cac17f23e5fe3c65a5d890"
+    },
+    {
+      "bytes": 2374,
+      "git_blob_oid": "d025c281aecc6b8231995408c87969a6a7b12a1f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfaA.h",
+      "sha256": "cb2c505608eafc24c361156df1201e5e66b924bc3f6e05f906bf6c702810afe3"
+    },
+    {
+      "bytes": 1378,
+      "git_blob_oid": "d4a99b7d1d1c8ceebe2fb60b9b775b0d6348bc52",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfaRenum_depth_first.h",
+      "sha256": "565d68b515866fc6a91955b214c0840dd45eced9263693e39f468804088d371d"
+    },
+    {
+      "bytes": 1261,
+      "git_blob_oid": "4e9195742a37ab43512ef704a57ded84bf1fa682",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfaRenum_remove_gaps.h",
+      "sha256": "37c97974ccdf9776c41ec4caf09a34f8a3cd4e63f7140112ac31313f350a84a4"
+    },
+    {
+      "bytes": 2496,
+      "git_blob_oid": "8c10891b1a6ff4e2bdd3f26792a37c512b6505f1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa_ar_judy.h",
+      "sha256": "bf53c1866b1c365bd7362824567c2778687fc2a1a94eceaec8c90faed2901a1d"
+    },
+    {
+      "bytes": 2711,
+      "git_blob_oid": "9715c24ad0b5d2bbf3acc7d599c2a4141a5309cc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa_dynamic_t.h",
+      "sha256": "56c54dbabf3451b70f5c1779d154962b70a26e356173246e5e68693f6fb71877"
+    },
+    {
+      "bytes": 1909,
+      "git_blob_oid": "58a3bf5ab5e883a2790e369374368006ae8a9720",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa_renum.h",
+      "sha256": "8dcebd5ffd8cff3726a483b9debaf933ea50324577fb62c514da59b62eff0e5b"
+    },
+    {
+      "bytes": 2170,
+      "git_blob_oid": "3ce84fe849e20b951508d3013a2225a15d4d43a8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa_renum_iws.h",
+      "sha256": "8b1aabc3c3cc8d3ebae2c3267665b6133b4f26897d7ae2b3892705625121a944"
+    },
+    {
+      "bytes": 2181,
+      "git_blob_oid": "842bbf92638ddbc71a650ab2dbeebc3d00eaa680",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa_ro.h",
+      "sha256": "070e80219b88fc0f329d8649b8b10e55fd52ce2ebd21744f9359edc26e8a842b"
+    },
+    {
+      "bytes": 2198,
+      "git_blob_oid": "bf398a6a2a21e824d01fcb28ecd3741b9e8afa04",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSDfa_wo_ro.h",
+      "sha256": "548e9e3fc5351e3e66c822c771320137dfbdb4a9662df151af1bd4188c1effd0"
+    },
+    {
+      "bytes": 1756,
+      "git_blob_oid": "52a94204128595104a15252efb59f49de24c6c18",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSNfa2RevNfa.h",
+      "sha256": "2d13cc0dc1684632e0d985a27cb0b9611af02233bbca8157872291d166ed37d8"
+    },
+    {
+      "bytes": 2951,
+      "git_blob_oid": "cc616ef9ba6728c9e834e5065defefaba5897f4e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSNfaA.h",
+      "sha256": "38c395036dd577a031cf8edc0125bd10017c1eb24e9572ef22270274511acc6b"
+    },
+    {
+      "bytes": 3165,
+      "git_blob_oid": "b4d3ba92ff01d90dfc352225f57845a534f18d9e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSNfa_ar_judy.h",
+      "sha256": "6d0f330c9c83dc7f2a68c12cf309bdd6b28dca3ff245c2728a5564e0a73c7b4f"
+    },
+    {
+      "bytes": 2196,
+      "git_blob_oid": "89ba9d3d6b67496937e4d8296c3229dd14a7c703",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSNfa_ro.h",
+      "sha256": "5dd5593df1010d8bb6f99d87687ba7af259768fabea4c1cf40bba3da26b20877"
+    },
+    {
+      "bytes": 1884,
+      "git_blob_oid": "1391ac3271086e9342c36867c04da08b912f33be",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARSNfa_wo_ro.h",
+      "sha256": "73d9dacacf6cbe0246b3606b4384b59a69ce93d97b3a46b193045a099a04ee30"
+    },
+    {
+      "bytes": 1530,
+      "git_blob_oid": "611f6339df4bc3cacd68372778b4c929d2f3891c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexp2MinDfa.h",
+      "sha256": "390a21dd977d10647272442cf5d94a2e20a17bb1ef9ae088cf029aa745565365"
+    },
+    {
+      "bytes": 2947,
+      "git_blob_oid": "b6f51bf8b8b327cc4cde04187194675f25fb28fa",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexp2Nfa.h",
+      "sha256": "a14e32fbbb33bc518fc9e4c53ceae299ec36f4bb5bd852bc2a0486853544e241"
+    },
+    {
+      "bytes": 579,
+      "git_blob_oid": "8897747bbb58551362bfac33014bbd42bc1f933c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpLexerA.h",
+      "sha256": "774c08f3e51017b9c2d2d303739c607469e63f94fa43647a7d401a5a2e4eb991"
+    },
+    {
+      "bytes": 821,
+      "git_blob_oid": "b807a968f7e732b2dfe42abe2777616f65fd488a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpLexer_char.h",
+      "sha256": "710b53b7308dd26c1d53d7d6b77e9d2ceca4330a94d397ab8262775e69a41561"
+    },
+    {
+      "bytes": 1699,
+      "git_blob_oid": "0a3632da45a13ad6ee16673d69be7633b0f81e91",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpLexer_triv.h",
+      "sha256": "0cdbcde1dd6c3458c35683e85a6d093324920c5d154c1799a192d81afd0f3522"
+    },
+    {
+      "bytes": 2527,
+      "git_blob_oid": "1cc1da934ea265ed33ad508b74e4a65a48bc1f57",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpLexer_wre.h",
+      "sha256": "10fdbb2ae16f8e89cdea88a1ad05279938a2e6b4a07f3e08e92c5b9a640463ae"
+    },
+    {
+      "bytes": 5636,
+      "git_blob_oid": "3c7cd7e161826c9578c49b60ef0637b9289b6755",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpParser_msyacc.h",
+      "sha256": "81afcd639421f32b365e17a609626d921704354147396775cef5a9b5e76fba3b"
+    },
+    {
+      "bytes": 2007,
+      "git_blob_oid": "1546f3358ab90011f94f820b6ce3ab5d80dec23c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpReverse.h",
+      "sha256": "3f1c77499c799f24e207f35172e8232d069efcd7bf5d760031421f610618f64f"
+    },
+    {
+      "bytes": 2462,
+      "git_blob_oid": "a53bf9fd1378cc09fce390b800cf6bb8056e13f8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpSimplify.h",
+      "sha256": "0c34db5c0dd8059cdba8af0805f30555075ddcc47001ede860878da4a810ba37"
+    },
+    {
+      "bytes": 3861,
+      "git_blob_oid": "753cd1860b788cdb89a725cdac071455be6dc534",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTree.h",
+      "sha256": "6e300083bded8bc16cba282de7ee5b5d6f4a826bcc98ea20965478d5142512c3"
+    },
+    {
+      "bytes": 3436,
+      "git_blob_oid": "b550b0c8e61ea65256ae357c489974ed86d76882",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTree2Funcs.h",
+      "sha256": "b5cd0a2660bdb968b0d23348ec0574c040569a1c6b67e084060c91fe573af4aa"
+    },
+    {
+      "bytes": 1434,
+      "git_blob_oid": "03f88a05dd13f178270bd8b2dc511cfbf2dca1d1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTree2Hash.h",
+      "sha256": "2fe740b49c1758ad6791edf345845efdfbb1c28a8fb87d5821c2f0570a6e1c6c"
+    },
+    {
+      "bytes": 2040,
+      "git_blob_oid": "90586e1f3dfe6c4f36e0a343cdd8f6d5e6120e4c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTree2PosEqs.h",
+      "sha256": "e0dd699ee5d07382bbe7f05eed8c11ad7a6bbaf2cabb3b58cf19981f88bbc06a"
+    },
+    {
+      "bytes": 1287,
+      "git_blob_oid": "6d3c62ea27827c8ed98b8167c7dabc038dc691c5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTree2Str.h",
+      "sha256": "ba2ef8ed1658db5a9125c057af0c51c2a8eaa4a598256b181cf3b1f6bdcdc4b2"
+    },
+    {
+      "bytes": 3332,
+      "git_blob_oid": "7c0e531ad35736d72c55e957d8af9c737000eeaa",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTreeSimplify_disj.h",
+      "sha256": "9997ceeb9ec8e0e6bfd5f1a33ac575681b9e954629b0f2d5b635de476736ac41"
+    },
+    {
+      "bytes": 3676,
+      "git_blob_oid": "447594aae79f468b885fd97bb09adfea03a1a89c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTreeSort.h",
+      "sha256": "8279a1aceca0c28d703d9ab55ba28d9a4e363e80d5f3a745e74d9fb5f9a9ca17"
+    },
+    {
+      "bytes": 756,
+      "git_blob_oid": "8b3253c40f30bf9a8f73ae95309984de4d858352",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARegexpTreeTopoGraph.h",
+      "sha256": "7488becb35c5927e30da5e331fdcf8d7591e1b451c269de548110e4ef0d4fd4c"
+    },
+    {
+      "bytes": 1471,
+      "git_blob_oid": "21e2f89f96de3f0642b12723c9b82d674e50b37c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FARemoveUnreachable.h",
+      "sha256": "fac6c68033cb2fac3f2abdfcccfd065e2bcda76f9698b9026cf36e231645b5be"
+    },
+    {
+      "bytes": 1363,
+      "git_blob_oid": "652bf482c6034135b34af4cc8fe10fcbb7130ad6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAResolveMatch_nest.h",
+      "sha256": "16ccb9f03027c4cffe1d1ac13c34166161c7ce0f6407fb68263e9632f2dcd495"
+    },
+    {
+      "bytes": 10606,
+      "git_blob_oid": "fe9eabe7f4381ea85b6b7bee8b11a322124f07d4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASegmentationTools_bf_t.h",
+      "sha256": "7d6fc968994ce4cc126e57b8291c436ce4d5e82b696983a98fa665ca6d9d8045"
+    },
+    {
+      "bytes": 3178,
+      "git_blob_oid": "e0ee740ee43f4da4ac60f043d2ee51ca22a11c8c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASelectTrPatterns.h",
+      "sha256": "a13b809cfc845783544cdc3308b84edfc91b036ecffd635fdf97c2a91a9dddeb"
+    },
+    {
+      "bytes": 2957,
+      "git_blob_oid": "f2b1f87a80377b6f7db4b9a28a903ae694812b2d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASetUtils.h",
+      "sha256": "ed272aeb1405ed483c7fd995c0b167135220617f415ff8e8c67345fb6f366072"
+    },
+    {
+      "bytes": 1659,
+      "git_blob_oid": "43c0fd0b16335a79a5fe786f5a2c9462b3ffc504",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASortMultiMap.h",
+      "sha256": "dc16617a537fe72f60a9ec328cf24ea1ad4a1b69d23f8b2ec0e94715403547d4"
+    },
+    {
+      "bytes": 1258,
+      "git_blob_oid": "79e2400a183f95c7bbf8fcee54d5b15908cf263d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASplitSets.h",
+      "sha256": "2d07e2a6ad8fdaf2f8db47b7ecf252be7f3371395f2a6875491a43728716ecf6"
+    },
+    {
+      "bytes": 1222,
+      "git_blob_oid": "81c9463bbb08cc35f782ac8ec552056e0208da14",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASplitStates.h",
+      "sha256": "d914a53469530f61a5d92e262e7fe2caa771e112483a8e9530280248d89bced1"
+    },
+    {
+      "bytes": 652,
+      "git_blob_oid": "09d33360ed04f876f82cb90b6bbd8beb8cd6e0a7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2Ow.h",
+      "sha256": "d339b86ac57fc5861551690e0879f7787d927399021272d29d55348a0cc52d98"
+    },
+    {
+      "bytes": 489,
+      "git_blob_oid": "b648161951288ceadba8166cd19a30329b49420e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2OwA.h",
+      "sha256": "cd6b797f785b6f0f88346c0e5a6fa63bb5e52168334449f38e63122f24bb4ac2"
+    },
+    {
+      "bytes": 988,
+      "git_blob_oid": "88d9f30f5bf46bb8886177ca7d92e2bd02f50e72",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2Ows.h",
+      "sha256": "2abef00efd6f4dec88667ba568fdd52ce8b58453828c41741864af748d6cfb00"
+    },
+    {
+      "bytes": 1061,
+      "git_blob_oid": "d0c1a3d89017c1608e578148a28c0c80c35962a5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2OwsA.h",
+      "sha256": "b25f56569719d36c88cc9aae3078c52bba1ee977fbde0e55739f4b14c86ea9a2"
+    },
+    {
+      "bytes": 989,
+      "git_blob_oid": "34406bf5e754ba3d4ef2f839a6af30fc9da2d847",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2Ows_amb.h",
+      "sha256": "2385b93ae38d1693a32f0d6385cd29166dc7336f27306e6a440a6be714d65392"
+    },
+    {
+      "bytes": 952,
+      "git_blob_oid": "64511239791ead38f26e470375966862c8dc4232",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2Ows_ar_uniq.h",
+      "sha256": "a29c7aad63bcc4dae6a889e2d24e370f83995efd5db86e48bb58d2ec4b1f5926"
+    },
+    {
+      "bytes": 1488,
+      "git_blob_oid": "2f5138d696294819cd407bbee195405415b69a92",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAState2TrBr_pack_triv.h",
+      "sha256": "73a3b8231c30323f2b1d392e85886d94d0fc69bbefd8c474f2c4c4203c207e95"
+    },
+    {
+      "bytes": 1075,
+      "git_blob_oid": "a52f8949cdc404a53534e3a0b7cca506fcc61f51",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAStr2IntA.h",
+      "sha256": "dc50db367b580a15be3b3e28aca9c0a44d86cc719321da62e6ef47843bf76e1d"
+    },
+    {
+      "bytes": 2102,
+      "git_blob_oid": "ab447d03ad3e94743b06ae76218d6d11ca689838",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAStr2Int_hash.h",
+      "sha256": "181ea9a1c258499bf3219f48b36477b1ced2f765905cab4958130dda4675de13"
+    },
+    {
+      "bytes": 1456,
+      "git_blob_oid": "bce15d0f3d3faf8b5676b96c1a58627fd88d045c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAStr2Utf16.h",
+      "sha256": "2703c47890ae5736c53ae89e981a83c14a02f80a18203f7accaa75eb97f01416"
+    },
+    {
+      "bytes": 1237,
+      "git_blob_oid": "8079e55a9e05d421492c409c2d476583119e0983",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAStrList2MinDfa.h",
+      "sha256": "5df10e490bf762baf8a21af4fe8a295897ecb85f97a2d77dcf32094a93cacdbb"
+    },
+    {
+      "bytes": 1198,
+      "git_blob_oid": "7c6e934fa3d59ae9cb0071e3da0d8a3a17e7bbca",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAStringArrayPack.h",
+      "sha256": "bf3607c6fa2bebaf08d5e63516cc584dd9329780a6847f2edd05056fc83cc1db"
+    },
+    {
+      "bytes": 1770,
+      "git_blob_oid": "241e3d92d5483a8519bac39fdda11aaf5fd77f06",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAStringTokenizer.h",
+      "sha256": "8c2cda5790b9be83fc298a4126bc7d6d4b2fd4fb1afa12b0b516151dc4f80f4d"
+    },
+    {
+      "bytes": 13655,
+      "git_blob_oid": "a157025fc48b33586eeec8e9467eacf058424d14",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASubstInterpretTools_t.h",
+      "sha256": "2c44eb3d9da89cfc32916fc64923f3ed8318100dc156e028a205a268ac1ef608"
+    },
+    {
+      "bytes": 3680,
+      "git_blob_oid": "02e0d8d12fed39500f7fbbad18da52d45b9432f9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASubstRules2Regexp.h",
+      "sha256": "3bc56eb7748d6a853db51874924c8b552df77783c331d633f81630e095c76b06"
+    },
+    {
+      "bytes": 4841,
+      "git_blob_oid": "39e4babd8181afcb7ddbe9e71a01a5e7b1fc3d00",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASuffixRules2Chains.h",
+      "sha256": "abc378d091a95aeae2277452189d77d9586548bc68fbc0eea9f05902a167161b"
+    },
+    {
+      "bytes": 1523,
+      "git_blob_oid": "7a95c90e3a22f9fa4a6ac71cf3d2102ad9550d27",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FASummTagScores.h",
+      "sha256": "8953cef48ff2e94ea2ed9ac37bb83ef96ba7fb5a45a2640cd35aacd7ae2109a7"
+    },
+    {
+      "bytes": 1018,
+      "git_blob_oid": "5949acd54fad10fce5cee35953a22514fe39bda4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATagSet.h",
+      "sha256": "8c2a31c6db4eedea2da73f29179b6d1c4eaa2c92f20b4e8109116c021d4fcba8"
+    },
+    {
+      "bytes": 1239,
+      "git_blob_oid": "867fd0da670cf69f0a1a6494d5921e087026725e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATaggedText.h",
+      "sha256": "94bfcab887f53000c0c9bc4d3472f28907705342e4654b817b21537cfa6ee015"
+    },
+    {
+      "bytes": 762,
+      "git_blob_oid": "ed1f70ad772047146de1f2cc565404841cfc82d2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATaggedTextA.h",
+      "sha256": "e31356e8cafe93c405f7bf49ae541254b32ddf10bf2c7f71de1e174730d1b306"
+    },
+    {
+      "bytes": 3708,
+      "git_blob_oid": "b351b27d5dfe594e3e60de3484560a05d2fc9e4b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATaggedTextStat.h",
+      "sha256": "4bd892ebf9bdbfe0194c5809b01889df75feda71484fd09c91dd5b8518981b00"
+    },
+    {
+      "bytes": 2689,
+      "git_blob_oid": "23de322b6b3b159a922869c5a58bf0011790ef08",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestCmpDfa.h",
+      "sha256": "86c9fb3526954882454d2f74727836ff28cddc6737dc39ccf89b441229a4022b"
+    },
+    {
+      "bytes": 1401,
+      "git_blob_oid": "35b8e42dfaa842114ae4c4491e16128cb43a1221",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestCmpMultiMap.h",
+      "sha256": "174bab8ce976a3e36635c914bdde0e775aeb4ce64eced41dcc2ad5a015f09430"
+    },
+    {
+      "bytes": 2351,
+      "git_blob_oid": "0a28e32029487403761121c1e2c01bb75e8c9c08",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestCmpPosNfa.h",
+      "sha256": "296ec8a3cb8505a40cd02398c503c50f0e12f4a079f88bdef45494b53b73a153"
+    },
+    {
+      "bytes": 2973,
+      "git_blob_oid": "1a3d2268cd851f91f68d2843c0439c106e537fe2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph.h",
+      "sha256": "3d62719a7665c9a4d46fd390ce86862892b0c20fb92d0d1318a2c2546dc3b8b9"
+    },
+    {
+      "bytes": 775,
+      "git_blob_oid": "3d476f5a739cbb236ea09b531ab7e9b0de149e76",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph_b2w.h",
+      "sha256": "e71c9ad5cecf447fd170a550968b6d04277f7936175187df10c35c421a8d718f"
+    },
+    {
+      "bytes": 832,
+      "git_blob_oid": "c6f5bc498a02719920a072e86f11f909dcd71814",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph_tag_dict.h",
+      "sha256": "2587213bb86a5cb5527c64c99a73a72cba121eb054428236f788155f3e856503"
+    },
+    {
+      "bytes": 748,
+      "git_blob_oid": "8dd36dceaa80c405386073f8e246bf9c9ea9614d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph_w2b.h",
+      "sha256": "e7688113f5a529c8a4fdc70c04806b8e239ee29c7e67fff4c0bdeb9ed08e8143"
+    },
+    {
+      "bytes": 982,
+      "git_blob_oid": "f466099ec7414a890eb44bbb528160a6164fbb72",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph_w2h.h",
+      "sha256": "3457224040f630d0306a2a6e88ba1375f239537fa75c90c81a8aff0ed87c9f82"
+    },
+    {
+      "bytes": 883,
+      "git_blob_oid": "0bb6c75804fb4dc43e70fa7e65ac26e0383f346f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph_w2s.h",
+      "sha256": "3ee9a60a0cec3b14fca30eadb5d078d90dd7f476aa2aeaed2412d105a870789b"
+    },
+    {
+      "bytes": 807,
+      "git_blob_oid": "ef808c4b64183a3eaaf145623a2a771c8569623f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATestMorph_w2t.h",
+      "sha256": "a71fd0d87115dfed63271329d6660d9670513038450b2027478748aa700ba726"
+    },
+    {
+      "bytes": 616,
+      "git_blob_oid": "b93f86adc8d9e6422a2ecac839609ce20430745b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAToken.h",
+      "sha256": "fe14658da5e355b379d40fa2de056fc433344c456caff241a6b45d7f48f704ca"
+    },
+    {
+      "bytes": 13869,
+      "git_blob_oid": "26b993a82e64eeac1291bc68adbde150b3491382",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATokenNfa2Nfa_t.h",
+      "sha256": "2f2c40ef804bbcbf27ca9f689f81facd5c57442143161b3a960a13297e858b53"
+    },
+    {
+      "bytes": 2395,
+      "git_blob_oid": "3181c6dce8e120d88a1299927fd55226d28c83e3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATokenNfa2TupleNfa.h",
+      "sha256": "a17826fed6fb4f5f96c205d0e2f1ea91fdfab9104fc9a0c0eb6f0d9aa03e0b3d"
+    },
+    {
+      "bytes": 4945,
+      "git_blob_oid": "b39066b63f9e51da9977088358592274d2e00daf",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATopoSort_t.h",
+      "sha256": "74325e38b6f514657edcb8006d8cf1108b05bee7f137dee27771db0a0a041f01"
+    },
+    {
+      "bytes": 1671,
+      "git_blob_oid": "3767d31eb2a7b3d21eaefc88f3c8c4c608715ff7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATrBr2Symbol.h",
+      "sha256": "97e4e3c0759fb2db248d574d7992378097973315bfea49d4cc7364acc9e75b14"
+    },
+    {
+      "bytes": 2434,
+      "git_blob_oid": "364d936d2c9e4903f555247c9405c9a9a74a3666",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATrBrNfa2MealyNfa.h",
+      "sha256": "25506d13f7cd39fcabc82de270631e0b07227bfaf3b6e485e94f83758422b421"
+    },
+    {
+      "bytes": 2000,
+      "git_blob_oid": "48504fbe3b2320c14345ffda694db6759ec10e46",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATrWordIOTools_utf8.h",
+      "sha256": "e108f5a4fe1b2a46d68d9c2639976b0074a42cfbc5cfa735551459aaf9cc0465"
+    },
+    {
+      "bytes": 3593,
+      "git_blob_oid": "c7a527d864760fa85dd34e827acb3f6c36356c27",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATransClosure_acyc_t.h",
+      "sha256": "61355116018ed7d46cda0b2023dedb3d95b03d8f88dfe47c58a0d80a25e1d7de"
+    },
+    {
+      "bytes": 2123,
+      "git_blob_oid": "1a31033926707df69c1afaa35e71f3370e6cce7f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATypeMinDfa2MinMooreDfa.h",
+      "sha256": "98616917fb550a26364bc6e8eb5366da4d18404b88237399ace1494b0bd981e2"
+    },
+    {
+      "bytes": 2279,
+      "git_blob_oid": "a807af32c8dfd221f541b20c7f20d5a4f2a6dbf5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FATypesNfaList2TypeNfa.h",
+      "sha256": "bf113be86d7eccd4bedfe73bf338c7ec01dbf2c213f65b371bde74bc497d64b0"
+    },
+    {
+      "bytes": 2699,
+      "git_blob_oid": "0a7d4f2806dfd29ae0f5e786a4559289acd57633",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAUnAmbiguous.h",
+      "sha256": "318f89384ad2e084861fd4d155b85ad33639fc3eed27208879bcdd30826014cc"
+    },
+    {
+      "bytes": 1800,
+      "git_blob_oid": "afe4169ce381c01679299575c7599a346a550f66",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAUtf16Utils.h",
+      "sha256": "32abd2a86fc9d358c967a63e33f3fa4009b9d880cf5a658054485eb683f54934"
+    },
+    {
+      "bytes": 1117,
+      "git_blob_oid": "bd3fdf5457ddab1ea09b3bd87c53103ae468b06b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAUtf32ToEnc.h",
+      "sha256": "33ae6deff72b5e76bfc102d6e573c49e44e40f3dd9a8f1bece719e0857c1e61e"
+    },
+    {
+      "bytes": 5739,
+      "git_blob_oid": "621d4c0a58e775d35a9515b43ab38e6f75d5fa7f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAUtils.h",
+      "sha256": "a7869f1c1a1ad54b97a0b7f21a58b070bcf8f953172cbfc1b220cc7467552034"
+    },
+    {
+      "bytes": 3500,
+      "git_blob_oid": "e1429d19e3c970ef0d1a4b54fcfae0303587ddfb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAW2VInterpreter_t.h",
+      "sha256": "6bd0d888a1b0a6bdc9798d7625883bd33c11c2a42cc82faddb286ae62d814b52"
+    },
+    {
+      "bytes": 6161,
+      "git_blob_oid": "8dfb94f83dd9ad24ea65ba92ff7947beb89da21b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWRECompiler.h",
+      "sha256": "43abd013fcec425e96488b1a3e987c0fb2f892fa08b460dfdfad9ee05f764ad2"
+    },
+    {
+      "bytes": 2888,
+      "git_blob_oid": "0751b296e7a21c92a411bd25985bca8559c0af54",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWREConf.h",
+      "sha256": "c131cf7b762b23a67ec54498b01447bba0e133c8ac1d0ef5bfa7a9d5c05dba60"
+    },
+    {
+      "bytes": 3246,
+      "git_blob_oid": "af2232b8d2aa30372f9ce8f1794d76e907a4c838",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWREConfA.h",
+      "sha256": "2394fdd81526f4b1311aa7dd379ff0dc161137c9717f4553fdd280a7ab96b4bb"
+    },
+    {
+      "bytes": 1319,
+      "git_blob_oid": "8cba2dfdc4e67cec701ef33b8ecfc19f35030c2c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWREConfPack.h",
+      "sha256": "79584ce637c55572f8e7af17e7b281488d642ae0b5c9633f3d848d00ea762b5f"
+    },
+    {
+      "bytes": 609,
+      "git_blob_oid": "0fbcadd984fa5f586d21ab779d22c7f2e66cc3b9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWREIO.h",
+      "sha256": "66730089ede1ec4db37c21500f84b5d0ddef4db593bdca1fab9f968a9d56cb09"
+    },
+    {
+      "bytes": 1438,
+      "git_blob_oid": "b30c8b4b825ffdb6f4cf74b592801eb9d6dc719e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWRERules2TokenNfa.h",
+      "sha256": "21dda04f1707d410f63ab2a70538ce6214b94da3a98ac1d782cdd596fc7a678e"
+    },
+    {
+      "bytes": 2890,
+      "git_blob_oid": "21afea0cafc7865fc73e16220cb63b916aeea00c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWREToken.h",
+      "sha256": "dda9ec961fc81327baef98e4cced2231076a25a95d23712d98df5f1497e2f35d"
+    },
+    {
+      "bytes": 2190,
+      "git_blob_oid": "767881929b5df0bbb45c0f1bc4b7bc5690ada5aa",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWRETokenParser.h",
+      "sha256": "23560fcc5b97a41752c2b809083f94df846b5751acfbb1d724418ae4d7298d41"
+    },
+    {
+      "bytes": 5753,
+      "git_blob_oid": "03dd4716d097aee30e94eabfe52a44a132615462",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWRETokens2Dicts.h",
+      "sha256": "1ef921ba55e372ebfa3c58ca4d1dd57d2cf937425e80d06d40338303ced79c73"
+    },
+    {
+      "bytes": 5376,
+      "git_blob_oid": "5eddb686943e3af71bdba08bcaa468d66ebc21b0",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWRETokens2Digitizers.h",
+      "sha256": "62f75e2552b2744884045a68ff79b139f82e6dca9d89cc452f3ec4a00673f8ff"
+    },
+    {
+      "bytes": 1822,
+      "git_blob_oid": "959cc4432e750a129fc2c5051826878ee85f2e1b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWord2WordSuff.h",
+      "sha256": "77053b227974ac1cfc9b22eb0b1fd0785244262ab02a8681f1a93413a492fe35"
+    },
+    {
+      "bytes": 1499,
+      "git_blob_oid": "3f6c89db00d418595bdc17da1b6a1c573c1cbc6f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/FAWreRulesConfKeeper.h",
+      "sha256": "4c6f2fad4e2dcf12416961732182687e6baf29767bdaefcce1b4a4e4fc657b66"
+    },
+    {
+      "bytes": 39,
+      "git_blob_oid": "aebb1915c7c64e2caed3544927f2cf38583e47a5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/inc/blingfire-compile_src_pch.h",
+      "sha256": "79f0eabee7628a8766591b5794738e9b22df581072766cc6666fe1c0136f4bdc"
+    },
+    {
+      "bytes": 4597,
+      "git_blob_oid": "7e80bcff654e749823cfdccb6c5721c65794b4d8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAAct2Arr_css.cpp",
+      "sha256": "504360f213a3cc1b7ff42e7c50b76109feb393b98ad8ee608f13934bd129b078"
+    },
+    {
+      "bytes": 4593,
+      "git_blob_oid": "d13c7ed83b01f9f93e5a33e3b6af35543c1479c8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAAct2Arr_data.cpp",
+      "sha256": "9885d061c9eff6c34c600ede9fcfb34e0c39b51962fb256a1318f1e0b937dbd3"
+    },
+    {
+      "bytes": 2658,
+      "git_blob_oid": "edb6d2bb0aadb910c37595f9e9fa420497322380",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAAct2Arr_score_tag.cpp",
+      "sha256": "b1e3aa13d2bebdc057d12a3e98c1fd7f37f198e1dedad2c8708c1cc244ab79a6"
+    },
+    {
+      "bytes": 741,
+      "git_blob_oid": "ed0f4ec2d0c9b9648be47efbbabf5f07501273a1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAActionsArray_static.cpp",
+      "sha256": "bf29097d3fbdcabf958ca5481bc2911f8effd59ec49a3ef2656533813cb72f45"
+    },
+    {
+      "bytes": 3181,
+      "git_blob_oid": "a3c10ae28337883b196ca733286dcf345bc71578",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAAllocator.cpp",
+      "sha256": "2c2f470c3070afbd18a31a40b505a4a6c8e57f72c74285c750c2b7b30dd4b6e6"
+    },
+    {
+      "bytes": 6770,
+      "git_blob_oid": "38c1bea344d08319dcca46d9d3bf73323edaae34",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAArrayPack.cpp",
+      "sha256": "59c776a4d1de975937a0f0c135235d3945a824313f65ccdaaf85a35a5a9f6e53"
+    },
+    {
+      "bytes": 624,
+      "git_blob_oid": "abbf1d06fd56f564400ababe5cc9a2b5c2a62124",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAArray_p2ca.cpp",
+      "sha256": "4b1a638461d968c83134e2ef59db3649a15492922f380efdc25b0b4021614318"
+    },
+    {
+      "bytes": 18248,
+      "git_blob_oid": "cfd31ddb4ecd6cfeef5b40b4b85a044f3ec1d5a7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAAutIOTools.cpp",
+      "sha256": "97d55259e1d8cd7d9ae754f6054b524f0af0546ed25187dfc6af065b4a0e04ab"
+    },
+    {
+      "bytes": 4493,
+      "git_blob_oid": "bcd84248145da4b7140bbec21f42d0532ea930a5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FABitArray.cpp",
+      "sha256": "69f85a6f8e38a77505403d09dbdc34d788c9d109008c1195bcb90488059e2e9b"
+    },
+    {
+      "bytes": 1515,
+      "git_blob_oid": "bb3cbd6d7605daf3e918962e621cdc6c70e8f2fc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FABrResult.cpp",
+      "sha256": "a17526913d21de452695c8edebc6db4c86fc6ed7173333a75b8514445c90afff"
+    },
+    {
+      "bytes": 6413,
+      "git_blob_oid": "797814de1da93a19f511c4c74ecc6507549a4242",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FACalcIwEqClasses.cpp",
+      "sha256": "2a7159a8597cf826670be2e2b1e322df35862a020c074f40e1ae708e965bb289"
+    },
+    {
+      "bytes": 5944,
+      "git_blob_oid": "b90127616df0adc4fd22137f7e383b29295b9d14",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FACalcMealy1.cpp",
+      "sha256": "ad24fe21995ba4053941da346dd1d74059382124c9b1cba38d94c8911ee3c8fb"
+    },
+    {
+      "bytes": 5069,
+      "git_blob_oid": "fdd66a360540e990c6f8c5acc5d4ab6ebd79172f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FACalcMealy2.cpp",
+      "sha256": "558df0062d7f94a5cd78fdd52eb464ffb238c3b1e513aae9ea46aea655c0ebf7"
+    },
+    {
+      "bytes": 12285,
+      "git_blob_oid": "30b3f9e15b52fdc4dab0db65bad0059890012733",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAChain2Num_hash.cpp",
+      "sha256": "7bc782cfd1ffaa1debb01c08165428afe63231b8694388c12fc5db539d1a67ca"
+    },
+    {
+      "bytes": 3025,
+      "git_blob_oid": "7bef5c08f752312dfad7b5b87504e51b69952372",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAChain2Num_judy.cpp",
+      "sha256": "6cb4b59f758e79effcf92f2c9d2bb571991c93d2bd07aa0ee7b91ab2f44332f9"
+    },
+    {
+      "bytes": 2868,
+      "git_blob_oid": "4f939441f8fb730dccc055bed78cda2bdea8cae4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAChains2MinDfa.cpp",
+      "sha256": "a132d8aeccc419f8d53e0dd777f740eac06f4fa4ef6a44d83c519ca8fdee3440"
+    },
+    {
+      "bytes": 16994,
+      "git_blob_oid": "5200e337b467ab560f996be3aa6ce8c898737b69",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAChains2MinDfa_sort.cpp",
+      "sha256": "7ce9a1b3cb9c107b85d64febf56c5bead3e6c28bf49579e3743442b57411302e"
+    },
+    {
+      "bytes": 6603,
+      "git_blob_oid": "51deb478634a6a7bae8b875f5713d5a0cb38eece",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAChainsPack_triv.cpp",
+      "sha256": "d07c320df209eee1cc65c9701bf1bd77c2aa676f0672d76ec1c75e8be18b85f3"
+    },
+    {
+      "bytes": 2005,
+      "git_blob_oid": "7814e31800895d67c5b35ca809d9f8cf601ae38b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FACmpTrBrOws_greedy.cpp",
+      "sha256": "898ca7ba78072d1a936f0aae611b52dac188c3941b4a3e6d143e55473adc5612"
+    },
+    {
+      "bytes": 7465,
+      "git_blob_oid": "c6aab9fa288d2777e4fd62813206f33a98b10b85",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAConfParser.cpp",
+      "sha256": "57b65835d40d30aa20b5ee41f8167be752f47b33ee059611ba30cc3ff2dc2a48"
+    },
+    {
+      "bytes": 10892,
+      "git_blob_oid": "82344377be516888620a54c8a0f9f9ff7ec59437",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FACorpusIOTools_utf8.cpp",
+      "sha256": "632474e12289bca5ff4173fd5546414713b28fd52f162bb940fd883bc479f2fc"
+    },
+    {
+      "bytes": 2620,
+      "git_blob_oid": "8cdc66b6e98e7f315ff80f7c00d55f1fbcf4f345",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FACssLDB.cpp",
+      "sha256": "3fbba4f67d20dae2d659170d494777fc68c168945bc3da8dd47e5a22604bad5b"
+    },
+    {
+      "bytes": 3484,
+      "git_blob_oid": "76fca31c324fbc8d0b165ed9e17c071efdc5eb11",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADfa2MealyNfa.cpp",
+      "sha256": "72085f49513050e3f072c6aa0c26b28a40d85af4e824ca1340ee841dcfaf1148"
+    },
+    {
+      "bytes": 36777,
+      "git_blob_oid": "f02d453bd7158eef08ad3eaedca5646de0f7bc4b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADfaPack_triv.cpp",
+      "sha256": "dffdc8e0ce89ff93d55ab1e5fa884cd5208f82a4ae9ced2b898b5ab70c369587"
+    },
+    {
+      "bytes": 1687,
+      "git_blob_oid": "ec68edbc749e17bd1e743a9018469fa37ae0801c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADfaTopoGraph.cpp",
+      "sha256": "3240a92e64ad9985d8a7c2a856aff4798c674e5b65c4b1f10c033cae8206afa5"
+    },
+    {
+      "bytes": 4736,
+      "git_blob_oid": "e18af2ea606beffc5e984c7fcbd7502170a47d07",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADfas2CommonNfa.cpp",
+      "sha256": "1a85872c2a57650de02e5ce5ca893194f44be297b2349f4b73ca60a5208c4d61"
+    },
+    {
+      "bytes": 15753,
+      "git_blob_oid": "d8586916176872e85aec270353018826b549a00c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADict2Classifier.cpp",
+      "sha256": "dfc370173e8bb504f63663afbebc0b90c81c4499acf7459beb26555c6c622274"
+    },
+    {
+      "bytes": 12786,
+      "git_blob_oid": "8ea5944b223dd481fa3ee5e07fc44a85f32b0672",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADictSplit.cpp",
+      "sha256": "3809aa8136f3721c0885b8fa2740f411a731968fbd80ba89b3925c2746dc0ced"
+    },
+    {
+      "bytes": 12025,
+      "git_blob_oid": "74092fd3e452d087a4209695558b52589fe29b13",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FADictStr2SuffixRule.cpp",
+      "sha256": "00907d4bd32b6c9a2888b75afdf153a5f25df3bb39576049798351722cf6f3bd"
+    },
+    {
+      "bytes": 972,
+      "git_blob_oid": "722b25d74532c3c10c9cb06f203770978c59a0f3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEncoder_delta_pref.cpp",
+      "sha256": "28b0e1e9fe583a8de5cf1f199f3285d6a67e8e5d3d112389b85c0a46527d2837"
+    },
+    {
+      "bytes": 1009,
+      "git_blob_oid": "8eaabf0c31ca5142bb84ef8712316c11fa1f4971",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEncoder_delta_pref_mask.cpp",
+      "sha256": "0858a78d5a1ca89e86a6f7c3b10bbb68576d25e358ac248d46d58aa391f10961"
+    },
+    {
+      "bytes": 1114,
+      "git_blob_oid": "d6fd27f866322aee020c5c1d7c19608a62e85feb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEncoder_mask.cpp",
+      "sha256": "dc7bc020390e4bb6e281b85a134bf22800d559047cbdd50533eefd63ff0a9cd1"
+    },
+    {
+      "bytes": 1125,
+      "git_blob_oid": "0ef36156281ad7397cd8858a10fd2a22f2d62158",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEncoder_pm_dpm.cpp",
+      "sha256": "5b01f4d44c675da251abfc048280d7671ada0e0edf64acb12d823f122d0d45c1"
+    },
+    {
+      "bytes": 848,
+      "git_blob_oid": "f3b93087aac45f61beed07a3def4026cefaab3ac",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEncoder_pref.cpp",
+      "sha256": "939027f2d01e22816f1da0a5c3ef0f151f3cc7bbeadaefca87a070d275c93992"
+    },
+    {
+      "bytes": 876,
+      "git_blob_oid": "520416d5ef1c94fe72caa3f42199aa3a16c5dada",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEncoder_pref_mask.cpp",
+      "sha256": "6120d46b14e9ec7a1666daad0b28452d6042eccc8ee3bba11aaaf8e5c8aa6418"
+    },
+    {
+      "bytes": 5010,
+      "git_blob_oid": "8bc59cc667e0ace99435a6d109a2e107d2d84303",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEpsilonGraph.cpp",
+      "sha256": "b63fc8cd5f96835f8d53f19d1d5ab9b4616c663fa553b78f5dd42fe473f64fc8"
+    },
+    {
+      "bytes": 3658,
+      "git_blob_oid": "fa15319db2f66bb7a9362792fbc349ce14abd449",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEpsilonGraph_mealy.cpp",
+      "sha256": "ea485da1f22c2da031103f6176082746bba2d1ca4ecb630daf7c551526747717"
+    },
+    {
+      "bytes": 6489,
+      "git_blob_oid": "345f350967ad4dca6115ae518c569418c11e9b46",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAEpsilonRemoval.cpp",
+      "sha256": "0d51de1a104b70fcd6ef3a7045384a318f2060dc5aa3dee58f0073b55e2a2f68"
+    },
+    {
+      "bytes": 1167,
+      "git_blob_oid": "6abedcc6da6c4a91b60ddca4d986a90428af9f54",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAException.cpp",
+      "sha256": "6395bf8530e8174576858969e1eee6b7a9b268ad9005327b760d19f801b916ab"
+    },
+    {
+      "bytes": 6264,
+      "git_blob_oid": "6b4c495c87173c7a8083d23be1e4704d404f9416",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAExtendClassifier_cxp.cpp",
+      "sha256": "2b79add676294d49430532c921f1d1dde9f40f16c37cfe4a4e17c0b67b69a1e4"
+    },
+    {
+      "bytes": 1193,
+      "git_blob_oid": "802e573bed1eaf28d146beb4e47c6bdbeb51789e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAFloatArrayPack.cpp",
+      "sha256": "586a0950820181d18e4c709f38db98050cedd906c245a1c219dcfdf15be52903"
+    },
+    {
+      "bytes": 13431,
+      "git_blob_oid": "2289a1abb857317b96babe5284cb32b3a0bef1ac",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAFsmRenum.cpp",
+      "sha256": "bd9058b66992e6a840bb793d4d9a58de59e37dd42f94e66f35749de33cdc33aa"
+    },
+    {
+      "bytes": 2575,
+      "git_blob_oid": "6a6827a7f86cea829ca3bd1986f4c515f475a49d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAGcLDB.cpp",
+      "sha256": "6e3336f8dfd924c940be4f35153cd3998782a8f2cfa579f525db6562a8dbaad9"
+    },
+    {
+      "bytes": 3933,
+      "git_blob_oid": "7a3ce40d87f85b354f59aa9b876b4a8884f6de5b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAIsDotNfa.cpp",
+      "sha256": "4e56afabf4712a39ab7f980418d5896e78b322322029cf55c8e9c1d46727b7be"
+    },
+    {
+      "bytes": 6434,
+      "git_blob_oid": "c8039e14289a39e70951b5e48693fcba6a55319a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAIwMapPack.cpp",
+      "sha256": "72244c80972c6149e1f89712e1d4b6178195e84395164e11888bf92fd3fe9786"
+    },
+    {
+      "bytes": 13687,
+      "git_blob_oid": "318713ffea8fbea4253118ab29dcc8c4d5914da1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAIwOwSuffArr2Patterns.cpp",
+      "sha256": "e313d0ba6a87896212e4f40e4556d99b4ec58132df72911c7e8e74ff1461740c"
+    },
+    {
+      "bytes": 12776,
+      "git_blob_oid": "acfb013049a02cc4dd06dcbf49a514fb48585a9b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FALad.cpp",
+      "sha256": "2ab09f1c14aabbc6748e00b8c0775ab251217d606b4a6803d03ffeec72f94004"
+    },
+    {
+      "bytes": 5760,
+      "git_blob_oid": "686dfe2b376b7887187607822afe68fb08768372",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FALadConfKeeper.cpp",
+      "sha256": "1954cb337939342f1a75c12b19bb693dc5086f28a1bc86a6f128a848d395fe99"
+    },
+    {
+      "bytes": 2050,
+      "git_blob_oid": "92a4faaf1ad5dd5d7687b54f9505ea584eeb3640",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FALadLDB.cpp",
+      "sha256": "45cac05ef720e677088a74b0e8f175fde46f29a24707b43e6ad27225c3f8ae88"
+    },
+    {
+      "bytes": 14164,
+      "git_blob_oid": "ef890414c2f3de7580f521e43e2d6353a43d8783",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FALad_dist.cpp",
+      "sha256": "12ba3197894ec07990ec2cf5ef89f00a3dbb9a04d3c311d2a63ae73d397e0965"
+    },
+    {
+      "bytes": 14380,
+      "git_blob_oid": "3a0fe836c67a642c3924ca9208c35c575a28206b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FALexBreaker.cpp",
+      "sha256": "34a415492204b4cde92b5a004ab9b20b0ff312650e582ffc4998148224e30a95"
+    },
+    {
+      "bytes": 11834,
+      "git_blob_oid": "a234b029fb3f7abf951b4f80e8b19864d4effd5b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMapIOTools.cpp",
+      "sha256": "a3e451b5363a6eae9490adefbcf3701d793d470249b9553e59214f7de670f570"
+    },
+    {
+      "bytes": 1943,
+      "git_blob_oid": "416e8bab967465a8062a7a6984e3898e9e57f483",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMap_judy.cpp",
+      "sha256": "675055e6a7b2e64d7c68fac6e918e6c8aca10141d812e0773106307ad9da2cfa"
+    },
+    {
+      "bytes": 1668,
+      "git_blob_oid": "b5c35d7617a374ab05fe3feaa2410987d111c153",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMap_std.cpp",
+      "sha256": "b3080a4f329ffd7edd5be21722a20b32e95f47b55d8cdb673acebf2f4376852e"
+    },
+    {
+      "bytes": 1508,
+      "git_blob_oid": "4df4beb429a276923a32f3116a74b0a5a960bbce",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMealyDfa.cpp",
+      "sha256": "eb369711c2eafa899e2c70764206edfaacea0fd5ccc5a1c26911ef07b65f4ec1"
+    },
+    {
+      "bytes": 5152,
+      "git_blob_oid": "694892aa8e6a6d7045a8c7aaf4539b20022ee0f9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMealyDfa_ro.cpp",
+      "sha256": "c3102f53cebdf09903c21aed9b4d88dc6e9727ff443b6def9179bce39493114f"
+    },
+    {
+      "bytes": 1120,
+      "git_blob_oid": "ef0174d176dfa0c1e537e9c20c58861489715b10",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMealyNfa.cpp",
+      "sha256": "3a038d2c5c644fc51a6f67f07c4a5f8c9bb2905f0b3b5b3deb27ecfd81842e32"
+    },
+    {
+      "bytes": 9989,
+      "git_blob_oid": "f7dc6cc3243e7a42c90d26fccd188d095706c75f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMealyNfa2Dfa.cpp",
+      "sha256": "0d27a7f84840f1226b15ae99c66de8b1aca4ba0f3f427b9fd03a479074a2763a"
+    },
+    {
+      "bytes": 3796,
+      "git_blob_oid": "09ccc55424e2da571f13d7cde3a368e49791f339",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMergeDumps.cpp",
+      "sha256": "5575730d6a4548945071f5e035a55e33fae07d92077952ccbf7c9f50336acc0f"
+    },
+    {
+      "bytes": 3773,
+      "git_blob_oid": "b788c41070be97737fccaae28e24f41739833995",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMergeMwe.cpp",
+      "sha256": "bd30e919c974989b859e0b827a93ce0baf0da74953e685f70f33189a75101a5b"
+    },
+    {
+      "bytes": 2113,
+      "git_blob_oid": "2cc99664688b24136896d7061c7f913a838d5ea0",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMergeSets.cpp",
+      "sha256": "36583b4552ac846e1b9a813532dc5b7a884962b07d2e121988595a656d8067e1"
+    },
+    {
+      "bytes": 1228,
+      "git_blob_oid": "40c0bf3e32c3b17700df69e00e5b73d9361a5597",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMsg.cpp",
+      "sha256": "96b8ace902b674fa0e2bcada2092e3d851a81c913e4457b6861c058bce8267aa"
+    },
+    {
+      "bytes": 5939,
+      "git_blob_oid": "b2bba70f135a468ae7dd3f3d9fc9b0f9bd124f10",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMultiMapPack.cpp",
+      "sha256": "5e0eb07e2a6025eb481c520b6f891a3ff04ebc33d4964037fd81e2e747f00043"
+    },
+    {
+      "bytes": 5162,
+      "git_blob_oid": "57c057406df246f15055e82cf5a25eaab23b02cd",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMultiMapPack_fixed.cpp",
+      "sha256": "3036ac505770d0a5641626d73f9d4982afe3f90208fe1afd8f077528b4e4b2f7"
+    },
+    {
+      "bytes": 4483,
+      "git_blob_oid": "d0c48382e52ee2ce2af9991dee8c30c7395a87e8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMultiMapPack_mph.cpp",
+      "sha256": "e8634dcedacb81d85aa19d2bec8939aafa3b23594bec00279f56cfef79d4464b"
+    },
+    {
+      "bytes": 5084,
+      "git_blob_oid": "bc15e71dc4739a09e66625b5a51749ae44f16887",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMultiMap_ar.cpp",
+      "sha256": "274cf64dd7aaaf4ce226ef75e9795cd70603894b5163cd62b935fb52108f77c2"
+    },
+    {
+      "bytes": 7485,
+      "git_blob_oid": "fdea90248f4268d11fc7babb87a219fa86250f65",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMultiMap_ar_uniq.cpp",
+      "sha256": "2a23036720cc276b347c18fa2f128e2f59e53af771bbd8290d515f1a4d635ac9"
+    },
+    {
+      "bytes": 6785,
+      "git_blob_oid": "e583fd3a7d7bb0bd81909ad805eaa7b39bfe7c78",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAMultiMap_judy.cpp",
+      "sha256": "3f9c581be803c2c4dba3b2419d96ac95db6106e1fb0d636bc925b60ecb44b044"
+    },
+    {
+      "bytes": 2892,
+      "git_blob_oid": "292b7ff9013a85e305afbd8dd7428a6e1a31c76e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfa2EqPairs.cpp",
+      "sha256": "0619432263f112a350bd5776f90a3facca2d584000a451b83617da2d7fd56a36"
+    },
+    {
+      "bytes": 4865,
+      "git_blob_oid": "97429b3c144581d62ed2e3378d622b8acaffbaa9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfaCreator_base.cpp",
+      "sha256": "52cd502933cec00870c83702215c204f58e2bf369eb22e3267c179ec297edc5d"
+    },
+    {
+      "bytes": 14030,
+      "git_blob_oid": "4bb6369a724dbac7cd69ceaf05b63495d5c304a8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfaCreator_char.cpp",
+      "sha256": "d6d25f0b21a92cf9f05aeae152a23c0f2b66c7064538bdd38e61be654a4c6098"
+    },
+    {
+      "bytes": 929,
+      "git_blob_oid": "0f765ea6d83a27d3b3c0336d107897cb23ac749c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfaCreator_digit.cpp",
+      "sha256": "d6fbe7d77c3d99e68fcc82988dad7fd211deabe3c74b17f19455f158b5e6d1e5"
+    },
+    {
+      "bytes": 2096,
+      "git_blob_oid": "ec57c672dd1f3ed1a165a4bb4a36d71a81552039",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfaCreator_wre.cpp",
+      "sha256": "08188798bb7b0cdd46180691d703605873406c27fc314633f5db15330a98441d"
+    },
+    {
+      "bytes": 4325,
+      "git_blob_oid": "9f9cfcddc0488de3d26ae6a256fe9ae5e5c7af3f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfaDelta_ro.cpp",
+      "sha256": "d9446368d9e802cbd85500d2cec89d3a4a291241bdb8f41fa3294c95d2ac5fe4"
+    },
+    {
+      "bytes": 5778,
+      "git_blob_oid": "8d16edce4e7884453091463e1700d31da0121cb1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfaDelta_wo_ro.cpp",
+      "sha256": "3754f938d32baba058e4287e3769ee194112a3735477837170858c83ad23f3fb"
+    },
+    {
+      "bytes": 7595,
+      "git_blob_oid": "85e64b42097abde9e66863e7cef3aebbfd964e50",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfas2CommonENfa.cpp",
+      "sha256": "dac879329a15ec6d8c0fe01779e85d9d8ffec9fe8170fda90450c85298941579"
+    },
+    {
+      "bytes": 13496,
+      "git_blob_oid": "02c22810c02a87997131bfe78d776057260ccfdc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FANfas2TupleNfa.cpp",
+      "sha256": "d01df8ecd73d6d777386679b9a7fe21586ad4ce5c3aa9ce0787e6094243af598"
+    },
+    {
+      "bytes": 7162,
+      "git_blob_oid": "676cae7392308a30f458371f03d6f0b7efdd4c6d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAOffsetTablePack.cpp",
+      "sha256": "be8a010843a5d0e40195723e43365408251f1c1848bedc092f3f3909a094eea3"
+    },
+    {
+      "bytes": 4099,
+      "git_blob_oid": "47507926824c4609d3d4c91d04b4d7cf4585aa70",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAParseTree.cpp",
+      "sha256": "2ef1716136dc25cf3cb2fea248a0aa810a354321281d527d893fe005a1369618"
+    },
+    {
+      "bytes": 5133,
+      "git_blob_oid": "6584da9a49bcf8b15bd5146b7a6d840a2b52b299",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAParseTree_rbt.cpp",
+      "sha256": "359372c7923240cb8d6718b66e9f10d216fe2f0bede92f756e342fb046c81e42"
+    },
+    {
+      "bytes": 7912,
+      "git_blob_oid": "e2bb7cfd848fd8423c42c6a55063779ae1eae015",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAParsedRegexp2TrBrMaps.cpp",
+      "sha256": "e03148afb18951765d7388694673ace7f8d337c068bcf47283655a72f98a3f29"
+    },
+    {
+      "bytes": 26085,
+      "git_blob_oid": "84042de13339ebd1da7aa66465432d642cc5a981",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAParser2WRE.cpp",
+      "sha256": "af396d644e1dd123b84d0dfece41ab55dfb83bfafebfdde06517ab421e3c06b0"
+    },
+    {
+      "bytes": 22682,
+      "git_blob_oid": "16afdcb94696f87fc2aba0304e6adbc3d8f265a4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAPosNfaPack_triv.cpp",
+      "sha256": "a0dd02567f1c11f360ec8a024c431d500292ecccaa338ba89b72a9d8be32b891"
+    },
+    {
+      "bytes": 6379,
+      "git_blob_oid": "f6c8a2e3370e8b77a3ecac91a978a7162c458f37",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAPosNfa_pack_triv.cpp",
+      "sha256": "1fc489dacb219550153e839500d167bbf718b1438d5ddccc0fa764e7aac0ddcd"
+    },
+    {
+      "bytes": 16914,
+      "git_blob_oid": "a45106bbbc41366e295e7e0f67286650025e1799",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAPrintUtils.cpp",
+      "sha256": "3baf39eac1cfd55f9f484c2a5a7c85eb8b6022d5f5d9d6fc945ef63a1e99b710"
+    },
+    {
+      "bytes": 5161,
+      "git_blob_oid": "e755c8a3e270a832175519003030d488558ae0df",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa2MooreDfa.cpp",
+      "sha256": "e9049ead82b1f43a046274d515b3fa0ae4e6d17b13dca1b9d5656fad215b73d1"
+    },
+    {
+      "bytes": 3523,
+      "git_blob_oid": "1a30cde7cce4b3dd6d4c4f10cd96a48db9ca2acc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa2PerfHash.cpp",
+      "sha256": "65ee22f6621d577eb1c0d05aa6de61167734af2932f695c65f0a60241397753c"
+    },
+    {
+      "bytes": 4894,
+      "git_blob_oid": "0f86326b23fac5909967c8897b3fa3ed47ad5d12",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfaRenum_depth_first.cpp",
+      "sha256": "695ecf981f56a0e7f5a424650bfe8076672a452358f5405ea54940f02c8c9476"
+    },
+    {
+      "bytes": 2610,
+      "git_blob_oid": "56688ea78f205dfaba955c50bdd7d71dc01a88bf",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfaRenum_remove_gaps.cpp",
+      "sha256": "d706a9178b7369ea03d3ac29d98b717829b4fee6dd00b3bf4491e16bc0684151"
+    },
+    {
+      "bytes": 7332,
+      "git_blob_oid": "16f35db84bb6a08161ab2ec11aa60dedd0982cf1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa_ar_judy.cpp",
+      "sha256": "d6d4eb1b71c4873c5c3a52ecbd4cf857161eb5fd42fcaf8ca0e2d7764758b28b"
+    },
+    {
+      "bytes": 5139,
+      "git_blob_oid": "0d7afd07bf2a2c9cc02eed460c9169ae0dbed5fb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa_renum.cpp",
+      "sha256": "c02b448d696342b716c85c3aa4a6646bf833fb27e68ed52515f50573d7607082"
+    },
+    {
+      "bytes": 4197,
+      "git_blob_oid": "d57b9902366851528d68a32f3e7ef1577093ca18",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa_renum_iws.cpp",
+      "sha256": "7210ea363509ca373b7bd16dcf63efe11aeed827a24e7b9595da6487570d1225"
+    },
+    {
+      "bytes": 7484,
+      "git_blob_oid": "d115eabafc079f7342e4a17ae5ab6990f819b515",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa_ro.cpp",
+      "sha256": "be5b9220788ea910d896042520587dfcdcf950b94507f2ffcbce49e261d1e563"
+    },
+    {
+      "bytes": 6197,
+      "git_blob_oid": "99ea728aae187a79b685efc7327c24fb781b37c3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSDfa_wo_ro.cpp",
+      "sha256": "eb40d065dceb167ba820430912eeb0bca115d40526dd04fda1cbb0c7cfead0f9"
+    },
+    {
+      "bytes": 7383,
+      "git_blob_oid": "4ad34b66d765e80ef812bb028fb951578ff2a679",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSNfa2RevNfa.cpp",
+      "sha256": "1e91d95084ad91a386edfaa778bd742cfad19d12bcee281c2a972b8735bb6e37"
+    },
+    {
+      "bytes": 13262,
+      "git_blob_oid": "5e0668e0e194bc322efe89f44b1bbee5f08dbc87",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSNfa_ar_judy.cpp",
+      "sha256": "714b42d822621bdf6c3ad838954233477d85dff8438e87f01b014e9d71d7d0db"
+    },
+    {
+      "bytes": 4618,
+      "git_blob_oid": "4d980681e1daa8d69fbde01dd6c630e41863ceeb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSNfa_ro.cpp",
+      "sha256": "733018efdee23bc819d57caefa46e4ab00c79d4a94de78e1c3d514e052e3ca92"
+    },
+    {
+      "bytes": 4456,
+      "git_blob_oid": "3e69122e460c6e3e055349528317e0f6ea7a8868",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARSNfa_wo_ro.cpp",
+      "sha256": "6eddb17c0cb865bd280beb85b572ba072242568e0365c7da5a48747dd23580fd"
+    },
+    {
+      "bytes": 2583,
+      "git_blob_oid": "90495ada9f7efd91942da5209f028e5381cb0fc3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexp2MinDfa.cpp",
+      "sha256": "c6cc75c06d4150ccea9e8cc278a52ba0642e8f8e660be8a49be3b39032028365"
+    },
+    {
+      "bytes": 7297,
+      "git_blob_oid": "d80ea3ae0b519da0c2dfbb53b09188c20b34d3bf",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexp2Nfa.cpp",
+      "sha256": "0001e53585befd5293d7ed708de2c04e98b6096e02e24988175aad3e170f8827"
+    },
+    {
+      "bytes": 4784,
+      "git_blob_oid": "9d69326a9348e7ef40237de39c835825110da1b3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpLexer_char.cpp",
+      "sha256": "59b7ee1f5bcd6317a81a1548cd691029d3bb819ea1743930749adbfa5cf7ea29"
+    },
+    {
+      "bytes": 4453,
+      "git_blob_oid": "dce815055ab6c9ec39e5b06d7a49631e5f1cfd0b",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpLexer_triv.cpp",
+      "sha256": "3215a312858ba79f1ae7fb1568fa07a05bab92bdc1d92bb5bc846260d7f1ec08"
+    },
+    {
+      "bytes": 5473,
+      "git_blob_oid": "b0dff88637f5ea8981fc34cf4223c10dfe174417",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpLexer_wre.cpp",
+      "sha256": "0762b5197e08ed543a9cb5cd7fffa5175d3ae392a844a1ab0e59480304cb969a"
+    },
+    {
+      "bytes": 18535,
+      "git_blob_oid": "29f5e34ce2a2f557b44272aa5551e63c65d6a2d1",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpParser_msyacc.cpp",
+      "sha256": "43cb073c3382a7995725d85dcfcf3bb127ca41dee93d95cfebb29560c42e7c0c"
+    },
+    {
+      "bytes": 5805,
+      "git_blob_oid": "7c0df5f557a7ed3dcf4cb7d14493c11a148564e3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpParser_msyacc.y",
+      "sha256": "2eb0f2b50ac6d6e3db7160153b2cacdc40e9c98869d9e360ee471b9e115206db"
+    },
+    {
+      "bytes": 3675,
+      "git_blob_oid": "2b8ccd33c4a4685113a66a296007c4956199af24",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpReverse.cpp",
+      "sha256": "882511b5a1738261d72276cfa56dcb54d5ba125504a02c08d19785076704ab3a"
+    },
+    {
+      "bytes": 4700,
+      "git_blob_oid": "ff9d17130a5b977010afb23dae72ed9cd34295e7",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpSimplify.cpp",
+      "sha256": "6b39e89a813c8144e494441ea63c474b56ca614953c341cee0d66545fa48a5ab"
+    },
+    {
+      "bytes": 6630,
+      "git_blob_oid": "bf87f826a5052605607572768f92b201681d8608",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTree.cpp",
+      "sha256": "7f31eab0a81cb704301ed78233389094364319957608d92d9b6aeb5e89185f26"
+    },
+    {
+      "bytes": 18115,
+      "git_blob_oid": "3a2ec80962b6ae7c9a118441b31520c26aa70a57",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTree2Funcs.cpp",
+      "sha256": "ac0327619822dd8fadffb40f391ecbd5e40029f0480ee0e34659c3af3b3053ca"
+    },
+    {
+      "bytes": 3569,
+      "git_blob_oid": "5cdb43def74ab6f735cc6c596fa49ee05277f39d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTree2Hash.cpp",
+      "sha256": "fa0a2c1c107c6466d23d5a6b14e64899497c9984ff05ba1d85835abb7d081dbe"
+    },
+    {
+      "bytes": 5363,
+      "git_blob_oid": "b65d5f9e7743288e3808ef25e35597df9889caf9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTree2PosEqs.cpp",
+      "sha256": "67e3debb63265dbbadf69d94511cfd328b4748660a5193590b9f2e0b75634627"
+    },
+    {
+      "bytes": 4877,
+      "git_blob_oid": "dce30f171d07b5312998837d31e2f8d4c37ef2f6",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTree2Str.cpp",
+      "sha256": "9f45c4467c85d9c30d0bdefd890a27199ef737ca48f537d266d42bf351d780f7"
+    },
+    {
+      "bytes": 19303,
+      "git_blob_oid": "64db3432cecc28980ec564cae53fc8996a087d25",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTreeSimplify_disj.cpp",
+      "sha256": "412166b50d0f6b2cd0c1d6ba10cf60de983d540c99ade9cd053d80ad0fcc61f1"
+    },
+    {
+      "bytes": 11653,
+      "git_blob_oid": "e7c9e99416b85b500e12c36c480dcd352d967d0a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTreeSort.cpp",
+      "sha256": "79d23d55fc2ff06ab608877b59fe1e33112ad14befb57a727dc462501700f4a5"
+    },
+    {
+      "bytes": 1229,
+      "git_blob_oid": "152d65d9c524b4e4d9662891bcf2fb0d38d00746",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARegexpTreeTopoGraph.cpp",
+      "sha256": "6dc6a209a678f248b5bfb4c7f4dd0bf2cff4ccb8ed0358acac584a2c284f97bf"
+    },
+    {
+      "bytes": 6060,
+      "git_blob_oid": "9311b56d85dec4a795f2c105e341dab315517ebb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FARemoveUnreachable.cpp",
+      "sha256": "e9ceb00c461939e7a2219c257a4e487313a18cb6400dd5d0e81e8b2a70bea5b2"
+    },
+    {
+      "bytes": 6222,
+      "git_blob_oid": "e20ba20965b456bc7baf8eac0fc701414067088a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAResolveMatch_nest.cpp",
+      "sha256": "8ff31d2bea0983b9b13e9f23141df5f53249462f76d6c7487279d9baa02bde51"
+    },
+    {
+      "bytes": 9798,
+      "git_blob_oid": "92b2f3ce7fd498cf91619b00d8040fbed568eeef",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASelectTrPatterns.cpp",
+      "sha256": "fd45141c61e535da365a8af4d3e60ed47f3e3114644e0aaf40148dbf2fd59c1a"
+    },
+    {
+      "bytes": 10378,
+      "git_blob_oid": "bc7fb419eb6a922f34dfde6721be80fe12496f5d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASetUtils.cpp",
+      "sha256": "5acc0e7af557d5ce183812a1de9daf67b28071d8152d80308a4866efc2bbec1d"
+    },
+    {
+      "bytes": 3485,
+      "git_blob_oid": "1a51409319d5b5502c5024bfc89e32501814b20f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASortMultiMap.cpp",
+      "sha256": "eadfbed51318b25d1ce1dd7876bd0f750f70d6306794ac598234eb3d807eaaeb"
+    },
+    {
+      "bytes": 2393,
+      "git_blob_oid": "e17498917cbeb73350c2e6cc8b1160d31202851f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASplitSets.cpp",
+      "sha256": "9de1131b7c30cffb0e5f3abb815aea673d59bdc20db2aeea4380a75f5f0628ec"
+    },
+    {
+      "bytes": 3592,
+      "git_blob_oid": "53d3e93e53cbeb40cabbcf3d14fa5030639e7967",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASplitStates.cpp",
+      "sha256": "9ac4d87a9eb4e91754cf742a65576c717ce073c057cc3f9f2179423ec46ead29"
+    },
+    {
+      "bytes": 796,
+      "git_blob_oid": "b36e348eb5b1b4c39cd2e2aefe0797c15f924b2d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAState2Ow.cpp",
+      "sha256": "74d0a3fa89bf67af79f1262b2bf12fc87145466142be38ad565acab12016ad0b"
+    },
+    {
+      "bytes": 1720,
+      "git_blob_oid": "f444da1f390faff8b5be2b6a637609340eabae98",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAState2Ows.cpp",
+      "sha256": "d80477f61d5ad4ab10dc7f853a8e7fab376a0496d2cc46e21eea015f37dc951e"
+    },
+    {
+      "bytes": 2267,
+      "git_blob_oid": "c115ca637ce149100dcbf56b483d92c8e9570fc3",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAState2Ows_amb.cpp",
+      "sha256": "39b7a14b616f392a747603e4c758e3cca3664ea49239100f600950e667c2f925"
+    },
+    {
+      "bytes": 1335,
+      "git_blob_oid": "80c1f5ef701982b307187066b20c6188a688debd",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAState2Ows_ar_uniq.cpp",
+      "sha256": "7987e4bbd2b03514b7452e924cfdf4f13395581b9bef4eeb90ed13e5d6ad42a2"
+    },
+    {
+      "bytes": 5255,
+      "git_blob_oid": "8b07c63dfbe4f4059082c50f052d68944eae8b2e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAState2TrBr_pack_triv.cpp",
+      "sha256": "64ae0776d49de79be549bb371f14b60525408ee8ef9855d29647e03c102e6b89"
+    },
+    {
+      "bytes": 8040,
+      "git_blob_oid": "363bae55bc9cc899ff00b7556536c6b9af3b1249",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAStr2Int_hash.cpp",
+      "sha256": "4da95c0a57f22e2954ab9e6d6db1c6893a0918403639166d97893124256873f8"
+    },
+    {
+      "bytes": 3253,
+      "git_blob_oid": "7647cba429e252922b1d9337188f023d96a7322d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAStr2Utf16.cpp",
+      "sha256": "b4f3ecb6dab0e31b7daf6b9a7389cb2ab532786ca824739e8e6b85810906f064"
+    },
+    {
+      "bytes": 2308,
+      "git_blob_oid": "4cce8074196ed176926625c5a2e0f4e13a666f94",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAStrList2MinDfa.cpp",
+      "sha256": "72cb60dcb92bb76a6d29f60a44f6c1a0af98dfa0c054072d9eb6f980789e4993"
+    },
+    {
+      "bytes": 1751,
+      "git_blob_oid": "f481205ddce8b9fa09df3b68fe47c7ec2c6b8f57",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAStringArrayPack.cpp",
+      "sha256": "234195500f2f1989731fba61d1f67565f5ff7c616a9f2007cb87f678ee6be02d"
+    },
+    {
+      "bytes": 3512,
+      "git_blob_oid": "61c273f480ad53f38e499d67d601855814db38af",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAStringTokenizer.cpp",
+      "sha256": "9d703d78aa0bb71acc47893e5829ff49105d54c8bd9c37ea016a81a0917d7353"
+    },
+    {
+      "bytes": 12209,
+      "git_blob_oid": "4b7b96efadb34683f2d1c829611aca0ac8b7f8cb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASubstRules2Regexp.cpp",
+      "sha256": "55245190d56ba2e2a0488d9143cc91418a571cfefef52f6551209783ee6143b5"
+    },
+    {
+      "bytes": 13907,
+      "git_blob_oid": "90975d9f6f5c48d91066fb138b876f46f227f856",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASuffixRules2Chains.cpp",
+      "sha256": "7fa2f89993f2befc0e67d66b816acdc074c494edda1ced250d5ca8f4bf363555"
+    },
+    {
+      "bytes": 3068,
+      "git_blob_oid": "df1494b6c792e9cd8522df4433ddb360ce2bc77e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FASummTagScores.cpp",
+      "sha256": "d6aa536b57dda8014963f24891e0a9a06d57361e370d9aafea4c75f2e331146c"
+    },
+    {
+      "bytes": 1787,
+      "git_blob_oid": "220e47b685e8b6831657a98506a3fe9927d8f1e4",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATagSet.cpp",
+      "sha256": "a8554f2c8a0deb2efb4d58e55c1e19ff3240f358aa444df8f2540756a6c196f4"
+    },
+    {
+      "bytes": 3196,
+      "git_blob_oid": "39da7c753d5e383670b125754f929bd507de19c2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATaggedText.cpp",
+      "sha256": "24e812d4ae46324b04675f3d6fbb5c7fdac949ec26623272f613f3d4ae5c5737"
+    },
+    {
+      "bytes": 21331,
+      "git_blob_oid": "78a88429cbe86b9b253de1278f2fcae21be86f5f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATaggedTextStat.cpp",
+      "sha256": "def90edb58d6d733ddc6885191a55a9e7abcb5e6b49a3a7cc1d503c87abe47b7"
+    },
+    {
+      "bytes": 8611,
+      "git_blob_oid": "9ff253c48796588207b28f9bbe969c3b6eae5106",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestCmpDfa.cpp",
+      "sha256": "181157f8169abb55c0170649b0c71a1d9f0aa7b348167f4b25f56e4a03366f53"
+    },
+    {
+      "bytes": 3471,
+      "git_blob_oid": "0c25f2e822cc8880ada0f17886ef77099e5f5a70",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestCmpMultiMap.cpp",
+      "sha256": "6379e01e6673a4c45635815ea9d039b514011f0aadfce89a58e866e21606a5fd"
+    },
+    {
+      "bytes": 7459,
+      "git_blob_oid": "2e509013dd8346d94f1da62c16164b1fc838a45d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestCmpPosNfa.cpp",
+      "sha256": "c6c9dfc237b280392f248d0eba4e0c093ea403e62c43aa781821b9b81f983112"
+    },
+    {
+      "bytes": 6424,
+      "git_blob_oid": "eef5e999316da5c4b6d86202720472ae322a034c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph.cpp",
+      "sha256": "c2cca2c368c342e6b86c28eae4266ba887ba84634b310b85870c19a61f5086f1"
+    },
+    {
+      "bytes": 5058,
+      "git_blob_oid": "12d717a46de71564edbae99ca9bd969162bbf141",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph_b2w.cpp",
+      "sha256": "56d03ddce28448e5556d462f09d9e194e0542bc5aa5bf3734f07c410257b86e3"
+    },
+    {
+      "bytes": 4675,
+      "git_blob_oid": "fafb444eefd8a05f92088998cc42e1ecc38b7fa8",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph_tag_dict.cpp",
+      "sha256": "7d0b801abd7eba6f9df4cb09875966448c1033361a0c900d21724f6e2bece55a"
+    },
+    {
+      "bytes": 5089,
+      "git_blob_oid": "2dc44908a6812bcdb87ca022a41c6ce0060fd9a5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph_w2b.cpp",
+      "sha256": "e2e91d8a7b8b77d3b4615a5b173513e9765a42eaf8b5345c8dc9aea6bceb416d"
+    },
+    {
+      "bytes": 3690,
+      "git_blob_oid": "ea9e6b7f61851a3186cbb3e5a647efccdd10d43a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph_w2h.cpp",
+      "sha256": "3f17e2b7ed8046c80c7272b67ebb70d8ff0f566f1248f1434c5e58d0a9c197c6"
+    },
+    {
+      "bytes": 4288,
+      "git_blob_oid": "435d86ee5abfcadd6886f2c72fa725b6056b5483",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph_w2s.cpp",
+      "sha256": "3a10fb8d787191b7b7b00fdc35c9d122e8a0006b3288bf0da3ed375e69ae5cac"
+    },
+    {
+      "bytes": 4635,
+      "git_blob_oid": "42c2be8a2bcf75f59fa46b3de42129a9d33d177a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATestMorph_w2t.cpp",
+      "sha256": "faba917316cc922816dde47cee9f526c36bc4f4be0163f2d78d7333bcce0dd1e"
+    },
+    {
+      "bytes": 863,
+      "git_blob_oid": "3fb217645f243160d46b62667d262d67b7af3ded",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAToken.cpp",
+      "sha256": "47c3192d6d53c2b66362017e582d713c484a553f55754fb694ace14cd69c66fd"
+    },
+    {
+      "bytes": 6974,
+      "git_blob_oid": "d9a741cbf677b55dadec692e77cbfb8ee97979e0",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATokenNfa2TupleNfa.cpp",
+      "sha256": "cdb44b95e1a0ec2a692f50b0767f9771077d412cc0c470ec011c95067493aea9"
+    },
+    {
+      "bytes": 3481,
+      "git_blob_oid": "37358f41df07ad75bfcaee25aa8d45e8381e3ac9",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATrBr2Symbol.cpp",
+      "sha256": "7852204a3a39ac0cb07a8b3a23b136fc37830d253886f522f669651f8b7cc008"
+    },
+    {
+      "bytes": 7912,
+      "git_blob_oid": "2bbfa5ce25b73dd69f125f7070465e84f09eb5fc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATrBrNfa2MealyNfa.cpp",
+      "sha256": "4884b8b6812e9c1e8995e259b4d166f4c8648477cf55a7a668d66b33250158aa"
+    },
+    {
+      "bytes": 8670,
+      "git_blob_oid": "83ab8c5f87a30343586e4c02f4d6cc726e1f8afc",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATrWordIOTools_utf8.cpp",
+      "sha256": "93ef9fc0a62001c547b0dfca3dce36f30dc41b12611d9c53a9be27e7bd958b96"
+    },
+    {
+      "bytes": 4505,
+      "git_blob_oid": "2fe045767f215c27b96581789089bb122dd5764f",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATypeMinDfa2MinMooreDfa.cpp",
+      "sha256": "77062926b419b0521cb2be45b5b03239e9186dbd8a5c596106e797201790f180"
+    },
+    {
+      "bytes": 4700,
+      "git_blob_oid": "3dfcf4be20400ffc2ff2bd6f8636acf71cf58014",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FATypesNfaList2TypeNfa.cpp",
+      "sha256": "cc87b7d292f3861b679e2ffcbcaf1874eb573134787b5c50aa2f52fcb8204079"
+    },
+    {
+      "bytes": 7723,
+      "git_blob_oid": "feb70ec0f8ec008180bc91a53cf655fe2cf557fa",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAUnAmbiguous.cpp",
+      "sha256": "2b2c19881510e64204dda7d80754ebc0a29bdf05fe2face2056a82d1cec93129"
+    },
+    {
+      "bytes": 4209,
+      "git_blob_oid": "1a6e04be83c44f77820f79972de4578572f2db5e",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAUtf16Utils.cpp",
+      "sha256": "2b207c7a5b839056b9ae676b98be42df46dd475b2344c51c840501c1190b1227"
+    },
+    {
+      "bytes": 3425,
+      "git_blob_oid": "8676332ee18af6c21d5a19f7b5713305158c1611",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAUtf32ToEnc.cpp",
+      "sha256": "88beed76a6035ef096266da7ff091d12b3cadef89b121652e9541311522306e9"
+    },
+    {
+      "bytes": 19483,
+      "git_blob_oid": "d27f0c997e34f914c146209f8c8e28ea37fa468d",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAUtils.cpp",
+      "sha256": "874b647c3fec7edd71ea32b6c1c4b44a1e85d3baae6ce4a69299a2467545a9fc"
+    },
+    {
+      "bytes": 17628,
+      "git_blob_oid": "b5f6b541aa33ae3b112634814f1ce6af4802a581",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWRECompiler.cpp",
+      "sha256": "6193055b523a382fe78a4f405b1f025395ca423348aded43c3afa7edca6823a0"
+    },
+    {
+      "bytes": 7818,
+      "git_blob_oid": "2f46e336f63ed09022d1054ef3ee6ae33db98feb",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWREConf.cpp",
+      "sha256": "a33264afeb6664bf55c9da1db3b05e461c9e7a5b51af0e64e8bddd2e35793c3a"
+    },
+    {
+      "bytes": 8007,
+      "git_blob_oid": "7aac1529db9e319324041ce03cdc59a5d35ef588",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWREConfPack.cpp",
+      "sha256": "6848ea12538a5a7ee222d0ff54a052f774630e5b33d5462c0c7606b7cafede0a"
+    },
+    {
+      "bytes": 7382,
+      "git_blob_oid": "fc2f05ffd62b17a20c4c75cae5600c16fcf3539a",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWREIO.cpp",
+      "sha256": "8d9bcdc87b754b82281dc4ceb36c8e94d9c14a1994435ee574f41def4749a31e"
+    },
+    {
+      "bytes": 3614,
+      "git_blob_oid": "3723c81fa85c4a62385e5d30598a8c73793ab008",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWRERules2TokenNfa.cpp",
+      "sha256": "93af191c9473c2008d4fc4d8744f876c3371a4e9978c0aa32d364bdaf3d3211f"
+    },
+    {
+      "bytes": 3288,
+      "git_blob_oid": "94a846e18abaf727d3b319af17b8df2690686fc5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWREToken.cpp",
+      "sha256": "3e2aff8a4d48b51d094acf8445dc14056e691e626bc55cd58433c2afcde51933"
+    },
+    {
+      "bytes": 14018,
+      "git_blob_oid": "25563961e77f630da389478504ce3bef8e174963",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWRETokenParser.cpp",
+      "sha256": "46f9f289a3b3ecc8ceb22035c6d4bf60d531dcf6dce45e1d1908a5f790504bd5"
+    },
+    {
+      "bytes": 18498,
+      "git_blob_oid": "fd97d560152960e7fd9064732d37c3562b1fbb5c",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWRETokens2Dicts.cpp",
+      "sha256": "6335eb9a8afb747de440f7d4239de05919ea0d8320ed5d0283d6e613387c3801"
+    },
+    {
+      "bytes": 16056,
+      "git_blob_oid": "1626cb7e9c3cc21595cfab3d7d54deffdc48c077",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWRETokens2Digitizers.cpp",
+      "sha256": "9d4030e8d508c5b1bcd6ba4f14291c9e4ace7b118371d983a212f0b7d1d81ab8"
+    },
+    {
+      "bytes": 4083,
+      "git_blob_oid": "8253e3063fa751c0b1505395aeefe0bb823db3c2",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWord2WordSuff.cpp",
+      "sha256": "af9856cb9ab155fd10fce6bb864aca26a14b70d05dd90088404a5db6a7e93286"
+    },
+    {
+      "bytes": 3413,
+      "git_blob_oid": "80b056f04a43189a9c77658fbdff3aef351b60f5",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/FAWreRulesConfKeeper.cpp",
+      "sha256": "b550d65caf55bd71ffa8dc1ff70eb1d1fb3777e76e0e11e3341bce02893ce80a"
+    },
+    {
+      "bytes": 40,
+      "git_blob_oid": "2c439e142c41c28ce2ebc5719a776374dde12381",
+      "git_mode": "100644",
+      "path": "blingfirecompile.library/src/blingfire-compile_src_pch.cpp",
+      "sha256": "fcc3b5ea6d657e795611691501078dba6231e8c8843e9665d95265a0031bfe5e"
+    },
+    {
+      "bytes": 1407666,
+      "git_blob_oid": "1ef357f3f44d17ae8e5c5a81f4a21ac3a2e14104",
+      "git_mode": "100644",
+      "path": "blingfiretools/blingfiretokdll/BlingFireTokLibSbdData.cxx",
+      "sha256": "5a0ec7fce095b6719b158f0771cedcb4d126cf5ee345bce723e78e21f124bdff"
+    },
+    {
+      "bytes": 540983,
+      "git_blob_oid": "f9a03abae1665d6754af7f170e6f20814859f8b0",
+      "git_mode": "100644",
+      "path": "blingfiretools/blingfiretokdll/BlingFireTokLibWbdData.cxx",
+      "sha256": "791e6e4e67cb4120696964e4a912a4741bf65ec62bf998cc75445ebf5a9ef8f0"
+    },
+    {
+      "bytes": 60650,
+      "git_blob_oid": "241d22749fcaa862ac2ce82486ef980f750f9eb9",
+      "git_mode": "100644",
+      "path": "blingfiretools/blingfiretokdll/blingfiretokdll.cpp",
+      "sha256": "6d5cb53279af81f3041296897352ae1b58ba69ebbb0a7250716a47085f9f1d0b"
+    },
+    {
+      "bytes": 592,
+      "git_blob_oid": "f000f2498ba897726b3581a760c8acb8bb8eee43",
+      "git_mode": "100644",
+      "path": "blingfiretools/blingfiretokdll/blingfiretokdll.def",
+      "sha256": "978f4cc85a73f8b04a461cc7bd006f7505df8e3274084663e9ea548fd06013dd"
+    },
+    {
+      "bytes": 4422,
+      "git_blob_oid": "19861f8d075b71dec9b9a2bcf76a264054ed83ec",
+      "git_mode": "100644",
+      "path": "blingfiretools/blingfiretokdll/blingfiretokdll.h",
+      "sha256": "5717c42de8f76fba02de69ca01d08ba00071292889b7c4873f3ce9ce8844defa"
+    },
+    {
+      "bytes": 81,
+      "git_blob_oid": "9070364c6da1ce8413ebc82308f1bfeca11b73a4",
+      "git_mode": "100644",
+      "path": "cmake/blingfire-config.cmake.in",
+      "sha256": "0fcdefde184b4dd37dffbc0069fdd7b2ddf679b3422af83c4c9f7dec18ea7bc2"
+    },
+    {
+      "bytes": 9639,
+      "git_blob_oid": "14180463d607689f09ca2125c0590c2d283d3187",
+      "git_mode": "100644",
+      "path": "dist-pypi/blingfire/__init__.py",
+      "sha256": "8a2a0f8dfa9713124156bc0fba57129ab94ec545233e1623d676c07c36511149"
+    }
+  ],
+  "gzip": {
+    "compresslevel": 9,
+    "filename": "",
+    "mtime": 1733688115
+  },
+  "original_immutable_archive_url": "https://codeload.github.com/microsoft/BlingFire/tar.gz/18e9a19e586095fb60d629fa850fb610d5bca605",
+  "prefix": "blingfire-18e9a19e586095fb60d629fa850fb610d5bca605/",
+  "producer": {
+    "git": "git version 2.54.0 (Apple Git-157)",
+    "python": "3.14.8 (main, Oct 14 2026, 00:55:47) [Clang 23.1.3 ]",
+    "zlib": "1.2.12"
+  },
+  "repository": "https://github.com/microsoft/BlingFire",
+  "selected_paths": [
+    "CMakeLists.txt",
+    "LICENSE",
+    "blingfireclient.library",
+    "blingfirecompile.library",
+    "blingfiretools/blingfiretokdll",
+    "cmake",
+    "dist-pypi/blingfire/__init__.py"
+  ],
+  "source_bytes": 6874950,
+  "source_projection": true,
+  "tar_bytes": 7311360,
+  "tar_sha256": "f8548f8e3a279027d7f0ac871d3013d7995de8e22967820a69eb2775ab4d3b79"
+}

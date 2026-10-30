@@ -1,0 +1,30 @@
+[build-system]
+requires = ["scikit-build-core==1.1.1", "pybind11==3.1.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "livekit-blingfire"
+version = "1.1.0"
+description = "BlingFire sentence and word tokenization for LiveKit Agents"
+readme = "README.md"
+requires-python = ">=3.15.2,<3.16"
+license = "Apache-2.0 AND MIT AND BSD-3-Clause"
+license-files = ["LICENSE", "LICENSE-BLINGFIRE", "LICENSE-PYBIND11"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.urls]
+Source = "https://github.com/livekit/agents"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = "==4.4.4"
+cmake.define.CMAKE_OSX_DEPLOYMENT_TARGET = "11.0"
+wheel.packages = ["python/livekit"]
+build.targets = ["lk_blingfire"]
+build.tool-args = ["-j1"]
+install.components = ["python"]
+sdist.include = ["vendor/blingfire.tar.gz"]
