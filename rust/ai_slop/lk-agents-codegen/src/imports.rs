@@ -9,6 +9,27 @@ pub fn merge(header: &str, extra: &str) -> Result<String, String> {
     };
     let imports = merge_scope(header, extra_runtime)?;
     let (runtime, existing) = imports.split_once("if TYPE_CHECKING:\n").unwrap_or((&imports, ""));
+    // A name the module already imports at runtime needs no type-checking import.
+    let lines = |text: &str| text.lines().map(str::to_owned).collect::<Vec<_>>();
+    let imported = statements(&lines(runtime))?;
+    let added = added
+        .lines()
+        .map(|line| line.strip_prefix("    ").unwrap_or(line).to_owned())
+        .collect::<Vec<_>>();
+    let added = statements(&added)?
+        .into_iter()
+        .filter_map(|mut st| {
+            st.names.retain(|n| {
+                !imported.iter().any(|i| i.from && i.module == st.module && i.names.contains(n))
+            });
+            match (st.from, st.names.is_empty()) {
+                (true, true) => None,
+                (true, false) => Some(render(&st.module, &st.names).join("\n")),
+                (false, _) => Some(format!("import {}", st.module)),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let dedent = |block: &str| {
         block
             .lines()
@@ -16,7 +37,10 @@ pub fn merge(header: &str, extra: &str) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let checking = merge_scope(&dedent(existing), &dedent(added))?;
+    let checking = merge_scope(&dedent(existing), &dedent(&added))?;
+    if checking.trim().is_empty() {
+        return Ok(runtime.to_owned());
+    }
     let checking = checking
         .trim()
         .lines()

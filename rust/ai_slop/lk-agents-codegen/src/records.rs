@@ -439,8 +439,16 @@ fn struct_emits(fields: &[Field]) -> Result<(String, String), String> {
             continue;
         }
         pattern.push(f.rust_name.clone());
-        if !f.private {
-            sets.push_str(&set(f, &f.rust_name, "        ")?);
+        match &f.ty {
+            _ if f.private => {}
+            // Nothing to send: the host's factory stamps it.
+            Ty::Optional(inner) if f.factory.is_some() => sets.push_str(&format!(
+                "        if let Some(x) = {} {{\n            kwargs.set_item({:?}, {})?;\n        }}\n",
+                f.rust_name,
+                f.host_name(),
+                emit(inner, "x")?
+            )),
+            _ => sets.push_str(&set(f, &f.rust_name, "        ")?),
         }
     }
     Ok((pattern.join(", "), sets))

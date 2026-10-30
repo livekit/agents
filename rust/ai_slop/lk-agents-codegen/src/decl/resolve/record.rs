@@ -55,6 +55,23 @@ impl Resolver<'_> {
                 },
             }),
         };
+        let dataclass = match voc::find(&record.nested, "dataclass") {
+            None if voc::find(&record.nested, "post_init").is_some() => {
+                return Err(format!("{at}: `post_init` shapes a mutable dataclass model"));
+            }
+            None => None,
+            Some(_)
+                if pydantic.is_some()
+                    || typed_dict
+                    || enumeration
+                    || transparent
+                    || persisted
+                    || !matches!(item, syn::Item::Struct(_)) =>
+            {
+                return Err(format!("{at}: a mutable dataclass record is a plain model struct"));
+            }
+            Some(_) => Some(Dataclass { post_init: voc::text(at, &record.nested, "post_init")? }),
+        };
         if pydantic.is_none()
             && ["constants_after", "private"].iter().any(|w| voc::find(&record.nested, w).is_some())
         {
@@ -168,6 +185,26 @@ impl Resolver<'_> {
                 "{at}: a pydantic model computes a left-out field in Python: record(.., validator = \"..\")"
             ));
         }
+        // A positional dataclass: a field without a default never follows one with a default.
+        if let Some(d) = &dataclass
+            && let RecordBody::Struct(fields) = &body
+        {
+            if d.post_init.is_some() && fields.iter().any(|f| f.omitted.is_some()) {
+                return Err(format!("{at}: `post_init` computes in Python: no `omitted` field"));
+            }
+            let defaulted = |f: &&Field| {
+                f.default.is_some() || f.factory.is_some() || matches!(f.ty, Ty::Maybe(_))
+            };
+            let modeled: Vec<&Field> = fields.iter().filter(|f| f.modeled()).collect();
+            if let Some(i) = modeled.iter().position(defaulted)
+                && let Some(f) = modeled[i..].iter().find(|f| !defaulted(f))
+            {
+                return Err(format!(
+                    "{at}: `{}` has no default after a defaulted field: a dataclass is positional",
+                    f.host_name()
+                ));
+            }
+        }
         let members = crate::parse::members(item_attrs(item), "python", &ident);
         for (i, member) in members.iter().enumerate() {
             let RecordBody::Struct(fields) = &body else {
@@ -208,6 +245,7 @@ impl Resolver<'_> {
             typed_dict,
             enumeration,
             pydantic,
+            dataclass,
             constants,
             persisted,
             members,
@@ -288,6 +326,7 @@ impl Resolver<'_> {
                         host_type: None,
                         private: false,
                         annotation: None,
+                        rename: None,
                         doc: Vec::new(),
                     }))
                 }
@@ -334,6 +373,7 @@ impl Resolver<'_> {
                     "host_type",
                     "private",
                     "annotation",
+                    "rename",
                     // Rust's own: `record(.., model_dump)` dumps the field through this function.
                     "dump_with",
                 ],
@@ -357,6 +397,10 @@ impl Resolver<'_> {
                 return Err(format!("{at}: a private attribute defaults by its default_factory"));
             }
             let annotation = voc::text(&at, &entries, "annotation")?;
+            let rename = voc::text(&at, &entries, "rename")?;
+            if private && rename.is_some() {
+                return Err(format!("{at}: a private attribute is named `_<field>`"));
+            }
             let omitted = voc::rust(&at, &entries, "omitted")?.map(|path| {
                 let path = quote::quote!(#path).to_string().replace(' ', "");
                 match path.strip_prefix("crate::") {
@@ -399,6 +443,7 @@ impl Resolver<'_> {
                 host_type,
                 private,
                 annotation,
+                rename,
                 doc: doc(&f.attrs),
             });
         }
@@ -465,6 +510,8 @@ pub(super) fn record_target(
             "typed_dict",
             "default",
             "pydantic",
+            "dataclass",
+            "post_init",
             "base",
             "repr",
             "validator",
@@ -551,6 +598,8 @@ pub(super) fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Res
         (Ty::Record(Record { host: HostForm::Record { .. }, .. }), Literal::None) => true,
         // A unit enum's string; the generated model's type check holds it to a member.
         (Ty::Record(r), Literal::Str(_)) => r.literal && matches!(r.host, HostForm::Record { .. }),
+        // A hand-written conversion's host value (`False` for `AlignedTranscript::None`).
+        (Ty::Record(Record { host: HostForm::Converted(_), .. }), _) => true,
         (Ty::Optional(inner), d) => return check_default(at, inner, Some(d)),
         (Ty::Bool, Literal::Bool(_))
         | (Ty::Float, Literal::Float(_) | Literal::Int(_))

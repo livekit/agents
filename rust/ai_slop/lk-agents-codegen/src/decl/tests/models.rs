@@ -324,3 +324,43 @@ fn transparent_records_extract_and_emit_existing_host_classes() {
     .unwrap();
     assert!(crate::records::conversions(&invalid).err().unwrap().contains("names one host class"));
 }
+
+// Catches: a plugin-facing dataclass emitted frozen or keyword-only (breaking positional
+// construction and mutation), its `__post_init__` hook dropped or calling `_core`, a renamed field
+// crossing under its Rust name, a host-stamped `Option` overwritten with `None` on emit, or a
+// required field accepted after a defaulted one (a `TypeError` at import).
+#[test]
+fn a_dataclass_record_is_mutable_positional_and_calls_its_post_init_hook() {
+    let decls = read(
+        r#"#[crate::host(record(module = "stt", dataclass, post_init = "event_post_init", extract, emit))]
+        pub struct Event {
+            #[host(rename = "type")]
+            pub kind: String,
+            #[host(default = 0.0)]
+            pub start_time: f64,
+            #[host(annotation = "float", default_factory = "time.time")]
+            pub created_at: Option<f64>,
+        }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let stt = &models.iter().find(|o| o.path == "stt.py").expect("stt.py").text;
+    assert!(
+        stt.contains("@dataclass\nclass Event:\n    type: str\n    start_time: float = 0.0\n")
+            && stt.contains("    created_at: float = field(default_factory=time.time)\n")
+            && stt.contains(
+                "    def __post_init__(self) -> None:\n        _bindings.event_post_init(self)\n"
+            ),
+        "{stt}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("if let Some(x) = created_at {") && shell.contains("kwargs.set_item(\"type\""),
+        "{shell}"
+    );
+    let unordered = read(
+        r#"#[crate::host(record(module = "stt", dataclass, extract))]
+        pub struct Event { #[host(default = 0.0)] pub start_time: f64, pub text: String }"#,
+    );
+    assert!(unordered.err().is_some_and(|e| e.contains("positional")));
+}

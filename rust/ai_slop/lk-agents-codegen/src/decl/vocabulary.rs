@@ -61,6 +61,9 @@
 //! | record field | `host_type = "module.Name"` | the class the host holds, when the type's own model is not it (a legacy model beside its handwritten public class) |
 //! | record enum variant | `native` | only native code produces or takes it: no model, never read, emitting it raises |
 //! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`; a call with its arguments, `..utils.shortuuid("item_")`, `..` a module of the package); with `skip`, Rust never sends it and the host stamps it, read back on extract |
+//! | record struct | `record(.., dataclass)` | a mutable, positional `@dataclass` (built by position, read with `dataclasses.asdict`), not a frozen keyword-only one; a field without a default never follows a defaulted one |
+//! | record struct | `record(.., dataclass, post_init = "hook")` | its `__post_init__` calls `_bindings.hook(self)`: a host-side normalisation of what was given |
+//! | record field | `rename = "type"` | the Python attribute, when the Rust name cannot be it |
 //! | record struct | `record(.., pydantic, constants_after = "id")` | the constants follow that field instead of leading the model's fields |
 //! | record struct | `record(.., pydantic, private(_name = "annotation"))` | a host-only `PrivateAttr` no Rust field holds, defaulting to an empty value of its container |
 //! | record struct | `record(.., model_dump)` | the record marker expands `ModelDump` (`model_dump(mode="json")`) in the model's field order; a field's `dump_with = path` dumps it as `path(self, cx)` |

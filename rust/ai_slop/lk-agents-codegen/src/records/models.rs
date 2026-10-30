@@ -369,6 +369,8 @@ fn model(
         runtime.add("..types", "NOT_GIVEN");
     }
     let pydantic = r.pydantic.as_ref();
+    // A mutable model's JSON reads `JsonValue`, as the values users and plugins put in it.
+    let json_value = pydantic.is_some() || r.dataclass.is_some();
     for factory in all.iter().filter_map(|f| f.factory.as_deref()) {
         match pydantic {
             Some(_) => runtime.add("pydantic", "Field"),
@@ -400,6 +402,8 @@ fn model(
             Some(p) => {
                 format!("\n\nclass {name}({}):\n", p.base.as_deref().unwrap_or("BaseModel"))
             }
+            // Mutable and positional: plugins build it by position and read `dataclasses.asdict`.
+            None if r.dataclass.is_some() => format!("\n\n@dataclass\nclass {name}:\n"),
             None => {
                 format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n")
             }
@@ -451,7 +455,7 @@ fn model(
                         _ => name.clone(),
                     }
                 }
-                None => annotation(&f.ty, module, own, out, pydantic.is_some(), imports),
+                None => annotation(&f.ty, module, own, out, json_value, imports),
             };
             s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
@@ -553,6 +557,12 @@ fn model(
                 s = s.replace("    pass\n", "");
             }
             s.push_str(&constants);
+            if let Some(hook) = r.dataclass.as_ref().and_then(|d| d.post_init.as_deref()) {
+                runtime.add("..", "_bindings");
+                s.push_str(&format!(
+                    "\n    def __post_init__(self) -> None:\n        _bindings.{hook}(self)\n"
+                ));
+            }
             let omitted = r.omitted();
             if !omitted.is_empty() {
                 s.push_str(

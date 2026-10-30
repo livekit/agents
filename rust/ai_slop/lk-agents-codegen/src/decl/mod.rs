@@ -56,6 +56,9 @@ pub struct RecordDecl {
     /// `record(.., pydantic)`: a struct whose model is a mutable pydantic `BaseModel` (the public
     /// records users and plugins build, mutate and validate), not a frozen dataclass.
     pub pydantic: Option<Pydantic>,
+    /// `record(.., dataclass)`: a struct whose model is a mutable, positional `@dataclass` (the
+    /// plugin-facing records built by position and read with `dataclasses.asdict`), not a frozen one.
+    pub dataclass: Option<Dataclass>,
     /// `record(.., constant(type = "stt_metrics"))`: fields the model holds at a fixed value (a
     /// discriminator its readers compare), never Rust state; read past, emitted by default.
     pub constants: Vec<(String, String)>,
@@ -90,6 +93,13 @@ pub struct Pydantic {
     /// `private(_cache = "dict[object, object]")`: host-only private attributes no Rust field
     /// holds, each defaulting to an empty value of its annotation's container.
     pub private: Vec<(String, String)>,
+}
+
+/// A mutable dataclass model: `post_init = ".."` names the `_bindings` function its
+/// `__post_init__` calls (a host-side normalisation of what was given).
+#[derive(Debug, Clone, Default)]
+pub struct Dataclass {
+    pub post_init: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +169,8 @@ pub struct Field {
     /// `annotation = ".."`: the model's annotation, when the type's own is not the one the host
     /// declares (one side-table key standing for `list[rtc.AudioFrame]`).
     pub annotation: Option<String>,
+    /// `rename = "type"`: the Python attribute, when the Rust name cannot be it.
+    pub rename: Option<String>,
     pub doc: Vec<String>,
 }
 
@@ -168,9 +180,10 @@ impl Field {
         !self.skip || self.factory.is_some()
     }
 
-    /// The Python attribute: the Rust name without a raw identifier's `r#` (`r#type` is `type`).
+    /// The Python attribute: its `rename`, else the Rust name without a raw identifier's `r#`
+    /// (`r#type` is `type`).
     pub fn host_name(&self) -> std::borrow::Cow<'_, str> {
-        let name = self.rust_name.trim_start_matches("r#");
+        let name = self.rename.as_deref().unwrap_or(self.rust_name.trim_start_matches("r#"));
         match self.private {
             true => format!("_{name}").into(),
             false => name.into(),
