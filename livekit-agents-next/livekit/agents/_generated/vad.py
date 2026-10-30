@@ -15,7 +15,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum, unique
+from enum import StrEnum, unique
 from types import TracebackType
 from typing import Generic, Literal, Never, Self, get_type_hints
 
@@ -32,7 +32,7 @@ from .chat_items import MetricsMetadata
 
 
 @unique
-class VADEventType(str, Enum):
+class VADEventType(StrEnum):
     START_OF_SPEECH = "start_of_speech"
     INFERENCE_DONE = "inference_done"
     END_OF_SPEECH = "end_of_speech"

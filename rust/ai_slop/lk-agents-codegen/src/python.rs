@@ -427,7 +427,7 @@ fn imports(
                 }
             },
             Kind::Enum => {
-                needs(&mut stdlib, "enum", "Enum");
+                needs(&mut stdlib, "enum", "StrEnum");
                 needs(&mut stdlib, "enum", "unique");
             }
             Kind::Plain => {}
@@ -853,9 +853,9 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
     }
 
     if let Body::Unit(variants) = &d.body {
-        // `(str, Enum)`, never a bare `Enum` or `#[pyclass]` enum, so `== "job_shutdown"` holds.
+        // A `StrEnum`, never a bare `Enum` or `#[pyclass]` enum, so `== "job_shutdown"` holds.
         b.push_str("@unique\n");
-        b.push_str(&format!("class {}(str, Enum):\n", t.name));
+        b.push_str(&format!("class {}(StrEnum):\n", t.name));
         if docstring(&mut b, &d.doc, 4) {
             b.push('\n');
         }
@@ -875,7 +875,7 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
         Kind::TypedDict if !t.total => "(TypedDict, total=False)",
         Kind::TypedDict => "(TypedDict)",
         Kind::Dataclass | Kind::Plain => "",
-        Kind::Enum => "(str, Enum)",
+        Kind::Enum => "(StrEnum)",
         Kind::Union => {
             return Err(format!("{}: `union` needs a Rust enum with typed variants", d.rust_name));
         }

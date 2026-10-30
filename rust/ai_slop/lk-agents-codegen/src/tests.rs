@@ -881,8 +881,8 @@ fn an_enum_record_crosses_as_its_str_enum_members() {
     let models = crate::records::python(&decls).expect("models");
     let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
     assert!(
-        session.contains("from enum import Enum, unique\n")
-            && session.contains("@unique\nclass CloseReason(str, Enum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job-shutdown\"\n    \"\"\"The job ended.\"\"\"\n")
+        session.contains("from enum import StrEnum, unique\n")
+            && session.contains("@unique\nclass CloseReason(StrEnum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job-shutdown\"\n    \"\"\"The job ended.\"\"\"\n")
             && session.contains("\nCloseReason.__module__ = \"livekit.agents.session\"\n"),
         "{session}"
     );

@@ -25,7 +25,7 @@ pub struct Decl {
 #[derive(Debug, Clone)]
 pub enum Body {
     Struct(Vec<Field>),
-    /// Fieldless enum. Python `(str, Enum)`, so `ev.reason == "job_shutdown"` stays `True`.
+    /// Fieldless enum. Python `StrEnum`, so `ev.reason == "job_shutdown"` stays `True`.
     Unit(Vec<UnitVariant>),
     /// One type per variant: the discriminated union. The tag is the member's own discriminant.
     /// A member may be [`Ty::Foreign`] (`OverlappingSpeechEvent`), named but never generated.
@@ -233,7 +233,7 @@ pub enum Kind {
     Pydantic,
     Dataclass,
     TypedDict,
-    /// `(str, Enum)` in Python.
+    /// `StrEnum` in Python.
     Enum,
     Plain,
     Union,

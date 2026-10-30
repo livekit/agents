@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum, unique
+from enum import StrEnum, unique
 from typing import Literal, TypeAlias
 
 UserState: TypeAlias = Literal["speaking", "listening", "away"]
@@ -163,7 +163,7 @@ class UserTurnExceededEvent:
 
 
 @unique
-class CloseReason(str, Enum):
+class CloseReason(StrEnum):
     ERROR = "error"
     JOB_SHUTDOWN = "job_shutdown"
     PARTICIPANT_DISCONNECTED = "participant_disconnected"

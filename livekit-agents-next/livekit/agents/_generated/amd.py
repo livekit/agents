@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, unique
+from enum import StrEnum, unique
 from typing import Literal, TypedDict
 
 from typing_extensions import TypedDict
@@ -19,7 +19,7 @@ from typing_extensions import TypedDict
 
 
 @unique
-class AMDCategory(str, Enum):
+class AMDCategory(StrEnum):
     HUMAN = "human"
     MACHINE_IVR = "machine-ivr"
     MACHINE_VM = "machine-vm"

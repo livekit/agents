@@ -711,9 +711,9 @@ fn model(
             s
         }
         RecordBody::Literals(values) if r.enumeration => {
-            runtime.add("enum", "Enum");
+            runtime.add("enum", "StrEnum");
             runtime.add("enum", "unique");
-            let mut s = format!("\n\n@unique\nclass {}(str, Enum):\n", r.name);
+            let mut s = format!("\n\n@unique\nclass {}(StrEnum):\n", r.name);
             if !r.doc.is_empty() {
                 s.push_str(&docstring(&r.doc, "    "));
                 s.push('\n');

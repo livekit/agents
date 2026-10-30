@@ -16,7 +16,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum, unique
+from enum import StrEnum, unique
 from types import TracebackType
 from typing import Generic, Literal, Never, Self, get_type_hints
 
@@ -42,7 +42,7 @@ from .usage import TokenUsage
 
 
 @unique
-class SpeechEventType(str, Enum):
+class SpeechEventType(StrEnum):
     START_OF_SPEECH = "start_of_speech"
     """indicate the start of speech
     if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT

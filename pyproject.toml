@@ -177,8 +177,6 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 # The CLI is mid-refactor in the owner's session; its one `asyncio.TimeoutError` goes with it.
 "livekit-agents-next/livekit/agents/cli.py" = ["UP041"]
-# Generated record enums stay `(str, Enum)` until lk-agents-codegen emits `StrEnum`.
-"livekit-agents-next/livekit/agents/_generated/*" = ["UP042"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
