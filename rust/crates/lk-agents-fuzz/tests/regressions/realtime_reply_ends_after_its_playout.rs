@@ -1,5 +1,6 @@
 //! A realtime reply whose audio finished playing before the server ended its generation is done.
 use lk_agents_fuzz::drive::{NodeSetup, RealtimeSetup, Run, Setup, simulate};
+use lk_agents_fuzz::fakes::RealtimeDelays;
 use lk_agents_fuzz::input::{Input, Millis, Ref};
 use lk_agents_voice::events::SessionEvent;
 
@@ -18,17 +19,21 @@ fn the_reply_is_done_once_the_server_ends_it() {
             transcription: true,
             realtime_audio: false,
         }),
-        // A server whose reply calls no tool and ends 12 ms after its last audio.
-        realtime: Some(RealtimeSetup { seed: 1, ..RealtimeSetup::default() }),
+        // A server whose reply calls no tool and ends 30 s after its last audio.
+        realtime: Some(RealtimeSetup {
+            tool_calls: Some(0),
+            delays: RealtimeDelays { done: Some(30_000), ..RealtimeDelays::default() },
+            ..RealtimeSetup::default()
+        }),
         sync_transcription: true,
         ..Setup::default()
     };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         // The reply's last message is in the sink; the server has not yet said it is done.
-        Input::Advance { ms: Millis(1_112) },
+        Input::Advance { ms: Millis(20_000) },
         Input::PlayoutFinished { segment: Ref::new(0) },
-        Input::Advance { ms: Millis(5_000) },
+        Input::Advance { ms: Millis(20_000) },
     ];
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
