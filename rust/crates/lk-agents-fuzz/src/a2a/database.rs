@@ -1,9 +1,9 @@
 //! The thread's database as the simulation runs it: lk-agents-storage's in-memory connection on
 //! the run's virtual clock, behind storage's fault-injecting one, every request a little late so
-//! the workers' operations interleave. A holder stalls now and then (a paused process): its lease
-//! lapses, and its requests, renewals and commit alike, reach the database only once it resumes;
-//! or a commit is slow, its lease lapsing meanwhile. Another run may then take the lane, and the
-//! fence refuses the late commit. Between batches it observes what the rules read: a
+//! the workers' operations interleave. A holder stalls now and then (a paused process): its
+//! requests, renewals and commit alike, reach the database only once it resumes; or its commit is
+//! slow. Past its TTL the lease lapses, another run may take the lane, and the fence refuses the
+//! late commit. Between batches it observes what the rules read: a
 //! terminal row that changed, the rows a commit applied while its acknowledgment was lost, the
 //! terminal rows each commit wrote and those it left `working`, the tasks that held a question
 //! and the most questions pending at once.
@@ -41,6 +41,8 @@ pub struct Ledger {
     /// The most questions pending at once, and which.
     pub most_pending: Vec<String>,
     pub lost_acks: u64,
+    /// Commits the fence refused.
+    pub fenced_out: u64,
     /// When the database refused the key: `(from, until)` since the run's start.
     pub key_refused: Vec<(Duration, Duration)>,
     pub injected: BTreeMap<&'static str, u64>,
@@ -98,7 +100,7 @@ pub struct Database {
     commits: Mutex<u64>,
     /// The stalled holder's lease token, and when it resumes.
     stalled: Mutex<Option<(String, tokio::time::Instant)>>,
-    /// The next commit takes this long, its lease lapsed.
+    /// The next commit takes this long.
     pub slow_commit: Mutex<Option<std::time::Duration>>,
 }
 
@@ -121,30 +123,15 @@ impl Database {
     }
 
     pub async fn select(&self, sql: &'static str) -> Vec<Row> {
-        self.select_owned(Statement::raw(sql)).await
+        self.memory.query(Statement::raw(sql)).await.unwrap_or_default()
     }
 
-    async fn select_owned(&self, statement: Statement) -> Vec<Row> {
-        self.memory.query(statement).await.unwrap_or_default()
-    }
-
-    /// The lane's holder stalls for `d`, as a paused process does: its lease lapses, so a
-    /// waiter may take the lane, and its requests wait until it resumes.
+    /// The lane's holder stalls for `d`, as a paused process does: its requests wait until it
+    /// resumes, and its lease lapses if `d` outlasts it.
     pub async fn stall_holder(&self, d: std::time::Duration) {
-        let held = Statement::raw("SELECT lease_token FROM lanes WHERE lease_token IS NOT NULL");
-        let Some(token) =
-            self.select_owned(held).await.first().and_then(|r| r[0].as_str().map(str::to_owned))
-        else {
-            return;
-        };
-        self.lapse_lease().await;
-        *self.stalled.lock().unwrap() = Some((token, tokio::time::Instant::now() + d));
-    }
-
-    async fn lapse_lease(&self) {
-        let lapse =
-            Statement::raw("UPDATE lanes SET lease_until = 0 WHERE lease_token IS NOT NULL");
-        let _ = self.memory.batch(vec![lapse]).await;
+        let rows = self.select("SELECT lease_token FROM lanes WHERE lease_token IS NOT NULL").await;
+        let Some(token) = rows.first().and_then(|r| r[0].as_str()) else { return };
+        *self.stalled.lock().unwrap() = Some((token.to_owned(), tokio::time::Instant::now() + d));
     }
 
     /// A request of the stalled holder's (it binds its lease token) waits until it resumes.
@@ -238,7 +225,6 @@ impl SqliteConnection for Database {
         let commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
         let slow = commit.then(|| self.slow_commit.lock().unwrap().take()).flatten();
         if let Some(d) = slow {
-            self.lapse_lease().await;
             tokio::time::sleep(d).await;
         }
         let (before, version) = (self.rows().await, self.version().await);
@@ -246,7 +232,7 @@ impl SqliteConnection for Database {
         let after = self.rows().await;
         // a commit the database ran that matched no lane row: the fence refused a stale run
         if commit && result.is_ok() && self.version().await == version {
-            *self.world.ledger.lock().unwrap().injected.entry("FencedOut").or_default() += 1;
+            self.world.ledger.lock().unwrap().fenced_out += 1;
         }
         self.observe(&before, &after, commit, &result);
         result

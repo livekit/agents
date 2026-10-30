@@ -75,7 +75,8 @@ impl TurnHost for Host {
     > {
         Box::pin(async move {
             let handlers = &self.handlers;
-            let batch = ctx.batch.iter().filter_map(|m| m.message_id.clone()).collect();
+            let batch: Vec<String> =
+                ctx.batch.iter().filter_map(|m| m.message_id.clone()).collect();
             let invocation = {
                 let mut invocations = handlers.invocations.lock().unwrap();
                 invocations.push(batch);
@@ -163,10 +164,9 @@ impl StreamSource<TurnEvent> for Handler {
             if world.inject(f.unavailable, "HandlerUnavailable") {
                 return Err(raised("StorageUnavailable", "the handler lost the database"));
             }
-            if world.inject(f.save_refused, "SaveRefused") {
-                let kind = ["VersionConflict", "NotSerializable", "TooLarge"]
-                    [world.draw(|r| r.usize(0..3))];
-                *world.ledger.lock().unwrap().injected.entry(kind).or_default() += 1;
+            let kind =
+                ["VersionConflict", "NotSerializable", "TooLarge"][world.draw(|r| r.usize(0..3))];
+            if world.inject(f.save_refused, kind) {
                 return Err(raised(kind, "save_context refused"));
             }
             if self.verdict.lock().unwrap().take() == Some(Verdict::Yield) {

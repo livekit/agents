@@ -186,6 +186,9 @@ async fn simulate(seed: u64, messages: usize) -> Record {
         save_refused: rng.u8(0..3),
     };
     let kill_pct = rng.u8(0..8);
+    // now and then the key is revoked for good partway through
+    let mut revoked_at = (rng.u8(0..32) == 0)
+        .then(|| Duration::from_millis(rng.u64(0..FAULT_WINDOW.as_millis() as u64)));
     let ttl = Duration::from_secs(rng.u64(2..6));
     let timing = LeaseTiming::new(ttl, ttl / 3).expect("a lease timing");
     let clock: Arc<dyn Clock> = Arc::new(SimClock::new());
@@ -264,9 +267,16 @@ async fn simulate(seed: u64, messages: usize) -> Record {
         for i in ended {
             follow_up(&mut requests, i, now, &opts, &mut rng);
         }
+        if revoked_at.is_some_and(|at| at <= now) {
+            revoked_at = None;
+            database.faults.refuse_token_for(HORIZON);
+            world.ledger.lock().unwrap().key_refused.push((now, HORIZON));
+            *world.ledger.lock().unwrap().injected.entry("KeyRevoked").or_default() += 1;
+        }
         if faulty {
             if inject(&database, &world, &faults, now, &mut rng) {
-                let d = Duration::from_millis(rng.u64(100..3000));
+                // up to twice the lease's life: past it, the lease lapses
+                let d = Duration::from_millis(rng.u64(100..2 * ttl.as_millis() as u64));
                 if rng.bool() {
                     database.stall_holder(d).await;
                 } else {

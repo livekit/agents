@@ -27,6 +27,7 @@ fn reach(record: &a2a::Record, into: &mut BTreeMap<&'static str, u64>) {
         ("Reject", answered(Policy::Reject)),
         ("WorkerLost", record.requests.iter().filter(|r| r.killed).count() as u64),
         ("LostAck", ledger.lost_acks),
+        ("FencedOut", ledger.fenced_out),
     ] {
         *into.entry(name).or_default() += n;
     }
