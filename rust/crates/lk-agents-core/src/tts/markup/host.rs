@@ -10,12 +10,6 @@ use super::MarkupExt;
 
 pub struct SpeechMarkup;
 
-impl crate::llm::chat_dict::AssistantMarkup for SpeechMarkup {
-    fn strip_expr_markup(text: &str) -> String {
-        super::strip_expr_markup(text)
-    }
-}
-
 impl MarkupFunctions for SpeechMarkup {
     fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String> {
         super::chat_message_text_content(parts, assistant)

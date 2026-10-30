@@ -1,8 +1,6 @@
 //! `ChatContext.to_dict` (`chat_context.py:629`): the item filters over each item's generated
 //! `model_dump(mode="json", exclude_none=True)`.
 
-use std::marker::PhantomData;
-
 use lk_agents_abi::llm::chat_context::ItemKind;
 use lk_agents_abi::llm::to_dict::ChatContextDict;
 use lk_agents_abi::{ChatItem, DumpCx, ModelDump, ToDictError, ToDictHost, ToDictOptions};
@@ -38,15 +36,10 @@ pub fn item_to_dict(
     item.model_dump(&DumpCx { opts, host }, "ChatItem")
 }
 
-/// How an assistant message reads without the speech core's expressive markup.
-pub trait AssistantMarkup {
-    fn strip_expr_markup(text: &str) -> String;
-}
+/// The host's `ChatContext.to_dict`, optionally without assistant expressive markup.
+pub struct ChatDict;
 
-/// The host's `ChatContext.to_dict`, stripping assistant markup with `M`.
-pub struct ChatDict<M>(PhantomData<M>);
-
-impl<M: AssistantMarkup> ChatContextDict for ChatDict<M> {
+impl ChatContextDict for ChatDict {
     #[allow(clippy::too_many_arguments)]
     fn chat_ctx_to_dict(
         items: Vec<ChatItem>,
@@ -66,7 +59,7 @@ impl<M: AssistantMarkup> ChatContextDict for ChatDict<M> {
             exclude_metrics,
             exclude_config_update,
         };
-        let strip = M::strip_expr_markup;
+        let strip = crate::tts::markup::strip_expr_markup;
         let host = ToDictHost {
             media: None,
             strip_expr_markup: strip_markup.then_some(&strip as &dyn Fn(&str) -> String),

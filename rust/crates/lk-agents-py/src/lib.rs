@@ -118,8 +118,7 @@ impl generated::Implementations for Selected {
     type WordTokenizer = lk_agents_runtime::cores::BasicWordTokenizer;
     type SentenceTokenizer = lk_agents_runtime::cores::BasicSentenceTokenizer;
     type BufferedTokens = lk_agents_runtime::cores::BufferedTokenStream;
-    type ChatContextDict =
-        lk_agents_runtime::cores::ChatDict<lk_agents_runtime::cores::SpeechMarkup>;
+    type ChatContextDict = lk_agents_runtime::cores::ChatDict;
     type MarkupFunctions = lk_agents_runtime::cores::SpeechMarkup;
     type MarkupClass = lk_agents_runtime::cores::ProviderMarkup;
     type TranscriptStripper = lk_agents_runtime::cores::TranscriptMarkupStripper;
