@@ -324,12 +324,10 @@ impl AgentClient {
                                 .observe(CleanupObservation::UnacknowledgedRequest { request: id }),
                         }
                     }
-                    let empty = {
-                        let mut operations = inner.operations.lock();
-                        operations.remove(&id);
-                        operations.is_empty()
-                    };
-                    if empty && inner.closed.load(Ordering::Acquire) {
+                    let mut operations = inner.operations.lock();
+                    operations.remove(&id);
+                    // One scope: no exchange settles between the check and the close.
+                    if operations.is_empty() && inner.closed.load(Ordering::Acquire) {
                         inner.core.lock().close();
                     }
                 }
@@ -395,7 +393,8 @@ impl AgentClient {
             let requests = self.inner.operations.lock().keys().copied().collect();
             self.inner.observe(CleanupObservation::Incomplete { requests });
         }
-        if self.inner.operations.lock().is_empty() {
+        let operations = self.inner.operations.lock();
+        if operations.is_empty() {
             self.inner.core.lock().close();
         }
     }
