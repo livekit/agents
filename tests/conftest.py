@@ -6,7 +6,7 @@ import sys
 from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import pytest
 
@@ -268,6 +268,42 @@ def _core_logs() -> Iterator[None]:
     _core.flush_logs()
     yield
     _core.flush_logs()
+
+
+class _CoreCaplog(pytest.LogCaptureFixture):
+    """``caplog`` whose reads first wait for the core's queued log lines (decision 125), so a
+    line the core logged before the read is in ``records``."""
+
+    @property
+    def records(self) -> list[logging.LogRecord]:
+        _core.flush_logs()
+        return super().records
+
+    @property
+    def text(self) -> str:
+        _core.flush_logs()
+        return super().text
+
+    @property
+    def record_tuples(self) -> list[tuple[str, int, str]]:
+        _core.flush_logs()
+        return super().record_tuples
+
+    @property
+    def messages(self) -> list[str]:
+        _core.flush_logs()
+        return super().messages
+
+    def get_records(self, when: Literal["setup", "call", "teardown"]) -> list[logging.LogRecord]:
+        _core.flush_logs()
+        return super().get_records(when)
+
+
+@pytest.fixture
+def caplog(request: pytest.FixtureRequest) -> Iterator[pytest.LogCaptureFixture]:
+    result = _CoreCaplog(request.node, _ispytest=True)
+    yield result
+    result._finalize()
 
 
 @pytest.fixture(scope="session", autouse=True)
