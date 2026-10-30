@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
@@ -140,6 +140,16 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+    manual_flush: bool = False
+    """Whether the STT supports flushing the stream to finalize a segment.
+
+    When enabled, manual turn commits request a flush. With a turn detector, automatic
+    flushing occurs immediately for positive or unavailable EOT predictions, or halfway
+    through the maximum endpointing delay for negative predictions. Without a turn
+    detector, VAD end-of-speech requests the flush. Text-based EOT uses final transcripts
+    only, so flushing precedes its first prediction if no final transcript is available.
+    Disable this for custom STT nodes that buffer audio and manage flushing themselves.
+    """
 
 
 class STTError(BaseModel):
@@ -389,6 +399,7 @@ class RecognizeStream(ABC):
         )
 
         self._num_retries = 0
+        self._on_provider_progress: Callable[[], None] | None = None
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -475,11 +486,6 @@ class RecognizeStream(ABC):
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
-                # an attempt that outlived the connect timeout had connected, so this failure
-                # is not consecutive with the previous one and the budget starts over
-                if time.time() - last_start_time > self._conn_options.timeout:
-                    self._num_retries = 0
-
                 if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise
@@ -507,6 +513,17 @@ class RecognizeStream(ABC):
             except Exception as e:
                 self._emit_error(e, recoverable=False)
                 raise
+
+    def _mark_provider_progress(self) -> None:
+        """Reset recovery retries after a valid provider processing event.
+
+        Call at the receive/parse boundary for speech, turn, transcription, or
+        audio-processing events. Setup, errors, heartbeats, and local events do
+        not indicate provider progress.
+        """
+        self._num_retries = 0
+        if self._on_provider_progress is not None:
+            self._on_provider_progress()
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt.emit(
@@ -544,8 +561,8 @@ class RecognizeStream(ABC):
 
                 self._stt.emit("metrics_collected", stt_metrics)
             elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                # reset the retry count after a successful recognition
-                self._num_retries = 0
+                # Preserve recovery resets for custom providers that emit only transcripts.
+                self._mark_provider_progress()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
