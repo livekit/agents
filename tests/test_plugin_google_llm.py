@@ -556,3 +556,44 @@ async def test_no_system_messages_omit_the_system_instruction() -> None:
         assert "systemInstruction" not in config.model_dump(by_alias=True, exclude_none=True)
     finally:
         await provider.aclose()
+
+
+async def test_usage_counts_tool_prompts_in_the_input_and_thoughts_in_the_output() -> None:
+    # Gemini reports built-in tool prompts outside prompt_token_count and thinking outside
+    # candidates_token_count.
+    async def responses():
+        yield types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="ok")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=100,
+                tool_use_prompt_token_count=40,
+                cached_content_token_count=60,
+                candidates_token_count=20,
+                thoughts_token_count=10,
+            ),
+        )
+
+    provider = LLM(api_key="test")
+    context = ChatContext.empty()
+    context.add_message(role="user", content="hello")
+    try:
+        with patch.object(
+            provider._client.aio.models,
+            "generate_content_stream",
+            AsyncMock(return_value=responses()),
+        ):
+            async with provider.chat(chat_ctx=context) as stream:
+                response = await stream.collect()
+    finally:
+        await provider.aclose()
+
+    assert response.usage is not None
+    assert response.usage.input_tokens == 140
+    assert response.usage.output_tokens == 30
+    assert response.usage.output_reasoning_tokens == 10
+    assert response.usage.cache_read_tokens == 60

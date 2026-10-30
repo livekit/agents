@@ -522,10 +522,11 @@ class LLMStream(llm.LLMStream):
                     self.send(
                         llm.ChatChunk(
                             id=request_id,
-                            # Gemini counts thinking outside its candidates; our output
-                            # total includes it.
+                            # Gemini counts built-in tool prompts outside the prompt and
+                            # thinking outside the candidates; our totals include them.
                             usage=TokenUsage(
-                                input_tokens=usage.prompt_token_count or 0,
+                                input_tokens=(usage.prompt_token_count or 0)
+                                + (usage.tool_use_prompt_token_count or 0),
                                 output_tokens=(usage.candidates_token_count or 0)
                                 + (usage.thoughts_token_count or 0),
                                 cache_read_tokens=usage.cached_content_token_count,

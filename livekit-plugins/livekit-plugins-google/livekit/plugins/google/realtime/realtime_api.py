@@ -1699,11 +1699,20 @@ class RealtimeSession(llm.RealtimeSession):
                     counts[key] = counts.get(key, 0) + detail.token_count
             return counts
 
-        prompt = by_modality(usage_metadata.prompt_tokens_details)
+        prompt = by_modality(
+            [
+                *(usage_metadata.prompt_tokens_details or []),
+                *(usage_metadata.tool_use_prompt_tokens_details or []),
+            ]
+        )
         cached = by_modality(usage_metadata.cache_tokens_details)
         response = by_modality(usage_metadata.response_tokens_details)
         thoughts = usage_metadata.thoughts_token_count
-        # Gemini counts thinking outside its response tokens; our output total includes it.
+        # Gemini counts built-in tool prompts outside the prompt and thinking outside the
+        # response; our totals include them.
+        input_tokens = (usage_metadata.prompt_token_count or 0) + (
+            usage_metadata.tool_use_prompt_token_count or 0
+        )
         output_tokens = (usage_metadata.response_token_count or 0) + (thoughts or 0)
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
@@ -1715,7 +1724,7 @@ class RealtimeSession(llm.RealtimeSession):
             ttft=None,
             cancelled=False,
             tokens=TokenUsage(
-                input_tokens=usage_metadata.prompt_token_count or 0,
+                input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=usage_metadata.cached_content_token_count,
                 output_reasoning_tokens=thoughts,

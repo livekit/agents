@@ -263,6 +263,39 @@ async def test_ttft_is_unavailable_without_a_response_start_event(
         assert collected[0].duration >= 0
 
 
+async def test_usage_counts_tool_prompts_in_the_input_and_thoughts_in_the_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gemini reports built-in tool prompts outside prompt_token_count and thinking outside
+    # response_token_count.
+    async with _make_session(monkeypatch) as session:
+        collected: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", collected.append)
+        session._start_new_generation()
+        session._handle_usage_metadata(
+            types.UsageMetadata(
+                prompt_token_count=100,
+                prompt_tokens_details=[
+                    types.ModalityTokenCount(modality=types.MediaModality.AUDIO, token_count=100)
+                ],
+                tool_use_prompt_token_count=40,
+                tool_use_prompt_tokens_details=[
+                    types.ModalityTokenCount(modality=types.MediaModality.TEXT, token_count=40)
+                ],
+                response_token_count=20,
+                thoughts_token_count=10,
+            )
+        )
+
+    tokens = collected[0].tokens
+    assert (tokens.input_tokens, tokens.input_audio_tokens, tokens.input_text_tokens) == (
+        140,
+        100,
+        40,
+    )
+    assert (tokens.output_tokens, tokens.output_reasoning_tokens) == (30, 10)
+
+
 async def test_unspoken_model_text_is_omitted_in_audio_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
