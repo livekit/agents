@@ -850,3 +850,43 @@ async def test_file_transcription_earlier_model_keeps_singular_language() -> Non
 
     assert 'name="language"\r\n\r\nen' in body
     assert 'name="languages[]"' not in body
+
+
+@pytest.mark.parametrize(
+    ("usage", "audio_duration", "tokens"),
+    [
+        ({"type": "duration", "seconds": 2.5}, 2.5, (0, 0)),
+        ({"type": "tokens", "input_tokens": 12, "output_tokens": 3}, None, (12, 3)),
+        (None, None, (0, 0)),
+    ],
+)
+async def test_realtime_usage_reports_what_the_server_measured(
+    usage: dict[str, Any] | None,
+    audio_duration: float | None,
+    tokens: tuple[int, int],
+) -> None:
+    instance = _offline_stt(model="gpt-4o-transcribe", vad=None)
+    stream = instance.stream()
+    ws = await _connected(stream)
+    ws.incoming.put_nowait(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "transcript": "hello",
+            "usage": usage,
+        }
+    )
+
+    reported = None
+    try:
+        async with asyncio.timeout(3):
+            async for event in stream:
+                if event.type == SpeechEventType.RECOGNITION_USAGE:
+                    reported = event.recognition_usage
+                    break
+    finally:
+        await stream.aclose()
+
+    assert reported is not None
+    assert reported.audio_duration == audio_duration
+    assert (reported.tokens.input_tokens, reported.tokens.output_tokens) == tokens

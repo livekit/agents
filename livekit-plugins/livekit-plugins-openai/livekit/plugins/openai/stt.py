@@ -938,27 +938,28 @@ class SpeechStream(stt.RecognizeStream):
                                 )
                             )
 
-                        audio_duration = 0.0
-                        if item_id in item_audio_timing:
-                            timing = item_audio_timing[item_id]
+                        audio_duration: float | None = None
+                        timing = item_audio_timing.pop(item_id, None)
+                        if timing is not None:
                             start_ms = timing.get("start_ms", 0)
                             end_ms = timing.get("end_ms", 0)
                             if end_ms > start_ms:
                                 audio_duration = (end_ms - start_ms) / 1000.0
-                            del item_audio_timing[item_id]
 
-                        usage = data.get("usage")
-                        tokens = (
-                            TokenUsage(
+                        # the usage is either {"type": "tokens", ...} or
+                        # {"type": "duration", "seconds": N}
+                        usage = data.get("usage") or {}
+                        tokens = TokenUsage()
+                        if usage.get("type") == "tokens":
+                            tokens = TokenUsage(
                                 input_tokens=usage.get("input_tokens", 0),
                                 output_tokens=usage.get("output_tokens", 0),
                                 input_audio_tokens=(usage.get("input_token_details") or {}).get(
                                     "audio_tokens"
                                 ),
                             )
-                            if usage
-                            else None
-                        )
+                        elif usage.get("type") == "duration":
+                            audio_duration = usage.get("seconds", audio_duration)
                         self.send(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.RECOGNITION_USAGE,
