@@ -203,9 +203,16 @@ class RTZROpenAPIClient:
             self._http_session = None
 
     async def connect_websocket(
-        self, config: dict[str, str], headers: dict[str, str] | None = None
+        self,
+        config: dict[str, str],
+        headers: dict[str, str] | None = None,
+        *,
+        autoping: bool = True,
     ) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the streaming WebSocket endpoint."""
+        """Connect to the streaming WebSocket endpoint.
+
+        Set ``autoping=False`` when the receiver handles PING and PONG frames.
+        """
         # Build URL like reference client
         query_string = "&".join(f"{k}={v}" for k, v in config.items())
         url = f"{self._ws_base}/v1/transcribe:streaming?{query_string}"
@@ -219,7 +226,7 @@ class RTZROpenAPIClient:
         session = self._ensure_http_session()
 
         try:
-            ws = await session.ws_connect(url, headers=ws_headers)
+            ws = await session.ws_connect(url, headers=ws_headers, autoping=autoping)
             logger.debug("Connected to RTZR WebSocket at %s", url)
             return ws
         except aiohttp.ClientResponseError as e:

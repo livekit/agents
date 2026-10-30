@@ -8,12 +8,22 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
-from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
+from livekit.agents import Agent, APIConnectionError, APIConnectOptions, APIError, utils
+from livekit.agents.tts import (
+    TTS,
+    AudioEmitter,
+    AvailabilityChangedEvent,
+    ChunkedStream,
+    FallbackAdapter,
+    TTSCapabilities,
+    TTSError,
+)
 from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TTS_STARTED_TIME
 from livekit.agents.utils.aio.channel import ChanEmpty
+from livekit.agents.voice.io import PlaybackFinishedEvent
 
+from .fake_session import FakeActions, create_session, run_session
 from .fake_tts import FakeSynthesizeStream, FakeTTS
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -651,3 +661,132 @@ async def _drain_stream(stream: SynthesizeStream) -> None:
     with contextlib.suppress(Exception):
         async for _ in stream:
             pass
+
+
+_SECONDS_PER_CHAR = 0.05
+_REPLY_TOKENS = ["Your ", "order ", "has ", "shipped. ", "It ", "arrives ", "Monday."]
+_REPLY = "".join(_REPLY_TOKENS)
+
+
+class _OutageTTS(TTS):
+    """Streaming TTS that refuses connections for `outage` seconds from its first connection
+    attempt, failing each stream before it reads any text. Once it is back, it records the text
+    each stream was given and speaks it at 50ms per character."""
+
+    def __init__(self, *, outage: float) -> None:
+        super().__init__(
+            capabilities=TTSCapabilities(streaming=True), sample_rate=24000, num_channels=1
+        )
+        self._outage = outage
+        self._down_until: float | None = None
+        self.received: list[str] = []
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
+        raise NotImplementedError
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        return _OutageStream(tts=self, conn_options=conn_options)
+
+
+class _OutageStream(SynthesizeStream):
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        assert isinstance(self._tts, _OutageTTS)
+        await asyncio.sleep(0.05)  # connecting
+        now = asyncio.get_running_loop().time()
+        if self._tts._down_until is None:
+            self._tts._down_until = now + self._tts._outage
+        if now < self._tts._down_until:
+            raise APIConnectionError("connection refused")
+
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=24000,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+        output_emitter.start_segment(segment_id=utils.shortuuid())
+        text = ""
+        async for data in self._input_ch:
+            if isinstance(data, str):
+                text += data
+                output_emitter.push(b"\x00\x00" * int(24000 * _SECONDS_PER_CHAR * len(data)))
+        output_emitter.end_segment()
+        self._tts.received.append(text)
+
+
+async def _speak_reply(fallback_adapter: FallbackAdapter) -> None:
+    # like Agent.default.tts_node: AgentSession's default tts_conn_options (max_retry=3),
+    # with the LLM tokens still arriving while the TTS is down
+    async with fallback_adapter.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS) as stream:
+
+        async def _push_reply() -> None:
+            for token in _REPLY_TOKENS:
+                await asyncio.sleep(0.2)
+                stream.push_text(token)
+            stream.end_input()
+
+        push_task = asyncio.create_task(_push_reply())
+        async for _ in stream:
+            pass
+        await push_task
+
+
+async def test_stream_retry_sends_text_once() -> None:
+    # the TTS is down for 3s, longer than the adapter's retries of it (max_retry_per_tts=2,
+    # ~2.2s), so the adapter's stream fails and is retried, and the TTS is back during that retry
+    tts_impl = _OutageTTS(outage=3.0)
+    fallback_adapter = FallbackAdapter([tts_impl])
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    await _speak_reply(fallback_adapter)
+    await fallback_adapter.aclose()
+
+    assert [e.recoverable for e in errors] == [True]  # the adapter's stream was retried once
+    assert tts_impl.received == [_REPLY]
+
+
+async def test_stream_retry_sends_text_once_to_secondary() -> None:
+    # the primary is down for the whole call and the secondary for 3s: both fail the first
+    # attempt, and the secondary serves the retry
+    primary = _OutageTTS(outage=float("inf"))
+    secondary = _OutageTTS(outage=3.0)
+    fallback_adapter = FallbackAdapter([primary, secondary])
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    await _speak_reply(fallback_adapter)
+    await fallback_adapter.aclose()
+
+    assert [e.recoverable for e in errors] == [True]  # the adapter's stream was retried once
+    assert primary.received == []
+    assert secondary.received == [_REPLY]
+
+
+async def test_session_speaks_reply_once_after_tts_outage() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Where is my order?")
+    actions.add_llm(_REPLY)
+
+    # the outage starts with the reply and outlasts the adapter's retries of the TTS, as
+    # above; the session keeps its default conn_options
+    fallback_adapter = FallbackAdapter([_OutageTTS(outage=3.0)])
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    session = create_session(actions)
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    agent = Agent(instructions="You are a helpful assistant.", tts=fallback_adapter)
+    await asyncio.wait_for(run_session(session, agent), timeout=60)
+    await fallback_adapter.aclose()
+
+    assert [e.recoverable for e in errors] == [True]  # the adapter's stream was retried once
+    played = [ev.playback_position for ev in playback_finished_events]
+    assert played == pytest.approx([len(_REPLY) * _SECONDS_PER_CHAR], abs=0.1)

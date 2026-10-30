@@ -61,6 +61,9 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+# how long a previously registered worker may stay disconnected (e.g. while it
+# reconnects after a websocket interruption) before the health check reports 503
+HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
 
@@ -388,6 +391,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
+        # monotonic time when a registered connection was lost, cleared on re-register
+        self._disconnected_at: float | None = None
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -660,6 +665,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
+
+                    # 503 until the first RegisterWorkerResponse (docs / Node SDK).
+                    # unregistered=True workers never connect; keep / as a liveness probe.
+                    if not unregistered:
+                        if self._id == "unregistered":
+                            return web.Response(status=503, text="not connected to livekit")
+
+                        # a short reconnect after a websocket interruption is expected;
+                        # only report unhealthy once it has lasted longer than the grace period
+                        disconnected_at = self._disconnected_at
+                        if (
+                            disconnected_at is not None
+                            and time.monotonic() - disconnected_at > HEALTH_RECONNECT_GRACE_PERIOD
+                        ):
+                            return web.Response(status=503, text="not connected to livekit")
 
                     return web.Response(text="OK")
 
@@ -1153,11 +1173,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 self._handle_register(msg.register)
                 self._connecting = False
+                self._disconnected_at = None
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
-                await self._run_ws(ws)
+                try:
+                    await self._run_ws(ws)
+                finally:
+                    # registered connection lost: start the health check grace period
+                    if self._disconnected_at is None:
+                        self._disconnected_at = time.monotonic()
             except Exception as e:
                 if self._closed:
                     break
@@ -1559,8 +1585,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if not active_jobs:
             return
 
-        job_ids = [job_info.job.id for job_info in active_jobs]
-        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        # the jobs as they were assigned, so the server tracks them again
+        jobs = []
+        for job_info in active_jobs:
+            job = agent.Job()
+            job.CopyFrom(job_info.job)
+            job.state.participant_identity = job_info.accept_arguments.identity
+            jobs.append(job)
+
+        job_ids = [job.id for job in jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids, jobs=jobs)
         msg = agent.WorkerMessage(migrate_job=migrate_req)
         await self._queue_msg(msg)
 
