@@ -1,16 +1,12 @@
 [
   "pyo3-dependency:lk-agents-abi:pyo3",
   "pyo3-dependency:lk-agents-abi:pyo3-async-runtimes",
-  "pyo3-file:rust/crates/lk-agents-abi/src/errors/host.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/errors/provider.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/llm/realtime.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/bridge.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/buffers.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/conversion_tests.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/host_errors.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/host_tests.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/mod.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/python/values.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/voice/io.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/voice/rtc/error.rs"
+  "pyo3-file:rust/crates/lk-agents-abi/src/python/values.rs"
 ]
