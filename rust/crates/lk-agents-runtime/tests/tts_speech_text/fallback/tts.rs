@@ -31,10 +31,10 @@ async fn the_child_sink_is_released_when_the_stream_that_owns_it_ends() {
     sink.end_input();
     drain_tts(&mut source).await;
 
-    let before = pushed.lock().expect("pushed").len();
+    let before = pushed.lock().len();
     sink.push("late".into()).expect("push");
     assert_eq!(
-        pushed.lock().expect("pushed").len(),
+        pushed.lock().len(),
         before,
         "the turn is over: a late token must not reach a provider the chain has released"
     );

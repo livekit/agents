@@ -7,8 +7,9 @@ use lk_agents_abi::{
 };
 use lk_agents_inference::fallback::ChainPolicy;
 use lk_agents_inference::testkit::fallback::{Frames, NO_DEADLINE, boom, parts, until, within};
+use lk_agents_net::lock::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -42,15 +43,15 @@ struct RecordingSink(Arc<Mutex<Vec<String>>>);
 
 impl StreamSink<String> for RecordingSink {
     fn push(&self, item: String) -> Result<(), ProviderError> {
-        self.0.lock().expect("pushed").push(item);
+        self.0.lock().push(item);
         Ok(())
     }
     fn flush(&self) -> Result<(), ProviderError> {
-        self.0.lock().expect("pushed").push("<flush>".into());
+        self.0.lock().push("<flush>".into());
         Ok(())
     }
     fn end_input(&self) {
-        self.0.lock().expect("pushed").push("<end>".into());
+        self.0.lock().push("<end>".into());
     }
 }
 
@@ -72,7 +73,7 @@ impl Tts for FakeTts {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            self.pushed.lock().expect("pushed").push(text.to_owned());
+            self.pushed.lock().push(text.to_owned());
             Ok(Box::new(self.frames()) as TtsSource)
         })
     }
@@ -150,7 +151,7 @@ async fn a_batch_only_member_streams_through_sentences() {
     sink.push("And this one is the second sentence.".into()).expect("push");
     sink.end_input();
     assert!(!drain_tts(&mut source).await.is_empty(), "the member served the stream");
-    assert_eq!(pushed.lock().expect("pushed").len(), 2, "one synthesis per sentence");
+    assert_eq!(pushed.lock().len(), 2, "one synthesis per sentence");
     source.close(NO_DEADLINE).await;
     fb.aclose();
 }
@@ -171,7 +172,7 @@ async fn a_failover_replays_the_text_already_pushed_into_the_new_provider() {
     let frames = drain_tts(&mut source).await.len();
     assert_eq!(frames, 2, "the healthy provider served the whole utterance");
     assert_eq!(
-        good_pushed.lock().expect("pushed").as_slice(),
+        good_pushed.lock().as_slice(),
         &["Hello there, ".to_string(), "<flush>".into(), "how are you?".into(), "<end>".into()],
         "everything pushed before the failover is replayed, in order"
     );
@@ -211,7 +212,7 @@ async fn a_streaming_probe_replays_the_text_recorded_so_far() {
 
     until("the probe to bring the primary back", || fb.chain().is_available(0)).await;
     assert_eq!(
-        flaky_pushed.lock().expect("pushed").as_slice(),
+        flaky_pushed.lock().as_slice(),
         &["Hello there".to_string(), "<flush>".into(), "<end>".into()],
         "the probe replays the recorded tokens, in order, into a private channel"
     );
@@ -308,7 +309,7 @@ async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_tex
     source.close(NO_DEADLINE).await;
     until("the first probe to be refused", || flaky.refusals.load(Ordering::SeqCst) == 0).await;
     assert!(!fb.chain().is_available(0));
-    flaky_pushed.lock().expect("pushed").clear();
+    flaky_pushed.lock().clear();
 
     // Second request: "flaky" is skipped before the caller has pushed anything.
     let (sink, mut source) = within("stream", fb.stream(false)).await.expect("opened");
@@ -319,7 +320,7 @@ async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_tex
 
     until("the skipped entry to be probed and recover", || fb.chain().is_available(0)).await;
     assert_eq!(
-        flaky_pushed.lock().expect("pushed").as_slice(),
+        flaky_pushed.lock().as_slice(),
         &["two".to_string(), "<end>".into()],
         "the probe replays the text this request received"
     );
@@ -344,7 +345,7 @@ async fn a_closed_tts_adapter_starts_no_more_probes_and_a_total_outage_names_the
         tokio::task::yield_now().await;
     }
     assert!(
-        alpha_pushed.lock().expect("pushed").is_empty(),
+        alpha_pushed.lock().is_empty(),
         "a probe started after aclose is a task nothing will ever cancel"
     );
     source.close(NO_DEADLINE).await;

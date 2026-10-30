@@ -11,9 +11,10 @@ use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamSource};
 use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use lk_agents_core::tts::markup::{Markup, MarkupExt};
+use lk_agents_net::lock::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
@@ -43,7 +44,7 @@ struct DotSplitter {
 
 impl SentenceSplitter for DotSplitter {
     fn push(&mut self, text: &str) -> Vec<String> {
-        self.seen.lock().unwrap().push(text.to_owned());
+        self.seen.lock().push(text.to_owned());
         self.buf.push_str(text);
         let mut out = Vec::new();
         while let Some(i) = self.buf.find('.') {
@@ -145,7 +146,7 @@ impl FakeTts {
         })
     }
     fn texts(&self) -> Vec<String> {
-        self.calls.lock().unwrap().clone()
+        self.calls.lock().clone()
     }
 }
 
@@ -171,8 +172,8 @@ impl Tts for FakeTts {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            self.calls.lock().unwrap().push(text.to_owned());
-            let n = self.calls.lock().unwrap().len();
+            self.calls.lock().push(text.to_owned());
+            let n = self.calls.lock().len();
             let frames = (0..self.frames_per_call)
                 .map(|i| {
                     let mut a = SynthesizedAudio::new(frame(240), format!("inner-{n}"));
@@ -340,7 +341,7 @@ async fn an_empty_push_never_reaches_the_splitter() {
     drain(source).await.unwrap();
     assert_eq!(tts.texts(), vec!["half a sentence."]);
     // What the output alone cannot show: an empty push reaching the splitter.
-    assert_eq!(*obs.seen.lock().unwrap(), vec!["half", " a sentence."]);
+    assert_eq!(*obs.seen.lock(), vec!["half", " a sentence."]);
 }
 
 // Catches: a no-op `flush()`, and a `push` guard of `&&` instead of `||`.

@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 /// A physical output that latches each frame's segment key; the test reports its playback.
 #[derive(Default)]
-struct KeyedPlayback(Arc<PlaybackTracker>, std::sync::Mutex<Option<PlaybackSegment>>);
+struct KeyedPlayback(Arc<PlaybackTracker>, lk_agents_net::lock::Mutex<Option<PlaybackSegment>>);
 
 impl AudioOutput for KeyedPlayback {
     fn label(&self) -> &str {
@@ -25,7 +25,7 @@ impl AudioOutput for KeyedPlayback {
         _: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
         Box::pin(async move {
-            *self.1.lock().unwrap() = self.0.current_segment();
+            *self.1.lock() = self.0.current_segment();
             Ok(())
         })
     }
@@ -106,7 +106,7 @@ impl Chain {
     }
 
     fn key(&self) -> PlaybackSegment {
-        self.output.1.lock().unwrap().expect("the physical output accepted a frame")
+        self.output.1.lock().expect("the physical output accepted a frame")
     }
 
     fn played(&self, offset_ms: u64, ms: u64) {

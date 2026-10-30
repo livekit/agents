@@ -2,7 +2,7 @@
 //! a text, raises, asks input-required with a pending call, or sleeps until told, and records what
 //! it was handed. The cases are those of `tests/test_storage.py`, with its assertions.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
@@ -16,6 +16,7 @@ use lk_agents_core::a2a::{
     TurnResult, Verdict,
 };
 use lk_agents_net::clock::RealClock;
+use lk_agents_net::lock::Mutex;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::db::Receive;
@@ -209,7 +210,7 @@ impl Fake {
     }
 
     fn calls(&self) -> Vec<Call> {
-        self.calls.lock().unwrap().clone()
+        self.calls.lock().clone()
     }
 
     fn batches(&self) -> Vec<Vec<String>> {
@@ -309,7 +310,7 @@ impl Fake {
         checkpoints: &mut Checkpoints,
     ) -> Result<HandlerOutput, ProviderError> {
         let message_text = ctx.batch.last().map(batch_message_text).unwrap_or_default();
-        self.calls.lock().unwrap().push(Call {
+        self.calls.lock().push(Call {
             batch: ctx.batch.iter().map(batch_message_text).collect(),
             history: ctx
                 .history
@@ -351,7 +352,7 @@ impl Fake {
             }),
             Behavior::Slow { entered, gate, output } => {
                 entered.set();
-                self.updates.lock().unwrap().push((ctx.task_id.clone(), "working on it".into()));
+                self.updates.lock().push((ctx.task_id.clone(), "working on it".into()));
                 gate.wait().await;
                 Ok(text(output))
             }
@@ -854,7 +855,7 @@ async fn reject_refuses_while_a_turn_runs(backend: Backend) {
     }
     assert_eq!(r1.output, Some(json!("slow")));
     assert_eq!(
-        slow.updates.lock().unwrap().clone(),
+        slow.updates.lock().clone(),
         vec![(r1.task.task_id.clone(), "working on it".to_owned())],
         "the host's update reached the wire hook"
     );

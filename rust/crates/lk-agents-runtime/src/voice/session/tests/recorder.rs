@@ -3,8 +3,9 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{PlaybackFinished, PlaybackSegment, PlaybackTracker};
+use lk_agents_net::lock::Mutex;
 use lk_agents_voice::recorder_io::{RecorderPlaybackObserver, RecorderTap};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Counts the recorder's playback started, progressed and finished callbacks.
@@ -15,13 +16,13 @@ impl AudioRecorder for RecorderProbe {
     fn on_input_frame(&self, _: f64, _: &AudioFrame) {}
     fn capture_frame(&self, _: f64, _: &AudioFrame) {}
     fn on_playback_started(&self, _: f64) {
-        self.0.lock().unwrap()[0] += 1;
+        self.0.lock()[0] += 1;
     }
     fn on_playback_progressed(&self, _: f64, _: f64, _: f64) {
-        self.0.lock().unwrap()[1] += 1;
+        self.0.lock()[1] += 1;
     }
     fn on_playback_finished(&self, _: f64, _: f64) {
-        self.0.lock().unwrap()[2] += 1;
+        self.0.lock()[2] += 1;
     }
     fn flush(&self, _: f64) -> Result<(), RecordingFailure> {
         Ok(())
@@ -33,7 +34,7 @@ fn reattaching_one_physical_output_does_not_duplicate_recorder_playback() {
     let output = PlaybackTracker::new();
     let (original, replacement) = (ResourceId(1), ResourceId(2));
     let recorder = Arc::new(RecorderProbe::default());
-    let counts = || *recorder.0.lock().unwrap();
+    let counts = || *recorder.0.lock();
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let tap = RecorderTap::new(recorder.clone(), clock.clone());
     let first_observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
