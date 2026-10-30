@@ -433,7 +433,8 @@ async def test_wav_inline_decoder_with_resampling():
 
 
 @pytest.mark.asyncio
-async def test_wav_multi_chunk_each_with_headers():
+@pytest.mark.parametrize("mime_type", ["audio/wav", "audio/wav; codecs=1", " Audio/WAV "])
+async def test_wav_multi_chunk_each_with_headers(mime_type: str):
     """Each push() is a complete WAV file; decoder must re-parse headers each time."""
     sample_rate = 24000
     num_channels = 1
@@ -443,7 +444,7 @@ async def test_wav_multi_chunk_each_with_headers():
     wav_chunk = _make_wav(sample_rate, num_channels, samples_per_chunk)
 
     decoder = AudioStreamDecoder(
-        sample_rate=sample_rate, num_channels=num_channels, format="audio/wav"
+        sample_rate=sample_rate, num_channels=num_channels, format=mime_type
     )
 
     for _ in range(num_chunks):

@@ -38,12 +38,14 @@ def _mime_to_av_format(mime: str | None) -> str | None:
 
     If *mime* is *None* or not recognised, return *None* so that PyAV will
     fall back to auto‑detection.
+
+    Media type parameters and surrounding whitespace do not affect the container.
     """
 
     if not mime:
         return None
 
-    mime = mime.lower()
+    mime = mime.split(";", 1)[0].strip().lower()
     _TABLE: dict[str, str] = {
         "audio/mpeg": "mp3",
         "audio/mp3": "mp3",
