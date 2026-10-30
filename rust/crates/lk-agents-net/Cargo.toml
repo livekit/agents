@@ -34,8 +34,8 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 bytes = "1"
 url = "2"
 serde.workspace = true
-# The delegation A2A client (decision 85): the protocol records and the A2A decisions it executes
-# (`lk_agents_core::a2a`, sans-IO; this edge is pending owner approval).
+# The delegation A2A client: the protocol records and the A2A decisions it executes
+# (`lk_agents_core::a2a`, sans-I/O).
 a2a.workspace = true
 lk-agents-core = { path = "../lk-agents-core" }
 # The Cloud session report upload: its protobuf header and Google RPC retry records.

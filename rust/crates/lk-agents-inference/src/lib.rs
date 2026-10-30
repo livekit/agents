@@ -1,7 +1,7 @@
-//! The `Native*` inference-gateway clients, detectors and fallback adapters, over the shared
+//! The inference gateway's provider clients, detectors and fallback adapters, over the shared
 //! transport of `lk-agents-net`.
 
-/// docs/CONTRACTS.md §4.7's provider traits, re-exported so a call site names one crate.
+/// The provider traits, re-exported so a call site names one crate.
 pub use lk_agents_abi as abi;
 
 // Conversation judges: model calls run concurrently on one conversation.

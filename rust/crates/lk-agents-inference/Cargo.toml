@@ -5,46 +5,24 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# BELOW the docs/CONTRACTS.md §4.7 purity line, and the furthest below it of any crate so far: this is the only place
-# in the workspace that opens a socket. §1.4's `Native*` column is exactly this crate -- the
-# inference gateway's LLM (HTTPS, OpenAI-compatible), STT/TTS/VAD (WS + JSON), and later EOT.
-#
-# Nothing in tiers 0/1 (§4) may depend on it. The rule that keeps that honest is the module split
-# described in `lib.rs`: every wire message, every error classification and every retry decision
-# lives in a `mod` that does not name `reqwest` or `tokio_tungstenite`, and the transport sits
-# behind a seam. The pure half is where the tests are.
-#
-# New dependencies are declared here rather than in `[workspace.dependencies]` on purpose: they are
-# all below the purity line, several crates are being written in parallel against that shared
-# manifest, and a version bump here must not be able to move a pure crate. See DECISIONS #4.
+# Async I/O: provider clients, their retry/fallback/reconnect execution, provider-side media
+# execution and evaluation judges (docs/internals/rust-core.md). The sans-I/O crates never depend
+# on it.
 [dependencies]
-# docs/CONTRACTS.md §4.7's home for the Llm/Stt/Tts/Vad traits. This crate is one of the two implementations of every
-# one of them (§1.0's table); it defines none of its own.
+# The provider traits and records this crate implements.
 lk-agents-abi = { path = "../lk-agents-abi" }
+# The shared HTTP/WebSocket transport and ProcessEnv.
 lk-agents-net = { path = "../lk-agents-net" }
 parking_lot.workspace = true
 # Chat formatting, strict tool schemas and JSON repair: the gateway LLM's, the realtime model's and
-# the judges' request bodies (sans-IO, no executor in its closure).
+# the judges' request bodies.
 lk-agents-core = { path = "../lk-agents-core" }
-# `build_strict_openai_schema`, which is what `ToolContext.parse_function_tools("openai",
-# strict=True)` returns and what the gateway's OpenAI-compatible body carries.
-# `AudioByteStream` (the 50 ms re-framing every STT send loop does) and nothing else. Reaching for
-# a local copy would be a second implementation of the one thing 23 plugin packages observe.
-# `openai::to_chat_ctx`, for `Llm::chat(chat_ctx, ...)`. One way, and it must stay that way: the
-# formatter knows nothing about a gateway.
-# `Spawner`, so this crate never builds a runtime (R13, §1.13) and the driver owns what starts.
-# `soxr` only. `fallback`: `tts/fallback_adapter.py:262-282` resamples a fallback TTS's output to
-# the rate the adapter chose, and doing that with a different resampler than the primary path uses
-# would make the fallback audibly different from the primary by construction; the VAD and the
-# realtime session resample their own input. The interruption window does **not** (DR-9): the
-# driver feeds it the session's one converted stream. Default features, so no ffmpeg -- `soxr.rs`
-# is not behind that gate.
-# `blingfire`: a fallback TTS member without a duplex path streams through its sentences.
+# Resampling, TTS framing and decoding on the media pool; `blingfire` for a fallback TTS member
+# without a duplex path, which streams through its sentences.
 lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
 serde = { workspace = true }
-# `preserve_order` for the same reason `lk-agents-format` states it: gateway request bodies are
-# assembled as maps and the reference emits them in declaration order. Also unifies with the rest
-# of the workspace, so a mixed build cannot silently switch `Map` to a sorted BTreeMap.
+# `preserve_order`: gateway request bodies are assembled as maps and the reference emits them in
+# declaration order.
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 async-trait.workspace = true
@@ -55,13 +33,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 rand = "0.9"
 base64 = { workspace = true }
 
-# --- the real transport ---
-#
-# **Not optional.** It used to be, off by default, to keep ~200 transitive crates out of a tier-2
-# build. Nothing ever turned it on except a live test -- so `lk-agents-py` linked this crate with
-# no transport at all, and the "native" gateway STT/TTS/LLM clients physically could not open a
-# socket from Python. A gate whose off-state silently disables the implementation is the same
-# mistake as leaving the work in the host: the build was green and the feature was absent.
+# The transport the provider clients drive (not optional: a build without it cannot reach the
+# gateway).
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
