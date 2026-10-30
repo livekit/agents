@@ -73,6 +73,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--core-version", required=True)
     parser.add_argument("--junitxml")
+    parser.add_argument("--sdk-source", type=Path)
     args = parser.parse_args()
     if Version(args.core_version) < Version("1.7.1"):
         parser.error("this compatibility check starts at LiveKit 1.7.1")
@@ -94,7 +95,16 @@ def main() -> int:
     print(f"Published core {args.core_version}: {agents.__file__}")
     print(f"Rime source: {rime.__file__}")
     print(f"Rime SDK: {version('rimelabs-sdk')}")
-    files = [ROOT / "tests/test_plugin_rime.py"]
+    import rimelabs_sdk
+
+    if args.sdk_source:
+        assert Path(rimelabs_sdk.__file__).resolve().is_relative_to(args.sdk_source.resolve())
+    print(f"Rime SDK source: {rimelabs_sdk.__file__}")
+    files = [
+        ROOT / "tests/test_plugin_rime.py",
+        ROOT / "tests/test_plugin_rime_reliability.py",
+        ROOT / "tests/test_plugin_rime_playback_lifetime.py",
+    ]
     command = ["-c", str(ROOT / "pyproject.toml"), "--unit", "--no-concurrent", "-q", "-rx"]
     if args.junitxml:
         command.extend(["--junitxml", args.junitxml])

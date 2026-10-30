@@ -160,7 +160,7 @@ Create one model per AgentSession and close it when the application finishes.
 
 Use the ordinary `livekit.agents.AgentSession` and
 `livekit.agents.llm.RealtimeModelFallbackAdapter`. The plugin has no replacement
-session, activity, fallback class, or custom audio output.
+session, activity, or fallback class. It provides an optional audio output wrapper.
 
 ```python
 from livekit.agents.llm import RealtimeModelFallbackAdapter
@@ -175,7 +175,7 @@ session = AgentSession(llm=model)
 ### LiveKit compatibility
 
 The plugin package requires `livekit-agents>=1.8.10`. The Prism adapter also has
-source compatibility checks against LiveKit 1.7.1, 1.8.6, and 1.8.8 with
+source compatibility checks against LiveKit 1.8.10 with
 `rimelabs-sdk==0.1.0a26`. These checks load the plugin source directly; they do not
 install this package on older core versions.
 
@@ -188,14 +188,17 @@ Run the source compatibility check from the repository root:
 
 ```sh
 uv run --no-project --python 3.11 \
-  --with 'livekit-agents[codecs]==1.7.1' \
-  scripts/test_rime_compatibility.py --core-version 1.7.1
+  --with 'livekit-agents[codecs]==1.8.10' \
+  scripts/test_rime_compatibility.py --core-version 1.8.10
 ```
 
 Substitute both version values to test another release. The runner verifies import
 paths and runs all Rime regressions locally without API keys. Three tool-limit
 cases are expected failures before 1.8.6; other failures or skips fail the check.
-Package installation and live services need separate validation.
+Package installation and live services need separate validation. Add
+`--with-editable /path/to/rime-sdk/python` to the uv command and
+`--sdk-source /path/to/rime-sdk/python` to the script arguments to test the
+companion SDK source. Run both Rime test files with the current source core too.
 
 ### Turns and interruption
 
@@ -204,12 +207,58 @@ speech events and uses LiveKit's standard cancellation and message truncation.
 It requests interruption on caller speech. Early speech hints do not change
 playback volume. There is no custom per-response interruption policy.
 
-The adapter sends no playback completion receipts. Prism estimates playback
-completion from its audio timing plus 1.5 seconds of slack. After caller
-interruption it waits up to 300 ms for a precise position, then uses its estimate.
-Skipped or muted output can therefore delay the next request until the estimate
-expires. LiveKit supplies a truncation position when it interrupts a partially
-played message, including application stops.
+Choose playback behavior when you create the model:
+
+| Option | Behavior |
+| --- | --- |
+| `playback="auto"` (default) | Report measured completion for output identified by the installed wrapper. Use Prism estimates elsewhere. |
+| `playback="estimated"` | Use Prism estimates for normal completion. |
+| `playback="discard"` | Discard audio before frame allocation and output buffering. Report zero played milliseconds at response end. |
+
+All modes retain interruption reporting. Discard keeps text and tools active. It
+keeps the audio capability and an empty audio stream, so LiveKit does not invoke
+an automatic TTS fallback. Explicit application `say()` calls are separate.
+Discard still uses server synthesis, audio transfer, and SDK parsing. It is not
+text-only server generation. Speed depends on the deployment and workload.
+
+For a caller-owned sink, install the wrapper before starting the agent:
+
+```python
+model = rime.realtime.RealtimeModel(context_mode="shared")
+session = AgentSession(llm=model)
+session.output.audio = model.wrap_audio_output(my_audio_sink)
+await session.start(Agent(instructions="Help the caller."))
+```
+
+For RoomIO, install it at the start of `on_enter`, before requesting an opening
+reply. LiveKit sets up RoomIO before it calls `on_enter`:
+
+```python
+class Assistant(Agent):
+    async def on_enter(self):
+        sink = self.session.output.audio
+        if sink is not None:
+            self.session.output.audio = model.wrap_audio_output(sink)
+        self.session.generate_reply(instructions="Greet the caller.")
+
+session = AgentSession(llm=model)
+await session.start(Assistant(instructions="Help the caller."), room=ctx.room)
+```
+
+The wrapper reads frame metadata before downstream resampling. Local protocol
+checks cover the normal AgentSession audio path, 24 kHz and 48 kHz sinks, multiple
+messages, and synchronous completion events. The RoomIO example is tested with
+real RoomIO and an RTC audio source, using local publication and subscription
+substitutes. Actual room transport and device playback need a deployment check. Custom audio nodes must preserve the frame metadata and sample sequence.
+Missing metadata, mixed output, discarded frames, replacement sinks, and missing
+completion events keep estimates in effect. Application TTS and `say()` audio
+cannot release a Prism response. A bare `playback_finished` listener cannot prove
+which response finished.
+
+After generation ends, an unconfirmed output releases its local hold after the
+generated audio duration plus `timeouts.request_s`. This cleanup never reports
+completion. Paused or delayed output can thus return to estimated completion.
+Late events after close cannot report to another provider session.
 
 Text passed to `generate_reply(user_input=...)` is inserted into history before
 a proactive reply request. It is not submitted through Prism's dedicated typed
@@ -264,26 +313,98 @@ An imported result must immediately follow its call. Images, video, developer
 messages, and tool progress are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
 
-Append, deletion, and insertion of missing imported results preserve retained turns.
-To retry an imported result after newer speech, insert it directly after its
-existing call and keep all other items unchanged and in order. Prism acknowledges
-each result separately. Replacing or reordering history
-rebuilds completed items with new server IDs. A rebuild requires no active reply
-or pending tool call. Prism has no atomic history replacement: replies can see
-intermediate context between operations. An explicit event-scoped refusal during
-an append or result insertion preserves acknowledged items, logs a warning, and
-returns normally. Later items in that update are not sent after the refusal.
-Refusal of the first deletion also logs a warning and preserves the original history.
-Keep the requested context to retry or correct the unaccepted items. Preserve
-newer conversation items and accepted item IDs when retrying. The plugin does not retry
-automatically or execute tools again. The plugin permits new reply requests even
-when a tool result was refused. Prism decides whether to accept those requests,
-and a reply can use history that is missing the refused result. Server-initiated
-speech replies are still controlled by Prism.
+The default `context_mode="strict"` retains replacement semantics. Append,
+prepend, middle insertion, deletion, replacement, and reorder are supported.
+Edits that need a rebuild require no active reply or pending call. Prism deletes
+a completed call and its result together. Every write has a separate
+acknowledgment; replacement is not atomic.
 
-An unknown request outcome, session failure, or partially applied deletion or
-replacement still ends the session. Standard fallback replays the current agent
-context, which can already contain the requested edit even when Prism rejected it.
+For headless tests and tasks inside tools, use:
+
+```python
+model = rime.realtime.RealtimeModel(playback="discard", context_mode="shared")
+```
+
+Shared mode treats ordinary context updates as views. Empty or reduced views
+preserve omitted history and the original pending tool call. A task can change
+instructions and tools without removing that call. Recorded generated, played,
+and retained transcript variants do not force a rebuild. Unknown changes or
+insertions are rejected. LiveKit's separate warning about tasks on realtime
+models remains; automatic task-isolated history is not supported.
+
+Shared mode also preserves omitted messages that were never played. Use an
+explicit edit to remove those messages. Task views and provider history need not
+be equal. Exact edits, including punctuation changes, use these helpers:
+
+```python
+await model.replace_chat_ctx(session.current_agent, target_context)
+await model.clear_chat_ctx(session.current_agent)
+await model.reconcile_chat_ctx(session.current_agent)
+```
+
+Helpers require an active agent that uses this model directly. Pause competing
+local context edits and handoffs during each call. Helpers preserve local
+configuration records and use `exclude_invalid_function_calls=False` so a task's
+smaller tool list cannot strip the parent call. Pending calls cannot be cleared.
+These helpers do not support a model inside a fallback adapter.
+
+`PrismHistoryUpdateError` is a `llm.RealtimeError` with the following fields:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `rejected`, `partial`, or `uncertain` |
+| `recoverable` | The known provider state can still be used after reconciliation |
+| `confirmed_chat_ctx` | Detached projection, or `None` for an uncertain outcome |
+| `needs_reconciliation` | Local context still needs repair |
+
+Error codes are `history_update_rejected`, `history_update_partial`, and
+`history_update_uncertain`. Messages and notice representations exclude transcript
+content. The plugin records each accepted write before the next write. A known
+partial edit keeps the connection open. An acknowledgment timeout or unknown
+write outcome retains the SDK's terminal failure behavior. No mutation is retried.
+
+The explicit helper attempts local repair after a known failure, then raises the
+original error. Check `needs_reconciliation`; an event that races with repair can
+prevent it. For ordinary core-owned updates, install a synchronous notice callback
+and arrange recovery in application code:
+
+```python
+import asyncio
+from livekit.plugins.rime.realtime import PrismHistoryUpdateError
+
+notices = asyncio.Queue()
+model = rime.realtime.RealtimeModel(
+    context_mode="shared", on_history_update=notices.put_nowait,
+)
+session = AgentSession(llm=model)
+
+async def recover_next_update():
+    notice = await notices.get()
+    if notice.recoverable and notice.needs_reconciliation:
+        # Application must first pause competing edits and handoffs.
+        await model.reconcile_chat_ctx(session.current_agent)
+
+try:
+    await model.replace_chat_ctx(session.current_agent, target_context)
+except PrismHistoryUpdateError as error:
+    if error.recoverable and error.needs_reconciliation:
+        await model.reconcile_chat_ctx(session.current_agent)
+    raise
+```
+
+Until reconciliation succeeds, dependent client replies and ordinary edits are
+blocked. Results for already-live calls can still settle. Accepted results retain
+their continuation ownership; they are not executed again. Reconciliation resumes a blocked tool continuation once. Other client replies
+need a new request through the session. A refused typed input cannot silently
+start a reply without that input. Provider-initiated speech remains under Prism's
+control. The helpers do not rewrite the session's past event log.
+
+SDK alpha26 supports these features within its existing reference-cache lifetime.
+Long tasks and delayed playback beyond 128 responses require the SDK version with
+`hold_response` (currently the companion SDK source change, not a published floor).
+That SDK retains up to 128 ordinary and 128 protected responses. Active generation,
+unresolved calls, and holds count toward the protected bound. Limit exhaustion
+raises an error instead of evicting a pending owner. No audio is retained by holds.
 
 Set `truncation="auto"`, `truncation="disabled"`, or
 `truncation=RetentionRatio(0.9)` at construction or through `model.update_options()`.
@@ -323,7 +444,8 @@ before the provider acknowledges it, so rejected or cancelled edits can leave
 agent and provider history different. Fallback startup can also return before a
 backup is ready, and a failed restart can emit more than one reconnect event.
 Use a known valid history when starting a replacement session after these errors;
-the plugin does not add its own history rollback or startup failover logic.
+use the direct-model helpers for known history failures. Fallback swaps retain
+their existing dropped-update and startup behavior.
 
 ### Events and limits
 
