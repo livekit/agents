@@ -89,8 +89,8 @@ pub fn measured(rng: &mut fastrand::Rng, m: &Measured) -> u64 {
 }
 
 /// A provider delay in ms. Most draws are [`measured`]; a stray one is either a boundary (none,
-/// a tick, a frame, or a tick around a deadline in play) or a stall up to twenty times the most
-/// ever measured.
+/// a tick, a frame, or a tick around a deadline in play) or a stall ten to a hundred times the
+/// most ever measured.
 pub fn delay(rng: &mut fastrand::Rng, m: &Measured, timing: &Timing) -> u64 {
     if rng.f64() >= timing.stray {
         return measured(rng, m);
@@ -103,7 +103,7 @@ pub fn delay(rng: &mut fastrand::Rng, m: &Measured, timing: &Timing) -> u64 {
             k => (timing.deadlines[(k - 3) / 3] + (k - 3) as u64 % 3).saturating_sub(1),
         };
     }
-    (m[10].max(1) as f64 * 20f64.powf(rng.f64())).round() as u64
+    (m[10].max(1) as f64 * 10f64.powf(1.0 + rng.f64())).round() as u64
 }
 
 /// One thing the fakes opened: which boundary it sits at, and which one of its kind it is.

@@ -873,7 +873,7 @@ a share of draws equal to the run's randomness (none in a pure conversation, nea
 uniform run) strays instead, half to a boundary (none, a tick, a frame, or a tick around a
 deadline the setup arms: pre-connect, endpointing, connect options, retry interval, the close's
 transcript wait, the away timer, speech gap, transcription timeout, turn limit, hook bound) and
-half to a stall up to twenty times the most measured.
+half to a stall ten to a hundred times the most measured.
 
 | Fake | Calibrated from | Still cannot do |
 |---|---|---|
