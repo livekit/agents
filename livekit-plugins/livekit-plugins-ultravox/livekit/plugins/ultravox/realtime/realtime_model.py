@@ -930,6 +930,7 @@ class RealtimeSession(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            responds_to_user_audio=True,
         )
         self.emit("generation_created", generation_ev)
 
