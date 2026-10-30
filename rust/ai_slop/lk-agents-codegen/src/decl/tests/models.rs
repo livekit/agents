@@ -364,3 +364,20 @@ fn a_dataclass_record_is_mutable_positional_and_calls_its_post_init_hook() {
     );
     assert!(unordered.err().is_some_and(|e| e.contains("positional")));
 }
+
+// Catches: a list field read from any iterable, so a `str` given for `list[str]` becomes its
+// characters instead of a type error.
+#[test]
+fn a_list_field_reads_a_list_or_tuple_only() {
+    let decls = read(
+        r#"#[crate::host(record(module = "session", extract))]
+        pub struct Keyterms { pub terms: Vec<String> }"#,
+    )
+    .expect("resolves");
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>()")
+            && shell.contains("Keyterms.terms: expected a list or tuple"),
+        "{shell}"
+    );
+}
