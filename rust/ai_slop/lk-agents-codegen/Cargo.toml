@@ -22,6 +22,10 @@ lk-agents-bindgen = { path = "../lk-agents-bindgen" }
 name = "architecture-fixtures"
 path = "../../architecture/fixtures.rs"
 
+[[example]]
+name = "io-fixtures"
+path = "../../architecture/io/fixtures.rs"
+
 [dev-dependencies]
 tokio.workspace = true
 futures = "0.3"

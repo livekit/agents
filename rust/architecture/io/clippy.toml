@@ -1,0 +1,9 @@
+# The I/O policy for runtime, worker, net, inference, storage and py: the crates that run beside
+# the host. Selected with CLIPPY_CONF_DIR by architecture/check.py; see architecture/README.md.
+
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
+  { path = "std::sync::RwLock", reason = "Use lk_agents_net::lock::RwLock: a contended wait releases the host lock (Python's GIL)." },
+  { path = "parking_lot::Mutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
+  { path = "parking_lot::RwLock", reason = "Use lk_agents_net::lock::RwLock: a contended wait releases the host lock (Python's GIL)." },
+]

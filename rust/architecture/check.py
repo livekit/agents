@@ -10,6 +10,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 import tomllib
 
@@ -23,6 +24,8 @@ UNRESTRICTED = (
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.
 ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net", "lk-agents-storage"}
+# The I/O policy's crates (rust/architecture/io/clippy.toml): everything that runs beside the host.
+IO = ASYNC | {"lk-agents-runtime", "lk-agents-py"}
 # The documented crate graph (rust-core.md "Crates and dependencies"): each checked crate's allowed
 # workspace dependencies. Build tools are unchecked.
 GRAPH = {
@@ -222,71 +225,6 @@ def executor_violations(root: Path, paths: list[str]) -> dict[str, int]:
     return violations
 
 
-# A blocking guard held across a host call deadlocks against a host thread that holds the GIL and
-# takes the same lock (review13, 8837e6dcd): a guard's scope makes no host call. Logging is one
-# (pyo3-log takes the GIL), as are `Python::attach`, an emit and the playback tracker's fan-out
-# to host observers. A lock-scoped block returns what to log or emit; the caller does it after.
-LOCKING = tuple(
-    f"rust/crates/lk-agents-{name}/src/"
-    for name in ("runtime", "worker", "net", "inference", "storage", "py")
-)
-LOCK = r"\.(?:try_)?lock\(\)(?!\s*\.await)"
-GUARD = re.compile(
-    r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*[\w.:()]*?" + LOCK
-    + r"(?:\.unwrap\(\)|\.expect\([^()]*\)|\.unwrap_or_else\((?:\|\w+\|\s*\w+\.into_inner\(\)|[\w:]+)\))?\s*;"
-)
-SCRUTINEE = re.compile(r"\b(?:if\s+let|while\s+let|match|for)\b[^{};]*?" + LOCK + r"[^{};]*\{")
-HOST_UNDER_LOCK = re.compile(
-    r"\blog::\w+!|(?<![\w:])(?:warn|error|info|debug|trace)!|\bPython::(?:attach|with_gil)\b"
-    r"|[.:]emit\w*\(|\.(?:playback_started|playback_progressed|playback_finished|transcript_shown)\("
-)
-
-
-def guard_scopes(code: str):
-    """The text each blocking guard is held across: from a `let` guard to its `drop` or the end of
-    its block, and a guard taken in an `if let`/`while let`/`match`/`for` head across its body."""
-    def block_end(at: int, depth: int = 0) -> int:
-        while at < len(code):
-            depth += {"{": 1, "}": -1}.get(code[at], 0)
-            if depth < 0 or (depth == 0 and code[at] == "}"):
-                return at
-            at += 1
-        return at
-
-    def held(start: int, end: int, name: str | None) -> str:
-        released = name and re.search(rf"\bdrop\(\s*{name}\s*\)", code[start:end])
-        return code[start : start + released.start() if released else end]
-
-    for match in GUARD.finditer(code):
-        yield match.start(), held(match.end(), block_end(match.end()), match.group(1))
-    for match in SCRUTINEE.finditer(code):
-        # `if let Ok(guard) = m.try_lock()` binds the guard itself, which a `drop` releases.
-        bound = re.match(r"\w+\s+let\s+(?:Ok|Some)\(\s*(?:mut\s+)?(\w+)\s*\)\s*=", match.group(0))
-        name = bound.group(1) if bound else None
-        yield match.start(), held(match.end(), block_end(match.end(), 1), name)
-
-
-def locked_host_call_violations(root: Path, paths: list[str]) -> dict[str, int]:
-    """Per file and enclosing guard (its line's text), the host calls made under it, outside
-    comments, strings and tests."""
-    violations = {}
-    for path in paths:
-        if not path.startswith(LOCKING) or any(
-            part.removesuffix(".rs").endswith("tests") for part in Path(path).parts
-        ):
-            continue
-        text = (root / path).read_text()
-        if generated(text):
-            continue
-        code = without_test_modules(NOT_CODE.sub(blank, text))
-        for start, scope in guard_scopes(code):
-            if count := len(HOST_UNDER_LOCK.findall(scope)):
-                line = code[start : code.find("\n", start)].strip()
-                key = f"locked-host-call:{path}:{line}"
-                violations[key] = violations.get(key, 0) + count
-    return violations
-
-
 def pyo3_violations(metadata: dict, root: Path, paths: list[str]) -> set[str]:
     """A pyo3-family dependency of any other workspace crate (every feature), and every tracked
     Rust file of another crate naming pyo3, generated output included."""
@@ -473,9 +411,6 @@ DEPENDENCY_BASELINES = {
     "legacy": "rust/architecture/dependencies-baseline.json",
     "sqlite": "rust/architecture/dependencies-sqlite-baseline.json",
 }
-CLIPPY_BASELINES = {
-    "legacy": "rust/architecture/clippy-baseline.json",
-}
 
 
 def baseline_family(identity: str) -> str:
@@ -543,7 +478,6 @@ def check_boundaries() -> int:
         ("pyo3", pyo3_violations(metadata, root, paths)),
         ("host-calls", host_call_violations(root, paths)),
         ("executors", executor_violations(root, paths)),
-        ("locked-host-calls", locked_host_call_violations(root, paths)),
         ("uses", use_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
@@ -614,13 +548,46 @@ def check_warnings() -> int:
 LINTS = ("disallowed_methods", "disallowed_types", "disallowed_macros")
 
 
-def policed(path: str) -> bool:
-    """A subject-core or ABI source the Clippy policy covers."""
+class Policy(NamedTuple):
+    """A Clippy configuration over a crate set. A purity site also needs its source exemption;
+    an I/O site is held by its baseline alone."""
+
+    name: str
+    crates: frozenset[str]
+    conf: str
+    baseline: str
+    modes: tuple[str, ...]
+    exempted: bool
+
+
+POLICIES = (
+    Policy(
+        "purity",
+        frozenset(PURE),
+        "rust/architecture",
+        "rust/architecture/clippy-baseline.json",
+        ("default", "python", "all"),
+        True,
+    ),
+    Policy(
+        "io",
+        frozenset(IO),
+        "rust/architecture/io",
+        "rust/architecture/io/clippy-baseline.json",
+        ("default", "all"),
+        False,
+    ),
+)
+PURITY = POLICIES[0]
+
+
+def policed(path: str, policy: Policy = PURITY) -> bool:
+    """A handwritten source of one of the policy's crates."""
     parts = Path(path).parts
-    return len(parts) > 3 and parts[2] in PURE and not path.startswith(UNRESTRICTED)
+    return len(parts) > 3 and parts[2] in policy.crates and not path.startswith(UNRESTRICTED)
 
 
-def source_paths(root: Path) -> list[str]:
+def source_paths(root: Path, policy: Policy = PURITY) -> list[str]:
     paths = (
         git(root, "ls-files", "-c", "-o", "--exclude-standard", "-z", "--", "rust/crates/*/*.rs")
         .strip("\0")
@@ -628,7 +595,7 @@ def source_paths(root: Path) -> list[str]:
     )
     result = []
     for path in paths:
-        if not path or not policed(path):
+        if not path or not policed(path, policy):
             continue
         if Path(path).parts[3] in {"build.rs", "build"}:
             continue
@@ -727,11 +694,16 @@ def command(root: Path, crates: list[str], mode: str = "all") -> list[str]:
         *args,
         "--message-format=json",
         "--",
+        # Only the policy's lints decide; a crate's other Clippy findings are not this gate's.
+        "-A",
+        "clippy::all",
         *(arg for lint in LINTS for arg in ("--force-warn", f"clippy::{lint}")),
     ]
 
 
-def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int, int, str, str]]:
+def compiler_locations(
+    messages: list[dict], root: Path, policy: Policy = PURITY
+) -> list[tuple[str, int, int, str, str]]:
     """Resolve macro-expansion spans back to the handwritten invoking core item."""
     root = root.resolve()
     sites = set()
@@ -754,7 +726,7 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
                 except ValueError:
                     relative = ""
                 in_worker_pool |= relative.startswith(UNRESTRICTED)
-                if relative.startswith("rust/crates/") and policed(relative):
+                if relative.startswith("rust/crates/") and policed(relative, policy):
                     candidates.append(
                         (
                             relative,
@@ -808,7 +780,9 @@ def site_inventory(root: Path, helper: Path, locations: list[tuple]) -> set[str]
     return identities
 
 
-def exemption_errors(root: Path, helper: Path, records: list[dict]) -> list[str]:
+def exemption_errors(
+    root: Path, helper: Path, records: list[dict], policy: Policy = PURITY
+) -> list[str]:
     """Each compiler site must retain an effective source exemption."""
     from collections import defaultdict
 
@@ -829,7 +803,7 @@ def exemption_errors(root: Path, helper: Path, records: list[dict]) -> list[str]
         package = record["package_id"]
         if package not in features:
             raise ValueError(f"{crate_root}: missing compiler feature inventory")
-        for path, line, column, lint, _ in compiler_locations([message], root):
+        for path, line, column, lint, _ in compiler_locations([message], root, policy):
             by_file[(path, crate_root, package)].add((line, column, lint, expanded))
     groups = defaultdict(dict)
     for (path, crate_root, package), sites in by_file.items():
@@ -895,14 +869,25 @@ def compiler_messages(output: str | list[dict]) -> list[dict]:
 
 def check_clippy() -> int:
     root = Path(__file__).resolve().parents[2]
-    crates = sorted(name for name in PURE if (root / "rust/crates" / name).is_dir())
-    errors: list[str] = []
     helper = build_helper(root)
+    return max(check_policy(root, helper, policy) for policy in POLICIES)
+
+
+def library(root: Path, crate: str) -> str:
+    """The crate's library target name (lk-agents-py's is `_core`)."""
+    manifest = tomllib.loads((root / "rust/crates" / crate / "Cargo.toml").read_text())
+    return manifest.get("lib", {}).get("name", crate.replace("-", "_"))
+
+
+def check_policy(root: Path, helper: Path, policy: Policy) -> int:
+    crates = sorted(name for name in policy.crates if (root / "rust/crates" / name).is_dir())
+    errors: list[str] = []
     snapshots = {
-        path: hashlib.sha256((root / path).read_bytes()).digest() for path in source_paths(root)
+        path: hashlib.sha256((root / path).read_bytes()).digest()
+        for path in source_paths(root, policy)
     }
     actual = {f"allow:{identity}" for identity in inventory(root, helper, list(snapshots))}
-    baseline, history_errors = read_baselines(root, CLIPPY_BASELINES)
+    baseline, history_errors = read_baselines(root, {"legacy": policy.baseline})
     errors.extend(ratchet(actual, baseline))
     errors.extend(history_errors)
     for error in errors:
@@ -910,9 +895,9 @@ def check_clippy() -> int:
     if errors:
         return 1
     env = os.environ.copy()
-    env["CLIPPY_CONF_DIR"] = str(root / "rust/architecture")
+    env["CLIPPY_CONF_DIR"] = str(root / policy.conf)
     locations = set()
-    for mode in ("default", "python", "all"):
+    for mode in policy.modes:
         process = subprocess.run(
             command(root, crates, mode),
             cwd=root,
@@ -935,19 +920,20 @@ def check_clippy() -> int:
             record["target"]["name"]
             for record in records
             if record.get("reason") == "compiler-artifact"
-            and "lib" in record.get("target", {}).get("kind", [])
+            and {"lib", "rlib"} & set(record.get("target", {}).get("kind", []))
         }
-        missing = {name.replace("-", "_") for name in crates} - artifacts
+        missing = {library(root, name) for name in crates} - artifacts
         if missing:
             raise ValueError(
-                f"Clippy {mode} transcript is missing core artifacts: {sorted(missing)}"
+                f"Clippy {policy.name} {mode} transcript is missing artifacts: {sorted(missing)}"
             )
-        sites = compiler_locations(messages, root)
-        errors.extend(exemption_errors(root, helper, records))
-        locations.update(sites)
-        print(f"clippy {mode}: successful complete compiler pass")
+        locations.update(compiler_locations(messages, root, policy))
+        if policy.exempted:
+            errors.extend(exemption_errors(root, helper, records, policy))
+        print(f"clippy {policy.name} {mode}: successful complete compiler pass")
     current = {
-        path: hashlib.sha256((root / path).read_bytes()).digest() for path in source_paths(root)
+        path: hashlib.sha256((root / path).read_bytes()).digest()
+        for path in source_paths(root, policy)
     }
     changed = sorted(
         path
@@ -955,17 +941,17 @@ def check_clippy() -> int:
         if snapshots.get(path) != current.get(path)
     )
     if changed:
-        raise ValueError("core source changed during Clippy captures; rerun: " + ", ".join(changed))
+        raise ValueError("source changed during Clippy captures; rerun: " + ", ".join(changed))
     actual.update(site_inventory(root, helper, sorted(locations)))
     errors.extend(ratchet(actual, baseline))
     errors.extend(stale(actual, baseline))
     for error in errors:
         print(error, file=sys.stderr)
     print(
-        f"clippy: {sum(s.startswith('site:') for s in actual)} sites; "
+        f"clippy {policy.name}: {sum(s.startswith('site:') for s in actual)} sites; "
         f"{sum(s.startswith('allow:') for s in actual)} exemptions; baseline {len(baseline)}"
     )
-    return bool(errors)
+    return int(bool(errors))
 
 
 def main() -> int:

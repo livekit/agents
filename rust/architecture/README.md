@@ -37,12 +37,6 @@ checks formatting followed by the architecture gate. Run `make -C rust` for help
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only
   `executors-baseline.json`.
-- No host call while a blocking guard is held (review13): in runtime, worker, net, inference,
-  storage and py, outside tests, a `let` guard (to its `drop` or block end) or a guard taken in an
-  `if let`/`while let`/`match`/`for` head makes no host call: logging (pyo3-log takes the GIL),
-  `Python::attach`, an emit or the playback tracker's fan-out. A lock-scoped block returns what to
-  log or emit. Identities live in the shrink-only `locked-host-calls-baseline.json` (empty). The
-  rule is lexical: a helper given the locked state is not followed.
 - Warning-clean crates (`WARNING_CLEAN` in `check.py`, a list that only grows) stay clean:
   any compiler warning of theirs in `cargo check --tests --workspace` fails. ABI, voice,
   runtime, py, fuzz and external path dependencies are not gated yet.
@@ -53,6 +47,12 @@ checks formatting followed by the architecture gate. Run `make -C rust` for help
   Python and all-feature configurations. One handwritten `clippy.toml` in this
   directory defines the policy. The checker explicitly sets `CLIPPY_CONF_DIR`
   to this directory and selects only ABI, core, voice and media with `-p`.
+- A second policy, `io/clippy.toml`, covers runtime, worker, net, inference, storage and py
+  (default and all-feature configurations): no raw `std::sync`/`parking_lot` `Mutex` or
+  `RwLock`. Their one lock is `lk_agents_net::lock`, whose contended wait releases the host
+  lock (Python's GIL), so a host call made under a lock cannot deadlock against a host thread
+  waiting for it (review13). Its sites need no source exemption; `io/clippy-baseline.json`
+  holds the existing ones and only shrinks.
 - Codegen's shared source visitor inventories reasoned lint exemptions, identifies
   compiler sites and validates export placement, including inactive branches and
   macro bodies. Effective exemptions are required for every compiler site.

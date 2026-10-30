@@ -355,6 +355,37 @@ class ClippyContracts(unittest.TestCase):
         self.assertFalse(ratchet(sites, sites))
 
 
+class IoPolicyContracts(unittest.TestCase):
+    """The I/O policy refuses a raw lock: only lk_agents_net::lock waits without the GIL."""
+
+    def test_the_io_policy_rejects_each_raw_lock(self):
+        io = next(policy for policy in clippy.POLICIES if policy.name == "io")
+        env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / io.conf)}
+        command = [
+            "cargo",
+            "clippy",
+            "--no-deps",
+            "--config",
+            str(ROOT / "rust/.cargo/config.toml"),
+            "--manifest-path",
+            str(ROOT / "rust/Cargo.toml"),
+            "--locked",
+            "-p",
+            "lk-agents-codegen",
+            "--example",
+            "io-fixtures",
+            "--message-format=json",
+            "--",
+            *(a for lint in clippy.LINTS for a in ("--force-warn", f"clippy::{lint}")),
+        ]
+        process = subprocess.run(command, env=env, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
+        diagnostics = [m["message"] for m in clippy.compiler_messages(process.stdout)]
+        for name in ("std::sync::Mutex", "std::sync::RwLock", "parking_lot::Mutex", "parking_lot::RwLock"):
+            with self.subTest(name=name):
+                self.assertTrue(any(f"`{name}`" in d for d in diagnostics), diagnostics)
+
+
 class CompilerLocationContracts(unittest.TestCase):
     def test_worker_exemption_keeps_other_primary_spans_visible(self):
         def span(path, expansion=None):
