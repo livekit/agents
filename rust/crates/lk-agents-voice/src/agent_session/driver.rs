@@ -213,11 +213,6 @@ impl Driver {
         std::mem::take(&mut self.outbox)
     }
 
-    /// The frame the core is stepping in: the queue owner performs its effects inside it.
-    pub fn frame(&self) -> FrameId {
-        self.current
-    }
-
     /// `ivr_detection=True`: the IVR system is the host's to start; the core starts no system.
     pub fn ivr_detection(&self) -> bool {
         self.session.config.effective.turn.ivr_detection()

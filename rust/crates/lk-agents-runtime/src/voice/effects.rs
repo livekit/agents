@@ -38,8 +38,6 @@ impl Runtime {
     /// Views first: a receipt or event performed in the same batch must read what the core
     /// accepted, not the state before it. Returns the rest.
     pub(super) fn publish_views(&mut self, effects: Vec<Effect>) -> Vec<Effect> {
-        let frames = Arc::clone(&self.shared.frames);
-        let _scope = frames.enter(self.driver.frame());
         let mut operations = Vec::with_capacity(effects.len());
         for effect in effects {
             match effect {
@@ -54,8 +52,6 @@ impl Runtime {
     }
 
     pub(super) fn operate(&mut self, operations: Vec<Effect>) {
-        let frames = Arc::clone(&self.shared.frames);
-        let _scope = frames.enter(self.driver.frame());
         for effect in operations {
             self.perform_voice_effect(effect);
         }

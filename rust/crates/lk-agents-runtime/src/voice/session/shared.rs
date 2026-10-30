@@ -213,8 +213,6 @@ pub struct SessionShared {
     pub hook_host: bool,
     /// Never `tokio::spawn`.
     pub spawner: Arc<dyn Spawner>,
-    /// The task enters its own frame; it never reads the driver's `current`.
-    pub frames: Arc<lk_agents_abi::utils::frame::FrameTable>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub gen_ids: std::sync::atomic::AtomicU64,
     pub session_id: String,

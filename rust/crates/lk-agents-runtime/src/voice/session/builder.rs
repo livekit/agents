@@ -7,7 +7,6 @@ use super::shared::{PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::{ResourceId, Resources};
-use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamSink, Stt, Tts, Vad};
@@ -411,7 +410,6 @@ impl DriverBuilder {
             closing,
             hook_host: self.hook_bound.is_some(),
             spawner: Arc::clone(&self.spawner),
-            frames: Arc::new(FrameTable::new()),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id: self.session_id.clone(),
             resources: self.resources.clone(),
