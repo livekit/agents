@@ -27,8 +27,8 @@ backend = Agent(
         "is not listed is not available, say so and offer the nearest listed ones. A booking "
         "is schedule_appointment with the slot's id and the patient's email, never one they "
         "did not give; it asks for a missing email, then reads the appointment back for the "
-        "patient's yes. Their answer is the next request: an email means calling it again with "
-        "that email, a yes means calling it again the same way, a no means other openings. "
+        "patient's yes. Their answer is the next request: a yes or an email, call it again with "
+        "it; a no, other openings; else ask again. Only its booked means booked. "
         "Insurance is check_insurance; a check the patient no longer wants, you cancel."
     ),
     llm="google/gemma-4-31b-it",
