@@ -62,7 +62,12 @@ pub fn format_dtmf(events: &[DtmfEvent]) -> String {
     events.iter().map(|e| e.as_str()).collect::<Vec<_>>().join(" ")
 }
 
-pub use lk_agents_abi::voice::workflows::GetDtmfResult;
+/// `GetDtmfResult(user_input)`: the digits, space-separated (`format_dtmf`). The host builds its
+/// own dataclass from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetDtmfResult {
+    pub user_input: String,
+}
 
 /// The pressed digits, formatted.
 pub fn dtmf_result(inputs: &[DtmfEvent]) -> GetDtmfResult {

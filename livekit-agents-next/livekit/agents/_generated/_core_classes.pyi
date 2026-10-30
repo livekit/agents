@@ -1,7 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
-#     rust/crates/lk-agents-abi/src/voice/workflows.rs
 # and the `#[host(export)]` / `#[host(object)]` items in `EXPORT_SOURCES`.
 #
 # The stub of every `_core` class and function the binding generates rather than
@@ -11,98 +10,6 @@
 # non-empty diff, so a hand edit here is reverted rather than merged.
 
 from typing import Any
-
-class GetAddressResult:
-    """GetAddressResult(address: 'str')"""
-
-    def __init__(self, *, address: str) -> None: ...
-    @property
-    def address(self) -> str: ...
-
-
-class GetEmailResult:
-    """GetEmailResult(email_address: 'str')"""
-
-    def __init__(self, *, email_address: str) -> None: ...
-    @property
-    def email_address(self) -> str: ...
-
-
-class GetPhoneNumberResult:
-    """GetPhoneNumberResult(phone_number: 'str')"""
-
-    def __init__(self, *, phone_number: str) -> None: ...
-    @property
-    def phone_number(self) -> str: ...
-
-
-class GetNameResult:
-    """GetNameResult(first_name: 'str | None' = None, middle_name: 'str | None' = None, last_name: 'str | None' = None)"""
-
-    def __init__(
-        self,
-        *,
-        first_name: str | None = None,
-        middle_name: str | None = None,
-        last_name: str | None = None,
-    ) -> None: ...
-    @property
-    def first_name(self) -> str | None: ...
-    @property
-    def middle_name(self) -> str | None: ...
-    @property
-    def last_name(self) -> str | None: ...
-
-
-class GetCardNumberResult:
-    """GetCardNumberResult(issuer: 'str', card_number: 'str')"""
-
-    def __init__(self, *, issuer: str, card_number: str) -> None: ...
-    @property
-    def issuer(self) -> str: ...
-    @property
-    def card_number(self) -> str: ...
-
-
-class GetSecurityCodeResult:
-    """GetSecurityCodeResult(security_code: 'str')"""
-
-    def __init__(self, *, security_code: str) -> None: ...
-    @property
-    def security_code(self) -> str: ...
-
-
-class GetExpirationDateResult:
-    """GetExpirationDateResult(date: 'str')"""
-
-    def __init__(self, *, date: str) -> None: ...
-    @property
-    def date(self) -> str: ...
-
-
-class GetCreditCardResult:
-    """GetCreditCardResult(cardholder_name: 'str', issuer: 'str', card_number: 'str', security_code: 'str', expiration_date: 'str')"""
-
-    def __init__(
-        self,
-        *,
-        cardholder_name: str,
-        issuer: str,
-        card_number: str,
-        security_code: str,
-        expiration_date: str,
-    ) -> None: ...
-    @property
-    def cardholder_name(self) -> str: ...
-    @property
-    def issuer(self) -> str: ...
-    @property
-    def card_number(self) -> str: ...
-    @property
-    def security_code(self) -> str: ...
-    @property
-    def expiration_date(self) -> str: ...
-
 
 WARM_TRANSFER_IDENTITY: str
 TWILIO_RINGING_TIMEOUT: float
@@ -120,20 +27,6 @@ SDK_SHUTDOWN_TIMEOUT_SECONDS: float
 UPLOAD_TIMEOUT_SECONDS: int
 REDACTED_EXCEPTION: str
 REDACTED_LOG_BODY: str
-
-
-class GetDOBResult:
-    """GetDOBResult(date_of_birth: 'date', time_of_birth: 'time | None' = None)"""
-
-    def __init__(self, *, date_of_birth: Any, time_of_birth: Any | None = None) -> None: ...
-    @property
-    def date_of_birth(self) -> Any: ...
-    @property
-    def time_of_birth(self) -> Any | None: ...
-    def format_long(self) -> str: ...
-    def format_time(self) -> str | None: ...
-    def __eq__(self, other: object) -> bool: ...
-    def __repr__(self) -> str: ...
 
 
 class TrackPublishOptions:

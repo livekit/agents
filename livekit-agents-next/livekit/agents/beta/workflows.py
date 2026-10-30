@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any
@@ -17,12 +18,7 @@ from livekit import api
 
 from .. import _core, llm, stt, tts, utils
 from .._generated.vad import VAD
-from .._generated.workflows import (
-    GetDtmfResult,
-    GetEmailResult,
-    WarmTransferResult,
-    WorkflowInstructions as WorkflowInstructions,
-)
+from .._generated.workflows import WorkflowInstructions as WorkflowInstructions
 from ..job import JobContext, _server_credentials, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
@@ -62,6 +58,23 @@ __all__ = [
     "receive_dtmf",
     "validate_card_number",
 ]
+
+
+@dataclass
+class GetEmailResult:
+    email_address: str
+
+
+@dataclass
+class GetDtmfResult:
+    user_input: str
+    """The pressed digits, space-separated (``format_dtmf``)."""
+
+
+@dataclass
+class WarmTransferResult:
+    human_agent_identity: str
+
 
 _HOLD_MUSIC = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
 validate_card_number = _core.validate_card_number

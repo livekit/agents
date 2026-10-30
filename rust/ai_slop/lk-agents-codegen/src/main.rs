@@ -71,7 +71,6 @@ const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/inference/fallback.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/steering.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/expr.rs",
-    "rust/crates/lk-agents-abi/src/voice/workflows.rs",
     "rust/crates/lk-agents-abi/src/vad/vad.rs",
     "rust/crates/lk-agents-abi/src/inference/mod.rs",
     // The session schema (plan 13.5): the row models Python reads rows as, then everything else
@@ -89,7 +88,6 @@ const SOURCES: &[&str] = &[
 const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/voice/background_audio.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs",
-    "rust/crates/lk-agents-abi/src/voice/workflows.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
     "rust/crates/lk-agents-abi/src/worker/job.rs",
