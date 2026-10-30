@@ -77,7 +77,7 @@ The frontend holds no business state and never confirms anything the backend did
 | `class T(AgentTask[R])` + `self.complete(r)` on the call | `VoiceTask(agent=collector).run()` from a frontend tool; the collector has `output_type=R` and a tool returns `Completed(r)`, or `Failed(reason)` which raises `VoiceTaskFailed` ([voice-tasks.md](../../docs/voice-tasks.md)) |
 | `AgentTask`/`TaskGroup` over business data | backend tools on a persisted draft (see the hotel example), or an agent with `output_type` as a tool under `TextSession` ([text-session.md](../../docs/text-session.md)) |
 | `beta.workflows.GetEmailTask` | `GetEmailTask().run()` in a frontend tool, still in `livekit.agents.beta.workflows` |
-| `GetNameTask`, `GetPhoneNumberTask`, `GetAddressTask`, `GetCreditCardTask`, ... | a custom `VoiceTask` whose agent's `output_type` is the matching `Get*Result`, or a backend `record_*` tool when the value is business data |
+| `GetNameTask`, `GetPhoneNumberTask`, `GetAddressTask`, `GetCreditCardTask`, ... | a custom `VoiceTask` whose agent's `output_type` is your own result type (a dataclass or pydantic model of the fields you collect), or a backend `record_*` tool when the value is business data |
 | `WarmTransferTask(target_phone_number=)` | `await WarmTransfer(sip_call_to=...).run()` in a frontend tool (`livekit.agents.beta.workflows`) |
 | `EndCallTool()`, `send_dtmf_events` | unchanged, from `livekit.agents.beta`, on the frontend voice agent |
 | confirm before a write (prompt rule, `approved: bool` argument) | `@backend.tool(needs_approval=True)` or `needs_approval=read_back` ([tools.md, approval](../../docs/tools.md#approval)) |
