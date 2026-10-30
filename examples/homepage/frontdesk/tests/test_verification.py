@@ -1,8 +1,9 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 import pytest
+from livekit.agents import llm
 from livekit.agents.llm import ToolError
 
 import clinic as clinic_module
@@ -16,6 +17,11 @@ MONDAY = date(2026, 9, 28)
 @dataclass
 class FakeContext:
     userdata: CallState
+    function_call: llm.FunctionCall = field(
+        default_factory=lambda: llm.FunctionCall(
+            call_id="call_tool", name="tool", arguments="{}"
+        )
+    )
 
 
 @pytest.fixture
@@ -24,9 +30,7 @@ def clinic() -> Clinic:
 
 
 @pytest.fixture
-def agent(monkeypatch: pytest.MonkeyPatch, clinic) -> Receptionist:
-    monkeypatch.setenv("LIVEKIT_API_KEY", "unused")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "unused")
+def agent(clinic) -> Receptionist:
     return Receptionist(clinic)
 
 
@@ -188,8 +192,6 @@ class LateEvening(datetime):
 def test_riley_works_in_pacific_time(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(clinic_module, "datetime", LateEvening)
     monkeypatch.setattr(receptionist, "datetime", LateEvening)
-    monkeypatch.setenv("LIVEKIT_API_KEY", "unused")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "unused")
 
     clinic = Clinic.for_now()
     riley = Receptionist(clinic)
