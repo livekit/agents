@@ -22,12 +22,12 @@ pub struct CoreJudgeRunner(pub(crate) ::std::sync::Arc<CoreJudgeRunnerImpl>);
 impl CoreJudgeRunner {
     #[new]
     #[pyo3(signature = (llm, tools, host))]
-    fn new(llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<CoreJudgeRunner> {
+    fn new(py: Python<'_>, llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<CoreJudgeRunner> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
-        let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host);
+        let out = py.detach(|| <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host));
         Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
     }
 
@@ -68,7 +68,7 @@ type EvaluationsImpl = <crate::Selected as super::Implementations>::Evaluations;
 #[pyo3(signature = (verdicts))]
 pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let out = <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts).map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts)).map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(crate::generated::records::evals::evaluation_score_to_py(py, out)?)
 }
 
@@ -76,7 +76,7 @@ pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::
 #[pyfunction]
 pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let out = <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas();
+    let out = py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas());
     Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
 }
 

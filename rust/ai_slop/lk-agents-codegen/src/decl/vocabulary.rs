@@ -28,8 +28,8 @@
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
 //! | trait method | `call` | a synchronous call on `&self` or `&mut self`; no receiver declares a static class method. Synchronous class calls may borrow another instance as `&Self` |
 //! | trait method | `await` | an `async fn` on `&self`, awaited by the host; or `fn(&self, ..) -> BoxFuture<'static, T>`, called at the host's call (a command sent in call order) and its future awaited |
-//! | class method | `call, detach` | releases the GIL while the synchronous native operation executes; arguments are converted before release and results afterward |
 //! | trait method | `getter` | a read-only property on `&self` |
+//! | trait method | `getter, attached` | runs with the GIL held: only a hot getter that provably takes no lock. Every other synchronous entry converts its arguments, releases the GIL for the native call, then converts the result |
 //! | trait method | `call, future = T` | a synchronous method returning `HostRef` containing a host-owned future; its completion type `T` gives the generated `Future[T]` annotation |
 //! | trait method | `setter` | a writable property on `&self` with one value parameter and unit result |
 //! | trait method | `next` | `async fn next(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T` (`__aiter__`/`__anext__`); `None` ends it |

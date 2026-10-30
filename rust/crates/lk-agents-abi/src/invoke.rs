@@ -105,6 +105,6 @@ pub trait HostNotices: Send + Sync {
 pub trait Logging {
     /// Waits until every line the core logged so far has reached the host's logging. Tests call
     /// it at their boundaries; the interpreter's exit calls it.
-    #[host(function, detach, pid = false)]
+    #[host(function, pid = false)]
     fn flush_logs();
 }

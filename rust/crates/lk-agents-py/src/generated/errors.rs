@@ -21,7 +21,7 @@ fn _extract_api_error_functions_http_error_message_status(obj: &Bound<'_, PyAny>
 /// when the message adds detail, else just the reason.
 #[pyfunction]
 #[pyo3(signature = (message, status, reason))]
-pub fn http_error_display(message: ::std::string::String, #[pyo3(from_py_with = _extract_api_error_functions_http_error_message_status)] status: i64, reason: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
-    let out = <ApiErrorFunctionsImpl as ::lk_agents_abi::errors::ApiErrorFunctions>::http_error_message(&message, status, reason);
+pub fn http_error_display(py: Python<'_>, message: ::std::string::String, #[pyo3(from_py_with = _extract_api_error_functions_http_error_message_status)] status: i64, reason: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <ApiErrorFunctionsImpl as ::lk_agents_abi::errors::ApiErrorFunctions>::http_error_message(&message, status, reason));
     Ok(out)
 }

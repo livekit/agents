@@ -32,9 +32,9 @@ fn an_export_is_a_guarded_registered_pyfunction_with_the_declared_signature() {
     .unwrap();
     assert!(out.starts_with("# [cfg (feature = \"python\")] const _ : () ="), "{out}");
     assert!(out.contains("# [pyo3 (name = \"split_sentences\" , signature = (text , min_sentence_len = 20 , * , retain_format = false))]"), "{out}");
-    assert!(out.contains("fn __host_py_split_sentences (text : & str , # [pyo3 (from_py_with = __host_read_split_sentences_min_sentence_len)] min_sentence_len : usize , retain_format : bool) -> :: pyo3 :: PyResult < Vec < Sentence > >"), "{out}");
+    assert!(out.contains("fn __host_py_split_sentences < 'py > (py : :: pyo3 :: Python < 'py > , text : & str , # [pyo3 (from_py_with = __host_read_split_sentences_min_sentence_len)] min_sentence_len : usize , retain_format : bool) -> :: pyo3 :: PyResult < Vec < Sentence > >"), "{out}");
     assert!(out.contains(":: lk_agents_abi :: python :: check_pid () ?"), "{out}");
-    assert!(out.contains("let out = split_sentences (text , min_sentence_len , retain_format) ;"), "{out}");
+    assert!(out.contains("let out = py . detach (|| split_sentences (text , min_sentence_len , retain_format)) ;"), "{out}");
     assert!(out.contains("wrap_pyfunction ! (__host_py_split_sentences , m)"), "{out}");
     let out = export(quote!(export(pid = false)), quote! { pub fn f(x: u8) -> u8 { x } }).unwrap();
     assert!(!out.contains("check_pid"), "{out}");
@@ -77,7 +77,7 @@ fn a_function_doc_is_its_first_paragraph_unlinked() {
 
 // Catches: a plain object's wrappers not calling the core method through `Self::` (a wrapper with
 // the core's own name would recurse or collide), the magic/renamed method or getter losing its
-// Python name, `detach` not releasing the GIL around the call, or the class-name check missing.
+// Python name, a synchronous call not releasing the GIL around the core call, or the class-name check missing.
 #[test]
 fn a_plain_object_is_pymethods_on_the_type_itself() {
     let out = object(
@@ -86,7 +86,7 @@ fn a_plain_object_is_pymethods_on_the_type_itself() {
             impl StreamBuffer {
                 #[host(new)] pub fn new() -> Self { todo!() }
                 #[host(method(name = "__len__"))] pub fn len(&self) -> usize { 0 }
-                #[host(method(name = "read", detach, defaults(size = -1)))] pub fn read_up_to(&self, size: isize) -> Vec<u8> { todo!() }
+                #[host(method(name = "read", defaults(size = -1)))] pub fn read_up_to(&self, size: isize) -> Vec<u8> { todo!() }
                 pub fn read(&self, buf: &mut [u8]) -> usize { 0 }
             }
         },
@@ -94,8 +94,8 @@ fn a_plain_object_is_pymethods_on_the_type_itself() {
     .unwrap();
     assert!(out.contains("# [:: pyo3 :: pymethods] impl StreamBuffer"), "{out}");
     assert!(out.contains("same_name (< StreamBuffer as :: pyo3 :: PyClass > :: NAME , \"StreamBuffer\")"), "{out}");
-    assert!(out.contains("# [new] fn __host_py_new () -> :: pyo3 :: PyResult < Self >"), "{out}");
-    assert!(out.contains("# [pyo3 (name = \"__len__\")] fn __host_py_len (& self ,)"), "{out}");
+    assert!(out.contains("# [new] fn __host_py_new < 'py > (py : :: pyo3 :: Python < 'py > ,) -> :: pyo3 :: PyResult < Self >"), "{out}");
+    assert!(out.contains("# [pyo3 (name = \"__len__\")] fn __host_py_len < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"), "{out}");
     assert!(out.contains("# [pyo3 (name = \"read\" , signature = (size = - 1))]"), "{out}");
     assert!(out.contains("fn __host_py_read_up_to < 'py > (& self , py : :: pyo3 :: Python < 'py > , # [pyo3 (from_py_with = __host_read_read_up_to_size)] size : isize)"), "{out}");
     assert!(out.contains("let out = py . detach (|| Self :: read_up_to (self , size)) ;"), "{out}");
@@ -120,11 +120,11 @@ fn a_mutex_object_is_a_frozen_class_over_the_core_type_beside_it() {
     )
     .unwrap();
     assert!(out.contains("# [doc = \" `AudioStreamDecoder`'s engine.\"] # [:: pyo3 :: pyclass (frozen , name = \"AudioDecoder\" , module = \"livekit.agents._core\")] pub struct PyAudioDecoder { pub inner : :: std :: sync :: Mutex < Decoder > , }"), "{out}");
-    assert!(out.contains("# [pyo3 (signature = (mime , * , sample_rate = 48000))] fn __host_py_new (mime : & str , # [pyo3 (from_py_with = __host_read_new_sample_rate)] sample_rate : u32) -> :: pyo3 :: PyResult < PyAudioDecoder >"), "{out}");
-    assert!(out.contains("let out = < Decoder > :: new (mime , sample_rate) ;"), "{out}");
+    assert!(out.contains("# [pyo3 (signature = (mime , * , sample_rate = 48000))] fn __host_py_new < 'py > (py : :: pyo3 :: Python < 'py > , mime : & str , # [pyo3 (from_py_with = __host_read_new_sample_rate)] sample_rate : u32) -> :: pyo3 :: PyResult < PyAudioDecoder >"), "{out}");
+    assert!(out.contains("let out = py . detach (|| < Decoder > :: new (mime , sample_rate)) ;"), "{out}");
     assert!(out.contains("Ok (PyAudioDecoder { inner : :: std :: sync :: Mutex :: new (out) })"), "{out}");
-    assert!(out.contains("# [getter (output_format)] fn __host_py_output_format_pair (& self ,)"), "{out}");
-    assert!(out.contains("fn __host_py_flush_bytes (& self ,)"), "{out}");
+    assert!(out.contains("# [getter (output_format)] fn __host_py_output_format_pair < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"), "{out}");
+    assert!(out.contains("fn __host_py_flush_bytes < 'py > (& self , py : :: pyo3 :: Python < 'py > ,)"), "{out}");
     assert!(out.contains("self . inner . lock () . map_err (| _ | :: pyo3 :: exceptions :: PyRuntimeError :: new_err (\"native object state is poisoned\")) ? . flush_bytes ()"), "{out}");
     assert!(out.contains("m . add_class :: < PyAudioDecoder > ()"), "{out}");
 }
@@ -263,7 +263,7 @@ fn json_crosses_through_the_checked_readers_and_a_borrow_is_lent() {
     assert!(out.contains("tags : :: std :: vec :: Vec < :: std :: string :: String >"), "{out}");
     assert!(out.contains("ids : :: std :: vec :: Vec < String >"), "{out}");
     assert!(out.contains("map_from_py (v , \"m\")"), "{out}");
-    assert!(out.contains("let out = f (& schema , root . as_ref () , v , & tags , & ids , m) ;"), "{out}");
+    assert!(out.contains("let out = py . detach (|| f (& schema , root . as_ref () , v , & tags , & ids , m)) ;"), "{out}");
     assert!(out.contains("-> :: pyo3 :: PyResult < :: std :: vec :: Vec < (& 'static str , :: pyo3 :: Bound < 'py , :: pyo3 :: PyAny > , :: pyo3 :: Bound < 'py , :: pyo3 :: types :: PyDict > ,) > >"), "{out}");
     assert!(out.contains("value_to_py (py , & v1) ?"), "{out}");
 }
@@ -357,7 +357,7 @@ fn a_keyword_record_parameter_is_spread_through_the_records_macro() {
     assert!(out.contains("__host_kwargs_Frame ! {"), "{out}");
     assert!(out.contains("{ id , * , } { }"), "{out}");
     assert!(out.contains("{ & self , py : :: pyo3 :: Python < 'py > , # [pyo3 (from_py_with = __host_read_update_id)] id : u64 , } { }"), "{out}");
-    assert!(out.contains("let out = Self :: update (self , id , frame) ;"), "{out}");
+    assert!(out.contains("let out = py . detach (|| Self :: update (self , id , frame)) ;"), "{out}");
 }
 
 // Catches: a method returning `Reply<T>` awaited on the calling thread (it would block the loop),
@@ -370,7 +370,7 @@ fn a_reply_method_raises_its_refusal_now_and_awaits_the_reply_on_the_loop() {
         quote! { impl T { #[host(method)] pub fn ask(&self) -> Result<Reply<bool>, Refused> { todo!() } } },
     )
     .unwrap();
-    let send = out.find("let out = Self :: ask (self ,) ;").expect(&out);
+    let send = out.find("let out = py . detach (|| Self :: ask (self ,)) ;").expect(&out);
     let refusal = out.find("(& :: lk_agents_abi :: python :: Fail (& e)) . py_err ()").expect(&out);
     let future = out.find("future_into_py (py , async move { let out = reply . await ;").expect(&out);
     assert!(send < refusal && refusal < future, "{out}");
@@ -520,7 +520,7 @@ fn a_send_method_is_written_as_a_send_of_its_expression() {
     assert!(text.contains("pub fn release (& self , hold : u64) { let _ = self . send (Hold { id : HoldId (hold) }) ; }"), "{text}");
     assert!(text.contains("pub fn plain (& self) -> u8 { 0 }"), "{text}");
     let out = crate::object(quote!(object), &imp).unwrap().to_string();
-    assert!(out.contains("let out = Self :: clear (self ,) ;") && out.contains("let out = Self :: release (self , hold) ;"), "{out}");
+    assert!(out.contains("let out = py . detach (|| Self :: clear (self ,)) ;") && out.contains("let out = py . detach (|| Self :: release (self , hold)) ;"), "{out}");
 }
 
 // Catches: a body-less method compiled with no body at all, `send` beside a body it would silently

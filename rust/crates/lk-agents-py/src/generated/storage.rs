@@ -61,18 +61,18 @@ impl Storage {
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
     #[new]
     #[pyo3(signature = (*, directory = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None))]
-    fn new(directory: ::std::option::Option<::std::string::String>, url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_storage_new_renew_interval)] renew_interval: ::std::option::Option<f64>) -> PyResult<Storage> {
+    fn new(py: Python<'_>, directory: ::std::option::Option<::std::string::String>, url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_storage_new_renew_interval)] renew_interval: ::std::option::Option<f64>) -> PyResult<Storage> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, directory, url, api_key, api_secret, lease_ttl, renew_interval).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, directory, url, api_key, api_secret, lease_ttl, renew_interval)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(Storage(::std::sync::Arc::new(out)))
     }
 
     /// The absolute local directory, or the public API agentstore is reached through.
     #[getter]
-    fn location(&self) -> PyResult<::std::string::String> {
+    fn location(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::location(&self.0);
+        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::location(&self.0));
         Ok(out)
     }
 
@@ -240,11 +240,11 @@ pub struct CoreContextActivation(pub(crate) ::std::sync::Arc<CoreContextActivati
 impl CoreContextActivation {
     #[new]
     #[pyo3(signature = (scopes, routing_state, read_only))]
-    fn new(scopes: Bound<'_, PyAny>, routing_state: Option<Bound<'_, PyAny>>, read_only: bool) -> PyResult<CoreContextActivation> {
+    fn new(py: Python<'_>, scopes: Bound<'_, PyAny>, routing_state: Option<Bound<'_, PyAny>>, read_only: bool) -> PyResult<CoreContextActivation> {
         crate::host::check_pid()?;
         let scopes = scopes.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_scope_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let routing_state = routing_state.map(|v| ::lk_agents_abi::python::value_from_py(&v, "routing_state")).transpose()?;
-        let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::new(scopes, routing_state, read_only).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::new(scopes, routing_state, read_only)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(CoreContextActivation(::std::sync::Arc::new(out)))
     }
 
@@ -277,7 +277,7 @@ impl CoreContextActivation {
     #[getter]
     fn writes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::writes(&self.0);
+        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::writes(&self.0));
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_context::context_scope_write_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
@@ -285,7 +285,7 @@ impl CoreContextActivation {
     #[getter]
     fn statements<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::statements(&self.0);
+        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::statements(&self.0));
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_context::app_statement_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
@@ -303,16 +303,16 @@ impl CoreContextActivation {
         })
     }
 
-    fn acknowledge(&self) -> PyResult<()> {
+    fn acknowledge(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::acknowledge(&self.0);
+        py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::acknowledge(&self.0));
         Ok(())
     }
 
     /// End the activation, refusing subsequent loads or saves.
-    fn close(&self) -> PyResult<()> {
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::close(&self.0);
+        py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::close(&self.0));
         Ok(())
     }
 }
@@ -366,9 +366,9 @@ impl CoreAppTransaction {
     }
 
     /// Ends the transaction, discarding its writes.
-    fn rollback(&self) -> PyResult<()> {
+    fn rollback(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::rollback(&self.0);
+        py.detach(|| <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::rollback(&self.0));
         Ok(())
     }
 }
@@ -386,14 +386,14 @@ impl CoreVoiceStore {
     #[getter]
     fn initial_history<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let out = <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::initial_history(&self.0);
+        let out = py.detach(|| <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::initial_history(&self.0));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::pyo3::types::PyList::new(py, value.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())).transpose()?)
     }
 
     #[getter]
-    fn activation(&self) -> PyResult<super::storage::CoreContextActivation> {
+    fn activation(&self, py: Python<'_>) -> PyResult<super::storage::CoreContextActivation> {
         crate::host::check_pid()?;
-        let out = <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::activation(&self.0);
+        let out = py.detach(|| <CoreVoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::activation(&self.0));
         Ok(super::storage::CoreContextActivation(::std::sync::Arc::new(out)))
     }
 

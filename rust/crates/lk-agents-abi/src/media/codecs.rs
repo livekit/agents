@@ -53,14 +53,14 @@ pub trait StreamBuffer: Send + Sync + Sized + 'static {
     fn close(&self);
     #[host(call, name = "__len__")]
     fn len(&self) -> usize;
-    #[host(call, detach)]
+    #[host(call)]
     fn read(&self, #[host(default = -1)] size: isize) -> Vec<u8>;
 }
 
 /// Native sentence tokenization shared by buffered TTS token streams.
 #[crate::host(functions(pid = false))]
 pub trait MediaTokenization: Send + Sync + Sized + 'static {
-    #[host(function, detach)]
+    #[host(function)]
     fn split_sentences(
         text: &str,
         #[host(default = 20)] min_sentence_len: usize,

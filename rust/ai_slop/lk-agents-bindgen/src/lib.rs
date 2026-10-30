@@ -117,8 +117,9 @@ pub struct Sig {
     pub err: Option<String>,
     /// Call `check_pid()` first (the default).
     pub pid: bool,
-    /// Release the GIL around the call.
-    pub detach: bool,
+    /// A getter that provably takes no lock runs with the GIL held; every other synchronous
+    /// entry releases it around the call.
+    pub attached: bool,
     /// `///` lines, one leading space removed, trailing blanks dropped.
     pub doc: Vec<String>,
     pub is_async: bool,
@@ -314,7 +315,7 @@ pub fn sig(head: &str, m: &Metas, s: &syn::Signature, attrs: &[syn::Attribute], 
         kw_only,
         err,
         pid,
-        detach: m.flag(&format!("{head}.detach")),
+        attached: m.flag(&format!("{head}.attached")),
         doc: doc(attrs),
         is_async: s.asyncness.is_some(),
     };
@@ -395,7 +396,7 @@ fn result_ok(t: &syn::Type) -> Option<syn::Type> {
     })
 }
 
-const SIG_KEYS: [&str; 7] = ["name", "defaults.", "kw_only", "err", "pid", "detach", ""];
+const SIG_KEYS: [&str; 7] = ["name", "defaults.", "kw_only", "err", "pid", "attached", ""];
 
 fn sig_keys(head: &str) -> Vec<String> {
     SIG_KEYS.iter().map(|k| if k.is_empty() { head.to_owned() } else { format!("{head}.{k}") }).collect()
@@ -517,8 +518,11 @@ pub fn read_object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<Object
         if kind == MethodKind::New && !returns_self(&s.ret) {
             return Err(syn::Error::new_spanned(&sig_in.ident, "#[host(new)] returns Self or Result<Self, E>"));
         }
-        if kind == MethodKind::Getter && (!s.params.is_empty() || s.detach) {
+        if kind == MethodKind::Getter && !s.params.is_empty() {
             return Err(syn::Error::new_spanned(&sig_in.ident, "#[host(getter)] takes only the receiver"));
+        }
+        if s.attached && kind != MethodKind::Getter {
+            return Err(syn::Error::new_spanned(&sig_in.ident, "only a getter that takes no lock runs attached"));
         }
         let unit = |t: &syn::Type| matches!(t, syn::Type::Tuple(tu) if tu.elems.is_empty());
         let returns_nothing = match &s.ret {

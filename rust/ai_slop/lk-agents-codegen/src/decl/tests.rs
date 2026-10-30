@@ -155,7 +155,7 @@ fn an_eager_await_runs_at_the_call_and_awaits_its_future() {
     assert_eq!(ready.ret.ok, Ty::Int(crate::decl::Int::U32));
     let adapter = crate::adapter::emit(&decls).unwrap();
     let text = adapter.iter().map(|o| o.text.as_str()).collect::<String>();
-    let (sent, awaited) = (text.find("let call = <").unwrap(), text.find("call.await").unwrap());
+    let (sent, awaited) = (text.find("let call = py.detach(|| <").unwrap(), text.find("call.await").unwrap());
     assert!(sent < text.find("future_into_py").unwrap() && sent < awaited, "{text}");
     let raised = text[sent..].find(".map_err(").unwrap() + sent;
     assert!(raised < text.find("future_into_py").unwrap(), "{text}");
@@ -291,8 +291,8 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
     );
     for expected in [
         "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
-        "::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
-        "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        crate::host::check_pid()?;\n        ::lk_agents_abi::StreamSink::end_input(&*self.0);",
+        "py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
+        "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        crate::host::check_pid()?;\n        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));",
         "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&*self.0, model)",
         "{ let (sink, source) = out; Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }",
     ] {
@@ -400,11 +400,11 @@ fn mutable_classes_and_functions_are_their_own_forms() {
         "{llm}"
     );
     assert!(
-        llm.contains("fn parse(&mut self, id: ::std::string::String)")
+        llm.contains("fn parse(&mut self, py: Python<'_>, id: ::std::string::String)")
             && llm.contains("(&mut self.0, &id)"),
         "{llm}"
     );
-    assert!(llm.contains("#[pyfunction]\n#[pyo3(signature = (chunk))]\npub fn llm_usage_chunk(chunk: Bound<'_, PyAny>)"), "{llm}");
+    assert!(llm.contains("#[pyfunction]\n#[pyo3(signature = (chunk))]\npub fn llm_usage_chunk(py: Python<'_>, chunk: Bound<'_, PyAny>)"), "{llm}");
     let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
     assert!(
         root.contains("m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;")
@@ -1079,7 +1079,7 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let decls = read(&source).expect("string enum with its native diagnostic resolves");
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
-    assert!(llm.contains("fn new(kind: ::lk_agents_abi::llm::class::Kind)"), "{llm}");
+    assert!(llm.contains("fn new(py: Python<'_>, kind: ::lk_agents_abi::llm::class::Kind)"), "{llm}");
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
 }

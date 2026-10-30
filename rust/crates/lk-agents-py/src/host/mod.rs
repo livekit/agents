@@ -24,6 +24,8 @@ use pyo3::types::{PyCFunction, PyTuple};
 use tokio::sync::oneshot;
 
 #[cfg(test)]
+mod boundary_tests;
+#[cfg(test)]
 mod cancellation_tests;
 #[cfg(test)]
 mod node_tests;

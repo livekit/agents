@@ -323,7 +323,9 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             continue;
         }
         let (ty, convert) = if p.ty == Ty::This {
-            (format!("PyRef<'_, {}>", c.name), None)
+            // Borrowed out of its `PyRef` before the GIL is released.
+            let deref = if c.form == Form::MutableClass { "" } else { "*" };
+            (format!("PyRef<'_, {}>", c.name), Some(format!("&{deref}{}.0", p.name)))
         } else {
             input(&at, p)?
         };
@@ -350,8 +352,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         .iter()
         .map(|p| {
             if p.ty == Ty::This {
-                let deref = if c.form == Form::MutableClass { "" } else { "*" };
-                format!("&{deref}{}.0", p.name)
+                p.name.clone()
             } else if p.by_ref {
                 format!("&{}", p.name)
             } else {
@@ -391,7 +392,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             let refused =
                 m.refused.as_ref().map(|e| format!(".map_err({})?", e.with)).unwrap_or_default();
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = {call}(&self.0, {}){refused};\n        crate::host::future_into_py(py, async move {{\n            let out = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = py.detach(|| {call}(&self.0, {})){refused};\n        crate::host::future_into_py(py, async move {{\n            let out = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", "out").replace("{py}", "py")
@@ -406,14 +407,15 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             ));
         }
         _ => {
-            let needs_py = ret_ty.contains("'py") || m.detach;
+            let needs_py = ret_ty.contains("'py") || !m.attached;
             // A function is registered from `mod.rs`.
             let vis = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
                 "pub "
             } else {
                 ""
             };
-            let generics = if needs_py { "<'py>" } else { "" };
+            let lifetime = ret_ty.contains("'py");
+            let generics = if lifetime { "<'py>" } else { "" };
             let this = match m.kind {
                 MethodKind::New
                 | MethodKind::Function
@@ -425,7 +427,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             let all_args = receiver
                 .map(str::to_owned)
                 .into_iter()
-                .chain(needs_py.then(|| "py: Python<'py>".to_owned()))
+                .chain(needs_py.then(|| format!("py: Python<'{}>", if lifetime { "py" } else { "_" })))
                 .chain(args)
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -433,10 +435,12 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 "{call}({})",
                 this.into_iter().chain(passed).collect::<Vec<_>>().join(", ")
             );
-            let value = if m.detach {
-                format!("py.detach(|| {invocation}){err}")
-            } else {
+            // The native call runs without the GIL: a Rust task holding a lock it waits for may
+            // itself be waiting for the GIL.
+            let value = if m.attached {
                 format!("{invocation}{err}")
+            } else {
+                format!("py.detach(|| {invocation}){err}")
             };
             let body = if m.ret.ok == Ty::Unit {
                 format!("{ind}    {value};\n{ind}    Ok(())\n")
@@ -593,7 +597,7 @@ fn duplex_class(
         output = output.rust(),
     );
     s.push_str(&format!(
-        "    fn push(&self, item: {item_ty}) -> PyResult<()> {{\n{guard}{convert}        ::lk_agents_abi::StreamSink::push(&*self.0, item).map_err({err})\n    }}\n\n    fn flush(&self) -> PyResult<()> {{\n{guard}        ::lk_agents_abi::StreamSink::flush(&*self.0).map_err({err})\n    }}\n\n    fn end_input(&self) -> PyResult<()> {{\n{guard}        ::lk_agents_abi::StreamSink::end_input(&*self.0);\n        Ok(())\n    }}\n\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        crate::host::source::recv(&self.1, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        ::lk_agents_abi::StreamSink::end_input(&*self.0);\n        crate::host::source::aclose(&self.1, py)\n    }}\n"
+        "    fn push(&self, py: Python<'_>, item: {item_ty}) -> PyResult<()> {{\n{guard}{convert}        py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err({err})\n    }}\n\n    fn flush(&self, py: Python<'_>) -> PyResult<()> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamSink::flush(&*self.0)).map_err({err})\n    }}\n\n    fn end_input(&self, py: Python<'_>) -> PyResult<()> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));\n        Ok(())\n    }}\n\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        crate::host::source::recv(&self.1, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));\n        crate::host::source::aclose(&self.1, py)\n    }}\n"
     ));
     for m in &control.methods {
         s.push('\n');

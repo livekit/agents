@@ -42,7 +42,8 @@ pub trait ExpFilter: Send + Sized + 'static {
     ) -> Result<(), FilterResetError>;
     #[host(call)]
     fn apply(&mut self, exp: f64, sample: Maybe<f64>) -> Result<f64, FilterError>;
-    #[host(getter)]
+    // Read per audio frame; a field of a Python-owned value, under no lock.
+    #[host(getter, attached)]
     fn value(&self) -> Option<f64>;
     #[host(call)]
     fn update_base(&mut self, alpha: f64);

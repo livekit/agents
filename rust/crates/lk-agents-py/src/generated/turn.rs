@@ -29,7 +29,7 @@ impl InferenceEot {
     /// to the mini model, which `local_model` builds when the build links none.
     #[new]
     #[pyo3(signature = (model, overrides, backchannel_overrides, *, local_fallback, base_url, api_key, api_secret, sample_rate, local_model, on_metrics = None))]
-    fn new(model: Bound<'_, PyAny>, overrides: Option<Bound<'_, PyAny>>, backchannel_overrides: Option<Bound<'_, PyAny>>, local_fallback: bool, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, #[pyo3(from_py_with = _extract_inference_eot_new_sample_rate)] sample_rate: u32, local_model: Bound<'_, PyAny>, on_metrics: Option<Bound<'_, PyAny>>) -> PyResult<InferenceEot> {
+    fn new(py: Python<'_>, model: Bound<'_, PyAny>, overrides: Option<Bound<'_, PyAny>>, backchannel_overrides: Option<Bound<'_, PyAny>>, local_fallback: bool, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, #[pyo3(from_py_with = _extract_inference_eot_new_sample_rate)] sample_rate: u32, local_model: Bound<'_, PyAny>, on_metrics: Option<Bound<'_, PyAny>>) -> PyResult<InferenceEot> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let model = crate::generated::records::turn_events::turn_detector_model_from_py(&model)?;
@@ -37,7 +37,7 @@ impl InferenceEot {
         let backchannel_overrides = backchannel_overrides.map(|v| crate::generated::records::turn_events::threshold_override_from_py(&v)).transpose()?;
         let local_model = crate::generated::turn::EotModelFactoryProxy::from_host(&local_model)?;
         let on_metrics = on_metrics.map(|v| crate::generated::turn::EotMetricsObserverProxy::from_host(&v)).transpose()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::new(&env, model, overrides, backchannel_overrides, local_fallback, base_url, api_key, api_secret, sample_rate, local_model, on_metrics);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::new(&env, model, overrides, backchannel_overrides, local_fallback, base_url, api_key, api_secret, sample_rate, local_model, on_metrics));
         Ok(InferenceEot(::std::sync::Arc::new(out)))
     }
 
@@ -45,7 +45,7 @@ impl InferenceEot {
     #[getter]
     fn model<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::model(&self.0);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::model(&self.0));
         Ok(crate::generated::records::turn_events::turn_detector_model_to_py(py, out)?)
     }
 
@@ -53,62 +53,62 @@ impl InferenceEot {
     #[getter]
     fn overrides<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::overrides(&self.0);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::overrides(&self.0));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::turn_events::threshold_override_to_py(py, value)?)).transpose()?)
     }
 
     #[getter]
     fn backchannel_overrides<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::backchannel_overrides(&self.0);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::backchannel_overrides(&self.0));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::turn_events::threshold_override_to_py(py, value)?)).transpose()?)
     }
 
     /// `language=None` scores as English, not the global default.
     #[pyo3(signature = (language = None))]
-    fn lookup(&self, language: ::std::option::Option<::lk_agents_abi::LanguageCode>) -> PyResult<::std::option::Option<f64>> {
+    fn lookup(&self, py: Python<'_>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>) -> PyResult<::std::option::Option<f64>> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup(&self.0, language);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup(&self.0, language));
         Ok(out)
     }
 
     /// `None` disables backchannel detection; a `0.0` threshold also means off.
     #[pyo3(signature = (language = None))]
-    fn lookup_backchannel(&self, language: ::std::option::Option<::lk_agents_abi::LanguageCode>) -> PyResult<::std::option::Option<f64>> {
+    fn lookup_backchannel(&self, py: Python<'_>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>) -> PyResult<::std::option::Option<f64>> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup_backchannel(&self.0, language);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup_backchannel(&self.0, language));
         Ok(out)
     }
 
     #[pyo3(signature = (language = None))]
-    fn supports(&self, language: ::std::option::Option<::lk_agents_abi::LanguageCode>) -> PyResult<bool> {
+    fn supports(&self, py: Python<'_>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::supports(&self.0, language);
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::supports(&self.0, language));
         Ok(out)
     }
 
     #[pyo3(signature = (overrides = None))]
-    fn update_overrides(&self, overrides: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    fn update_overrides(&self, py: Python<'_>, overrides: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
         let overrides = overrides.map(|v| crate::generated::records::turn_events::threshold_override_from_py(&v)).transpose()?;
-        <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::update_overrides(&self.0, overrides);
+        py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::update_overrides(&self.0, overrides));
         Ok(())
     }
 
     #[pyo3(signature = (overrides = None))]
-    fn update_backchannel_overrides(&self, overrides: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    fn update_backchannel_overrides(&self, py: Python<'_>, overrides: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
         let overrides = overrides.map(|v| crate::generated::records::turn_events::threshold_override_from_py(&v)).transpose()?;
-        <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::update_backchannel_overrides(&self.0, overrides);
+        py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::update_backchannel_overrides(&self.0, overrides));
         Ok(())
     }
 
     /// One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
     /// each gateway connection.
     #[pyo3(signature = (headers, conn_options))]
-    fn stream(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, conn_options: ::lk_agents_abi::ApiConnectOptions) -> PyResult<super::turn::EotStream> {
+    fn stream(&self, py: Python<'_>, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, conn_options: ::lk_agents_abi::ApiConnectOptions) -> PyResult<super::turn::EotStream> {
         crate::host::check_pid()?;
-        let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(super::turn::EotStream(::std::sync::Arc::new(out)))
     }
 }
@@ -127,22 +127,22 @@ impl EotStream {
     #[getter]
     fn model<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::model(&self.0);
+        let out = py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::model(&self.0));
         Ok(crate::generated::records::turn_events::turn_detector_model_to_py(py, out)?)
     }
 
     #[getter]
-    fn is_fallback(&self) -> PyResult<bool> {
+    fn is_fallback(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_fallback(&self.0);
+        let out = py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_fallback(&self.0));
         Ok(out)
     }
 
     /// True once the cloud transport is gone with no local model to replace it.
     #[getter]
-    fn is_degraded(&self) -> PyResult<bool> {
+    fn is_degraded(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_degraded(&self.0);
+        let out = py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_degraded(&self.0));
         Ok(out)
     }
 
@@ -158,30 +158,30 @@ impl EotStream {
     }
 
     #[pyo3(signature = (*, timed_out = false))]
-    fn cancel_inference(&self, timed_out: bool) -> PyResult<()> {
+    fn cancel_inference(&self, py: Python<'_>, timed_out: bool) -> PyResult<()> {
         crate::host::check_pid()?;
-        <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::cancel_inference(&self.0, timed_out);
+        py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::cancel_inference(&self.0, timed_out));
         Ok(())
     }
 
     /// A segment boundary, not a close.
     #[pyo3(signature = (reason = None))]
-    fn flush(&self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn flush(&self, py: Python<'_>, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::flush(&self.0, reason);
+        py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::flush(&self.0, reason));
         Ok(())
     }
 
     #[pyo3(signature = (frame))]
-    fn push_audio(&self, frame: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push_audio(&self, py: Python<'_>, frame: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
         crate::host::check_pid()?;
-        <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::push_audio(&self.0, frame);
+        py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::push_audio(&self.0, frame));
         Ok(())
     }
 
-    fn end_input(&self) -> PyResult<()> {
+    fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::end_input(&self.0);
+        py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::end_input(&self.0));
         Ok(())
     }
 
@@ -258,18 +258,18 @@ impl InterruptionDetector {
     /// the server's settings.
     #[new]
     #[pyo3(signature = (*, threshold = None, min_interruption_duration = 0.05, max_audio_duration = 3.0, audio_prefix_duration = 1.0, detection_interval = 0.1, inference_timeout = 0.7, base_url = None, api_key = None, api_secret = None, conn_options = None, token_ttl_secs = 600))]
-    fn new(#[pyo3(from_py_with = _extract_interruption_detector_new_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_new_min_interruption_duration)] min_interruption_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_max_audio_duration)] max_audio_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_audio_prefix_duration)] audio_prefix_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_detection_interval)] detection_interval: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_inference_timeout)] inference_timeout: f64, base_url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)] token_ttl_secs: u64) -> PyResult<InterruptionDetector> {
+    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_interruption_detector_new_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_new_min_interruption_duration)] min_interruption_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_max_audio_duration)] max_audio_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_audio_prefix_duration)] audio_prefix_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_detection_interval)] detection_interval: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_inference_timeout)] inference_timeout: f64, base_url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)] token_ttl_secs: u64) -> PyResult<InterruptionDetector> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InterruptionDetector(::std::sync::Arc::new(out)))
     }
 
     /// Shared with live streams, which reconnect to pick the options up.
     #[pyo3(signature = (*, threshold = None, min_interruption_duration = None))]
-    fn update_options(&self, #[pyo3(from_py_with = _extract_interruption_detector_update_options_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_update_options_min_interruption_duration)] min_interruption_duration: ::std::option::Option<f64>) -> PyResult<()> {
+    fn update_options(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_interruption_detector_update_options_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_update_options_min_interruption_duration)] min_interruption_duration: ::std::option::Option<f64>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::update_options(&self.0, threshold, min_interruption_duration);
+        py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::update_options(&self.0, threshold, min_interruption_duration));
         Ok(())
     }
 }
@@ -294,7 +294,7 @@ type KeytermFunctionsImpl = <crate::Selected as super::Implementations>::Keyterm
 #[pyfunction]
 #[pyo3(signature = (config))]
 pub fn resolve_keyterm_detection<'py>(py: Python<'py>, config: ::std::option::Option<::lk_agents_abi::turn::keyterms::KeytermDetectionConfig>) -> PyResult<Bound<'py, PyAny>> {
-    let out = <KeytermFunctionsImpl as ::lk_agents_abi::turn::keyterms::KeytermFunctions>::resolve_keyterm_detection(config);
+    let out = py.detach(|| <KeytermFunctionsImpl as ::lk_agents_abi::turn::keyterms::KeytermFunctions>::resolve_keyterm_detection(config));
     Ok(crate::generated::records::keyterms::resolved_keyterm_detection_to_py(py, out)?)
 }
 

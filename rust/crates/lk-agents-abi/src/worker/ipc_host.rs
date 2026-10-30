@@ -286,7 +286,7 @@ pub trait IpcClient: Send + Sync + Sized + 'static {
     type Env;
 
     /// The handshake on the parent's socket, blocking before the process's loop exists.
-    #[host(new, detach)]
+    #[host(new)]
     fn new(
         env: &Self::Env,
         fd: i64,

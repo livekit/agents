@@ -41,10 +41,10 @@ pub struct SessionRecorder(pub(crate) ::std::sync::Arc<SessionRecorderImpl>);
 impl SessionRecorder {
     #[new]
     #[pyo3(signature = (path, *, sample_rate = 48000, t0 = None, bitrate = 64000))]
-    fn new(path: ::std::string::String, #[pyo3(from_py_with = _extract_session_recorder_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_session_recorder_new_t0)] t0: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)] bitrate: u32) -> PyResult<SessionRecorder> {
+    fn new(py: Python<'_>, path: ::std::string::String, #[pyo3(from_py_with = _extract_session_recorder_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_session_recorder_new_t0)] t0: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)] bitrate: u32) -> PyResult<SessionRecorder> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(&env, path, sample_rate, t0, bitrate).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(&env, path, sample_rate, t0, bitrate)).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(SessionRecorder(::std::sync::Arc::new(out)))
     }
 
@@ -60,23 +60,23 @@ impl SessionRecorder {
     }
 
     #[getter]
-    fn bytes_written(&self) -> PyResult<u64> {
+    fn bytes_written(&self, py: Python<'_>) -> PyResult<u64> {
         crate::host::check_pid()?;
-        let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::bytes_written(&self.0);
+        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::bytes_written(&self.0));
         Ok(out)
     }
 
     #[getter]
-    fn started_at(&self) -> PyResult<::std::option::Option<f64>> {
+    fn started_at(&self, py: Python<'_>) -> PyResult<::std::option::Option<f64>> {
         crate::host::check_pid()?;
-        let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::started_at(&self.0);
+        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::started_at(&self.0));
         Ok(out)
     }
 
     #[getter]
-    fn dropped_samples(&self) -> PyResult<(u64, u64)> {
+    fn dropped_samples(&self, py: Python<'_>) -> PyResult<(u64, u64)> {
         crate::host::check_pid()?;
-        let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::dropped_samples(&self.0);
+        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::dropped_samples(&self.0));
         Ok(out)
     }
 

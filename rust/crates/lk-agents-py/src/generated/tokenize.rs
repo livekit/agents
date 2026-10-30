@@ -15,31 +15,31 @@ type TokenizeFunctionsImpl = <crate::Selected as super::Implementations>::Tokeni
 
 #[pyfunction]
 #[pyo3(signature = (text, *, ignore_punctuation = true, split_character = false, retain_format = false))]
-pub fn split_words(text: ::std::string::String, ignore_punctuation: bool, split_character: bool, retain_format: bool) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::split_words(text, ignore_punctuation, split_character, retain_format);
+pub fn split_words(py: Python<'_>, text: ::std::string::String, ignore_punctuation: bool, split_character: bool, retain_format: bool) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
+    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::split_words(text, ignore_punctuation, split_character, retain_format));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (text, replacements, hold_last_word = false))]
-pub fn replace_words(text: ::std::string::String, replacements: Bound<'_, PyAny>, hold_last_word: bool) -> PyResult<::std::option::Option<(::std::string::String, usize)>> {
+pub fn replace_words(py: Python<'_>, text: ::std::string::String, replacements: Bound<'_, PyAny>, hold_last_word: bool) -> PyResult<::std::option::Option<(::std::string::String, usize)>> {
     let replacements = replacements.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, item.extract::<::std::string::String>()?))).collect::<PyResult<::indexmap::IndexMap<_, _>>>())?;
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::replace_words(text, replacements, hold_last_word);
+    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::replace_words(text, replacements, hold_last_word));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn tokenize_paragraphs(text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::tokenize_paragraphs(text);
+pub fn tokenize_paragraphs(py: Python<'_>, text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
+    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::tokenize_paragraphs(text));
     Ok(out)
 }
 
 /// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
 #[pyfunction]
 #[pyo3(signature = (word))]
-pub fn hyphenate_word(word: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::hyphenate_word(word);
+pub fn hyphenate_word(py: Python<'_>, word: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
+    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::hyphenate_word(word));
     Ok(out)
 }
 
@@ -48,9 +48,9 @@ type HostTokenizationImpl = <crate::Selected as super::Implementations>::HostTok
 
 #[pyfunction]
 #[pyo3(signature = (tokenize_fnc, text))]
-pub fn xml_tokenize(tokenize_fnc: Bound<'_, PyAny>, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
+pub fn xml_tokenize(py: Python<'_>, tokenize_fnc: Bound<'_, PyAny>, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
     let tokenize_fnc = crate::generated::tokenize::TokenizerCallbackProxy::from_host(&tokenize_fnc)?;
-    let out = <HostTokenizationImpl as ::lk_agents_abi::tokenize::bindings::HostTokenization>::xml_tokenize(tokenize_fnc, text).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <HostTokenizationImpl as ::lk_agents_abi::tokenize::bindings::HostTokenization>::xml_tokenize(tokenize_fnc, text)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -66,35 +66,35 @@ pub struct BasicWordTokenizer(pub(crate) ::std::sync::Arc<BasicWordTokenizerImpl
 impl BasicWordTokenizer {
     #[new]
     #[pyo3(signature = (*, ignore_punctuation = true, split_character = false, retain_format = false))]
-    fn new(ignore_punctuation: bool, split_character: bool, retain_format: bool) -> PyResult<BasicWordTokenizer> {
-        let out = <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::new(ignore_punctuation, split_character, retain_format);
+    fn new(py: Python<'_>, ignore_punctuation: bool, split_character: bool, retain_format: bool) -> PyResult<BasicWordTokenizer> {
+        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::new(ignore_punctuation, split_character, retain_format));
         Ok(BasicWordTokenizer(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (text, *, language = None))]
-    fn tokenize(&self, text: ::std::string::String, language: ::std::option::Option<::std::string::String>) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        let out = <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::tokenize(&self.0, text, language);
+    fn tokenize(&self, py: Python<'_>, text: ::std::string::String, language: ::std::option::Option<::std::string::String>) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::tokenize(&self.0, text, language));
         Ok(out)
     }
 
     #[pyo3(name = "_core_split")]
     #[pyo3(signature = (text))]
-    fn split(&self, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
-        let out = <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::split(&self.0, text);
+    fn split(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
+        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::split(&self.0, text));
         Ok(out)
     }
 
     #[getter]
     #[pyo3(name = "_core_min_token_len")]
-    fn min_token_len(&self) -> PyResult<usize> {
-        let out = <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::min_token_len(&self.0);
+    fn min_token_len(&self, py: Python<'_>) -> PyResult<usize> {
+        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::min_token_len(&self.0));
         Ok(out)
     }
 
     #[getter]
     #[pyo3(name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self) -> PyResult<usize> {
-        let out = <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::min_ctx_len(&self.0);
+    fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
+        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::min_ctx_len(&self.0));
         Ok(out)
     }
 }
@@ -119,35 +119,35 @@ pub struct BasicSentenceTokenizer(pub(crate) ::std::sync::Arc<BasicSentenceToken
 impl BasicSentenceTokenizer {
     #[new]
     #[pyo3(signature = (*, language = "english".to_owned(), min_sentence_len = 20, stream_context_len = 10, retain_format = false))]
-    fn new(language: ::std::string::String, #[pyo3(from_py_with = _extract_sentence_tokenizer_new_min_sentence_len)] min_sentence_len: usize, #[pyo3(from_py_with = _extract_sentence_tokenizer_new_stream_context_len)] stream_context_len: usize, retain_format: bool) -> PyResult<BasicSentenceTokenizer> {
-        let out = <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::new(language, min_sentence_len, stream_context_len, retain_format);
+    fn new(py: Python<'_>, language: ::std::string::String, #[pyo3(from_py_with = _extract_sentence_tokenizer_new_min_sentence_len)] min_sentence_len: usize, #[pyo3(from_py_with = _extract_sentence_tokenizer_new_stream_context_len)] stream_context_len: usize, retain_format: bool) -> PyResult<BasicSentenceTokenizer> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::new(language, min_sentence_len, stream_context_len, retain_format));
         Ok(BasicSentenceTokenizer(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (text, *, language = None))]
-    fn tokenize(&self, text: ::std::string::String, language: ::std::option::Option<::std::string::String>) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        let out = <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::tokenize(&self.0, text, language);
+    fn tokenize(&self, py: Python<'_>, text: ::std::string::String, language: ::std::option::Option<::std::string::String>) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::tokenize(&self.0, text, language));
         Ok(out)
     }
 
     #[pyo3(name = "_core_split")]
     #[pyo3(signature = (text))]
-    fn split(&self, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
-        let out = <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::split(&self.0, text);
+    fn split(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::split(&self.0, text));
         Ok(out)
     }
 
     #[getter]
     #[pyo3(name = "_core_min_token_len")]
-    fn min_token_len(&self) -> PyResult<usize> {
-        let out = <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_token_len(&self.0);
+    fn min_token_len(&self, py: Python<'_>) -> PyResult<usize> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_token_len(&self.0));
         Ok(out)
     }
 
     #[getter]
     #[pyo3(name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self) -> PyResult<usize> {
-        let out = <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_ctx_len(&self.0);
+    fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_ctx_len(&self.0));
         Ok(out)
     }
 }
@@ -174,21 +174,21 @@ pub struct TokenBuffer(pub(crate) TokenBufferImpl);
 impl TokenBuffer {
     #[new]
     #[pyo3(signature = (tokenize_fnc, *, min_token_len, min_ctx_len, max_token_len = None, xml_aware = false))]
-    fn new(tokenize_fnc: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_buffered_tokens_new_min_token_len)] min_token_len: usize, #[pyo3(from_py_with = _extract_buffered_tokens_new_min_ctx_len)] min_ctx_len: usize, #[pyo3(from_py_with = _extract_buffered_tokens_new_max_token_len)] max_token_len: ::std::option::Option<usize>, xml_aware: bool) -> PyResult<TokenBuffer> {
+    fn new(py: Python<'_>, tokenize_fnc: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_buffered_tokens_new_min_token_len)] min_token_len: usize, #[pyo3(from_py_with = _extract_buffered_tokens_new_min_ctx_len)] min_ctx_len: usize, #[pyo3(from_py_with = _extract_buffered_tokens_new_max_token_len)] max_token_len: ::std::option::Option<usize>, xml_aware: bool) -> PyResult<TokenBuffer> {
         let tokenize_fnc = crate::generated::tokenize::TokenizerCallbackProxy::from_host(&tokenize_fnc)?;
-        let out = <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::new(tokenize_fnc, min_token_len, min_ctx_len, max_token_len, xml_aware);
+        let out = py.detach(|| <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::new(tokenize_fnc, min_token_len, min_ctx_len, max_token_len, xml_aware));
         Ok(TokenBuffer(out))
     }
 
     /// The tokens ``text`` proves complete, batched.
     #[pyo3(signature = (text))]
-    fn push(&mut self, text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        let out = <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::push(&mut self.0, text).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn push(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        let out = py.detach(|| <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::push(&mut self.0, text)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
-    fn flush(&mut self) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        let out = <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::flush(&mut self.0).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn flush(&mut self, py: Python<'_>) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        let out = py.detach(|| <TokenBufferImpl as ::lk_agents_abi::tokenize::bindings::BufferedTokens>::flush(&mut self.0)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 }
@@ -199,8 +199,8 @@ type LanguageFunctionsImpl = <crate::Selected as super::Implementations>::Langua
 /// Normalise a language code or name to BCP-47.
 #[pyfunction]
 #[pyo3(signature = (code))]
-pub fn normalize_language(code: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::normalize(&code);
+pub fn normalize_language(py: Python<'_>, code: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::normalize(&code));
     Ok(out)
 }
 
@@ -209,32 +209,32 @@ pub fn normalize_language(code: ::std::string::String) -> PyResult<::std::string
 /// E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
 #[pyfunction]
 #[pyo3(signature = (code))]
-pub fn base_language(code: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::base_language(&code);
+pub fn base_language(py: Python<'_>, code: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::base_language(&code));
     Ok(out)
 }
 
 /// Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``.
 #[pyfunction]
 #[pyo3(signature = (code))]
-pub fn language_region(code: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
-    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::region(&code);
+pub fn language_region(py: Python<'_>, code: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = py.detach(|| <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::region(&code));
     Ok(out)
 }
 
 /// ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``.
 #[pyfunction]
 #[pyo3(signature = (code))]
-pub fn language_iso(code: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::iso(&code);
+pub fn language_iso(py: Python<'_>, code: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::iso(&code));
     Ok(out)
 }
 
 /// Return the English language name (e.g. ``'english'``), or ``None`` if unknown.
 #[pyfunction]
 #[pyo3(signature = (code))]
-pub fn language_name(code: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
-    let out = <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::language_name(&code);
+pub fn language_name(py: Python<'_>, code: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = py.detach(|| <LanguageFunctionsImpl as ::lk_agents_abi::tokenize::language::LanguageFunctions>::language_name(&code));
     Ok(out)
 }
 
@@ -249,14 +249,14 @@ pub struct SearchDocument(pub(crate) ::std::sync::Arc<SearchDocumentImpl>);
 impl SearchDocument {
     #[new]
     #[pyo3(signature = (name, description, parameters))]
-    fn new(name: ::std::string::String, description: ::std::string::String, parameters: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<SearchDocument> {
-        let out = <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::new(name, description, parameters);
+    fn new(py: Python<'_>, name: ::std::string::String, description: ::std::string::String, parameters: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<SearchDocument> {
+        let out = py.detach(|| <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::new(name, description, parameters));
         Ok(SearchDocument(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (terms))]
-    fn keyword_score(&self, terms: ::std::vec::Vec<::std::string::String>) -> PyResult<f64> {
-        let out = <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::keyword_score(&self.0, terms).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    fn keyword_score(&self, py: Python<'_>, terms: ::std::vec::Vec<::std::string::String>) -> PyResult<f64> {
+        let out = py.detach(|| <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::keyword_score(&self.0, terms)).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 }
@@ -283,34 +283,34 @@ pub struct BM25Index(pub(crate) BM25IndexImpl);
 impl BM25Index {
     #[new]
     #[pyo3(signature = (k1, b))]
-    fn new(#[pyo3(from_py_with = _extract_search_index_new_k1)] k1: f64, #[pyo3(from_py_with = _extract_search_index_new_b)] b: f64) -> PyResult<BM25Index> {
-        let out = <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::new(k1, b);
+    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_search_index_new_k1)] k1: f64, #[pyo3(from_py_with = _extract_search_index_new_b)] b: f64) -> PyResult<BM25Index> {
+        let out = py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::new(k1, b));
         Ok(BM25Index(out))
     }
 
     #[pyo3(signature = (documents))]
-    fn build(&mut self, documents: Bound<'_, PyAny>) -> PyResult<()> {
+    fn build(&mut self, py: Python<'_>, documents: Bound<'_, PyAny>) -> PyResult<()> {
         let documents = documents.try_iter().and_then(|items| items.map(|item| { let item = item?; item.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())?;
-        <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::build(&mut self.0, documents);
+        py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::build(&mut self.0, documents));
         Ok(())
     }
 
-    fn clear(&mut self) -> PyResult<()> {
-        <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::clear(&mut self.0);
+    fn clear(&mut self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::clear(&mut self.0));
         Ok(())
     }
 
     #[pyo3(signature = (doc, terms))]
-    fn score(&self, doc: Bound<'_, PyAny>, terms: ::std::vec::Vec<::std::string::String>) -> PyResult<f64> {
+    fn score(&self, py: Python<'_>, doc: Bound<'_, PyAny>, terms: ::std::vec::Vec<::std::string::String>) -> PyResult<f64> {
         let doc = doc.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)?;
-        let out = <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::score(&self.0, doc, terms);
+        let out = py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::score(&self.0, doc, terms));
         Ok(out)
     }
 
     #[pyo3(signature = (query, docs, limit))]
-    fn search(&self, query: ::std::string::String, docs: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_search_index_search_limit)] limit: i64) -> PyResult<::std::vec::Vec<usize>> {
+    fn search(&self, py: Python<'_>, query: ::std::string::String, docs: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_search_index_search_limit)] limit: i64) -> PyResult<::std::vec::Vec<usize>> {
         let docs = docs.try_iter().and_then(|items| items.map(|item| { let item = item?; item.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())?;
-        let out = <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::search(&self.0, query, docs, limit);
+        let out = py.detach(|| <BM25IndexImpl as ::lk_agents_abi::tokenize::search::SearchIndex>::search(&self.0, query, docs, limit));
         Ok(out)
     }
 }
@@ -328,25 +328,25 @@ fn _extract_tool_search_tool_search_loaded_count(obj: &Bound<'_, PyAny>) -> PyRe
 
 #[pyfunction]
 #[pyo3(signature = (query, docs, limit))]
-pub fn keyword_search(query: ::std::string::String, docs: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_tool_search_keyword_search_limit)] limit: i64) -> PyResult<::std::vec::Vec<usize>> {
+pub fn keyword_search(py: Python<'_>, query: ::std::string::String, docs: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_tool_search_keyword_search_limit)] limit: i64) -> PyResult<::std::vec::Vec<usize>> {
     let docs = docs.try_iter().and_then(|items| items.map(|item| { let item = item?; item.cast::<super::tokenize::SearchDocument>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())?;
-    let out = <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::keyword_search(query, docs, limit).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::keyword_search(query, docs, limit)).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (query))]
-pub fn tool_search_validate(query: ::std::string::String) -> PyResult<()> {
+pub fn tool_search_validate(py: Python<'_>, query: ::std::string::String) -> PyResult<()> {
     crate::host::check_pid()?;
-    <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_validate(query).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_validate(query)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(())
 }
 
 #[pyfunction]
 #[pyo3(signature = (query, count))]
-pub fn tool_search_loaded(query: ::std::string::String, #[pyo3(from_py_with = _extract_tool_search_tool_search_loaded_count)] count: usize) -> PyResult<::std::string::String> {
+pub fn tool_search_loaded(py: Python<'_>, query: ::std::string::String, #[pyo3(from_py_with = _extract_tool_search_tool_search_loaded_count)] count: usize) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
-    let out = <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_loaded(query, count).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_loaded(query, count)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -355,7 +355,7 @@ pub fn tool_search_loaded(query: ::std::string::String, #[pyo3(from_py_with = _e
 pub fn tool_proxy_arguments<'py>(py: Python<'py>, arguments: Bound<'_, PyAny>, known: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
-    let out = <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_proxy_arguments(arguments, known).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_proxy_arguments(arguments, known)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::lk_agents_abi::python::value_to_py(py, &x1)?])?.into_any() })
 }
 

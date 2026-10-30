@@ -224,7 +224,7 @@ impl Resolver<'_> {
             &entries,
             &[
                 "new", "call", "await", "getter", "setter", "function", "next", "name", "pid",
-                "detach", "future",
+                "attached", "future",
             ],
         )?;
         let kinds: Vec<MethodKind> = [
@@ -251,21 +251,14 @@ impl Resolver<'_> {
         if kind == MethodKind::Call && f.sig.receiver().is_none() {
             kind = MethodKind::StaticCall;
         }
-        let detach = match voc::find(&entries, "detach") {
+        let attached = match voc::find(&entries, "attached") {
             Some(flag) if flag.value.is_some() || !flag.nested.is_empty() => {
-                return Err(format!("{at}: detach is a bare flag"));
+                return Err(format!("{at}: attached is a bare flag"));
             }
             value => value.is_some(),
         };
-        if detach
-            && !matches!(
-                kind,
-                MethodKind::New | MethodKind::Call | MethodKind::StaticCall | MethodKind::Function
-            )
-        {
-            return Err(format!(
-                "{at}: detach requires a synchronous constructor, call or function"
-            ));
+        if attached && kind != MethodKind::Getter {
+            return Err(format!("{at}: only a getter that takes no lock runs attached"));
         }
         let receiver = f.sig.receiver();
         // `fn ..(&self, ..) -> BoxFuture<'static, T>`, maybe in a `Result<_, E>`: the call runs (or
@@ -376,7 +369,7 @@ impl Resolver<'_> {
                     ));
                 }
             } else if ty == Ty::This {
-                if !by_ref || !matches!(kind, MethodKind::Call | MethodKind::StaticCall) || detach {
+                if !by_ref || !matches!(kind, MethodKind::Call | MethodKind::StaticCall) {
                     return Err(format!(
                         "{pat}: an own-class input is borrowed as &Self by a synchronous class call"
                     ));
@@ -448,7 +441,7 @@ impl Resolver<'_> {
             kind,
             eager,
             refused,
-            detach,
+            attached,
             pid: voc::boolean(&at, &entries, "pid")?,
             params,
             ret,

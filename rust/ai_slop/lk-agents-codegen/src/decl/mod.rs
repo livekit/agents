@@ -426,8 +426,9 @@ pub struct Method {
     pub eager: bool,
     /// An eager await declared `Result<BoxFuture<'static, T>, E>`: `E`, raised at the call.
     pub refused: Option<ErrorDecl>,
-    /// Release the host lock while executing this synchronous native operation.
-    pub detach: bool,
+    /// A getter that provably takes no lock runs with the GIL held; every other synchronous
+    /// entry releases it for the native call.
+    pub attached: bool,
     /// Override the class or function group fork guard for this entry.
     pub pid: Option<bool>,
     pub params: Vec<Param>,

@@ -808,9 +808,15 @@ fn output(s: &Sig) -> Option<crate::shape::Out> {
     }
 }
 
+/// A synchronous entry runs the core without the GIL: a Rust task holding a lock it waits for
+/// may itself be waiting for the GIL.
+fn detaches(s: &Sig) -> bool {
+    !s.attached && !s.is_async
+}
+
 /// To release the GIL, to return an awaitable, or because a conversion needs it.
 fn needs_py(s: &Sig) -> bool {
-    s.detach || s.is_async || s.reply.is_some() || inputs(s).iter().flatten().any(|i| i.py) || (!s.is_async && output(s).is_some_and(|o| o.py))
+    detaches(s) || s.is_async || s.reply.is_some() || inputs(s).iter().flatten().any(|i| i.py) || (!s.is_async && output(s).is_some_and(|o| o.py))
 }
 
 fn generics(s: &Sig) -> TokenStream {
@@ -933,9 +939,9 @@ fn body_parts(s: &Sig, call: &Call, wrap: Option<(&syn::Ident, Wrap)>) -> (Token
         (Call::Shared(_), _) => quote!(self.inner.#rust(#(#args),*)),
     };
     let target = if s.is_async { quote!(#target.await) } else { target };
-    let target = if s.detach && matches!(call, Call::Locked(_)) && s.receiver != Receiver::None {
+    let target = if detaches(s) && matches!(call, Call::Locked(_)) && s.receiver != Receiver::None {
         quote!(py.detach(|| -> ::pyo3::PyResult<_> { ::std::result::Result::Ok(#target) })?)
-    } else if s.detach {
+    } else if detaches(s) {
         quote!(py.detach(|| #target))
     } else { target };
     let fail = match &s.ret {

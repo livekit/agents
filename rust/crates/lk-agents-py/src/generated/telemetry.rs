@@ -21,16 +21,16 @@ pub struct CoreTelemetryPolicy(pub(crate) ::std::sync::Arc<CoreTelemetryPolicyIm
 impl CoreTelemetryPolicy {
     #[new]
     #[pyo3(signature = (allow_pii, capture_content, project_redaction))]
-    fn new(allow_pii: bool, capture_content: bool, project_redaction: bool) -> PyResult<CoreTelemetryPolicy> {
+    fn new(py: Python<'_>, allow_pii: bool, capture_content: bool, project_redaction: bool) -> PyResult<CoreTelemetryPolicy> {
         crate::host::check_pid()?;
-        let out = <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::new(allow_pii, capture_content, project_redaction);
+        let out = py.detach(|| <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::new(allow_pii, capture_content, project_redaction));
         Ok(CoreTelemetryPolicy(::std::sync::Arc::new(out)))
     }
 
     #[getter]
-    fn redacted(&self) -> PyResult<bool> {
+    fn redacted(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::redacted(&self.0);
+        let out = py.detach(|| <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::redacted(&self.0));
         Ok(out)
     }
 
@@ -41,29 +41,29 @@ impl CoreTelemetryPolicy {
     fn snapshot<'py>(&self, py: Python<'py>, value: Bound<'_, PyAny>, destination: bool) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let value = crate::conversions::telemetry_value_from_py(&value)?;
-        let out = <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::snapshot(&self.0, value, destination);
+        let out = py.detach(|| <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::snapshot(&self.0, value, destination));
         Ok(crate::conversions::telemetry_value_to_py(py, out)?)
     }
 
     #[pyo3(signature = (name))]
-    fn keep_event(&self, name: ::std::string::String) -> PyResult<bool> {
+    fn keep_event(&self, py: Python<'_>, name: ::std::string::String) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::keep_event(&self.0, name);
+        let out = py.detach(|| <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::keep_event(&self.0, name));
         Ok(out)
     }
 
     /// A replacement body, or None to snapshot the original SDK value.
     #[pyo3(signature = (safe_body, body))]
-    fn log_body(&self, safe_body: bool, body: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+    fn log_body(&self, py: Python<'_>, safe_body: bool, body: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
         crate::host::check_pid()?;
-        let out = <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::log_body(&self.0, safe_body, body);
+        let out = py.detach(|| <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::log_body(&self.0, safe_body, body));
         Ok(out)
     }
 
     #[pyo3(signature = (is_error, description))]
-    fn status_description(&self, is_error: bool, description: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+    fn status_description(&self, py: Python<'_>, is_error: bool, description: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
         crate::host::check_pid()?;
-        let out = <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::status_description(&self.0, is_error, description);
+        let out = py.detach(|| <CoreTelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::status_description(&self.0, is_error, description));
         Ok(out)
     }
 }
@@ -92,27 +92,27 @@ fn _extract_telemetry_admission_core_record_bytes_link_count(obj: &Bound<'_, PyA
 #[pyo3(signature = (registered, signal_enabled, job_open, held_count, recording_disabled))]
 pub fn _core_export_action<'py>(py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, #[pyo3(from_py_with = _extract_telemetry_admission_core_export_action_held_count)] held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_export_action(registered, signal_enabled, job_open, held_count, recording_disabled);
+    let out = py.detach(|| <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_export_action(registered, signal_enabled, job_open, held_count, recording_disabled));
     Ok(crate::generated::records::telemetry::telemetry_export_action_to_py(py, out)?)
 }
 
 /// Conservative retained bytes of an SDK value; more than `SDK_RECORD_BYTES` refuses it.
 #[pyfunction]
 #[pyo3(signature = (value))]
-pub fn _core_value_bytes(value: Bound<'_, PyAny>) -> PyResult<usize> {
+pub fn _core_value_bytes(py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<usize> {
     crate::host::check_pid()?;
     let value = crate::conversions::telemetry_value_from_py(&value)?;
-    let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_value_bytes(value);
+    let out = py.detach(|| <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_value_bytes(value));
     Ok(out)
 }
 
 /// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
 #[pyfunction]
 #[pyo3(signature = (kind, fields, event_count, link_count))]
-pub fn _core_record_bytes(kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_admission_core_record_bytes_fields)] fields: ::std::vec::Vec<usize>, #[pyo3(from_py_with = _extract_telemetry_admission_core_record_bytes_event_count)] event_count: usize, #[pyo3(from_py_with = _extract_telemetry_admission_core_record_bytes_link_count)] link_count: usize) -> PyResult<usize> {
+pub fn _core_record_bytes(py: Python<'_>, kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_admission_core_record_bytes_fields)] fields: ::std::vec::Vec<usize>, #[pyo3(from_py_with = _extract_telemetry_admission_core_record_bytes_event_count)] event_count: usize, #[pyo3(from_py_with = _extract_telemetry_admission_core_record_bytes_link_count)] link_count: usize) -> PyResult<usize> {
     crate::host::check_pid()?;
     let kind = crate::generated::records::telemetry::telemetry_record_kind_from_py(&kind)?;
-    let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_record_bytes(kind, fields, event_count, link_count);
+    let out = py.detach(|| <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_record_bytes(kind, fields, event_count, link_count));
     Ok(out)
 }
 
@@ -127,16 +127,16 @@ pub struct CoreMetricSeries(pub(crate) CoreMetricSeriesImpl);
 #[pymethods]
 impl CoreMetricSeries {
     #[new]
-    fn new() -> PyResult<CoreMetricSeries> {
+    fn new(py: Python<'_>) -> PyResult<CoreMetricSeries> {
         crate::host::check_pid()?;
-        let out = <CoreMetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::new();
+        let out = py.detach(|| <CoreMetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::new());
         Ok(CoreMetricSeries(out))
     }
 
     #[pyo3(signature = (name, attributes))]
-    fn admit(&mut self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
+    fn admit(&mut self, py: Python<'_>, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreMetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&mut self.0, name, attributes);
+        let out = py.detach(|| <CoreMetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&mut self.0, name, attributes));
         Ok(out)
     }
 }
@@ -169,7 +169,7 @@ fn _extract_provider_metrics_stt_stream_metrics_host(obj: &Bound<'_, PyAny>) -> 
 #[pyo3(signature = (event, start, now, audio_durations, host))]
 pub fn stt_batch_metrics<'py>(py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_start)] start: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_now)] now: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)] audio_durations: ::std::vec::Vec<f64>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
     let event = crate::generated::records::stt::speech_event_from_py(&event)?;
-    let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host);
+    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host));
     Ok(crate::generated::records::metrics::stt_metrics_to_py(py, out)?)
 }
 
@@ -178,7 +178,7 @@ pub fn stt_batch_metrics<'py>(py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(f
 #[pyo3(signature = (event, host))]
 pub fn stt_stream_metrics<'py>(py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
     let event = crate::generated::records::stt::speech_event_from_py(&event)?;
-    let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host)).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [match x0 { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::stt_metrics_to_py(py, x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?])?.into_any() })
 }
 
@@ -209,23 +209,23 @@ pub struct LlmMetricState(pub(crate) LlmMetricStateImpl);
 impl LlmMetricState {
     #[new]
     #[pyo3(signature = (start))]
-    fn new(#[pyo3(from_py_with = _extract_llm_metric_state_new_start)] start: f64) -> PyResult<LlmMetricState> {
-        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::new(start);
+    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_llm_metric_state_new_start)] start: f64) -> PyResult<LlmMetricState> {
+        let out = py.detach(|| <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::new(start));
         Ok(LlmMetricState(out))
     }
 
     /// Whether `chunk` is the first with a response.
     #[pyo3(signature = (now, chunk))]
-    fn observe(&mut self, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn observe(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: Bound<'_, PyAny>) -> PyResult<bool> {
         let chunk = crate::generated::records::llm::chat_chunk_from_py(&chunk)?;
-        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk);
+        let out = py.detach(|| <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk));
         Ok(out)
     }
 
     /// `None` for a failed attempt or one that yielded no chunk.
     #[pyo3(signature = (now, failed, host))]
     fn finish<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_llm_metric_state_finish_now)] now: f64, failed: bool, #[pyo3(from_py_with = _extract_llm_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host);
+        let out = py.detach(|| <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::llm_metrics_to_py(py, value)?)).transpose()?)
     }
 }
@@ -261,30 +261,30 @@ pub struct TtsMetricState(pub(crate) TtsMetricStateImpl);
 impl TtsMetricState {
     #[new]
     #[pyo3(signature = (streamed))]
-    fn new(streamed: bool) -> PyResult<TtsMetricState> {
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::new(streamed);
+    fn new(py: Python<'_>, streamed: bool) -> PyResult<TtsMetricState> {
+        let out = py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::new(streamed));
         Ok(TtsMetricState(out))
     }
 
     /// A streamed segment's text, in the order its audio is finished.
     #[pyo3(signature = (text))]
-    fn queue_text(&mut self, text: ::std::string::String) -> PyResult<()> {
-        <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::queue_text(&mut self.0, text);
+    fn queue_text(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
+        py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::queue_text(&mut self.0, text));
         Ok(())
     }
 
     /// Whether `audio` ends its segment.
     #[pyo3(signature = (now, start, audio))]
-    fn observe(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn observe(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: Bound<'_, PyAny>) -> PyResult<bool> {
         let audio = crate::generated::records::tts::synthesized_audio_from_py(&audio)?;
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio);
+        let out = py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio));
         Ok(out)
     }
 
     /// The record of a finished request or segment, then the figures reset.
     #[pyo3(signature = (now, start, failed, batch_text, host))]
     fn finish<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, host);
+        let out = py.detach(|| <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, host));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::tts_metrics_to_py(py, value)?)).transpose()?)
     }
 }
@@ -325,43 +325,43 @@ pub struct Tagger(pub(crate) TaggerImpl);
 #[pymethods]
 impl Tagger {
     #[new]
-    fn new() -> PyResult<Tagger> {
+    fn new(py: Python<'_>) -> PyResult<Tagger> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::new(&env);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::new(&env));
         Ok(Tagger(out))
     }
 
     /// Mark the session as successful; ``reason`` is kept apart from the tag.
     #[pyo3(signature = (reason = None))]
-    fn success(&mut self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn success(&mut self, py: Python<'_>, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::success(&mut self.0, reason);
+        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::success(&mut self.0, reason));
         Ok(())
     }
 
     /// Mark the session as failed; ``reason`` is kept apart from the tag.
     #[pyo3(signature = (reason = None))]
-    fn fail(&mut self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn fail(&mut self, py: Python<'_>, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::fail(&mut self.0, reason);
+        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::fail(&mut self.0, reason));
         Ok(())
     }
 
     /// Add a ``key:value`` tag, with optional structured metadata.
     #[pyo3(signature = (tag, *, metadata = None))]
-    fn add(&mut self, tag: ::std::string::String, metadata: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    fn add(&mut self, py: Python<'_>, tag: ::std::string::String, metadata: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
         let metadata = metadata.map(|v| ::lk_agents_abi::python::value_from_py(&v, "metadata")).transpose()?;
-        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::add(&mut self.0, tag, metadata);
+        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::add(&mut self.0, tag, metadata));
         Ok(())
     }
 
     /// Remove a tag; removing an absent one does nothing.
     #[pyo3(signature = (tag))]
-    fn remove(&mut self, tag: ::std::string::String) -> PyResult<()> {
+    fn remove(&mut self, py: Python<'_>, tag: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::remove(&mut self.0, tag);
+        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::remove(&mut self.0, tag));
         Ok(())
     }
 
@@ -369,27 +369,27 @@ impl Tagger {
     #[getter]
     fn tags<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::tags(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::tags(&self.0));
         Ok(::pyo3::types::PyFrozenSet::new(py, out.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// ``sorted(tagger.tags)``.
-    fn sorted_tags(&self) -> PyResult<::std::vec::Vec<::std::string::String>> {
+    fn sorted_tags(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::std::string::String>> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::sorted_tags(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::sorted_tags(&self.0));
         Ok(out)
     }
 
     /// ``(tag, metadata, epoch seconds)``, in insertion order.
     fn entries<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::entries(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::entries(&self.0));
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, match x1 { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x2, py)?])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
-    fn is_empty(&self) -> PyResult<bool> {
+    fn is_empty(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::is_empty(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::is_empty(&self.0));
         Ok(out)
     }
 
@@ -397,7 +397,7 @@ impl Tagger {
     #[getter]
     fn evaluations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::evaluations(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::evaluations(&self.0));
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::evaluation_record_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
@@ -405,30 +405,30 @@ impl Tagger {
     #[getter]
     fn outcome<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome(&self.0));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::outcome_to_py(py, value)?)).transpose()?)
     }
 
     /// The reason given with the outcome.
     #[getter]
-    fn outcome_reason(&self) -> PyResult<::std::option::Option<::std::string::String>> {
+    fn outcome_reason(&self, py: Python<'_>) -> PyResult<::std::option::Option<::std::string::String>> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome_reason(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome_reason(&self.0));
         Ok(out)
     }
 
     /// One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record.
     #[pyo3(signature = (name, verdict, reasoning, instructions))]
-    fn _core_record_judgment(&mut self, name: ::std::string::String, verdict: ::std::string::String, reasoning: ::std::string::String, instructions: ::std::string::String) -> PyResult<()> {
+    fn _core_record_judgment(&mut self, py: Python<'_>, name: ::std::string::String, verdict: ::std::string::String, reasoning: ::std::string::String, instructions: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_record_judgment(&mut self.0, name, verdict, reasoning, instructions);
+        py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_record_judgment(&mut self.0, name, verdict, reasoning, instructions));
         Ok(())
     }
 
     /// Whether the session has judgments or an outcome to upload.
-    fn has_evals(&self) -> PyResult<bool> {
+    fn has_evals(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::has_evals(&self.0);
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::has_evals(&self.0));
         Ok(out)
     }
 
@@ -440,7 +440,7 @@ impl Tagger {
         crate::host::check_pid()?;
         let report = crate::generated::records::telemetry::session_report_input_from_py(&report)?;
         let project_item = crate::generated::telemetry::ChatItemProjectionProxy::from_host(&project_item)?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::log_record_wire_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 }
@@ -463,39 +463,39 @@ pub struct UploadGate(pub(crate) UploadGateImpl);
 #[pymethods]
 impl UploadGate {
     #[new]
-    fn new() -> PyResult<UploadGate> {
+    fn new(py: Python<'_>) -> PyResult<UploadGate> {
         crate::host::check_pid()?;
-        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::new();
+        let out = py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::new());
         Ok(UploadGate(out))
     }
 
     /// Called when a session re-initialises recording.
-    fn reset(&mut self) -> PyResult<()> {
+    fn reset(&mut self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::reset(&mut self.0);
+        py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::reset(&mut self.0));
         Ok(())
     }
 
     #[getter]
-    fn disabled(&self) -> PyResult<bool> {
+    fn disabled(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disabled(&self.0);
+        let out = py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disabled(&self.0));
         Ok(out)
     }
 
     /// Returns ``True`` on the transition only, where the reference logs its warning.
-    fn disable(&mut self) -> PyResult<bool> {
+    fn disable(&mut self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disable(&mut self.0);
+        let out = py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disable(&mut self.0));
         Ok(out)
     }
 
     /// Whether an upload response is the project's "recording disabled" 401.
     #[staticmethod]
     #[pyo3(signature = (status_code, body))]
-    fn is_disabled_response(#[pyo3(from_py_with = _extract_upload_gate_is_disabled_response_status_code)] status_code: u16, #[pyo3(from_py_with = _extract_upload_gate_is_disabled_response_body)] body: ::std::vec::Vec<u8>) -> PyResult<bool> {
+    fn is_disabled_response(py: Python<'_>, #[pyo3(from_py_with = _extract_upload_gate_is_disabled_response_status_code)] status_code: u16, #[pyo3(from_py_with = _extract_upload_gate_is_disabled_response_body)] body: ::std::vec::Vec<u8>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::is_disabled_response(status_code, body);
+        let out = py.detach(|| <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::is_disabled_response(status_code, body));
         Ok(out)
     }
 }
@@ -506,9 +506,9 @@ type ReportRecordsImpl = <crate::Selected as super::Implementations>::ReportReco
 /// Whether recording is enabled for the job.
 #[pyfunction]
 #[pyo3(signature = (options))]
-pub fn recording_enabled(options: Bound<'_, PyAny>) -> PyResult<bool> {
+pub fn recording_enabled(py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<bool> {
     let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
-    let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::recording_enabled(options);
+    let out = py.detach(|| <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::recording_enabled(options));
     Ok(out)
 }
 
@@ -521,7 +521,7 @@ pub fn _core_session_chat_record<'py>(py: Python<'py>, disabled: bool, options: 
     let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
     let item = crate::generated::records::chat_items::chat_item_from_py(&item)?;
     let projected = ::lk_agents_abi::python::value_from_py(&projected, "projected")?;
-    let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity);
+    let out = py.detach(|| <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity));
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::log_record_wire_to_py(py, value)?)).transpose()?)
 }
 
@@ -555,47 +555,47 @@ pub struct CoreSessionReportProjection(pub(crate) ::std::sync::Arc<CoreSessionRe
 impl CoreSessionReportProjection {
     #[new]
     #[pyo3(signature = (capture_content, options, project_redaction))]
-    fn new(capture_content: bool, options: Bound<'_, PyAny>, project_redaction: bool) -> PyResult<CoreSessionReportProjection> {
+    fn new(py: Python<'_>, capture_content: bool, options: Bound<'_, PyAny>, project_redaction: bool) -> PyResult<CoreSessionReportProjection> {
         crate::host::check_pid()?;
         let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::new(capture_content, &options, project_redaction);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::new(capture_content, &options, project_redaction));
         Ok(CoreSessionReportProjection(::std::sync::Arc::new(out)))
     }
 
     #[getter]
-    fn content(&self) -> PyResult<bool> {
+    fn content(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::content(&self.0);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::content(&self.0));
         Ok(out)
     }
 
     #[getter]
-    fn transcript(&self) -> PyResult<bool> {
+    fn transcript(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::transcript(&self.0);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::transcript(&self.0));
         Ok(out)
     }
 
     #[getter]
-    fn audio(&self) -> PyResult<bool> {
+    fn audio(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::audio(&self.0);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::audio(&self.0));
         Ok(out)
     }
 
     /// Optional observations beyond this prefix are omitted without failing the transcript.
     #[pyo3(signature = (items))]
-    fn event_limit(&self, #[pyo3(from_py_with = _extract_session_report_projection_event_limit_items)] items: usize) -> PyResult<usize> {
+    fn event_limit(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_session_report_projection_event_limit_items)] items: usize) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_limit(&self.0, items);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_limit(&self.0, items));
         Ok(out)
     }
 
     /// Admission precedes host SDK serialization and native JSON extraction.
     #[pyo3(signature = (retained_bytes, event_bytes))]
-    fn accepts_event(&self, #[pyo3(from_py_with = _extract_session_report_projection_accepts_event_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_session_report_projection_accepts_event_event_bytes)] event_bytes: usize) -> PyResult<bool> {
+    fn accepts_event(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_session_report_projection_accepts_event_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_session_report_projection_accepts_event_event_bytes)] event_bytes: usize) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::accepts_event(&self.0, retained_bytes, event_bytes);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::accepts_event(&self.0, retained_bytes, event_bytes));
         Ok(out)
     }
 
@@ -603,7 +603,7 @@ impl CoreSessionReportProjection {
     fn project<'py>(&self, py: Python<'py>, report: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let report = crate::generated::records::telemetry::session_report_snapshot_from_py(&report)?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project(&self.0, report);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project(&self.0, report));
         Ok(crate::generated::records::telemetry::session_report_snapshot_to_py(py, out)?)
     }
 
@@ -611,7 +611,7 @@ impl CoreSessionReportProjection {
     fn project_event<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_session_report_projection_project_event_retained_bytes)] retained_bytes: usize) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project_event(&self.0, event, retained_bytes);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project_event(&self.0, event, retained_bytes));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::projected_report_event_to_py(py, value)?)).transpose()?)
     }
 
@@ -619,7 +619,7 @@ impl CoreSessionReportProjection {
     fn event_record<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>, identity: (::std::string::String, ::std::string::String, ::std::string::String), #[pyo3(from_py_with = _extract_session_report_projection_event_record_timestamp)] timestamp: f64, disabled: bool) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let event = crate::generated::records::telemetry::projected_report_event_from_py(&event)?;
-        let out = <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_record(&self.0, event, identity, timestamp, disabled);
+        let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_record(&self.0, event, identity, timestamp, disabled));
         Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::log_record_wire_to_py(py, value)?)).transpose()?)
     }
 }
@@ -648,65 +648,65 @@ pub struct CoreEventRetention(pub(crate) CoreEventRetentionImpl);
 impl CoreEventRetention {
     #[new]
     #[pyo3(signature = (capture_content))]
-    fn new(capture_content: bool) -> PyResult<CoreEventRetention> {
+    fn new(py: Python<'_>, capture_content: bool) -> PyResult<CoreEventRetention> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::new(&env, capture_content).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::new(&env, capture_content)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(CoreEventRetention(out))
     }
 
     /// Bind report access to the first job that starts the session. Ownership cannot transfer.
     #[pyo3(signature = (job_id))]
-    fn claim(&mut self, job_id: ::std::string::String) -> PyResult<()> {
+    fn claim(&mut self, py: Python<'_>, job_id: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::claim(&mut self.0, job_id);
+        py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::claim(&mut self.0, job_id));
         Ok(())
     }
 
     /// Sessions started outside a job retain their existing application-owned access contract.
     #[pyo3(signature = (job_id))]
-    fn allows_read(&self, job_id: ::std::string::String) -> PyResult<bool> {
+    fn allows_read(&self, py: Python<'_>, job_id: ::std::string::String) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::allows_read(&self.0, job_id);
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::allows_read(&self.0, job_id));
         Ok(out)
     }
 
     /// Immutable consent captured when this session's report retention was created.
     #[getter]
-    fn capture_content(&self) -> PyResult<bool> {
+    fn capture_content(&self, py: Python<'_>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::capture_content(&self.0);
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::capture_content(&self.0));
         Ok(out)
     }
 
     /// Reject content without creation-time consent, unknown schemas and live-object events.
     #[pyo3(signature = (kind, redaction))]
-    fn accepts(&self, kind: ::std::string::String, redaction: bool) -> PyResult<bool> {
+    fn accepts(&self, py: Python<'_>, kind: ::std::string::String, redaction: bool) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::accepts(&self.0, kind, redaction);
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::accepts(&self.0, kind, redaction));
         Ok(out)
     }
 
     /// Expire old entries, then admit only within the item and byte budgets. The adapter removes
     /// exactly the returned prefix before appending the newly admitted snapshot.
     #[pyo3(signature = (retained_bytes, now_ns))]
-    fn admit(&mut self, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
+    fn admit(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
         crate::host::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&mut self.0, retained_bytes, now_ns);
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&mut self.0, retained_bytes, now_ns));
         Ok(out)
     }
 
     #[pyo3(signature = (now_ns))]
-    fn expire(&mut self, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
+    fn expire(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&mut self.0, now_ns);
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&mut self.0, now_ns));
         Ok(out)
     }
 
     #[getter]
-    fn diagnostics(&self) -> PyResult<::std::vec::Vec<(::std::string::String, u64)>> {
+    fn diagnostics(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<(::std::string::String, u64)>> {
         crate::host::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::diagnostics(&self.0);
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::diagnostics(&self.0));
         Ok(out)
     }
 }
@@ -725,9 +725,9 @@ fn _extract_trace_parents_core_format_trace_parent_span_id(obj: &Bound<'_, PyAny
 /// Wire values from the SDK's integer identifiers. Invalid parents are omitted.
 #[pyfunction]
 #[pyo3(signature = (trace_id, span_id, sampled))]
-pub fn _core_format_trace_parent(#[pyo3(from_py_with = _extract_trace_parents_core_format_trace_parent_trace_id)] trace_id: u128, #[pyo3(from_py_with = _extract_trace_parents_core_format_trace_parent_span_id)] span_id: u64, sampled: bool) -> PyResult<::std::option::Option<::std::string::String>> {
+pub fn _core_format_trace_parent(py: Python<'_>, #[pyo3(from_py_with = _extract_trace_parents_core_format_trace_parent_trace_id)] trace_id: u128, #[pyo3(from_py_with = _extract_trace_parents_core_format_trace_parent_span_id)] span_id: u64, sampled: bool) -> PyResult<::std::option::Option<::std::string::String>> {
     crate::host::check_pid()?;
-    let out = <TraceParentsImpl as ::lk_agents_abi::telemetry::transport::TraceParents>::_core_format_trace_parent(trace_id, span_id, sampled);
+    let out = py.detach(|| <TraceParentsImpl as ::lk_agents_abi::telemetry::transport::TraceParents>::_core_format_trace_parent(trace_id, span_id, sampled));
     Ok(out)
 }
 
@@ -735,9 +735,9 @@ pub fn _core_format_trace_parent(#[pyo3(from_py_with = _extract_trace_parents_co
 /// request.
 #[pyfunction]
 #[pyo3(signature = (traceparent = None))]
-pub fn _core_trace_parent(traceparent: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<(u128, u64, bool)>> {
+pub fn _core_trace_parent(py: Python<'_>, traceparent: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<(u128, u64, bool)>> {
     crate::host::check_pid()?;
-    let out = <TraceParentsImpl as ::lk_agents_abi::telemetry::transport::TraceParents>::_core_trace_parent(traceparent);
+    let out = py.detach(|| <TraceParentsImpl as ::lk_agents_abi::telemetry::transport::TraceParents>::_core_trace_parent(traceparent));
     Ok(out)
 }
 
@@ -756,17 +756,17 @@ pub struct CoreSessionReportUpload(pub(crate) ::std::sync::Arc<CoreSessionReport
 impl CoreSessionReportUpload {
     #[new]
     #[pyo3(signature = (api_key, api_secret))]
-    fn new(api_key: ::std::string::String, api_secret: ::std::string::String) -> PyResult<CoreSessionReportUpload> {
+    fn new(py: Python<'_>, api_key: ::std::string::String, api_secret: ::std::string::String) -> PyResult<CoreSessionReportUpload> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::new(&env, api_key, api_secret).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::new(&env, api_key, api_secret)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(CoreSessionReportUpload(::std::sync::Arc::new(out)))
     }
 
     /// A fresh LiveKit observability credential. No token policy lives in the host adapter.
-    fn bearer(&self) -> PyResult<::std::string::String> {
+    fn bearer(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::bearer(&self.0).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::bearer(&self.0)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -803,57 +803,57 @@ pub struct CorePreparedTranscript(pub(crate) ::std::sync::Arc<CorePreparedTransc
 #[pymethods]
 impl CorePreparedTranscript {
     #[new]
-    fn new() -> PyResult<CorePreparedTranscript> {
+    fn new(py: Python<'_>) -> PyResult<CorePreparedTranscript> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::new(&env).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::new(&env)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(CorePreparedTranscript(::std::sync::Arc::new(out)))
     }
 
     /// Maximum items per append batch before the adapter returns control to its event loop.
     #[getter]
-    fn input_batch_size(&self) -> PyResult<usize> {
+    fn input_batch_size(&self, py: Python<'_>) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::input_batch_size(&self.0);
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::input_batch_size(&self.0));
         Ok(out)
     }
 
     /// Which media parts belong to the transcript's native projection (image, audio).
-    fn content_policy(&self) -> PyResult<(bool, bool)> {
+    fn content_policy(&self, py: Python<'_>) -> PyResult<(bool, bool)> {
         crate::host::check_pid()?;
-        let out = <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::content_policy(&self.0);
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::content_policy(&self.0));
         Ok(out)
     }
 
     /// Validate host collection lengths and the shared retained-byte verdict before converting an
     /// item's fields. These scalar facts cannot allocate an unbounded native item.
     #[pyo3(signature = (items, item_bytes))]
-    fn check_input(&self, #[pyo3(from_py_with = _extract_prepared_transcript_check_input_items)] items: usize, #[pyo3(from_py_with = _extract_prepared_transcript_check_input_item_bytes)] item_bytes: usize) -> PyResult<()> {
+    fn check_input(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_prepared_transcript_check_input_items)] items: usize, #[pyo3(from_py_with = _extract_prepared_transcript_check_input_item_bytes)] item_bytes: usize) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::check_input(&self.0, items, item_bytes).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::check_input(&self.0, items, item_bytes)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     #[pyo3(signature = (item))]
-    fn append(&self, item: Bound<'_, PyAny>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let item = crate::generated::records::chat_items::chat_item_from_py(&item)?;
-        <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append(&self.0, item).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append(&self.0, item)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
-    fn finish(&self) -> PyResult<::std::string::String> {
+    fn finish(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish(&self.0).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish(&self.0)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// Append one already projected event to the same bounded recording preparation.
     #[pyo3(signature = (event))]
-    fn append_event(&self, event: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn append_event(&self, py: Python<'_>, event: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
         let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
-        let out = <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append_event(&self.0, event).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append_event(&self.0, event)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 

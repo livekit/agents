@@ -15,8 +15,8 @@ type RuntimeLoadImpl = <crate::Selected as super::Implementations>::RuntimeLoad;
 
 /// Each async worker's total busy seconds so far; empty before the runtime started.
 #[pyfunction]
-pub fn runtime_busy_seconds() -> PyResult<::std::vec::Vec<f64>> {
-    let out = <RuntimeLoadImpl as ::lk_agents_abi::metrics::RuntimeLoad>::runtime_busy_seconds();
+pub fn runtime_busy_seconds(py: Python<'_>) -> PyResult<::std::vec::Vec<f64>> {
+    let out = py.detach(|| <RuntimeLoadImpl as ::lk_agents_abi::metrics::RuntimeLoad>::runtime_busy_seconds());
     Ok(out)
 }
 
@@ -30,7 +30,7 @@ type MetricsRecordsImpl = <crate::Selected as super::Implementations>::MetricsRe
 pub fn metrics_log_fields<'py>(py: Python<'py>, metrics: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     crate::host::check_pid()?;
     let metrics = crate::generated::records::metrics::agent_metrics_from_py(&metrics)?;
-    let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::metrics_log_fields(metrics);
+    let out = py.detach(|| <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::metrics_log_fields(metrics));
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>({ let (x0, x1,) = value; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::lk_agents_abi::python::extra_to_py(py, &x1)?.into_any()])?.into_any() })).transpose()?)
 }
 
@@ -41,7 +41,7 @@ pub fn metrics_log_fields<'py>(py: Python<'py>, metrics: Bound<'_, PyAny>) -> Py
 pub fn otel_turn_records<'py>(py: Python<'py>, report: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let report = report.map(|v| crate::generated::records::chat_items::metrics_report_from_py(&v)).transpose()?;
-    let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_turn_records(report);
+    let out = py.detach(|| <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_turn_records(report));
     Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2, x3,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?, crate::generated::records::telemetry::otel_value_to_py(py, x2)?, { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x3 { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() }])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
 }
 
@@ -52,6 +52,6 @@ pub fn otel_turn_records<'py>(py: Python<'py>, report: Option<Bound<'_, PyAny>>)
 pub fn otel_usage_records<'py>(py: Python<'py>, metrics: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let metrics = crate::generated::records::metrics::agent_metrics_from_py(&metrics)?;
-    let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_usage_records(metrics);
+    let out = py.detach(|| <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_usage_records(metrics));
     Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2, x3,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?, crate::generated::records::telemetry::otel_value_to_py(py, x2)?, { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x3 { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() }])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
 }

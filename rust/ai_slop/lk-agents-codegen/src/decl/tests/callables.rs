@@ -505,7 +505,7 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let code = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
     assert!(
-        code.contains("let out = <MatrixImpl as ::lk_agents_abi::llm::class::Matrix>::values();")
+        code.contains("let out = py.detach(|| <MatrixImpl as ::lk_agents_abi::llm::class::Matrix>::values());")
             && code.contains("for (k, x) in out {"),
         "the adapter must retain the native enum-keyed map: {code}"
     );
@@ -632,7 +632,7 @@ fn writable_property_keeps_its_name_validates_the_value_and_propagates_failures(
     let guard = "crate::host::check_pid()?";
     assert_eq!(adapter.matches(guard).count(), 1, "only this setter overrides the PID policy");
     assert!(adapter.find(guard).unwrap() < adapter.find(call).unwrap(), "{adapter}");
-    assert!(adapter.contains(&format!("{call}.map_err(")), "{adapter}");
+    assert!(adapter.contains(&format!("{call}).map_err(")), "{adapter}");
     assert!(adapter.contains("HostException>::to_py_err(&e)"), "{adapter}");
     assert!(!adapter.contains("#[pyo3(name = \"target\")]"), "the setter annotation owns its name");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
@@ -846,13 +846,15 @@ fn static_class_calls_construct_values_and_compare_borrowed_instances() {
     let text = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
     assert!(
         text.contains(
-            "#[staticmethod]\n    #[pyo3(signature = (parts))]\n    fn from_parts(parts:"
+            "#[staticmethod]\n    #[pyo3(signature = (parts))]\n    fn from_parts(py: Python<'_>, parts:"
         ),
         "{text}"
     );
     assert!(text.contains("::from_parts(parts)") && !text.contains("::from_parts(&self"), "{text}");
     assert!(
-        text.contains("other: PyRef<'_, Value>") && text.contains("::equal(&self.0, &*other.0)"),
+        text.contains("other: PyRef<'_, Value>")
+            && text.contains("let other = &*other.0;")
+            && text.contains("::equal(&self.0, other))"),
         "{text}"
     );
     let equality = text.split("#[pyo3(name = \"__eq__\")]").nth(1).unwrap();

@@ -19,66 +19,66 @@ fn _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns(obj: &Bound
 
 #[pyfunction]
 #[pyo3(signature = (parts, assistant))]
-pub fn chat_message_text_content(parts: ::std::vec::Vec<::std::string::String>, assistant: bool) -> PyResult<::std::option::Option<::std::string::String>> {
+pub fn chat_message_text_content(py: Python<'_>, parts: ::std::vec::Vec<::std::string::String>, assistant: bool) -> PyResult<::std::option::Option<::std::string::String>> {
     crate::host::check_pid()?;
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_message_text_content(parts, assistant);
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_message_text_content(parts, assistant));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (provider))]
 pub fn supported_nonverbals<'py>(py: Python<'py>, provider: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::supported_nonverbals(provider);
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::supported_nonverbals(provider));
     Ok(crate::generated::records::tts::markup_info_to_py(py, out)?)
 }
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn split_all_markup(text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_all_markup(text);
+pub fn split_all_markup(py: Python<'_>, text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_all_markup(text));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn strip_all_markup(text: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_all_markup(text);
+pub fn strip_all_markup(py: Python<'_>, text: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_all_markup(text));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn strip_expr_markup(text: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_expr_markup(text);
+pub fn strip_expr_markup(py: Python<'_>, text: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_expr_markup(text));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn split_expr_markup(text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_expr_markup(text);
+pub fn split_expr_markup(py: Python<'_>, text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_expr_markup(text));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (tag_name, content = None, attrs = None))]
-pub fn to_xml(tag_name: ::std::string::String, content: ::std::option::Option<::std::string::String>, attrs: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<::std::string::String> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::to_xml(tag_name, content, attrs);
+pub fn to_xml(py: Python<'_>, tag_name: ::std::string::String, content: ::std::option::Option<::std::string::String>, attrs: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::to_xml(tag_name, content, attrs));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (summary))]
-pub fn chat_history_summary_xml(summary: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_history_summary_xml(summary);
+pub fn chat_history_summary_xml(py: Python<'_>, summary: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_history_summary_xml(summary));
     Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (items, keep_last_turns))]
-pub fn chat_ctx_summarize_plan(items: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns)] keep_last_turns: usize) -> PyResult<::std::option::Option<(usize, ::std::vec::Vec<usize>, ::std::string::String, ::std::string::String, f64)>> {
+pub fn chat_ctx_summarize_plan(py: Python<'_>, items: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns)] keep_last_turns: usize) -> PyResult<::std::option::Option<(usize, ::std::vec::Vec<usize>, ::std::string::String, ::std::string::String, f64)>> {
     let items = items.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_ctx_summarize_plan(items, keep_last_turns);
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_ctx_summarize_plan(items, keep_last_turns));
     Ok(out)
 }
 
@@ -96,36 +96,36 @@ pub struct Markup(pub(crate) ::std::sync::Arc<MarkupImpl>);
 impl Markup {
     #[new]
     #[pyo3(signature = (provider_key))]
-    fn new(provider_key: ::std::string::String) -> PyResult<Markup> {
-        let out = <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::from_provider_key(provider_key);
+    fn new(py: Python<'_>, provider_key: ::std::string::String) -> PyResult<Markup> {
+        let out = py.detach(|| <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::from_provider_key(provider_key));
         Ok(Markup(::std::sync::Arc::new(out)))
     }
 
     /// The provider's key into the markup tables, or `""` for no markup.
     #[pyo3(name = "_provider_key")]
-    fn provider_key(&self) -> PyResult<::std::string::String> {
-        let out = <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::provider_key(&self.0);
+    fn provider_key(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::provider_key(&self.0));
         Ok(out)
     }
 
     /// The instructions teaching the LLM this voice's markup, `None` without markup.
     #[pyo3(signature = (*, speech_steering = None))]
-    fn llm_instructions(&self, speech_steering: ::std::option::Option<::lk_agents_abi::tts::markup::SpeechSteering>) -> PyResult<::std::option::Option<::std::string::String>> {
-        let out = <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::llm_instructions(&self.0, speech_steering);
+    fn llm_instructions(&self, py: Python<'_>, speech_steering: ::std::option::Option<::lk_agents_abi::tts::markup::SpeechSteering>) -> PyResult<::std::option::Option<::std::string::String>> {
+        let out = py.detach(|| <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::llm_instructions(&self.0, speech_steering));
         Ok(out)
     }
 
     /// Fix common LLM markup mistakes (e.g. unclosed self-closing tags).
     #[pyo3(signature = (text))]
-    fn normalize(&self, text: ::std::string::String) -> PyResult<::std::string::String> {
-        let out = <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::normalize(&self.0, text);
+    fn normalize(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::normalize(&self.0, text));
         Ok(out)
     }
 
     /// Lower the framework's markup to the provider's native syntax.
     #[pyo3(signature = (text))]
-    fn convert(&self, text: ::std::string::String) -> PyResult<::std::string::String> {
-        let out = <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::convert(&self.0, text);
+    fn convert(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::convert(&self.0, text));
         Ok(out)
     }
 }
@@ -140,30 +140,30 @@ pub struct TranscriptMarkupStripper(pub(crate) TranscriptMarkupStripperImpl);
 #[pymethods]
 impl TranscriptMarkupStripper {
     #[new]
-    fn new() -> PyResult<TranscriptMarkupStripper> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::new();
+    fn new(py: Python<'_>) -> PyResult<TranscriptMarkupStripper> {
+        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::new());
         Ok(TranscriptMarkupStripper(out))
     }
 
     #[pyo3(signature = (text))]
-    fn push(&mut self, text: ::std::string::String) -> PyResult<::std::string::String> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::push(&mut self.0, text);
+    fn push(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::push(&mut self.0, text));
         Ok(out)
     }
 
-    fn flush(&mut self) -> PyResult<::std::string::String> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::flush(&mut self.0);
+    fn flush(&mut self, py: Python<'_>) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::flush(&mut self.0));
         Ok(out)
     }
 
     #[getter]
-    fn tags(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0);
+    fn tags(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>> {
+        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0));
         Ok(out)
     }
 
-    fn expression_attribute(&self) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::expression_attribute(&self.0);
+    fn expression_attribute(&self, py: Python<'_>) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>> {
+        let out = py.detach(|| <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::expression_attribute(&self.0));
         Ok(out)
     }
 }
@@ -211,30 +211,30 @@ pub struct SentencePacer(pub(crate) SentencePacerImpl);
 impl SentencePacer {
     #[new]
     #[pyo3(signature = (minimum_audio, maximum_text))]
-    fn new(#[pyo3(from_py_with = _extract_sentence_pacer_new_minimum_audio)] minimum_audio: f64, #[pyo3(from_py_with = _extract_sentence_pacer_new_maximum_text)] maximum_text: usize) -> PyResult<SentencePacer> {
+    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_sentence_pacer_new_minimum_audio)] minimum_audio: f64, #[pyo3(from_py_with = _extract_sentence_pacer_new_maximum_text)] maximum_text: usize) -> PyResult<SentencePacer> {
         crate::host::check_pid()?;
-        let out = <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::new(minimum_audio, maximum_text);
+        let out = py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::new(minimum_audio, maximum_text));
         Ok(SentencePacer(out))
     }
 
     #[pyo3(signature = (text))]
-    fn push(&mut self, text: ::std::string::String) -> PyResult<()> {
+    fn push(&mut self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::push(&mut self.0, text);
+        py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::push(&mut self.0, text));
         Ok(())
     }
 
-    fn end(&mut self) -> PyResult<()> {
+    fn end(&mut self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::end(&mut self.0);
+        py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::end(&mut self.0));
         Ok(())
     }
 
     /// Text to emit, remaining audio for diagnostics, and next wakeup (None means done).
     #[pyo3(signature = (now, audio))]
-    fn poll(&mut self, #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: f64, #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)] audio: f64) -> PyResult<(::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>)> {
+    fn poll(&mut self, py: Python<'_>, #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: f64, #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)] audio: f64) -> PyResult<(::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>)> {
         crate::host::check_pid()?;
-        let out = <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::poll(&mut self.0, now, audio);
+        let out = py.detach(|| <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::poll(&mut self.0, now, audio));
         Ok(out)
     }
 }
@@ -250,21 +250,21 @@ pub struct TtsStream(pub(crate) ::std::sync::Arc<TtsStreamImpl>);
 #[pymethods]
 impl TtsStream {
     #[pyo3(signature = (text))]
-    fn push_text(&self, text: ::std::string::String) -> PyResult<()> {
+    fn push_text(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::push_text(&self.0, text).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::push_text(&self.0, text)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
-    fn flush(&self) -> PyResult<()> {
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::flush(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::flush(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
-    fn end_input(&self) -> PyResult<()> {
+    fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::end_input(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::end_input(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -304,8 +304,8 @@ fn _extract_synthesis_checks_validate_synthesis_segments(obj: &Bound<'_, PyAny>)
 /// ``segments`` as ``(expected, actual)``) failed, or ``None``.
 #[pyfunction]
 #[pyo3(signature = (text, duration, segments))]
-pub fn validate_synthesis(text: ::std::string::String, #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_duration)] duration: f64, #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_segments)] segments: ::std::option::Option<(usize, usize)>) -> PyResult<::std::option::Option<::std::string::String>> {
-    let out = <SynthesisChecksImpl as ::lk_agents_abi::tts::streams::SynthesisChecks>::validate_synthesis(&text, duration, segments);
+pub fn validate_synthesis(py: Python<'_>, text: ::std::string::String, #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_duration)] duration: f64, #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_segments)] segments: ::std::option::Option<(usize, usize)>) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = py.detach(|| <SynthesisChecksImpl as ::lk_agents_abi::tts::streams::SynthesisChecks>::validate_synthesis(&text, duration, segments));
     Ok(out)
 }
 
