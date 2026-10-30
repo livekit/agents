@@ -2621,7 +2621,7 @@ requires-dist = [
 [[package]]
 name = "livekit-example-homepage"
 version = "0"
-source = { virtual = "examples/homepage" }
+source = { virtual = "examples/homepage/livekit-expert" }
 dependencies = [
     { name = "livekit-agents" },
     { name = "livekit-plugins-ai-coustics" },

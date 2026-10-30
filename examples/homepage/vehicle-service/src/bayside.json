@@ -1,0 +1,144 @@
+{
+  "dealership": "Bayside BMW",
+  "timezone": "America/Los_Angeles",
+  "advisors": ["Dana Whitfield", "Marcus Lee", "Priya Nair"],
+  "slot_times": ["07:30", "08:00", "09:00", "10:30", "13:00", "14:30", "16:00"],
+  "booked_slots": [[0, 1], [2, 2], [3, 0], [3, 4], [4, 3]],
+  "closes": "17:30",
+  "bookable_days": 5,
+  "menu": {
+    "oil_change": { "label": "Oil change", "price": 79, "hours": 1.0 },
+    "tire_rotation": { "label": "Tire rotation", "price": 39, "hours": 0.5 },
+    "diagnostic": { "label": "Diagnostic", "price": 159, "hours": 2.0 },
+    "warranty_repair": { "label": "Warranty repair", "price": 0, "hours": 4.0 }
+  },
+  "warranty": { "years": 3, "miles": 36000 },
+  "loaner_min_hours": 3.0,
+  "shuttle_miles": 10,
+  "recalls": [
+    {
+      "id": "23V-418",
+      "model": "X3",
+      "years": [2023, 2023],
+      "title": "Rear-view camera software update",
+      "hours": 0.5
+    }
+  ],
+  "likely_causes": [
+    {
+      "sound": "grinding",
+      "when": "braking",
+      "cause": "brake pads worn down to the metal",
+      "advice": "It may not stop well: drive it as little as possible until it's in."
+    },
+    {
+      "sound": "squealing",
+      "when": "braking",
+      "cause": "brake pads near the end of their life",
+      "advice": "Fine to drive in the meantime, but worth looking at soon."
+    },
+    {
+      "sound": "clunking",
+      "when": "over_bumps",
+      "cause": "a worn suspension part, like a sway bar link",
+      "advice": "Usually fine to drive carefully until it's looked at."
+    },
+    {
+      "sound": "clunking",
+      "when": "turning",
+      "cause": "a worn suspension part, like a control arm bushing",
+      "advice": "Usually fine to drive carefully until it's looked at."
+    },
+    {
+      "sound": "humming",
+      "when": "at_speed",
+      "cause": "a worn wheel bearing, or uneven tire wear",
+      "advice": "Fine to drive gently, but a bearing gets louder as it wears."
+    },
+    {
+      "sound": "clicking",
+      "when": "turning",
+      "cause": "a worn CV joint on the axle",
+      "advice": "Fine to drive gently until it's looked at."
+    },
+    {
+      "sound": "rattling",
+      "when": "idling",
+      "cause": "a loose heat shield under the car",
+      "advice": "Usually harmless, and fine to drive."
+    },
+    {
+      "sound": "rattling",
+      "when": "cold_start",
+      "cause": "a loose heat shield under the car",
+      "advice": "Usually harmless, and fine to drive."
+    }
+  ],
+  "customers": [
+    {
+      "name": "Alex Morgan",
+      "phone": "4155550142",
+      "vehicles": [
+        {
+          "id": "V1",
+          "year": 2023,
+          "model": "X3",
+          "miles": 21400,
+          "in_service_days_ago": 940
+        },
+        {
+          "id": "V2",
+          "year": 2019,
+          "model": "3 Series",
+          "trim": "330i",
+          "miles": 58100,
+          "in_service": "2019-06-14"
+        }
+      ],
+      "appointment": {
+        "vehicle_id": "V2",
+        "services": ["tire_rotation"],
+        "time": "14:30",
+        "ride": "wait"
+      }
+    }
+  ],
+  "shop_visit": {
+    "vehicle_id": "V1",
+    "dropped_off": "07:30",
+    "concern": "grinding from the front when braking",
+    "done": ["diagnostic", "recall"],
+    "labor_rate": 118,
+    "same_day_hours": 2.0,
+    "next_day_ready": "10:00",
+    "shuttle_lead_minutes": 30,
+    "findings": [
+      {
+        "id": "front_brakes",
+        "title": "Front brake pads and rotors",
+        "spoken": "the front brake pads are worn through to the metal, and that's scored both front rotors",
+        "found": "The front pads are worn through to the metal backing plate, and that's scored both front rotors. That's the grinding.",
+        "why": "Metal on metal stops the car worse every mile, and scored rotors can't be resurfaced, so the pads and rotors are replaced together.",
+        "parts": 312,
+        "labor_hours": 1.5,
+        "urgency": "now",
+        "can_wait": "No: it shouldn't be driven like this.",
+        "warranty": "Not covered: brakes are a wear item.",
+        "cheaper_option": "None: with the rotors scored, new pads alone wouldn't stop right."
+      },
+      {
+        "id": "rear_brakes",
+        "title": "Rear brake pads",
+        "spoken": "the rear brake pads are getting low, but they have some life left",
+        "found": "The rear pads are at 4 millimeters; new is 10.",
+        "why": "They're wearing normally and still have some life left.",
+        "parts": 96,
+        "labor_hours": 1.0,
+        "urgency": "next_visit",
+        "can_wait": "Yes: fine until the next visit, in the next 3,000 to 5,000 miles.",
+        "warranty": "Not covered: brakes are a wear item.",
+        "cheaper_option": "None, and there's no need to do them today."
+      }
+    ]
+  }
+}

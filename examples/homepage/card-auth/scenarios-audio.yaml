@@ -1,0 +1,22 @@
+# Scenarios that need real silence or speech, so they only run in audio:
+# lk agent simulate audio --scenarios scenarios-audio.yaml
+id: SCNG_v3CDkehbaD4K
+name: Kestrel Bank card verification demo, audio only
+scenarios:
+  - id: SCN_RBzkAYEcGQPU
+    label: Caller goes quiet and gets hung up on
+    instructions: |
+      PERSONA: Someone who put the phone down right after calling and never picked it back up.
+      OPENING LINE: "Hi, I need to lock my card."
+      After your opening line, say nothing at all for the rest of the call, whatever Avery asks.
+      Stay silent, and don't hang up.
+    agent_expectations: >
+      Once the caller goes quiet, asks once, in a few words, whether they're still there. When
+      the line stays quiet, says a short goodbye and ends the call. Never says the caller is
+      verified and never locks the card.
+    tags:
+      feature: idle
+    userdata:
+      expected:
+        verified: false
+        card: active

@@ -22,7 +22,7 @@ ai-coustics voice isolation.
 ## Run locally
 
 Install the workspace dependencies and provide LiveKit Cloud credentials in
-`../.env` or the environment:
+`../../.env` or the environment:
 
 ```bash
 uv sync --all-extras --dev   # from the repository root
