@@ -91,7 +91,9 @@ impl Driver {
                 metadata: Some(id.metadata()),
             };
             let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record));
-            // The stream's request takes the report here, also after the stream ended.
+            // The stream's request takes the report here, also after the stream ended. A report
+            // never creates a request: past the late window its delta is dropped and the request
+            // stays unmeasured.
             let ended = self.session.ended_stt.filter(|(ended, _)| *ended == stream);
             let request = self.session.stt_requests.get(&stream).copied().or(ended.map(|e| e.1));
             if let Some(request) = request {
@@ -100,7 +102,7 @@ impl Driver {
             out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                 metrics,
                 speech: None,
-                counted: request.is_some(),
+                counted: true,
             });
             return;
         }

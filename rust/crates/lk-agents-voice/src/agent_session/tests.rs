@@ -4,9 +4,9 @@ use super::*;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::lifecycle::SessionStartPlans;
 use crate::events::SessionEvent;
-use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::session_effects::SessionStart as _;
+use lk_agents_core::tts::markup::ChatMessageExt;
 
 #[test]
 fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
@@ -298,4 +298,30 @@ fn an_overlap_verdict_reports_its_interruption_metrics() {
         _ => None,
     });
     assert_eq!(reported, Some(metrics));
+}
+
+// Catches: a recognition stream's usage report arriving after a later stream also ended was
+// counted as a request of its own (5168d8080).
+#[test]
+fn a_late_usage_report_never_creates_a_request() {
+    use crate::audio::Tagged;
+    use lk_agents_abi::Ts;
+    use lk_agents_abi::resources::ResourceId;
+    use lk_agents_abi::stt::events::{RecognitionUsage, SpeechEvent, SpeechEventType};
+    use lk_agents_core::usage::ModelKind;
+
+    let driver = &mut driver();
+    for stream in [1, 2] {
+        let request = driver.session.start_request(ModelKind::Stt, "deepgram", "nova-3");
+        driver.session.stt_requests.insert(ResourceId(stream), request);
+    }
+    driver.stt_stream_ended(ResourceId(1));
+    driver.stt_stream_ended(ResourceId(2));
+    let mut out = driver.out();
+    let mut report = SpeechEvent::new(SpeechEventType::RecognitionUsage);
+    report.recognition_usage =
+        Some(RecognitionUsage { audio_duration: Some(2.0), ..Default::default() });
+    driver.on_stt(Ts::ZERO, Tagged { stream: ResourceId(1), item: report }, &mut out);
+    driver.settle_step(out);
+    assert_eq!(driver.session.usage.snapshot().requests, 2);
 }
