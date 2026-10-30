@@ -13,7 +13,7 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
-use lk_agents_net::attempts::RequestPolicy;
+use lk_agents_core::attempts::RequestPolicy;
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
@@ -403,7 +403,7 @@ async fn main_task_inner(
             num_retries += 1;
         } else {
             ctx.emit_error(err.request, err.error.clone(), false);
-            return match lk_agents_net::attempts::terminal_failure(
+            return match lk_agents_core::attempts::terminal_failure(
                 RequestKind::Interruption,
                 &err.error,
                 ctx.config.conn_options.max_retry,

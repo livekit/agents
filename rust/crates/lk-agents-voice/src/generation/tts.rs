@@ -1,8 +1,8 @@
 //! Streaming synthesis decisions: feed ordering, completion and aligned captions.
 
 use crate::transcription::{Heard, Visible};
-use lk_agents_abi::TimedString;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{TimedString, Ts};
 
 /// About five seconds of speculative 20 ms frames. Runtime backpressures the provider at this bound.
 pub const MAX_BUFFERED_TTS_FRAMES: usize = 256;
@@ -225,7 +225,8 @@ pub struct Lost {
 
 /// The accumulated input of a synthesis attempt, preserved for a retry.
 pub struct SynthesisAttempt {
-    pub retry: super::Attempt,
+    /// The reply's outer retry of its synthesis, on the session's TTS connection options.
+    pub retry: lk_agents_core::attempts::Attempts,
     pub opening: Visible,
     pub input_done: bool,
     synchronized: Option<String>,
@@ -245,9 +246,9 @@ pub enum RetryOutcome {
 }
 
 impl SynthesisAttempt {
-    pub fn new(options: lk_agents_abi::ApiConnectOptions, opening: Visible) -> Self {
+    pub fn new(options: &lk_agents_abi::ApiConnectOptions, opening: Visible, now: Ts) -> Self {
         Self {
-            retry: super::Attempt::new(options),
+            retry: lk_agents_core::attempts::Attempts::retrying(options, now),
             opening,
             input_done: false,
             synchronized: None,
@@ -282,7 +283,7 @@ impl SynthesisAttempt {
         match error {
             crate::agent_session::DriverError::Provider(error) => {
                 if produced {
-                    self.retry.produced_output();
+                    self.retry.delivered();
                 }
                 AttemptFailure::Retry(error)
             }

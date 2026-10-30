@@ -2,7 +2,7 @@
 
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};
-use lk_agents_net::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]

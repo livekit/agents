@@ -16,12 +16,12 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 pub use lk_agents_abi::voice::session_options::Instructions;
 use lk_agents_abi::{
-    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FrameId,
-    FunctionCall, FunctionCallOutput, Llm, MetricsReport, Role, ToolSpec, Tts,
+    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FrameId, FunctionCall,
+    FunctionCallOutput, Llm, MetricsReport, Role, ToolSpec, Tts,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// The output of an injected in-progress tool call, so the model waits instead of re-issuing it.
 pub const RUNNING_TOOL_PLACEHOLDER: &str = "The tool call is still in progress.";
@@ -398,8 +398,8 @@ impl ExpressiveLayers {
         tts: Option<&lk_agents_abi::resources::TtsRef>,
         modality: lk_agents_abi::Modality,
     ) -> Option<String> {
-        use lk_agents_core::tts::markup::SpeechSteering;
         use lk_agents_abi::voice::session_options::Instructions;
+        use lk_agents_core::tts::markup::SpeechSteering;
         let tts = tts?;
         let markup = tts.markup;
         markup.llm_instructions(None)?;
@@ -545,60 +545,6 @@ fn lookup(data: &serde_json::Value, field: &str) -> Option<String> {
     })
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Attempt {
-    budget: ApiConnectOptions,
-    /// Attempts made so far, the current one included. Starts at one.
-    attempt: u32,
-    /// This attempt has produced output, so no failure of it may be retried.
-    produced: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
-pub enum Retry {
-    /// Wait `after`, then attempt again. `attempt` is the number of the attempt that failed.
-    After { attempt: u32, after: Duration },
-    /// Terminal: budget spent, not retryable, or output already produced.
-    Never,
-}
-
-impl Attempt {
-    pub fn new(budget: ApiConnectOptions) -> Self {
-        Attempt { budget, attempt: 1, produced: false }
-    }
-
-    /// Every later failure is terminal.
-    pub fn produced_output(&mut self) {
-        self.produced = true;
-    }
-
-    /// The attempt failed; on [`Retry::After`] the counter has advanced. A client cancellation
-    /// (499) of a completion or synthesis, output already produced, a non-retryable error or a
-    /// spent allowance ends it; the delay is the connection options' schedule.
-    pub fn failed(
-        &mut self,
-        error: &lk_agents_abi::errors::ProviderError,
-        kind: lk_agents_abi::types::retry::RequestKind,
-    ) -> Retry {
-        use lk_agents_abi::types::retry::RequestKind::{Llm, TtsBatch, TtsStream};
-        let retries_so_far = self.attempt - 1;
-        let cancelled =
-            matches!(kind, Llm | TtsBatch | TtsStream) && error.status_code() == Some(499);
-        if self.produced
-            || cancelled
-            || !error.retryable()
-            || retries_so_far >= self.budget.max_retry
-        {
-            return Retry::Never;
-        }
-        let delay = self.budget.interval_for_retry(retries_so_far);
-        let failed = self.attempt;
-        self.attempt += 1;
-        Retry::After { attempt: failed, after: Duration::from_secs_f64(delay.max(0.0)) }
-    }
-}
-
 /// `say()` and `generate_reply()` share one pipeline, which keeps `say()` interruptible, scheduled
 /// and metered like every speech.
 #[derive(Debug)]
@@ -611,7 +557,9 @@ pub enum ReplySource {
     TextStream,
     /// **Pre-synthesised** audio, played instead of asking the TTS; `text` is still committed.
     /// The frames are the host handle's.
-    Audio { text: String },
+    Audio {
+        text: String,
+    },
     /// Runtime installs this speech's player after admission.
     Realtime,
 }
@@ -934,11 +882,12 @@ pub enum GenEvent {
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
-    use lk_agents_core::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
+    use std::time::Duration;
     use lk_agents_abi::Modality;
     use lk_agents_abi::resources::{ResourceId, TtsRef};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
     use lk_agents_abi::{ChatContext, TtsCapabilities};
+    use lk_agents_core::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
 
     fn tts(provider: &str, streaming: bool, lowers_markup: bool) -> TtsRef {
         TtsRef {

@@ -1,12 +1,9 @@
 //! Generated words, streaming segments and per-request model observations.
 
-use super::{Attempt, Retry};
-use crate::trace::ProviderKind;
 use crate::transcription::Visible;
 use crate::transcription::VisibleStream;
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::LlmMetrics;
-use lk_agents_abi::{Extra, LlmChunk, Ts};
+use lk_agents_abi::{Extra, LlmChunk};
 use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
 
 pub enum WordEffect {
@@ -124,29 +121,5 @@ impl LlmGenerationData {
         let mut record = self.metrics.finish(false, || (now, context))?;
         record.speech_id = Some(speech_id.to_owned());
         Some(record)
-    }
-}
-
-pub struct RetryWait {
-    pub failed_attempt: u32,
-    pub at: Ts,
-}
-
-/// A failed attempt's retry eligibility and absolute wake time.
-pub fn retry_after(
-    attempt: &mut Attempt,
-    leg: ProviderKind,
-    error: &ProviderError,
-    now: Ts,
-) -> Option<RetryWait> {
-    let kind = match leg {
-        ProviderKind::Llm => lk_agents_abi::types::retry::RequestKind::Llm,
-        ProviderKind::Tts => lk_agents_abi::types::retry::RequestKind::TtsStream,
-    };
-    match attempt.failed(error, kind) {
-        Retry::After { attempt, after } => {
-            Some(RetryWait { failed_attempt: attempt, at: now.saturating_add(after) })
-        }
-        Retry::Never => None,
     }
 }

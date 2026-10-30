@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
 pub use lifecycle::ProviderSession;
-use lk_agents_net::attempts::AttemptFailure;
+use lk_agents_core::attempts::AttemptFailure;
 use lk_agents_net::transport::HttpRequest;
 
 /// The rate when the gateway's answer names none (older gateways); the gateway is authoritative.

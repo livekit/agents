@@ -10,6 +10,7 @@
 /// runtime): the declared classes a core implements outright.
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
+    pub use lk_agents_core::attempts::ConnectOptionsRules;
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::chat_plans::ChatPlans;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
@@ -22,14 +23,12 @@ pub mod cores {
     pub use lk_agents_core::telemetry::report::ReportProjection;
     pub use lk_agents_core::telemetry::transport::TraceParents;
     pub use lk_agents_core::text::Languages;
-    pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_core::tokenize::{
         BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,
     };
+    pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
+    pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper};
     pub use lk_agents_voice::tokenize::SpeechTokenizer;
-    pub use lk_agents_core::tts::markup::{
-        ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper,
-    };
 }
 
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it

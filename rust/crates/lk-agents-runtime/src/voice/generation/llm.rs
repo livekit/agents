@@ -2,17 +2,17 @@
 
 use super::tools::ToolStep;
 use crate::voice::session::SessionShared;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
+use lk_agents_core::attempts::{AttemptStep, Attempts};
 use lk_agents_core::telemetry::provider::Context;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::generation::Attempt;
 pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
-use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read, retry_after};
+use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
@@ -128,7 +128,7 @@ async fn perform_llm_inference(
     };
     let (speech, step) = (handle.id(), ctx.step);
     // The engine owns the budget; the request carries the same options.
-    let mut attempt = Attempt::new(req.conn_options.clone());
+    let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
     loop {
         shared.trace(GenerationStep::ChatRequested {
             speech,
@@ -169,7 +169,7 @@ async fn perform_llm_inference(
                     Ok(()) => return Ok(data),
                     Err((error, produced)) => {
                         if produced {
-                            attempt.produced_output();
+                            attempts.delivered();
                         }
                         (error, Some(data))
                     }
@@ -177,7 +177,7 @@ async fn perform_llm_inference(
             }
         };
         let failed = |e, r| llm.failed(e, r);
-        match retry(shared, handle, &mut attempt, ProviderKind::Llm, &error, &failed).await {
+        match retry(shared, handle, &mut attempts, ProviderKind::Llm, &error, &failed).await {
             Retried::Again => continue,
             // What an interrupted retry reports: this stream's metrics, or none if it never opened.
             Retried::Interrupted => {
@@ -272,33 +272,42 @@ pub(super) enum Retried {
     GiveUp,
 }
 
+/// A failed attempt of a speech leg, decided by the shared attempt policy: on a retry, waits out
+/// its backoff, raced against the interruption.
 pub(super) async fn retry(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    attempt: &mut Attempt,
+    attempts: &mut Attempts,
     leg: ProviderKind,
     error: &ProviderError,
     provider: &(dyn Fn(ProviderError, bool) + Sync),
 ) -> Retried {
-    let wait = retry_after(attempt, leg, error, shared.time.now());
-    provider(error.clone(), wait.is_some());
+    let (now, mut steps) = (shared.time.now(), Vec::new());
+    if let Some(attempt) = attempts.current() {
+        attempts.failed_error(attempt, error.attempt_error(), now, &mut steps);
+        // The failed request is over: nothing of it is left to release.
+        attempts.closed(attempt, now, &mut steps);
+    }
+    let failed = steps.iter().find_map(|step| match step {
+        AttemptStep::Retry { attempt, .. } => Some(*attempt),
+        _ => None,
+    });
+    let at = failed.and(attempts.wake_at(None));
+    provider(error.clone(), at.is_some());
     shared.report(GenEvent::ProviderFailed {
         speech: handle.id(),
         leg,
-        recoverable: wait.is_some(),
+        recoverable: at.is_some(),
         error: Box::new(error.clone()),
     });
-    let Some(wait) = wait else { return Retried::GiveUp };
-    let at = wait.at;
-    shared.trace(GenerationStep::RetryArmed {
-        speech: handle.id(),
-        leg,
-        attempt: wait.failed_attempt,
-        at,
-    });
+    let (Some(failed), Some(at)) = (failed, at) else { return Retried::GiveUp };
+    shared.trace(GenerationStep::RetryArmed { speech: handle.id(), leg, attempt: failed + 1, at });
     // Raced against the interruption; a Rust-native wait, safe to drop.
     match until_interrupted(handle, shared.time.wait_until(at)).await {
-        Some(()) => Retried::Again,
+        Some(()) => {
+            attempts.wake(at, None, &mut steps);
+            Retried::Again
+        }
         None => Retried::Interrupted,
     }
 }

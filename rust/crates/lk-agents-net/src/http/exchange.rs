@@ -5,12 +5,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
 use crate::transport::HttpRequest;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock, Ts};
+use lk_agents_core::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
 use tokio::sync::mpsc;
 
 use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};

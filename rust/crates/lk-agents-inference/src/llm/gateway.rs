@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 use crate::llm::parse::WireChunk;
 use futures_util::StreamExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
-use lk_agents_net::attempts::AttemptFailure;
+use lk_agents_core::attempts::AttemptFailure;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;

@@ -20,7 +20,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
-use lk_agents_net::attempts::RequestPolicy;
+use lk_agents_core::attempts::RequestPolicy;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
@@ -513,7 +513,7 @@ impl Driver {
     }
 
     fn failed_launch(&mut self, request: AvatarRequestId, attempt: u32, error: ApiError) {
-        let failure = lk_agents_net::attempts::AttemptFailure::Connection(error.message);
+        let failure = lk_agents_core::attempts::AttemptFailure::Connection(error.message);
         self.queued.push(AvatarSessionEvent::Failed { request, attempt, failure });
         self.queued.push(AvatarSessionEvent::AttemptClosed { request, attempt });
     }

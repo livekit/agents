@@ -327,8 +327,10 @@ impl Generation<'_> {
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
         // Opened as the pipeline's synthesis is: a failed open is retried on the same budget.
-        let mut attempt =
-            lk_agents_voice::generation::Attempt::new(self.shared.conn.tts.unwrap_or_default());
+        let mut attempts = lk_agents_core::attempts::Attempts::retrying(
+            &self.shared.conn.tts.unwrap_or_default(),
+            self.shared.time.now(),
+        );
         let (sink, source) = loop {
             let error = match tts.stream(self.ctx.request.expressive.is_some()).await {
                 Ok(pair) => break pair,
@@ -336,7 +338,7 @@ impl Generation<'_> {
             };
             let kind = lk_agents_voice::trace::ProviderKind::Tts;
             let failed = |e, r| tts.failed(e, r);
-            match super::llm::retry(self.shared, self.handle, &mut attempt, kind, &error, &failed)
+            match super::llm::retry(self.shared, self.handle, &mut attempts, kind, &error, &failed)
                 .await
             {
                 super::llm::Retried::Again => {}

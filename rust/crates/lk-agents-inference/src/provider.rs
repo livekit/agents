@@ -5,7 +5,7 @@ use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::{ProviderAttempts as Port, ResponseObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
-use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
+use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
 
 #[derive(Debug)]
 pub struct ProviderAttempts {

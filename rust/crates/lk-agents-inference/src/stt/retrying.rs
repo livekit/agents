@@ -18,7 +18,7 @@ use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, RetryReport, StreamSink, StreamSource};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT, before};
-use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 pub struct RetryingStt {
     inner: Arc<dyn Stt>,
@@ -92,7 +92,7 @@ impl Failure<'_> {
             Ok(())
         } else {
             report.failed(error.clone(), false);
-            if let RetryDecision::Exhausted(message) = lk_agents_net::attempts::terminal_failure(
+            if let RetryDecision::Exhausted(message) = lk_agents_core::attempts::terminal_failure(
                 kind,
                 &adapted,
                 options.max_retry,

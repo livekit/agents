@@ -75,9 +75,8 @@ impl StreamAdapter {
         clock: Arc<dyn Clock>,
         budget: lk_agents_abi::ApiConnectOptions,
     ) -> Arc<dyn Tts> {
-        let splitter: SplitterFactory = Arc::new(|expressive| {
-            Box::new(super::sentences::sentence_splitter(None, expressive))
-        });
+        let splitter: SplitterFactory =
+            Arc::new(|expressive| Box::new(super::sentences::sentence_splitter(None, expressive)));
         Self::adapted(
             tts,
             splitter,
@@ -443,7 +442,7 @@ impl AdapterSource {
             && error.retryable()
             && error.status_code() != Some(499)
             && !self.sentence_audio;
-        let policy = lk_agents_net::attempts::RequestPolicy::from_options(&self.budget);
+        let policy = lk_agents_core::attempts::RequestPolicy::from_options(&self.budget);
         let Some(wait) = policy.retry_delay(*retries, eligible) else {
             return Err(error.into_final());
         };

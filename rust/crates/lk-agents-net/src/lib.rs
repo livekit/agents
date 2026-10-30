@@ -1,8 +1,7 @@
 //! `lk-agents-net`: the shared async transport of the I/O crates.
 //!
 //! - [`clock`]: the process's clocks, on Tokio time.
-//! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
-//! - [`http`]: HTTPS exchanges reporting transport observations, under [`attempts`].
+//! - [`http`]: HTTPS exchanges reporting transport observations, under `lk_agents_core::attempts`.
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
@@ -18,7 +17,6 @@
 
 pub mod a2a_auth;
 pub mod a2a_client;
-pub mod attempts;
 pub mod blocking_io;
 pub mod clock;
 pub mod dns;

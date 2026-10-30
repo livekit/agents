@@ -232,6 +232,20 @@ impl Attempts {
         attempts
     }
 
+    /// Whole requests retried on the options' allowance and backoff alone, by an owner whose
+    /// requests enforce their own phase and total limits (a voice reply's model and synthesis).
+    /// The first attempt is running.
+    pub fn retrying(options: &ApiConnectOptions, now: Ts) -> Self {
+        let policy = RequestPolicy {
+            connect_timeout: None,
+            write_timeout: None,
+            read_timeout: None,
+            total_timeout: None,
+            ..RequestPolicy::from_options(options)
+        };
+        Attempts::start(policy, now, &mut Vec::new())
+    }
+
     /// The attempt whose outcome is the request's, while one runs.
     pub fn current(&self) -> Option<u32> {
         match self.phase {

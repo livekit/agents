@@ -11,8 +11,8 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{LlmChunk, Ts};
 
-pub use lk_agents_net::attempts::{AttemptFailure, RequestPolicy};
-use lk_agents_net::attempts::{AttemptStep, Attempts};
+pub use lk_agents_core::attempts::{AttemptFailure, RequestPolicy};
+use lk_agents_core::attempts::{AttemptStep, Attempts};
 
 use super::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
 

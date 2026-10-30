@@ -8,7 +8,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
 
-use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 /// The `conn_options` fields the chain rewrites before handing a request to a child.
 /// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s

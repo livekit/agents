@@ -78,7 +78,7 @@ impl Pump {
             attempts.failed_error(id, error.clone(), now, &mut steps);
             attempts.closed(id, now, &mut steps);
             if !steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
-                let error = match lk_agents_net::attempts::terminal_failure(
+                let error = match lk_agents_core::attempts::terminal_failure(
                     lk_agents_abi::types::retry::RequestKind::SttStream,
                     &error,
                     self.opts.conn_options.max_retry,

@@ -24,10 +24,10 @@ use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
 
-use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 use crate::env::ProcessEnv;
 pub use admission::ReportAdmission;
 pub use events::EventRetention;
+use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 pub use transcript::TranscriptBuilder;
 
 const CHUNK_BYTES: usize = 64 * 1024;
