@@ -661,6 +661,8 @@ class SpeechStream(stt.RecognizeStream):
     _audio_since_commit: bool = False
     # a `commit` closed an utterance whose transcript (or error) has not arrived yet
     _awaiting_result: bool = False
+    # a language change needs a new handshake: reconnect once the current session closes
+    _reconnect_requested: bool = False
     _last_error: str | None = None
 
     def __init__(
@@ -697,17 +699,22 @@ class SpeechStream(stt.RecognizeStream):
     ) -> None:
         """Apply options to this stream: live via ``update_settings`` when connected, and
         otherwise on the next (re)connect. Values are expected to be validated already
-        (see :meth:`STT.update_options`)."""
+        (see :meth:`STT.update_options`).
+
+        ``update_settings`` can only change a single ``language_code``. A language *list*
+        is expressed in the handshake (``indic-auto`` plus ``x-language-candidates``), so
+        any change that involves a list reconnects with the new handshake.
+        """
         settings: dict[str, Any] = {}
-        if is_given(language):
+        reconnect = False
+        if is_given(language) and language != self._opts.language:
+            previous = _language_codes(self._opts.language)
             self._opts.language = language
             codes = _language_codes(language)
-            if len(codes) > 1:
-                logger.warning(
-                    "the candidate language list cannot change mid-session; "
-                    "it applies the next time the stream reconnects"
-                )
-            settings["language_code"] = codes[0] if len(codes) == 1 else INDIC_AUTO
+            if len(previous) == 1 and len(codes) == 1:
+                settings["language_code"] = codes[0]
+            else:
+                reconnect = self._ws is not None
         if is_given(format):
             self._opts.format = format
             settings["format"] = format
@@ -717,6 +724,32 @@ class SpeechStream(stt.RecognizeStream):
 
         if settings and self._ws is not None:
             self._send_control({"type": "update_settings", **settings})
+        if reconnect:
+            self._reconnect_for_new_handshake()
+
+    def _reconnect_for_new_handshake(self) -> None:
+        """Close the current session so ``_run`` opens a new one with the updated options.
+        An utterance in progress is committed first, so its transcript is not lost."""
+        ws = self._ws
+        if ws is None or self._reconnect_requested:
+            return
+        self._reconnect_requested = True
+
+        async def _reconnect() -> None:
+            with contextlib.suppress(Exception):
+                if self._speaking or self._awaiting_result:
+                    if self._speaking:
+                        await ws.send(json.dumps({"type": "commit"}))
+                    deadline = time.monotonic() + min(self._conn_options.timeout, 5.0)
+                    while (self._speaking or self._awaiting_result) and (
+                        time.monotonic() < deadline
+                    ):
+                        await asyncio.sleep(0.05)
+                await ws.close()
+
+        task = asyncio.get_running_loop().create_task(_reconnect())
+        self._control_tasks.add(task)
+        task.add_done_callback(self._control_tasks.discard)
 
     def _send_control(self, message: dict[str, Any]) -> None:
         ws = self._ws
@@ -736,6 +769,13 @@ class SpeechStream(stt.RecognizeStream):
             input_finished = await self._run_session()
             if input_finished:
                 return
+
+            if self._reconnect_requested:
+                # our own doing (new language handshake), not a failure to throttle
+                self._reconnect_requested = False
+                quick_closes = 0
+                logger.debug("Gnani STT reconnecting with updated language options")
+                continue
 
             # The server ended the session (idle timeout, 15 minute limit) while the
             # caller is still sending audio: open a new one. Audio pushed in the
@@ -764,6 +804,8 @@ class SpeechStream(stt.RecognizeStream):
         self._last_error = None
         self._audio_since_commit = False
         self._awaiting_result = False
+        # this session is built from the current options, so earlier requests are met
+        self._reconnect_requested = False
 
         try:
             async with websockets.connect(

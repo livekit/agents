@@ -477,6 +477,109 @@ async def test_update_options_applies_live_via_update_settings(server):
     }
 
 
+def _language_updates(session: Any) -> list[dict[str, Any]]:
+    return [c for c in session.controls if c["type"] == "update_settings" and "language_code" in c]
+
+
+@pytest.mark.parametrize(
+    ("start", "update", "headers"),
+    [
+        # single -> list: the new session needs the candidate restriction
+        (
+            "hi-IN",
+            ["hi-IN", "en-IN"],
+            {"language_code": "indic-auto", "x-language-candidates": "hi-IN,en-IN"},
+        ),
+        # list -> a different list: the old restriction would stay in force otherwise
+        (
+            ["hi-IN", "en-IN"],
+            ["ta-IN", "te-IN"],
+            {"language_code": "indic-auto", "x-language-candidates": "ta-IN,te-IN"},
+        ),
+        # list -> single: the candidate header must go away
+        (["hi-IN", "en-IN"], "ta-IN", {"language_code": "ta-IN"}),
+    ],
+)
+async def test_language_list_changes_reconnect_with_the_new_handshake(
+    server, start, update, headers
+):
+    """update_settings can only change `language_code`; the candidate list lives in the
+    handshake. Sending `indic-auto` alone would enable unrestricted detection (or keep the
+    old restriction), so a change involving a list opens a new session instead."""
+    stt_ = _make_stt(server, model="prisma-v3.0", language=start)
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    await _wait_for(lambda: server.sessions and server.sessions[0].audio > 0)
+
+    stt_.update_options(language=update)
+
+    await _wait_for(lambda: len(server.sessions) >= 2)
+    stream.end_input()
+    await _collect(stream)
+
+    assert _language_updates(server.sessions[0]) == []  # never a partial live update
+    new = server.sessions[1].headers
+    for key, value in headers.items():
+        assert new[key] == value
+    if "x-language-candidates" not in headers:
+        assert "x-language-candidates" not in new
+
+
+async def test_single_language_change_still_updates_live(server):
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    await _wait_for(lambda: server.sessions and server.sessions[0].audio > 0)
+
+    stt_.update_options(language="en-IN")
+
+    await _wait_for(lambda: _language_updates(server.sessions[0]))
+    stream.end_input()
+    await _collect(stream)
+
+    assert _language_updates(server.sessions[0]) == [
+        {"type": "update_settings", "language_code": "en-IN"}
+    ]
+    assert len(server.sessions) == 1  # no reconnect
+
+
+async def test_language_list_change_keeps_the_utterance_in_progress(server):
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)  # the server answers with speech_start
+    first = await stream.__anext__()
+    assert first.type == SOS
+
+    stt_.update_options(language=["hi-IN", "en-IN"], format="transcribe")
+
+    await _wait_for(lambda: len(server.sessions) >= 2)
+    stream.end_input()
+    events = [first, *await _collect(stream)]
+
+    assert {"type": "commit"} in server.sessions[0].controls  # committed before closing
+    assert FINAL in _types(events)
+    assert server.sessions[1].headers["format"] == "transcribe"  # other options carried over
+
+
+async def test_repeated_language_changes_are_not_mistaken_for_a_broken_session(server):
+    """Reconnecting on request must not trip the guard against sessions that keep closing
+    immediately."""
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    stream.push_frame(FRAME)
+    for n, language in enumerate(
+        [["hi-IN", "en-IN"], ["ta-IN", "te-IN"], "hi-IN", ["en-IN", "hi-IN"]]
+    ):
+        await _wait_for(lambda n=n: len(server.sessions) == n + 1 and server.sessions[n].audio > 0)
+        stt_.update_options(language=language)
+        await _wait_for(lambda n=n: len(server.sessions) == n + 2)
+        stream.push_frame(FRAME)
+
+    stream.end_input()
+    await _collect(stream)  # would raise APIConnectionError if throttled as quick closes
+    assert len(server.sessions) == 5
+
+
 async def test_session_keyterms_reach_a_running_stream(server):
     stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN", keyterms=["user"])
     stream = stt_.stream(conn_options=OPTS)

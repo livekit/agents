@@ -260,6 +260,36 @@ async def test_live_update_options_changes_the_running_session(session, english)
     assert _final_text(seen)
 
 
+async def test_live_language_list_update_reconnects_the_running_stream(session, english):
+    """A list lives in the handshake (indic-auto + candidates), so updating a running
+    single-language stream to a list must reconnect and keep transcribing."""
+    stt_ = _stt(session, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    errors: list[stt.STTError] = []
+    stt_.on("error", errors.append)
+    seen: list[stt.SpeechEvent] = []
+    try:
+        stream.push_frame(_silence(0.5))
+        await asyncio.sleep(1)  # let the first session connect
+        stt_.update_options(language=["en-IN", "hi-IN"])
+        await asyncio.sleep(2)  # ... and the replacement session come up
+        stream.push_frame(english)
+        stream.push_frame(_silence(0.3))
+        stream.flush()
+
+        async def read() -> None:
+            async for ev in stream:
+                seen.append(ev)
+                if ev.type == stt.SpeechEventType.END_OF_SPEECH:
+                    return
+
+        await asyncio.wait_for(read(), timeout=25)
+    finally:
+        await stream.aclose()
+    assert "table" in _final_text(seen).lower()
+    assert not errors
+
+
 async def test_live_idle_timeout_reconnects_without_surfacing_an_error(session, english):
     """The server ends an idle session; the plugin must reconnect and keep working."""
     stt_ = _stt(session, model="prisma-v3.0", language="en-IN", idle_timeout_sec=5)

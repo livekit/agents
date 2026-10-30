@@ -169,9 +169,12 @@ What Prisma v3.0 adds, and what the plugin does with it:
 - A rejected handshake (bad key, unsupported option) is a non-retryable `APIStatusError` that
   includes the server's message. A per-utterance failure (for example unclear audio) is logged
   and the stream keeps running.
-- `stt.update_options(language=..., format=..., keyterms=...)` applies to running streams
-  through `update_settings`, without reconnecting. A multi-language list cannot be changed
-  mid-session; it applies on the next reconnect.
+- `stt.update_options(language=..., format=..., keyterms=...)` applies to running streams.
+  `format`, `keyterms` and a change between two single languages go through `update_settings`
+  without reconnecting. A language *list* (or `"indic-auto"`) is part of the connection
+  handshake, which `update_settings` cannot change, so any change to or from a list
+  reconnects the stream with the new handshake. An utterance in progress is committed first,
+  so its transcript is not lost.
 
 > **Migration:** `language="en-IN,hi-IN"` (a comma-joined string) never worked against the API
 > for streaming and failed on REST for `prisma-v2.5`. It is still accepted, and treated as a
