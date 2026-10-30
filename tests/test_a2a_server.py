@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pickle
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -370,6 +371,9 @@ async def test_a_server_without_storage_speaks_a2a_on_threads_in_memory() -> Non
     assert first[0].id.startswith("AST_") and second[0].id.startswith("AST_")
     assert second[0].context_id == ctx_id
     assert seen == [[], ["hello", "seen 0"]]
+    # the threads exist in this process only: never handed to a job process as an empty copy
+    with pytest.raises(TypeError, match="one process"):
+        pickle.dumps(server._memory)
 
 
 def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agent:

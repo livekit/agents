@@ -76,6 +76,10 @@ class _MemoryStorage(Storage):
     def __init__(self) -> None:
         super().__init__({}, None)
 
+    def __reduce__(self) -> tuple[functools.partial[Storage], tuple[()]]:
+        # the text doors run in the server process; a copy in a job process would be empty
+        raise TypeError("in-memory threads live in one process: configure AgentServer(storage=)")
+
 
 class AgentDBStorage(Storage):
     """Threads on LiveKit Cloud's agentstore, reached through the public API of ``LIVEKIT_URL``'s
