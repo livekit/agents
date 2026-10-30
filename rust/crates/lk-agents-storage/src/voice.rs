@@ -354,11 +354,9 @@ impl HostVoiceStore for VoiceStore {
     }
 
     async fn aclose(&self) -> Result<(), StorageError> {
-        {
-            let mut closing = self.closing.lock();
-            *closing = true;
-        }
+        *self.closing.lock() = true;
         let mut state = self.state.lock().await;
+        let mut result = Ok(());
         if let Some(mut active) = state.active.take() {
             let uncertain = state.uncertain_fields.take();
             let resolving = uncertain.is_some();
@@ -366,9 +364,7 @@ impl HostVoiceStore for VoiceStore {
                 Some(fields) => fields,
                 None => self.activation.lock_managed().await,
             };
-            let result = if active.run.closed {
-                active.run.abandon(RunOutcome::Canceled, "voice-close").await
-            } else if resolving {
+            result = if resolving && !active.run.closed {
                 match active.run.resolve_later().await {
                     Some(result) => result.map(|_| ()),
                     None => Err(StorageError::Invalid("the voice commit has no resolver".into())),
@@ -379,16 +375,12 @@ impl HostVoiceStore for VoiceStore {
             self.released();
             active.thread.close().await;
             self.activation.end_managed(result.is_ok() && resolving, fields);
-            self.activation.close();
-            drop(state);
-            self.tasks.wait_empty(&RealClock::new(), None).await;
-            result?;
         } else {
             self.released();
-            self.activation.close();
-            drop(state);
-            self.tasks.wait_empty(&RealClock::new(), None).await;
         }
-        Ok(())
+        self.activation.close();
+        drop(state);
+        self.tasks.wait_empty(&RealClock::new(), None).await;
+        result
     }
 }
