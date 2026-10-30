@@ -1,0 +1,21 @@
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/_recognize_streams/legacy_recognize_stream.py
+  s_bcd3e70328118e::t_fc815aa2893579 19,170,181,372-377,393-394,421-430,433
+tests/test_plugin_cartesia_stt.py
+  s_bcd3e70328118e::t_38d188687260a1 36,42,47-70,73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2031c636102efc1542d402047d3a4aa22f2d250f",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
