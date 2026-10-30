@@ -3,9 +3,10 @@
 //! `lk_agents_core::a2a::task::TaskMachine`'s) over lk-agents-storage, on an in-memory database
 //! that reads the run's virtual clock (`testing::MemoryConnection`) behind storage's
 //! fault-injecting connection (`testing::Faulty`): a commit's acknowledgment lost before or after
-//! it applied, a commit refused (a disk I/O error, or too large), the database unreachable for a
-//! while. The handler, at its host port, loses the lane, is cancelled or loses the database now
-//! and then.
+//! it applied, a commit refused (a disk I/O error, or too large), the database unreachable or
+//! refusing the key for a while. The handler, at its host port, loses the lane, is cancelled,
+//! loses the database or has its context save refused (a stale save, a field that is not JSON, a
+//! state too large) now and then.
 //!
 //! Requests arrive out of order on three channels under door options the seed draws (the
 //! default map, one policy for every channel, or a map mixing them), workers die mid-turn (their
@@ -70,8 +71,12 @@ pub struct Faults {
     pub unavailable: u8,
     pub lost_ack: u8,
     pub refused_commit: u8,
+    /// Per mille per tick, like the connection's other faults: AgentDB refuses the key a while.
+    pub unauthorized: u8,
     pub lease_lost: u8,
     pub cancelled: u8,
+    /// Percent per handler step: the handler's `save_context` raises.
+    pub save_refused: u8,
 }
 
 /// One HTTP request for a message, on its own worker.
@@ -88,6 +93,8 @@ pub struct Request {
     /// The worker died: it stops and lets its lease lapse.
     pub killed: bool,
     pub answer: Option<Result<TurnResult, StorageError>>,
+    /// When the answer came, since the run's start.
+    pub answered_at: Duration,
 }
 
 /// A finished run.
@@ -140,6 +147,7 @@ fn request(
         started: false,
         killed: false,
         answer: None,
+        answered_at: Duration::ZERO,
     }
 }
 
@@ -170,8 +178,10 @@ async fn simulate(seed: u64, messages: usize) -> Record {
         unavailable: rng.u8(0..6),
         lost_ack: rng.u8(0..12),
         refused_commit: rng.u8(0..4),
+        unauthorized: rng.u8(0..2),
         lease_lost: rng.u8(0..4),
         cancelled: rng.u8(0..4),
+        save_refused: rng.u8(0..3),
     };
     let kill_pct = rng.u8(0..8);
     let ttl = Duration::from_secs(rng.u64(2..6));
@@ -214,6 +224,7 @@ async fn simulate(seed: u64, messages: usize) -> Record {
                 Ok(thread) => thread,
                 Err(e) => {
                     r.answer = Some(Err(e));
+                    r.answered_at = now;
                     opened_failed.push(i);
                     continue;
                 }
@@ -241,6 +252,7 @@ async fn simulate(seed: u64, messages: usize) -> Record {
             if worker.as_ref().is_some_and(tokio::task::JoinHandle::is_finished) {
                 let answer = worker.take().expect("finished").await.expect("a worker that ran");
                 requests[i].answer = Some(answer);
+                requests[i].answered_at = now;
                 ended.push(i);
             }
         }
@@ -248,8 +260,13 @@ async fn simulate(seed: u64, messages: usize) -> Record {
             follow_up(&mut requests, i, now, &opts, &mut rng);
         }
         if faulty {
-            if inject(&database, &world, &faults, &mut rng) {
-                database.lapse_lease().await;
+            if inject(&database, &world, &faults, now, &mut rng) {
+                let d = Duration::from_millis(rng.u64(100..3000));
+                if rng.bool() {
+                    database.stall_holder(d).await;
+                } else {
+                    *database.slow_commit.lock().unwrap() = Some(d);
+                }
             }
             // a client cancels a task, now and then one of a reply that is running
             let replying = rng.u16(0..100) == 0;
@@ -322,9 +339,9 @@ fn follow_up(
 }
 
 /// Storage's faults, armed at random while faults are on: the next commit's acknowledgment lost
-/// before or after it applies, or the commit refused; the database unreachable for a while.
-/// True when the lane's lease lapses now as well.
-fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) -> bool {
+/// before or after it applies, or the commit refused; the database unreachable or refusing the
+/// key for a while. True when the lane's holder stalls, or its next commit is slow, now as well.
+fn inject(database: &Database, world: &World, f: &Faults, now: Duration, rng: &mut Rng) -> bool {
     let mut fire = |pct: u8, kind: &'static str| {
         let hit = pct > 0 && rng.u16(0..1000) < u16::from(pct);
         if hit {
@@ -343,9 +360,15 @@ fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) -> bool
         }
     }
     let unreachable = fire(f.unavailable, "Unavailable");
+    let refused = fire(f.unauthorized, "Unauthorized");
     let lapsed = fire(f.lease_lost, "LeaseLapsed");
     if unreachable {
         database.faults.unreachable_for(Duration::from_millis(rng.u64(50..1500)));
+    }
+    if refused {
+        let d = Duration::from_millis(rng.u64(50..1500));
+        database.faults.refuse_token_for(d);
+        world.ledger.lock().unwrap().key_refused.push((now, now + d));
     }
     lapsed
 }

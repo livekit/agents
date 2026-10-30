@@ -2,8 +2,10 @@
 //! (`TurnHost`). It works a while before each step, reaches a few checkpoints, yields once told
 //! to, and ends with a text answer, a conversation tool's question (its call and placeholder
 //! output in the new items, as an agent run records them), a transport `Rejected` or `Working`
-//! transition, or a raise; while faults are on it may lose the lane, be cancelled by its host, or
-//! lose the database. Its output carries a marker
+//! transition, or a raise; while faults are on it may lose the lane, be cancelled by its host,
+//! lose the database, or have its `save_context` refused: a stale save (`VersionConflict`), a
+//! field that is not JSON (`NotSerializable`) or a state too large (`TooLarge`), raised as the
+//! storage errors they are. Its output carries a marker
 //! item naming the invocation, so the history shows which invocations' commits applied.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -160,6 +162,12 @@ impl StreamSource<TurnEvent> for Handler {
             }
             if world.inject(f.unavailable, "HandlerUnavailable") {
                 return Err(raised("StorageUnavailable", "the handler lost the database"));
+            }
+            if world.inject(f.save_refused, "SaveRefused") {
+                let kind = ["VersionConflict", "NotSerializable", "TooLarge"]
+                    [world.draw(|r| r.usize(0..3))];
+                *world.ledger.lock().unwrap().injected.entry(kind).or_default() += 1;
+                return Err(raised(kind, "save_context refused"));
             }
             if self.verdict.lock().unwrap().take() == Some(Verdict::Yield) {
                 self.yielded = true;

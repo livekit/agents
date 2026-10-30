@@ -1,6 +1,9 @@
 //! The thread's database as the simulation runs it: lk-agents-storage's in-memory connection on
 //! the run's virtual clock, behind storage's fault-injecting one, every request a little late so
-//! the workers' operations interleave. Between batches it observes what the rules read: a
+//! the workers' operations interleave. A holder stalls now and then (a paused process): its lease
+//! lapses, and its requests, renewals and commit alike, reach the database only once it resumes;
+//! or a commit is slow, its lease lapsing meanwhile. Another run may then take the lane, and the
+//! fence refuses the late commit. Between batches it observes what the rules read: a
 //! terminal row that changed, the rows a commit applied while its acknowledgment was lost, the
 //! terminal rows each commit wrote and those it left `working`, the tasks that held a question
 //! and the most questions pending at once.
@@ -38,6 +41,8 @@ pub struct Ledger {
     /// The most questions pending at once, and which.
     pub most_pending: Vec<String>,
     pub lost_acks: u64,
+    /// When the database refused the key: `(from, until)` since the run's start.
+    pub key_refused: Vec<(Duration, Duration)>,
     pub injected: BTreeMap<&'static str, u64>,
 }
 
@@ -91,6 +96,10 @@ pub struct Database {
     pub faults: Arc<Faulty>,
     world: Arc<World>,
     commits: Mutex<u64>,
+    /// The stalled holder's lease token, and when it resumes.
+    stalled: Mutex<Option<(String, tokio::time::Instant)>>,
+    /// The next commit takes this long, its lease lapsed.
+    pub slow_commit: Mutex<Option<std::time::Duration>>,
 }
 
 /// A task row as the observer reads it: its status, and whether it holds a pending question.
@@ -102,7 +111,8 @@ impl Database {
     pub fn new(world: Arc<World>) -> Result<Arc<Self>, StorageError> {
         let memory = MemoryConnection::new(world.clock.clone())?;
         let faults = Arc::new(Faulty::new(Box::new(memory.clone())));
-        Ok(Arc::new(Database { memory, faults, world, commits: Mutex::new(0) }))
+        let (commits, stalled, slow_commit) = (Mutex::new(0), Mutex::new(None), Mutex::new(None));
+        Ok(Arc::new(Database { memory, faults, world, commits, stalled, slow_commit }))
     }
 
     /// The database without faults: what the run left, read once it is over.
@@ -111,15 +121,44 @@ impl Database {
     }
 
     pub async fn select(&self, sql: &'static str) -> Vec<Row> {
-        self.memory.query(Statement::raw(sql)).await.unwrap_or_default()
+        self.select_owned(Statement::raw(sql)).await
     }
 
-    /// The lane's lease lapses as a paused holder's does, its renewal not yet landed: a waiter
-    /// may take the lane, and the holder's commit then meets the fence.
-    pub async fn lapse_lease(&self) {
+    async fn select_owned(&self, statement: Statement) -> Vec<Row> {
+        self.memory.query(statement).await.unwrap_or_default()
+    }
+
+    /// The lane's holder stalls for `d`, as a paused process does: its lease lapses, so a
+    /// waiter may take the lane, and its requests wait until it resumes.
+    pub async fn stall_holder(&self, d: std::time::Duration) {
+        let held = Statement::raw("SELECT lease_token FROM lanes WHERE lease_token IS NOT NULL");
+        let Some(token) =
+            self.select_owned(held).await.first().and_then(|r| r[0].as_str().map(str::to_owned))
+        else {
+            return;
+        };
+        self.lapse_lease().await;
+        *self.stalled.lock().unwrap() = Some((token, tokio::time::Instant::now() + d));
+    }
+
+    async fn lapse_lease(&self) {
         let lapse =
             Statement::raw("UPDATE lanes SET lease_until = 0 WHERE lease_token IS NOT NULL");
         let _ = self.memory.batch(vec![lapse]).await;
+    }
+
+    /// A request of the stalled holder's (it binds its lease token) waits until it resumes.
+    async fn wait_if_stalled(&self, params: impl Iterator<Item = &SqlValue>) {
+        let stalled = self.stalled.lock().unwrap().clone();
+        let Some((token, until)) = stalled else { return };
+        let mut params = params;
+        if params.any(|p| p.as_str() == Some(token.as_str())) {
+            tokio::time::sleep_until(until).await;
+        }
+    }
+
+    async fn version(&self) -> Option<i64> {
+        self.select("SELECT coalesce(sum(version), 0) FROM lanes").await.first()?[0].as_i64()
     }
 
     async fn rows(&self) -> Rows {
@@ -188,16 +227,27 @@ impl Database {
 impl SqliteConnection for Database {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         tokio::time::sleep(self.world.ms(0..15)).await;
+        self.wait_if_stalled(statement.params.iter()).await;
         self.faults.query(statement).await
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         tokio::time::sleep(self.world.ms(0..15)).await;
+        self.wait_if_stalled(statements.iter().flat_map(|s| &s.params)).await;
         // The commit's fenced lane update, as storage's fault connection recognizes it.
         let commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
-        let before = self.rows().await;
+        let slow = commit.then(|| self.slow_commit.lock().unwrap().take()).flatten();
+        if let Some(d) = slow {
+            self.lapse_lease().await;
+            tokio::time::sleep(d).await;
+        }
+        let (before, version) = (self.rows().await, self.version().await);
         let result = self.faults.batch(statements).await;
         let after = self.rows().await;
+        // a commit the database ran that matched no lane row: the fence refused a stale run
+        if commit && result.is_ok() && self.version().await == version {
+            *self.world.ledger.lock().unwrap().injected.entry("FencedOut").or_default() += 1;
+        }
         self.observe(&before, &after, commit, &result);
         result
     }

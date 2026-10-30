@@ -145,12 +145,14 @@ pub enum CommitFault {
 
 /// A thread database connection with faults a real connection shows: a commit's answer lost
 /// (`Uncertain`, applied or not), a refused commit (`Unavailable`, or `TooLarge` as an AgentDB
-/// frame over its limit is), and an unreachable database for a while.
+/// frame over its limit is), an unreachable database for a while, and AgentDB refusing the key
+/// for a while (`Unauthorized`, as a redial after a node drain meets a rotated key).
 pub struct Faulty {
     inner: Box<dyn SqliteConnection>,
     commit: parking_lot::Mutex<Option<CommitFault>>,
     unreachable_for: parking_lot::Mutex<Option<Duration>>,
     unreachable_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    refused_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Faulty {
@@ -160,7 +162,13 @@ impl Faulty {
             commit: parking_lot::Mutex::new(None),
             unreachable_for: parking_lot::Mutex::new(None),
             unreachable_until: parking_lot::Mutex::new(None),
+            refused_until: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Every request fails `Unauthorized` for `d` from now.
+    pub fn refuse_token_for(&self, d: Duration) {
+        *self.refused_until.lock() = Some(tokio::time::Instant::now() + d);
     }
 
     /// Every request fails `Unavailable` for `d` from now.
@@ -178,10 +186,12 @@ impl Faulty {
     }
 
     fn reachable(&self) -> Result<(), StorageError> {
+        let now = tokio::time::Instant::now();
+        if self.refused_until.lock().is_some_and(|until| now < until) {
+            return Err(StorageError::Unauthorized("the key was refused".into()));
+        }
         match *self.unreachable_until.lock() {
-            Some(until) if tokio::time::Instant::now() < until => {
-                Err(StorageError::Unavailable("unreachable".into()))
-            }
+            Some(until) if now < until => Err(StorageError::Unavailable("unreachable".into())),
             _ => Ok(()),
         }
     }

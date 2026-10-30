@@ -197,7 +197,8 @@ pub fn request_answered_once(record: &Record) -> Vec<Violation> {
 
 /// An error answer is one the client can act on: retry (`Unavailable`, `Uncertain`, a lost
 /// lease or a fenced conflict), a cancelled turn, `Rejected` only under `reject`, `NotFound` for
-/// a thread that is gone. A framework-internal `Invalid` never reaches the client.
+/// a thread that is gone, `Unauthorized` only while the database refused the key during the
+/// request. A framework-internal `Invalid` never reaches the client.
 pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
     record
         .requests
@@ -213,6 +214,11 @@ pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
                 let actionable = match e {
                     StorageError::Invalid(_) => ended,
                     StorageError::Rejected { .. } => r.policy == Policy::Reject,
+                    StorageError::Unauthorized(_) => record
+                        .ledger
+                        .key_refused
+                        .iter()
+                        .any(|(from, until)| r.start <= *until && *from <= r.answered_at),
                     StorageError::Unavailable(_)
                     | StorageError::Uncertain(_)
                     | StorageError::LeaseLost(_)
@@ -390,6 +396,15 @@ mod tests {
             q.answer = Some(Err(StorageError::Invalid("internal".into())));
             assert!(!answer_is_an_outcome(&r).is_empty());
         }
+    }
+
+    #[test]
+    fn unauthorized_while_the_key_was_accepted_is_rejected() {
+        let mut r = record();
+        r.ledger.key_refused.clear();
+        let q = r.requests.iter_mut().find(|q| !q.killed).unwrap();
+        q.answer = Some(Err(StorageError::Unauthorized("the key was refused".into())));
+        assert!(!answer_is_an_outcome(&r).is_empty());
     }
 
     #[test]
