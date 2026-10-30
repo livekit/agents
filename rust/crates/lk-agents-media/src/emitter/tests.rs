@@ -436,3 +436,137 @@ fn a_pushed_frame_goes_out_as_framed_with_only_the_tail_held() {
     let frame = Frame { data: vec![0u8; 4], samples_per_channel: 2 };
     assert_eq!(idle.em.push_frame(idle.now, frame, &mut idle.eff), Err(EmitterError::NoSegment));
 }
+
+// --------------------------------------------------------------------- segments
+
+// Catches: one byte stream (or its progressive size) carried across segments or a flush, so every
+// sentence after the first starts a whole frame late instead of with the 20 ms first frame.
+#[test]
+fn each_segment_and_each_flush_restarts_with_the_small_first_frame() {
+    let mut fx = Fx::streaming("a");
+    fx.push(100);
+    let first = fx.sizes()[0];
+    assert_eq!(first, 20 - TAIL, "the premise: 20 ms out first, its 10 ms tail held");
+    fx.end_segment();
+
+    fx.em.start_segment("b").unwrap();
+    let before = fx.sizes().len();
+    fx.push(100);
+    assert_eq!(fx.sizes()[before], first, "the next segment starts small again");
+
+    fx.flush();
+    let before = fx.sizes().len();
+    fx.push(100);
+    assert_eq!(fx.sizes()[before], first, "and so does the burst after a flush");
+}
+
+// Catches: the segment cleared before its final frame is built (a final with an empty id), a
+// second final per segment, or the silence marker attributed to the next segment.
+#[test]
+fn every_frame_carries_its_segment_id_and_each_segment_ends_exactly_once() {
+    let mut fx = Fx::streaming("a");
+    fx.push(100).end_segment();
+    fx.em.start_segment("b").unwrap();
+    fx.push(50).flush().end_segment(); // the tail went out on the flush: b ends on the marker
+
+    let frames: Vec<(&str, bool)> =
+        sent(&fx.eff).iter().map(|a| (a.segment_id.as_str(), a.is_final)).collect();
+    let split = frames.iter().position(|(id, _)| *id == "b").expect("b spoke");
+    let (a, b) = frames.split_at(split);
+    assert!(a.iter().all(|(id, _)| *id == "a") && b.iter().all(|(id, _)| *id == "b"));
+    assert_eq!(a.iter().filter(|(_, f)| *f).count(), 1);
+    assert_eq!(b.iter().filter(|(_, f)| *f).count(), 1);
+    assert!(a.last().unwrap().1 && b.last().unwrap().1, "the final is each segment's last frame");
+    assert_eq!(fx.em.num_segments(), 2);
+}
+
+// Catches: a non-streaming synthesis requiring `start_segment`, or `end_input` not finalizing its
+// implicit segment (the consumer would wait for an `is_final` that never comes).
+#[test]
+fn a_non_streaming_synthesis_is_one_implicit_segment_that_end_input_closes() {
+    let mut fx = Fx::new(false);
+    fx.push(100);
+    fx.em.end_input(fx.now, &mut fx.eff).unwrap();
+
+    assert_eq!(fx.sizes().iter().sum::<u32>(), 100);
+    assert_eq!(fx.finals().iter().filter(|f| **f).count(), 1);
+    assert_eq!(fx.finals().last(), Some(&true));
+    assert!(sent(&fx.eff).iter().all(|a| a.segment_id.is_empty()));
+    assert_eq!(fx.em.num_segments(), 1);
+    assert!((fx.em.pushed_duration(-1) - 0.1).abs() < 1e-9);
+}
+
+// Catches: words pushed after the last push lost when the segment ends, on either ending: the
+// buffered audio or the silence marker (the transcript would stop one word short).
+#[test]
+fn words_pushed_after_the_last_audio_go_out_with_the_segments_end() {
+    for flushed in [false, true] {
+        let mut fx = Fx::streaming("s");
+        fx.push(100);
+        if flushed {
+            fx.flush(); // nothing is left but the marker to carry them
+        }
+        std::mem::take(&mut fx.eff);
+        fx.em.push_timed_transcript([TimedString::new("bye")]).unwrap();
+        fx.end_segment();
+        let words: Vec<&str> = sent(&fx.eff)
+            .iter()
+            .flat_map(|a| a.timed_transcript.iter().map(|w| w.text.as_str()))
+            .collect();
+        assert_eq!(words, ["bye"], "flushed={flushed}");
+        assert_eq!(fx.finals().last(), Some(&true));
+    }
+}
+
+// --------------------------------------------------------------------- timing
+
+// Catches: the 10 ms silence marker counted as pushed audio, so a retry resumes past real speech
+// and the TTS metrics overstate the audio produced.
+#[test]
+fn pushed_duration_counts_the_providers_audio_but_not_the_silence_marker() {
+    let mut fx = Fx::streaming("s");
+    fx.push(50).flush().end_segment();
+    assert_eq!(fx.sizes().iter().sum::<u32>(), 50 + SR / 100, "the premise: the marker went out");
+    assert!((fx.em.pushed_duration(0) - 0.05).abs() < 1e-9);
+}
+
+// --------------------------------------------------------------------- channels
+
+// Catches: the tail split or the marker sized without the channel count: a stereo frame torn
+// between left and right swaps the channels for the rest of the segment.
+#[test]
+fn stereo_frames_hold_whole_sample_frames_and_keep_every_byte_in_order() {
+    let mut em = AudioEmitter::default();
+    em.initialize("req", SR, 2, FRAME_MS, true).unwrap();
+    em.start_segment("s").unwrap();
+    let mut eff = Effects::new();
+    let input: Vec<u8> = (0..300 * 4).map(|i| (i % 251) as u8).collect();
+    for chunk in input.chunks(7) {
+        em.push(Ts::ZERO, chunk, &mut eff).unwrap();
+    }
+    em.flush(Ts::ZERO, &mut eff).unwrap();
+    em.end_segment(Ts::ZERO, &mut eff).unwrap();
+
+    let frames = sent(&eff);
+    assert!(frames.iter().all(|a| a.frame.data.len() == a.frame.samples_per_channel as usize * 4));
+    let (audio, marker) = frames.split_at(frames.len() - 1);
+    let out: Vec<u8> = audio.iter().flat_map(|a| a.frame.data.iter().copied()).collect();
+    assert_eq!(out, input, "every byte once, in order");
+    assert_eq!(*marker[0].frame.data, [0u8; (SR / 100) as usize * 4], "10 ms of stereo silence");
+}
+
+// --------------------------------------------------------------------- interruption
+
+// Catches: stopping (an interruption) releasing the held tail or sending a final marker, so the
+// agent keeps talking after the user barged in.
+#[test]
+fn after_stop_mid_segment_nothing_more_is_sent() {
+    let mut fx = Fx::streaming("s");
+    fx.push(100);
+    let delivered = fx.sizes().len();
+    fx.em.stop(&mut fx.eff);
+    fx.push(100).flush().fire_drift().end_segment();
+    fx.em.end_input(fx.now, &mut fx.eff).unwrap();
+    assert_eq!(fx.sizes().len(), delivered, "the held and buffered audio is dropped");
+    assert!(fx.finals().iter().all(|f| !f), "and no final marker follows an interruption");
+}
