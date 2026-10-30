@@ -267,6 +267,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             try:
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
+                self._last_speech_end_time = 0
 
                 send = asyncio.create_task(send_task(ws))
                 recv = asyncio.create_task(recv_task(ws))

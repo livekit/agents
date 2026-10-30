@@ -77,17 +77,37 @@ def test_endpoint_uses_words_and_preserves_transcript_spans(end_time):
 
 
 @pytest.mark.no_concurrent
-async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+async def test_internal_reconnect_reanchors_transcript_and_audio_clock(monkeypatch):
+    import asyncio
+
     from livekit.agents import APIConnectOptions
     from livekit.plugins.cartesia.stt import STT
 
-    from .stt_reconnect import ReconnectClock
+    from .stt_reconnect import ReconnectClock, wait_until
 
     clock = ReconnectClock(monkeypatch)
     provider = STT(api_key="test-key", model="ink-whisper", http_session=clock)
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream.start_time_offset = 7.0
     try:
-        await clock.check(stream, lambda: stream.update_options(language="fr"))
+        for index, captured_at, expected_start in [(0, 1000.0, 7.0), (1, 1010.0, 17.0)]:
+            if index:
+                clock.now = captured_at
+                stream.update_options(language="fr")
+                await wait_until(lambda: len(clock.sockets) == 2)
+            await clock.push(stream, captured_at=captured_at)
+            assert stream.start_time_offset == pytest.approx(expected_start)
+            clock.sockets[index].respond(
+                {"type": "transcript", "is_final": True, "text": "hello", "duration": 0.5}
+            )
+            async with asyncio.timeout(2):
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        assert event.alternatives[0].start_time == pytest.approx(expected_start)
+                        assert event.alternatives[0].end_time == pytest.approx(expected_start + 0.5)
+                        break
+                else:
+                    pytest.fail("stream ended without a final transcript")
     finally:
         await stream.aclose()
         await provider.aclose()
