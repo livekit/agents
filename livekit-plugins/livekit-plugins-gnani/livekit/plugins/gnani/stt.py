@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -96,9 +97,22 @@ _SESSION_TUNING: dict[str, tuple[str, float, float, type]] = {
     "max_speech_s": ("x-max-speech-s", 5.0, 120.0, float),
 }
 
+# Peak sample amplitude (of 32767) below which a frame is treated as silence. Only audio
+# above it can start an utterance the server will answer, so only that audio makes the
+# stream wait for a reply at the end of the input (~-48 dBFS: digital silence and dither
+# stay below it, speech is far above it).
+_SIGNAL_PEAK = 128
 # A session that the server closes this quickly is not an idle timeout: stop reconnecting.
 _QUICK_CLOSE_S = 2.0
 _MAX_QUICK_CLOSES = 3
+
+
+def _has_signal(pcm: bytes) -> bool:
+    """True if 16-bit little-endian PCM holds anything louder than the noise floor."""
+    if len(pcm) < 2:
+        return False
+    samples = np.frombuffer(pcm, dtype="<i2", count=len(pcm) // 2)
+    return bool(np.abs(samples.astype(np.int32)).max() >= _SIGNAL_PEAK)
 
 
 @dataclass
@@ -657,10 +671,13 @@ class SpeechStream(stt.RecognizeStream):
     # defaults at class level so the message handlers work on a partially built stream
     _ws: Any = None
     _speaking: bool = False
-    # audio was sent since the last `commit`
-    _audio_since_commit: bool = False
-    # a `commit` closed an utterance whose transcript (or error) has not arrived yet
-    _awaiting_result: bool = False
+    # Reply bookkeeping for the end of the input. The server answers an utterance with one
+    # transcript (or error), and answers nothing for audio without speech, so the stream
+    # only waits for replies it can expect:
+    #  * signal audio was sent that no transcript has answered yet and no commit covers
+    _signal_unanswered: bool = False
+    #  * commits that closed such audio and whose reply (transcript or error) is outstanding
+    _commits_pending: int = 0
     # a language change needs a new handshake: reconnect once the current session closes
     _reconnect_requested: bool = False
     _last_error: str | None = None
@@ -737,11 +754,11 @@ class SpeechStream(stt.RecognizeStream):
 
         async def _reconnect() -> None:
             with contextlib.suppress(Exception):
-                if self._speaking or self._awaiting_result:
+                if self._speaking or self._commits_pending:
                     if self._speaking:
                         await ws.send(json.dumps({"type": "commit"}))
                     deadline = time.monotonic() + min(self._conn_options.timeout, 5.0)
-                    while (self._speaking or self._awaiting_result) and (
+                    while (self._speaking or self._commits_pending) and (
                         time.monotonic() < deadline
                     ):
                         await asyncio.sleep(0.05)
@@ -802,8 +819,8 @@ class SpeechStream(stt.RecognizeStream):
         ws_url = self._build_ws_url()
         headers = _build_ws_headers(self._opts)
         self._last_error = None
-        self._audio_since_commit = False
-        self._awaiting_result = False
+        self._signal_unanswered = False
+        self._commits_pending = 0
         # this session is built from the current options, so earlier requests are met
         self._reconnect_requested = False
 
@@ -875,56 +892,62 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _drain_after_input(self, recv_task: asyncio.Task[None]) -> None:
         """The audio input ended and its last utterance was committed: keep receiving
-        until that utterance's transcript (or error) has arrived, the server ended the
-        session, or the connection timeout runs out.
+        until every committed utterance has been answered (a transcript or an error), the
+        server ended the session, or the connection timeout runs out.
 
-        Completion is tracked explicitly (``_awaiting_result``) rather than inferred from
+        Completion is tracked explicitly (``_commits_pending``) rather than inferred from
         speech events, because the server may take a while to answer: a short clip can
         yield ``speech_start`` and the transcript well after the ``commit`` was sent.
         """
         deadline = time.monotonic() + self._conn_options.timeout
-        while self._awaiting_result and not recv_task.done():
+        while self._commits_pending > 0 and not recv_task.done():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                # e.g. the last utterance held no speech, so the server never answers
-                logger.debug("Gnani STT: no transcript for the final utterance before timeout")
+                # e.g. the last chunk held no speech, so the server never answers
+                logger.debug("Gnani STT: no reply for the final utterance before timeout")
                 return
             await asyncio.wait({recv_task}, timeout=min(remaining, 0.05))
+
+    def _note_reply(self) -> None:
+        """A transcript or an utterance error arrived: it answers one outstanding commit,
+        or else audio the server finalised on its own (trailing-silence detection)."""
+        if self._commits_pending > 0:
+            self._commits_pending -= 1
+        else:
+            self._signal_unanswered = False
 
     async def _send_audio(self, ws: Any) -> None:
         audio_buffer = bytearray()
 
-        async def send_audio(data: bytes) -> None:
-            await ws.send(data)
-            self._audio_since_commit = True
-
         async def commit() -> None:
             # close the open utterance now instead of waiting for trailing silence
-            # flag before sending, so a fast reply cannot be cleared by this coroutine
-            if self._audio_since_commit:
-                self._audio_since_commit = False
-                self._awaiting_result = True
+            if self._signal_unanswered:
+                # count it before sending, so a fast reply cannot be missed
+                self._signal_unanswered = False
+                self._commits_pending += 1
             await ws.send(json.dumps({"type": "commit"}))
 
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 if audio_buffer:
-                    await send_audio(bytes(audio_buffer))
+                    await ws.send(bytes(audio_buffer))
                     audio_buffer.clear()
                 await commit()
                 continue
 
             frame: rtc.AudioFrame = data
             raw_pcm = frame.data.tobytes()
+            if _has_signal(raw_pcm):
+                self._signal_unanswered = True
             audio_buffer.extend(raw_pcm)
 
             while len(audio_buffer) >= STREAM_CHUNK_BYTES:
                 chunk = bytes(audio_buffer[:STREAM_CHUNK_BYTES])
                 audio_buffer = audio_buffer[STREAM_CHUNK_BYTES:]
-                await send_audio(chunk)
+                await ws.send(chunk)
 
         if audio_buffer:
-            await send_audio(bytes(audio_buffer))
+            await ws.send(bytes(audio_buffer))
         await commit()
 
     def _handle_error(self, data: dict[str, Any]) -> None:
@@ -939,7 +962,7 @@ class SpeechStream(stt.RecognizeStream):
         # the remembered message becomes the error.
         logger.warning(f"Gnani STT error: {message}")
         self._last_error = message
-        self._awaiting_result = False
+        self._note_reply()
         self._end_speech_nowait()
 
     def _end_speech_nowait(self) -> None:
@@ -960,8 +983,8 @@ class SpeechStream(stt.RecognizeStream):
 
             if msg_type == "transcript":
                 self._mark_provider_progress()
-                # the committed utterance has been answered (even with an empty text)
-                self._awaiting_result = False
+                # an utterance has been answered (even with an empty text)
+                self._note_reply()
                 # partials are disabled, so every transcript is final; ignore any other
                 if not data.get("is_final", True):
                     continue

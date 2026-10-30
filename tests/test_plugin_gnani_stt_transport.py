@@ -29,7 +29,14 @@ from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 pytestmark = pytest.mark.plugin("gnani")
 
 OPTS = APIConnectOptions(max_retry=0, timeout=5, retry_interval=0.05)
-FRAME = rtc.AudioFrame(bytes(3200), 16000, 1, 1600)  # 100 ms of silence
+# 100 ms of a loud tone (speech stand-in) and 100 ms of digital silence
+FRAME = rtc.AudioFrame(
+    (b"\xe8\x03\x18\xfc") * 800,  # +1000, -1000, ...
+    16000,
+    1,
+    1600,
+)
+SILENCE = rtc.AudioFrame(bytes(3200), 16000, 1, 1600)
 
 
 class FakeVachanaSTT:
@@ -44,6 +51,10 @@ class FakeVachanaSTT:
         # and the transcript both come late), and a switch for a server that never answers
         self.reply_delay = 0.0
         self.silent = False
+        # seconds before the transcript answering a `commit`
+        self.commit_delay = 0.0
+        # finalise an utterance on its own when silence follows speech, like the real VAD
+        self.auto_finalize = False
         self.rest_calls: list[dict[str, Any]] = []
         self.rest_status = 200
 
@@ -80,7 +91,11 @@ class FakeVachanaSTT:
                     await ws.send_json({"type": "session_end", "reason": "idle_timeout"})
                     await ws.close(code=1001, message=b"idle_timeout")
                     break
-                if not s.speaking and not self.silent:
+                if self.auto_finalize and s.speaking and not any(msg.data):
+                    s.speaking = False
+                    await ws.send_json(self._transcript(index))
+                    continue
+                if not s.speaking and not self.silent and any(msg.data):
                     s.speaking = True
                     if self.reply_delay:
                         await asyncio.sleep(self.reply_delay)
@@ -96,19 +111,24 @@ class FakeVachanaSTT:
                             {"type": "error", "message": "Transcription failed or audio unclear"}
                         )
                         continue
-                    payload = {
-                        "type": "transcript",
-                        "text": self.text,
-                        "is_final": True,
-                        "utterance_id": "u1",
-                        "segment_id": f"seg-{index}",
-                    }
-                    if self.detected:
-                        payload["detected_language_code"] = self.detected
-                    await ws.send_json(payload)
+                    if self.commit_delay:
+                        await asyncio.sleep(self.commit_delay)
+                    await ws.send_json(self._transcript(index))
                 elif body["type"] == "update_settings":
                     await ws.send_json({"type": "settings_updated", "config": {}})
         return ws
+
+    def _transcript(self, index: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "type": "transcript",
+            "text": self.text,
+            "is_final": True,
+            "utterance_id": "u1",
+            "segment_id": f"seg-{index}",
+        }
+        if self.detected:
+            payload["detected_language_code"] = self.detected
+        return payload
 
     async def rest(self, request: web.Request) -> web.Response:
         form = await request.post()
@@ -356,6 +376,55 @@ async def test_end_input_does_not_wait_when_nothing_was_sent(server):
     started = asyncio.get_running_loop().time()
     assert await _collect(stream) == []
     assert asyncio.get_running_loop().time() - started < 5
+
+
+async def test_end_input_after_silence_only_does_not_wait(server):
+    """Audio without speech is never answered, so there is nothing to wait for."""
+    server.silent = True
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=30))
+    stream.push_frame(SILENCE)
+    stream.end_input()
+
+    started = asyncio.get_running_loop().time()
+    assert await _collect(stream) == []
+    assert asyncio.get_running_loop().time() - started < 5
+
+
+async def test_end_input_waits_for_every_queued_commit(server):
+    """Two utterances committed before their replies arrive: the first reply must not end
+    the wait for the second."""
+    server.commit_delay = 0.3
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    stream.push_frame(FRAME)
+    stream.flush()  # utterance A
+    stream.push_frame(FRAME)  # utterance B, committed by end_input
+    stream.end_input()
+
+    events = await _collect(stream)
+
+    assert _types(events).count(FINAL) == 2
+
+
+async def test_end_input_does_not_wait_for_audio_the_server_already_finalized(server):
+    """Speech followed by silence is finalised by the server's own VAD. Ending the input
+    afterwards must not wait for a reply that will never come."""
+    server.auto_finalize = True
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=30))
+    stream.push_frame(FRAME)
+    stream.push_frame(SILENCE)
+
+    async for ev in stream:  # the naturally finalised transcript
+        if ev.type == FINAL:
+            break
+    stream.push_frame(SILENCE)  # trailing silence while the caller winds down
+    stream.end_input()
+
+    started = asyncio.get_running_loop().time()
+    await _collect(stream)
+    assert asyncio.get_running_loop().time() - started < 5  # not the 30 s timeout
 
 
 async def test_partial_frames_are_chunked_to_1024_bytes(server):
