@@ -250,9 +250,11 @@ class ConnectionPool(Generic[T]):
             if task:
                 await aio.gracefully_cancel(task)
 
-        self.invalidate()
-        # the pool is going away, so retired connections are closed too rather than
-        # waiting for holders that may never return them.
-        self._to_close.update(self._retired)
-        self._retired.clear()
-        await self._drain_to_close()
+        # Wait for in-flight acquisitions so they cannot add a connection after closing.
+        async with self._connect_lock:
+            self.invalidate()
+            # the pool is going away, so retired connections are closed too rather than
+            # waiting for holders that may never return them.
+            self._to_close.update(self._retired)
+            self._retired.clear()
+            await self._drain_to_close()
