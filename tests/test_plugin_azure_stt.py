@@ -24,7 +24,7 @@ def test_azure_recognized_emits_final_transcript(monkeypatch):
     stream._on_provider_progress = None
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
 
     stream._on_recognized(
         SimpleNamespace(
