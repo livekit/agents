@@ -238,7 +238,7 @@ impl TransferRun {
                     participant_identity: HUMAN_AGENT_IDENTITY.to_owned(),
                     wait_until_answered: true,
                     sip_number: Some(sip_number.clone()).filter(|s| !s.is_empty()),
-                    headers: sip_headers.clone().into_iter().collect(),
+                    headers: sip_headers.clone(),
                     dtmf: dtmf.clone().unwrap_or_default(),
                     ringing_timeout: self.plan.ringing_timeout.map(|d| d.as_secs_f64()),
                 };

@@ -1,25 +1,21 @@
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::collections::BTreeMap;
 
 use crate::Ts;
 
 /// One closed enum per machine, so timers stay bounded.
-pub trait TimerId: Copy + Eq + Hash + std::fmt::Debug {}
-impl<T: Copy + Eq + Hash + std::fmt::Debug> TimerId for T {}
+pub trait TimerId: Copy + Ord + std::fmt::Debug {}
+impl<T: Copy + Ord + std::fmt::Debug> TimerId for T {}
 
 /// `arm` replaces (a stale handle can never fire), `cancel` is idempotent. A linear scan, not a
 /// heap: ~12 live timers, and replace-on-arm would need tombstones.
 #[derive(Debug)]
 pub struct TimerSet<T> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    armed: HashMap<T, Ts>,
+    armed: BTreeMap<T, Ts>,
 }
 
 impl<T: TimerId> Default for TimerSet<T> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
-        TimerSet { armed: HashMap::new() }
+        TimerSet { armed: BTreeMap::new() }
     }
 }
 
@@ -55,18 +51,12 @@ impl<T: TimerId> TimerSet<T> {
 
     /// Call until `None`. Ties break by the timer's own ordering, so a shared deadline is
     /// deterministic.
-    pub fn pop_due(&mut self, now: Ts) -> Option<T>
-    where
-        T: Ord,
-    {
+    pub fn pop_due(&mut self, now: Ts) -> Option<T> {
         self.pop_due_where(now, |_| true)
     }
 
     /// [`Self::pop_due`] among the timers `pick` accepts.
-    pub fn pop_due_where(&mut self, now: Ts, pick: impl Fn(T) -> bool) -> Option<T>
-    where
-        T: Ord,
-    {
+    pub fn pop_due_where(&mut self, now: Ts, pick: impl Fn(T) -> bool) -> Option<T> {
         let key = self
             .armed
             .iter()

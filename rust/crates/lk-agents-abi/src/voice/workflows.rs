@@ -3,8 +3,7 @@
 
 use crate::utils::dates::Date;
 use lk_agents_host_derive::Host;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// `CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`
 /// when empty and `dtmf` `""` when absent, as in the reference.
@@ -17,8 +16,7 @@ pub struct SipParticipantRequest {
     pub participant_identity: String,
     pub wait_until_answered: bool,
     pub sip_number: Option<String>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub headers: HashMap<String, String>,
+    pub headers: BTreeMap<String, String>,
     pub dtmf: String,
     pub ringing_timeout: Option<f64>,
 }

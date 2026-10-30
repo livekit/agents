@@ -198,14 +198,6 @@ static NAME_TO_CODE: &[(&str, &str)] = &[
     ("zulu", "zu"),
 ];
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// The reverse of [`NAME_TO_CODE`]. Two names map to `sl`, and it must be `"slovene"` (punkt only
-/// ships that one).
-static CODE_TO_NAME: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
-    std::sync::LazyLock::new(|| {
-        NAME_TO_CODE.iter().filter(|(name, _)| *name != "slovenian").map(|&(n, c)| (c, n)).collect()
-    });
-
 fn get<V: Copy>(table: &[(&'static str, V)], key: &str) -> Option<V> {
     table.binary_search_by_key(&key, |(k, _)| k).ok().map(|i| table[i].1)
 }
@@ -221,8 +213,10 @@ pub(crate) fn name_to_code(name: &str) -> Option<&'static str> {
     get(NAME_TO_CODE, name)
 }
 
+/// The reverse of [`NAME_TO_CODE`]. The first name wins, so `sl` reads `"slovene"`, the one punkt
+/// ships.
 pub(crate) fn code_to_name(code: &str) -> Option<&'static str> {
-    CODE_TO_NAME.get(code).copied()
+    NAME_TO_CODE.iter().find(|&&(_, c)| c == code).map(|&(name, _)| name)
 }
 
 #[cfg(test)]
