@@ -434,8 +434,9 @@ async def test_wav_inline_decoder_with_resampling():
 
 @pytest.mark.parametrize("audio_format,bits_per_sample", [(1, 24), (3, 32)])
 @pytest.mark.parametrize("chunk_size", [13, 100000])
+@pytest.mark.parametrize("metadata_size", [0, 131072])
 async def test_parameterized_wav_preserves_pyav_formats(
-    audio_format: int, bits_per_sample: int, chunk_size: int
+    audio_format: int, bits_per_sample: int, chunk_size: int, metadata_size: int
 ):
     sample_rate = 24000
     sample = b"\x00\x00\x20" if audio_format == 1 else struct.pack("<f", 0.25)
@@ -460,6 +461,15 @@ async def test_parameterized_wav_preserves_pyav_formats(
         + struct.pack("<I", len(pcm))
         + pcm
     )
+    if metadata_size:
+        metadata = b"JUNK" + struct.pack("<I", metadata_size) + bytes(metadata_size)
+        wav = (
+            wav[:4]
+            + struct.pack("<I", len(wav) - 8 + len(metadata))
+            + wav[8:12]
+            + metadata
+            + wav[12:]
+        )
 
     async def decode(mime: str | None) -> bytes:
         decoder = AudioStreamDecoder(sample_rate=sample_rate, format=mime)
@@ -479,9 +489,10 @@ async def test_parameterized_wav_preserves_pyav_formats(
     assert actual == struct.pack("<h", 8192) * (len(actual) // 2)
 
 
-async def test_wav_large_metadata_falls_back_to_pyav():
-    wav = _make_wav(24000, 1, 24000)
-    metadata = b"JUNK" + struct.pack("<I", 65536) + bytes(65536)
+@pytest.mark.parametrize("metadata_size", [65536, 131072])
+async def test_wav_large_metadata_preserves_consecutive_segments(metadata_size: int):
+    wav = _make_wav(24000, 1, 2400)
+    metadata = b"JUNK" + struct.pack("<I", metadata_size) + bytes(metadata_size)
     wav = (
         wav[:4] + struct.pack("<I", len(wav) - 8 + len(metadata)) + wav[8:12] + metadata + wav[12:]
     )
@@ -489,15 +500,16 @@ async def test_wav_large_metadata_falls_back_to_pyav():
     async def decode(mime: str | None) -> bytes:
         decoder = AudioStreamDecoder(sample_rate=24000, format=mime)
         try:
-            for start in range(0, len(wav), 1024):
-                decoder.push(wav[start : start + 1024])
+            for _ in range(2):
+                for start in range(0, len(wav), 1024):
+                    decoder.push(wav[start : start + 1024])
             decoder.end_input()
             return b"".join([bytes(frame.data) async for frame in decoder])
         finally:
             await decoder.aclose()
 
     actual = await decode("audio/wav; codecs=1")
-    assert 0 < len(actual) <= 24000 * 2
+    assert len(actual) == 2400 * 2 * 2
     assert not any(actual)
 
 

@@ -21,6 +21,7 @@ import struct
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from tempfile import SpooledTemporaryFile
 from typing import cast
 
 import av
@@ -375,8 +376,17 @@ class AudioStreamDecoder:
         # lazy-initialized only for WAV
         self._wav_decoder: _WavInlineDecoder | None = None
         # Retain the initial header until inline decoding is selected, so PyAV
-        # can replay it if the WAV uses another sample encoding.
-        self._wav_header: bytearray | None = bytearray() if self._is_wav else None
+        # can replay it if the WAV uses another sample encoding. Large metadata
+        # spills to disk without changing the decoder selected for PCM16.
+        self._wav_header: SpooledTemporaryFile[bytes] | None = (
+            SpooledTemporaryFile(max_size=65536) if self._is_wav else None
+        )
+
+    def _clear_wav_header(self) -> None:
+        """Release replay storage, including any temporary file."""
+        if self._wav_header is not None:
+            self._wav_header.close()
+            self._wav_header = None
 
     def push(self, chunk: bytes) -> None:
         if self._closed:
@@ -385,7 +395,7 @@ class AudioStreamDecoder:
             if self._wav_decoder is None:
                 self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
             if self._wav_header is not None:
-                self._wav_header.extend(chunk)
+                self._wav_header.write(chunk)
             try:
                 self._wav_decoder.push(chunk)
             except _UnsupportedWavFormat:
@@ -397,20 +407,20 @@ class AudioStreamDecoder:
             except Exception:
                 if not self._closed:
                     logger.exception("error decoding WAV audio")
+                    self._clear_wav_header()
                     self._output_ch.close()
                     self._closed = True
                 return
             else:
                 if self._wav_decoder._state == _WavState.STREAMING:
-                    self._wav_header = None
-                # Bound header replay storage for large metadata chunks.
-                if self._wav_header is None or len(self._wav_header) <= 65536:
-                    self._started = True
-                    return
+                    self._clear_wav_header()
+                self._started = True
+                return
 
             assert self._wav_header is not None
-            chunk = bytes(self._wav_header)
-            self._wav_header = None
+            self._wav_header.seek(0)
+            chunk = self._wav_header.read()
+            self._clear_wav_header()
             self._wav_decoder = None
             self._is_wav = False
             self._started = False
@@ -424,6 +434,7 @@ class AudioStreamDecoder:
             self._loop.run_in_executor(self._executor, self._decode_loop)
 
     def end_input(self) -> None:
+        self._clear_wav_header()
         if self._is_wav:
             if self._wav_decoder is not None and not self._closed:
                 try:
@@ -519,6 +530,7 @@ class AudioStreamDecoder:
         return await self._output_ch.__anext__()
 
     async def aclose(self) -> None:
+        self._clear_wav_header()
         if self._closed:
             return
 
