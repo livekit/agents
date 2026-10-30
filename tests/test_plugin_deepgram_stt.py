@@ -694,7 +694,9 @@ _PRERECORDED_RESPONSE = {
 
 
 class _BatchResponse:
-    """The prerecorded response; only `json()` is read off it."""
+    """The prerecorded response; only `ok` and `json()` are read off it."""
+
+    ok = True
 
     async def __aenter__(self) -> _BatchResponse:
         return self
@@ -1125,3 +1127,34 @@ async def test_v1_batch_hint_survives_an_option_update(caplog):
 
     assert session.last_params()["language_hint"] == ["en"]
     assert stt._opts.language_hint == ["en"]
+
+
+async def test_v1_batch_rejection_is_not_retried():
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.agents import APIStatusError
+    from livekit.plugins.deepgram import STT
+
+    requests = 0
+
+    async def handler(request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
+        return web.json_response(
+            {"err_code": "INVALID_AUTH", "err_msg": "Invalid credentials."}, status=401
+        )
+
+    app = web.Application()
+    app.router.add_post("/v1/listen", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        stt = STT(
+            api_key="bad-key", base_url=str(server.make_url("/v1/listen")), http_session=session
+        )
+        with pytest.raises(APIStatusError) as exc_info:
+            await stt.recognize([_frame(160)])
+
+    assert exc_info.value.status_code == 401
+    assert "Invalid credentials." in exc_info.value.message
+    assert requests == 1
