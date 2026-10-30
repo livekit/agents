@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Self
 
 from .._core import Thread
@@ -51,12 +51,10 @@ class Storage:
         self,
         *,
         scope: str | None = None,
-        attributes: dict[str, object] | None = None,
+        attributes: Mapping[str, str] | None = None,
         idle_ttl_seconds: int = 0,
     ) -> ThreadInfo:
-        """A new `AT_` thread, returned once its metadata and database exist. `attributes` maps
-        strings to strings.
-        """
+        """A new `AT_` thread, returned once its metadata and database exist."""
     async def get_thread(self, thread_id: str) -> ThreadInfo:
         """Unknown, deleted or expired threads raise `ThreadNotFound`."""
     async def list_threads(
@@ -71,7 +69,7 @@ class Storage:
         self,
         thread_id: str,
         *,
-        attributes: dict[str, object] | None = None,
+        attributes: Mapping[str, str] | None = None,
         idle_ttl_seconds: int | None = None,
     ) -> ThreadInfo:
         """Merges `attributes` (an empty value deletes the key) and sets the idle TTL when given:

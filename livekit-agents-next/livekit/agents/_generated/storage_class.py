@@ -21,7 +21,8 @@ class ThreadInfo:
     thread_id: str
     scope: str
     """The subject the thread is about, the one threads are listed and granted by."""
-    attributes: dict[str, object]
+    attributes: dict[str, str]
+    """A small string map the application sets and reads back."""
     created_at: int
     last_active: int
     expires_at: int

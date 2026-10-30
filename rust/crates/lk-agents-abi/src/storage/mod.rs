@@ -7,7 +7,9 @@ mod rows;
 pub mod thread;
 pub mod voice;
 
-use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+
+use serde_json::Value;
 
 pub use rows::*;
 
@@ -122,13 +124,12 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn location(&self) -> String;
 
-    /// A new `AT_` thread, returned once its metadata and database exist. `attributes` maps
-    /// strings to strings.
+    /// A new `AT_` thread, returned once its metadata and database exist.
     #[host(await)]
     async fn create_thread(
         &self,
         #[host(kw, default = None)] scope: Option<String>,
-        #[host(default = None)] attributes: Option<Map<String, Value>>,
+        #[host(default = None)] attributes: Option<BTreeMap<String, String>>,
         #[host(default = 0)] idle_ttl_seconds: i64,
     ) -> Result<ThreadInfo, StorageError>;
 
@@ -151,7 +152,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     async fn update_thread(
         &self,
         thread_id: String,
-        #[host(kw, default = None)] attributes: Option<Map<String, Value>>,
+        #[host(kw, default = None)] attributes: Option<BTreeMap<String, String>>,
         #[host(default = None)] idle_ttl_seconds: Option<i64>,
     ) -> Result<ThreadInfo, StorageError>;
 
@@ -213,7 +214,8 @@ pub struct ThreadInfo {
     pub thread_id: String,
     /// The subject the thread is about, the one threads are listed and granted by.
     pub scope: String,
-    pub attributes: Map<String, Value>,
+    /// A small string map the application sets and reads back.
+    pub attributes: BTreeMap<String, String>,
     pub created_at: i64,
     pub last_active: i64,
     pub expires_at: i64,

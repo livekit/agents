@@ -76,12 +76,10 @@ impl Storage {
         Ok(out)
     }
 
-    /// A new `AT_` thread, returned once its metadata and database exist. `attributes` maps
-    /// strings to strings.
+    /// A new `AT_` thread, returned once its metadata and database exist.
     #[pyo3(signature = (*, scope = None, attributes = None, idle_ttl_seconds = 0))]
-    fn create_thread<'py>(&self, py: Python<'py>, scope: ::std::option::Option<::std::string::String>, attributes: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_storage_create_thread_idle_ttl_seconds)] idle_ttl_seconds: i64) -> PyResult<Bound<'py, PyAny>> {
+    fn create_thread<'py>(&self, py: Python<'py>, scope: ::std::option::Option<::std::string::String>, attributes: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>, #[pyo3(from_py_with = _extract_storage_create_thread_idle_ttl_seconds)] idle_ttl_seconds: i64) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::create_thread(&this, scope, attributes, idle_ttl_seconds)
@@ -117,9 +115,8 @@ impl Storage {
     /// Merges `attributes` (an empty value deletes the key) and sets the idle TTL when given:
     /// the activity boundary that moves expiry.
     #[pyo3(signature = (thread_id, *, attributes = None, idle_ttl_seconds = None))]
-    fn update_thread<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, attributes: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_storage_update_thread_idle_ttl_seconds)] idle_ttl_seconds: ::std::option::Option<i64>) -> PyResult<Bound<'py, PyAny>> {
+    fn update_thread<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, attributes: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>, #[pyo3(from_py_with = _extract_storage_update_thread_idle_ttl_seconds)] idle_ttl_seconds: ::std::option::Option<i64>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::update_thread(&this, thread_id, attributes, idle_ttl_seconds)

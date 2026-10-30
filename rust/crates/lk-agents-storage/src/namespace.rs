@@ -2,6 +2,7 @@
 //! configuration and opened on first use, its records converted to the ABI's; and the
 //! storage-owned thread rows as the host reads them.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +19,7 @@ use lk_agents_abi::storage::{
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tokio::sync::OnceCell;
 
 use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
@@ -105,18 +106,6 @@ fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration
     }
 }
 
-fn attributes(
-    v: Option<Map<String, Value>>,
-) -> Result<std::collections::HashMap<String, String>, StorageError> {
-    v.unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| match v {
-            Value::String(s) => Ok((k, s)),
-            _ => Err(StorageError::Invalid(format!("attribute {k} is not a string"))),
-        })
-        .collect()
-}
-
 /// Whole seconds for the wire; `0` sends none, the default.
 fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     (seconds > 0).then_some(pbjson_types::Duration { seconds, nanos: 0 })
@@ -135,7 +124,7 @@ fn thread_info(t: ThreadRecord) -> ThreadInfo {
     ThreadInfo {
         thread_id: t.thread_id,
         scope: t.scope,
-        attributes: t.attributes.into_iter().map(|(k, v)| (k, Value::String(v))).collect(),
+        attributes: t.attributes.into_iter().collect(),
         created_at: seconds_of(t.created_at),
         last_active: seconds_of(t.last_active),
         expires_at: seconds_of(t.expires_at),
@@ -287,13 +276,12 @@ impl HostStorageClass for Namespace {
     async fn create_thread(
         &self,
         scope: Option<String>,
-        attributes: Option<Map<String, Value>>,
+        attributes: Option<BTreeMap<String, String>>,
         idle_ttl_seconds: i64,
     ) -> Result<ThreadInfo, StorageError> {
-        let attributes = self::attributes(attributes)?;
         let request = CreateRequest {
             scope: scope.unwrap_or_default(),
-            attributes,
+            attributes: attributes.unwrap_or_default().into_iter().collect(),
             idle_ttl: ttl(idle_ttl_seconds),
         };
         Ok(thread_info(self.storage().await?.create_thread(request).await?))
@@ -320,10 +308,10 @@ impl HostStorageClass for Namespace {
     async fn update_thread(
         &self,
         thread_id: String,
-        attributes: Option<Map<String, Value>>,
+        attributes: Option<BTreeMap<String, String>>,
         idle_ttl_seconds: Option<i64>,
     ) -> Result<ThreadInfo, StorageError> {
-        let attributes = self::attributes(attributes)?;
+        let attributes = attributes.unwrap_or_default().into_iter().collect();
         let idle_ttl = idle_ttl_seconds.map(|s| pbjson_types::Duration { seconds: s, nanos: 0 });
         let request = UpdateRequest { thread_id, attributes, idle_ttl };
         Ok(thread_info(self.storage().await?.update_thread(request).await?))
