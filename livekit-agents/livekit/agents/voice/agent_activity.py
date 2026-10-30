@@ -540,6 +540,10 @@ class AgentActivity(RecognitionHooks):
         self._answering: tuple[str, _Question] | None = None
         # a spoken turn whose transcript has not arrived: a realtime model may answer it first
         self._turn_transcript: asyncio.Future[str] | None = None
+        # clear while a question asked on the call waits for the person's next turn: background
+        # replies wait for it, so nothing is said between the question and that turn
+        self._turn_after_question = asyncio.Event()
+        self._turn_after_question.set()
 
         # the history this binding works on: the session's, continued from the previous
         # activity on a handoff, or the one handed to start()/update_agent(chat_ctx=)
@@ -1803,6 +1807,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            self._turn_after_question.set()
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
@@ -3383,6 +3388,7 @@ class AgentActivity(RecognitionHooks):
             relay = claimed
             handle.add_done_callback(lambda _: self._claim_next_turn(relay, question))
         question.asked = True
+        self._turn_after_question.clear()
         if (run_state := self._session._global_run_state) is not None and not run_state.done():
             run_state._watch_handle(handle)
 
@@ -3390,6 +3396,7 @@ class AgentActivity(RecognitionHooks):
         """The person's message answers the question in front of them: it is the output of the
         call that asked. The next one is asked unless an answer goes to a delegate's tool, whose
         task holds the floor until the tool returns."""
+        self._turn_after_question.set()
         front = next((q for q in self._questions if q.asked), None)
         if front is None:
             return

@@ -872,6 +872,10 @@ class _CallSink:
                     target_activity = self._owning_activity
                 else:
                     target_activity = await session.wait_for_idle()
+                if not target_activity._turn_after_question.is_set():
+                    # a question in front of the person holds the floor until their next turn
+                    await target_activity._turn_after_question.wait()
+                    continue
                 if all(u.ctx.speech_handle.done() for u in self._pending_updates):
                     break
         except ActivityClosedError:

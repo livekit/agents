@@ -21,7 +21,7 @@ from .a2a_driver import AGENT, Door, Reply, ScriptedLLM, call, no_project_env  #
 from .fake_io import FakeAudioOutput
 from .fake_realtime import ScriptedRealtimeModel
 from .test_call_lane import held
-from .test_call_progress import answering, instructed, soon, spoken
+from .test_call_progress import answering, instructed, outputs, slow_expert, soon, spoken, told
 from .test_live_inbox import said
 
 pytestmark = [pytest.mark.unit]
@@ -225,3 +225,33 @@ async def test_a_verbatim_question_on_a_model_with_no_voice_is_asked_through_a_r
     held = [i for i in asking_reply.items if i.type == "function_call_output"]
     assert [o.output for o in held].count("Which day?") <= 1
     assert spoken(session).count("Which day?") == 1
+
+
+@pytest.mark.rule("B95")
+async def test_a_result_that_lands_while_a_question_waits_is_told_after_the_persons_turn(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate, ended, heard = asyncio.Event(), list[str](), list[tuple[str, str]]()
+    model = ScriptedRealtimeModel(
+        Reply("", [call("slots", "s1", request="slots")], when=answering("any slots?")),
+        Reply("", [call("ask", "a1", request="book sunday")], when=answering("book sunday")),
+        Reply("We have 10 slots.", when=told("s1_final")),
+        Reply("", [call("ask", "a2", request="yes")], when=answering("yes")),
+    )
+    slots = expert(slow_expert(gate, ended), "slots", tool="slots")
+    booking = expert(asking("Sunday at 14:00?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[slots, booking]))
+        rt = model.active_session
+        rt.hear("any slots?")
+        await soon(lambda: [i for i in session.history.items if i.type == "function_call"], "slots")
+        rt.hear("book sunday")
+        await soon(lambda: "Sunday at 14:00?" in spoken(session), "the question")
+        gate.set()
+        await soon(lambda: "There are 10 slots." in outputs(session.history), "the result")
+        await asyncio.sleep(0.3)
+        assert spoken(session)[-1] == "Sunday at 14:00?"
+        assert not any(told("s1_final")(r) for r in model.requests), "told over the question"
+        rt.hear("yes")
+        await soon(lambda: "We have 10 slots." in spoken(session), "the result told")
+
