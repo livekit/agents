@@ -202,29 +202,6 @@ class SpeakingRateStream:
 
         return self._spectral_flux(audio, sample_rate)
 
-    def _stft(
-        self,
-        audio: np.ndarray[tuple[int], np.dtype[np.float32]],
-        frame_length: int,
-        hop_length: int,
-    ) -> np.ndarray[tuple[int, int], np.dtype[np.complex128]]:
-        num_frames = (len(audio) - frame_length) // hop_length + 1
-        result = np.zeros((frame_length // 2 + 1, num_frames), dtype=np.complex128)
-
-        window = np.hanning(frame_length)
-        scale_factor = 1.0 / np.sqrt(np.sum(window**2))
-        for i in range(num_frames):
-            start = i * hop_length
-            end = start + frame_length
-            frame = audio[start:end]
-            windowed = frame * window
-
-            # perform fft and scale
-            fft_result = np.fft.rfft(windowed)
-            result[:, i] = fft_result * scale_factor
-
-        return result
-
     def _spectral_flux(
         self, audio: np.ndarray[tuple[int], np.dtype[np.float32]], sample_rate: int
     ) -> float:
@@ -236,22 +213,20 @@ class SpeakingRateStream:
         frame_length = int(sample_rate * 0.025)  # 25ms
         hop_length = frame_length // 2  # 50% overlap
 
-        Zxx = self._stft(audio, frame_length, hop_length)
-
-        # calculate spectral flux (sum of spectral magnitude changes between frames)
-        spectral_magnitudes = np.abs(Zxx)
-        spectral_flux_values = []
-
-        for i in range(1, spectral_magnitudes.shape[1]):
-            # l1 norm of difference between consecutive spectral frames
-            flux = np.sum(np.abs(spectral_magnitudes[:, i] - spectral_magnitudes[:, i - 1]))
-            spectral_flux_values.append(flux)
-
-        if not spectral_flux_values:
+        num_frames = (len(audio) - frame_length) // hop_length + 1
+        if num_frames < 2:
             return 0.0
 
-        avg_flux = float(np.mean(spectral_flux_values))
-        return avg_flux
+        # STFT of all frames at once: this runs on the event loop for every window,
+        # so avoid a Python loop over the frames
+        window = np.hanning(frame_length)
+        scale_factor = 1.0 / np.sqrt(np.sum(window**2))
+        frames = np.lib.stride_tricks.sliding_window_view(audio, frame_length)[::hop_length]
+        spectral_magnitudes = np.abs(np.fft.rfft(frames * window, axis=1) * scale_factor)
+
+        # spectral flux: l1 norm of the difference between consecutive spectral frames
+        flux = np.sum(np.abs(np.diff(spectral_magnitudes, axis=0)), axis=1)
+        return float(np.mean(flux))
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio frame for syllable rate detection"""
