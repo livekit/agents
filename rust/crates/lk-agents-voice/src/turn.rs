@@ -3,11 +3,11 @@
 
 use crate::agent_activity::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
-use lk_agents_abi::{Maybe, secs};
 use lk_agents_abi::voice::session_options::{
     EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode, PreemptiveKwargs,
     TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
 };
+use lk_agents_abi::{Maybe, secs};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -131,7 +131,7 @@ pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
 /// The leaves an `Agent` may override: from its `turn_handling`, endpointing, `interruption`
 /// enabled and mode, preemptive generation and a `turn_detection` literal (the turn limit is
 /// session-only); its `min_consecutive_speech_delay` (seconds) and `use_tts_aligned_transcript`.
-/// `None` defers to the session's.
+/// An absent leaf defers to the session's.
 pub fn agent_layer(
     turn_handling: Option<&TurnHandlingKwargs>,
     min_consecutive_speech_delay: Option<f64>,
@@ -140,6 +140,12 @@ pub fn agent_layer(
     let mut o = turn_handling
         .map(|kw| turn_handling_layer(&TurnHandlingKwargs { user_turn_limit: None, ..*kw }))
         .unwrap_or_default();
+    // `Agent(turn_detection=None)` is given: automatic selection, not the session's mode.
+    if turn_handling
+        .is_some_and(|kw| matches!(kw.turn_detection, Maybe::Given(TurnDetectionKwarg::Null)))
+    {
+        o.turn.detection = Some(TurnDetection::Auto);
+    }
     let InterruptionOptions { enabled, mode, .. } = o.turn.interruption;
     o.turn.interruption = InterruptionOptions { enabled, mode, ..InterruptionOptions::default() };
     o.speech.min_consecutive_speech_delay =

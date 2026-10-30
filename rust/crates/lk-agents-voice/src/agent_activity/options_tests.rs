@@ -134,3 +134,22 @@ fn an_override_wins_leaf_by_leaf_until_its_own_release() {
     config.release_override(2);
     assert_eq!(delays(&config), (Some(ms(500)), Some(ms(4000))), "the agent layer is back");
 }
+
+// Catches: an agent's `turn_detection=None` deferring to the session's mode. The reference takes
+// the agent's given value, and `None` is automatic selection (`agent_activity.py`).
+#[test]
+fn an_agents_turn_detection_none_is_automatic_selection() {
+    let kwargs = TurnHandlingKwargs {
+        turn_detection: Maybe::Given(TurnDetectionKwarg::Null),
+        ..TurnHandlingKwargs::default()
+    };
+    let mut session = AgentSessionOptions::default();
+    session.turn.detection = Some(TurnDetection::Stt);
+    let stack = ConfigStack {
+        session,
+        agent: Some(crate::turn::agent_layer(Some(&kwargs), None, None)),
+        overrides: Vec::new(),
+    };
+    let legs = LegSet::from(SessionLegs { stt: true, vad: true, ..SessionLegs::none() });
+    assert_eq!(stack.resolve(&legs).turn.detection, Some(TurnDetection::Auto));
+}
