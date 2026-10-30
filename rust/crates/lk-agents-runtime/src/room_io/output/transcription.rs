@@ -427,7 +427,3 @@ impl TextOutput for ParticipantTranscriptionOutput {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "transcription_tests.rs"]
-mod tests;

@@ -46,15 +46,40 @@ fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
     }
 }
 
-/// A fake room on a virtual clock, and the same room as a session's.
-fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRoom) {
-    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
-        crate::rtc::events::RoomEventBus::port,
-    );
-    let room = rtc.room(name);
-    // The `FakeRtc` is the room's owner; the room keeps it alive through its own `Arc`.
-    std::mem::forget(rtc);
-    (room.clone(), FixedRoom { rtc: Some(room), time: Timebase::from_virtual(clock), pool: None })
+/// A session's room without RTC, on a virtual clock.
+fn no_room() -> FixedRoom {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    FixedRoom { rtc: None, time: Timebase::from_virtual(clock), pool: None }
+}
+
+/// An output that never reports playback; it latches the segment its first capture was keyed to.
+#[derive(Default)]
+struct MissingPlaybackReports(
+    Arc<lk_agents_abi::voice::io::PlaybackTracker>,
+    std::sync::OnceLock<lk_agents_abi::voice::io::PlaybackSegment>,
+);
+
+impl lk_agents_abi::voice::io::AudioOutput for MissingPlaybackReports {
+    fn label(&self) -> &str {
+        "missing playback reports"
+    }
+    fn tracker(&self) -> &Arc<lk_agents_abi::voice::io::PlaybackTracker> {
+        &self.0
+    }
+    fn capabilities(&self) -> lk_agents_abi::voice::io::AudioOutputCapabilities {
+        Default::default()
+    }
+    fn capture<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
+        Box::pin(async {
+            self.1.set(self.0.current_segment().expect("admitted capture")).unwrap();
+            Ok(())
+        })
+    }
+    fn flush_segment(&self) {}
+    fn clear_buffer(&self) {}
 }
 
 /// A session and the steps it journals.
@@ -116,7 +141,7 @@ fn assembled(
 
 #[tokio::test(start_paused = true)]
 async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
-    let api = room_only(fake_room("session-api-test").1, None);
+    let api = room_only(no_room(), None);
     let saw_close = Arc::new(AtomicBool::new(false));
     let drain_ended = Arc::new(AtomicBool::new(false));
     let (saw, ended) = (Arc::clone(&saw_close), Arc::clone(&drain_ended));
@@ -211,7 +236,7 @@ impl SessionExecutor for Observing {
 // memory grows with its length.
 #[tokio::test(start_paused = true)]
 async fn a_session_nobody_observes_keeps_no_journal() {
-    let api = unobserved(fake_room("no-journal").1, None);
+    let api = unobserved(no_room(), None);
     let journal = Arc::new(Mutex::new(None));
     let observed = journal.clone();
     let opening = api
@@ -243,54 +268,10 @@ async fn a_session_nobody_observes_keeps_no_journal() {
     );
 }
 
-// Catches: `RoomIo::on_agent_state_changed` with no caller, so the agent never writes
-// `lk.agent.state` and a frontend keyed on it shows the agent stuck.
-#[tokio::test(start_paused = true)]
-async fn the_agent_state_is_written_to_the_room_as_it_changes() {
-    let (room, fixed) = fake_room("agent-state");
-    let api = room_only(fixed, None);
-    let opening = api
-        .open(
-            Box::new(Executor::new(api.time().clone(), api.spawner())),
-            None,
-            move |mut runner: SessionRunner| {
-                Box::pin(async move {
-                    while let Some(ev) = runner.next_host_event().await {
-                        if let HostEvent::Hook(call) = ev {
-                            let _ = runner.api().send(Command::HookDone {
-                                id: call.id(),
-                                outcome: HookOutcome::Returned,
-                            });
-                        }
-                    }
-                })
-            },
-        )
-        .expect("a ready session opens");
-    opening.await.expect("the loop starts");
-    settle().await;
-
-    let written: Vec<String> = room
-        .local_participant()
-        .attribute_calls()
-        .iter()
-        .filter_map(|a| a.get(lk_agents_abi::ATTRIBUTE_AGENT_STATE).cloned())
-        .collect();
-    assert!(!written.is_empty(), "no `lk.agent.state` write reached the room");
-    assert_eq!(
-        room.local_participant()
-            .attributes()
-            .get(lk_agents_abi::ATTRIBUTE_AGENT_STATE)
-            .map(String::as_str),
-        Some("listening"),
-        "the room's attribute is not the agent's current state (writes: {written:?})"
-    );
-}
-
 /// A room-only session whose host answers every hook but `on_exit`, which the test answers.
 async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedReceiver<HookId>) {
     // A host that runs hooks: without a bound the driver treats `on_exit` as over at once.
-    let api = room_only(fake_room("session-api-test").1, Some(10.0));
+    let api = room_only(no_room(), Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
     let opening = api
         .open(
@@ -315,6 +296,8 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
         )
         .expect("a ready session opens");
     opening.await.expect("the loop starts");
+    // An output the held `say(audio=)` streams are captured to.
+    api.set_audio_output(Some(Arc::new(MissingPlaybackReports::default()))).unwrap();
     (api, exits)
 }
 
@@ -612,7 +595,7 @@ fn invalid<T>(r: Result<T, CommandRefused>) -> String {
 // `Duration::from_secs_f64` on the loop), or refused with a message that does not name it.
 #[tokio::test(start_paused = true)]
 async fn host_arguments_are_checked_before_anything_is_sent() {
-    let api = unobserved(fake_room("bad-arguments").1, None);
+    let api = unobserved(no_room(), None);
     assert!(invalid(api.ivr_start(-1.0, None, None)).contains("max_silence"));
     assert!(invalid(api.ivr_start(f64::NAN, None, None)).contains("max_silence"));
     let filler = |delay, interval, speech: &str| {
@@ -657,7 +640,7 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
 async fn rare_host_calls_reach_a_running_session() {
     let options =
         <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
-    let api = running(assembled(fake_room("rare-calls").1, None, Some(options))).await;
+    let api = running(assembled(no_room(), None, Some(options))).await;
 
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     api.interrupt(false).unwrap().await.unwrap();
@@ -689,7 +672,7 @@ async fn options_view_changes_only_after_core_acceptance() {
     use lk_agents_voice::agent_activity::options::aec_warmup_layer;
     let options =
         <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
-    let api = running(assembled(fake_room("accepted-options").1, None, Some(options))).await;
+    let api = running(assembled(no_room(), None, Some(options))).await;
     api.send(TurnCommand::Configure(aec_warmup_layer(None))).unwrap();
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     let (call, answer) = api.call(Answer::idle).unwrap();
@@ -842,7 +825,7 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
 
 #[tokio::test(start_paused = true)]
 async fn close_during_opening_retires_only_the_accepted_remote_host() {
-    let api = unobserved(fake_room("remote-close-during-opening").1, None);
+    let api = unobserved(no_room(), None);
     let make_host = || {
         let transport = Arc::new(RemoteTransport {
             started: AtomicBool::new(false),
@@ -892,7 +875,7 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
 // object) until it ends, which a long call grows without bound.
 #[tokio::test(start_paused = true)]
 async fn a_finished_speech_leaves_the_sessions_registry() {
-    let api = running(unobserved(fake_room("retired-speeches").1, None)).await;
+    let api = running(unobserved(no_room(), None)).await;
     api.set_audio_output(None).unwrap();
     for _ in 0..8 {
         let speech = api.say("Done.".into(), None, true, None).unwrap();

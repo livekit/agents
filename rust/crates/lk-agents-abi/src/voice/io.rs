@@ -972,16 +972,17 @@ mod playback_identity_regression {
     use super::{
         PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment, PlaybackTracker,
     };
-    use lk_agents_test_support::playback::PlaybackReports;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    /// Counts the events the tracker reports.
     #[derive(Default)]
-    struct Reports(PlaybackReports<PlaybackEvent>);
+    struct Reports(AtomicUsize);
 
     impl PlaybackObserver for Reports {
-        fn on_playback_event(&self, event: &PlaybackEvent) {
-            self.0.record(event.clone());
+        fn on_playback_event(&self, _: &PlaybackEvent) {
+            self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -1010,9 +1011,9 @@ mod playback_identity_regression {
             Duration::ZERO,
             Duration::from_millis(20)
         ));
-        assert_eq!(reports.0.event_count(), 1);
+        assert_eq!(reports.0.load(Ordering::SeqCst), 1);
         assert!(tracker.playback_finished(new, finished));
-        assert_eq!(reports.0.event_count(), 2);
+        assert_eq!(reports.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]

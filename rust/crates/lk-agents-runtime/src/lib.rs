@@ -67,5 +67,3 @@ pub mod avatar;
 /// Runtime room execution over the ABI-declared SDK capabilities.
 pub mod room_io;
 pub mod rtc;
-#[cfg(test)]
-pub(crate) use lk_agents_test_support::rtc as test_support_rtc;

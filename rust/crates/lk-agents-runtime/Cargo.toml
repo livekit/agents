@@ -41,7 +41,6 @@ libc = "0.2"
 
 [dev-dependencies]
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
-lk-agents-test-support = { path = "../lk-agents-test-support" }
 bytes = "1"
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
 lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] }

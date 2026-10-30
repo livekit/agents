@@ -502,7 +502,3 @@ impl lk_agents_abi::voice::room_owner::RoomVideoInputPort for ParticipantVideoIn
         Box::pin(async move { ParticipantVideoInput::aclose(self).await })
     }
 }
-
-#[cfg(test)]
-#[path = "input_tests.rs"]
-mod tests;

@@ -1,11 +1,37 @@
 use super::*;
 use lk_agents_abi::Ts;
-use lk_agents_test_support::playback::KeyedPlayback;
 use lk_agents_voice::transcription::synchronizer::Liang;
 use std::time::Duration;
 use tokio::sync::watch;
 
 // ----------------------------------------------------------------------------- the chain
+
+/// A physical output that latches each frame's segment key; the test reports its playback.
+#[derive(Default)]
+struct KeyedPlayback(Arc<PlaybackTracker>, std::sync::Mutex<Option<PlaybackSegment>>);
+
+impl AudioOutput for KeyedPlayback {
+    fn label(&self) -> &str {
+        "keyed playback"
+    }
+    fn tracker(&self) -> &Arc<PlaybackTracker> {
+        &self.0
+    }
+    fn capabilities(&self) -> lk_agents_abi::voice::io::AudioOutputCapabilities {
+        lk_agents_abi::voice::io::AudioOutputCapabilities { pause: true }
+    }
+    fn capture<'a>(
+        &'a self,
+        _: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
+        Box::pin(async move {
+            *self.1.lock().unwrap() = self.0.current_segment();
+            Ok(())
+        })
+    }
+    fn flush_segment(&self) {}
+    fn clear_buffer(&self) {}
+}
 
 /// The words the synchroniser released, with where each one's audio starts.
 struct Shown(watch::Sender<Vec<(String, f64)>>);
@@ -40,7 +66,7 @@ impl Chain {
             speed: 1.0,
             hyphenator: Arc::new(Liang),
             clock: Arc::new(lk_agents_net::clock::RealClock::new()),
-            spawner: Arc::new(lk_agents_test_support::TokioSpawner::current()),
+            spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
         });
         // As the session's first activation does: both legs attached open the gate.
         sync.audio_output().on_attached();
@@ -79,8 +105,8 @@ impl Chain {
         out.flush();
     }
 
-    fn key(&self) -> lk_agents_abi::voice::io::PlaybackSegment {
-        self.output.segment()
+    fn key(&self) -> PlaybackSegment {
+        self.output.1.lock().unwrap().expect("the physical output accepted a frame")
     }
 
     fn played(&self, offset_ms: u64, ms: u64) {

@@ -520,7 +520,58 @@ async fn twilio_originate(
 mod tests {
     use super::*;
     use lk_agents_abi::voice::workflows::IoEnableState;
+    use lk_agents_abi::voice::rtc::{
+        ByteStreamIngress, ConnectionState, LocalParticipant, ParticipantIdentity,
+        RemoteParticipant, RoomEventBus, RtcError, TextStreamIngress,
+    };
     use lk_agents_voice::workflows::prompts::warm_transfer as p;
+
+    /// A caller room these tests never reach: each stops before the transfer touches it.
+    struct Untouched;
+    impl RtcRoom for Untouched {
+        fn name(&self) -> Result<String, RtcError> {
+            unreachable!()
+        }
+        fn connection_state(&self) -> Result<ConnectionState, RtcError> {
+            unreachable!()
+        }
+        fn local(&self) -> &Arc<dyn LocalParticipant> {
+            unreachable!()
+        }
+        fn participant(
+            &self,
+            _: &ParticipantIdentity,
+        ) -> Result<Option<Arc<dyn RemoteParticipant>>, RtcError> {
+            unreachable!()
+        }
+        fn remote_participants(&self) -> Result<Vec<Arc<dyn RemoteParticipant>>, RtcError> {
+            unreachable!()
+        }
+        fn event_bus(&self) -> &RoomEventBus {
+            unreachable!()
+        }
+        fn register_byte_stream_handler(
+            &self,
+            _: &str,
+            _: Arc<dyn ByteStreamIngress>,
+        ) -> Result<(), RtcError> {
+            unreachable!()
+        }
+        fn unregister_byte_stream_handler(&self, _: &str) -> Result<(), RtcError> {
+            unreachable!()
+        }
+        fn register_text_stream_handler(
+            &self,
+            _: &str,
+            _: Arc<dyn TextStreamIngress>,
+        ) -> Result<(), RtcError> {
+            unreachable!()
+        }
+        fn unregister_text_stream_handler(&self, _: &str) -> Result<(), RtcError> {
+            unreachable!()
+        }
+    }
+
     fn transfer() -> Arc<TransferRun> {
         let plan = TransferPlan::resolve(TransferConfig {
             sip_call_to: Some("+15550100".to_owned()),
@@ -637,10 +688,7 @@ mod tests {
         use std::{future::Future, task::Poll};
         let transfer = transfer();
         let host = Arc::new(Holding::default());
-        let (rtc, _) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
-            crate::rtc::events::RoomEventBus::port,
-        );
-        let caller = rtc.room("transfer");
+        let caller: Arc<dyn RtcRoom> = Arc::new(Untouched);
         let first = transfer.run(host.clone(), caller.clone());
         let mut first = std::pin::pin!(first);
         let polled = std::future::poll_fn(|cx| Poll::Ready(first.as_mut().poll(cx))).await;
@@ -696,17 +744,15 @@ mod tests {
             call_token: None,
             original_caller_number: None,
         };
-        let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
-            crate::rtc::events::RoomEventBus::port,
-        );
-        let room: Arc<dyn RtcRoom> = rtc.room("late-create");
+        let clock = lk_agents_abi::VirtualClock::new();
+        let room: Arc<dyn RtcRoom> = Arc::new(Untouched);
         let mut dialing = Box::pin(twilio_originate(
             &port,
             &dial,
             "late-create",
             &room,
             Some(Duration::from_secs(1)),
-            &*clock,
+            &clock,
             spawner.clone(),
         ));
         let first =

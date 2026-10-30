@@ -75,6 +75,3 @@ python = [
 serde = []
 # The zeroed metrics records tests fill in field by field (`metrics::testkit`).
 testkit = []
-
-[dev-dependencies]
-lk-agents-test-support = { path = "../lk-agents-test-support" }

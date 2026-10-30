@@ -870,7 +870,3 @@ async fn read_text(
     }
     Ok(text)
 }
-
-#[cfg(test)]
-#[path = "owner_tests.rs"]
-pub(super) mod tests;

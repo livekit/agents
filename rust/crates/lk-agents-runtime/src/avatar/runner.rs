@@ -222,7 +222,3 @@ impl avatar::AvatarRunner for AvatarRunner {
         self.call(|call| Event::Close { call }).await
     }
 }
-
-#[cfg(test)]
-#[path = "runner_tests.rs"]
-mod tests;

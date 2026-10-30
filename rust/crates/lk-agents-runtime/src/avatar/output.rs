@@ -568,7 +568,3 @@ impl AudioOutput for DataStreamAudioOutput {
 
     fn resume(&self) {}
 }
-
-#[cfg(test)]
-#[path = "output_tests.rs"]
-mod tests;

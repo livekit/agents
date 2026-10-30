@@ -306,7 +306,31 @@ mod text_node_tests {
     use super::*;
     use std::task::{Context, Poll, Waker};
 
-    use lk_agents_test_support::text::BufferedTextNode;
+    /// A text node whose drain finishes when the test completes it (or on its cancel).
+    #[derive(Default)]
+    struct BufferedTextNode(tokio::sync::watch::Sender<bool>);
+
+    impl BufferedTextNode {
+        fn complete(&self) {
+            self.0.send_replace(true);
+        }
+    }
+
+    impl TextNode for BufferedTextNode {
+        fn capture_text(&self, _: &str) {}
+        fn capture_timed(&self, _: &TimedString) {}
+        fn flush(&self) {}
+        fn cancel(&self) {
+            self.complete();
+        }
+        fn retain_until_drained(&self, _: Box<dyn Send>) {}
+        fn drain(&self) -> lk_agents_abi::BoxFuture<'_, IoResult<()>> {
+            Box::pin(async move {
+                let _ = self.0.subscribe().wait_for(|done| *done).await;
+                Ok(())
+            })
+        }
+    }
 
     struct Destination;
     impl TextOutput for Destination {

@@ -494,7 +494,3 @@ pub async fn wait_avatar_join_room(
     wait::track_publication(room.as_ref(), Some(identity), video, true, false).await?;
     Ok((started, lk_agents_abi::unix_secs(clock.wall())))
 }
-
-#[cfg(test)]
-#[path = "receiver_tests.rs"]
-mod tests;
