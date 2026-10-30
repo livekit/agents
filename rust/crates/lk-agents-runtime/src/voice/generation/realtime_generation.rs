@@ -126,8 +126,8 @@ pub(crate) async fn realtime_generation_task(
             text.flush();
         }
         let text_result = match generation.text_out.as_deref() {
-            Some(text) => super::forward::finish_text(text, handle, played.is_err()).await.map(drop),
-            None => Ok(()),
+            Some(text) => super::forward::finish_text(text, handle, played.is_err()).await,
+            None => Ok(true),
         };
         binding.text_drained();
         let part = match played {
@@ -139,7 +139,8 @@ pub(crate) async fn realtime_generation_task(
                 return Err(heard_until(&mut generation, wake, handle, failed.error));
             }
         };
-        if generation.state.end_unvoiced(&part, generation.text_out.is_some()) {
+        let delivered = matches!(text_result, Ok(true));
+        if generation.state.end_unvoiced(&part, generation.text_out.is_some(), delivered) {
             let output = audio_out.as_deref().expect("the binding has an audio output");
             end_unvoiced(shared, handle.id(), output);
         }

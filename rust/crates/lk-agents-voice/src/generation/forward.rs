@@ -224,14 +224,19 @@ impl SegmentPlan {
         }
     }
 
-    /// A transcript-only segment still ends the bound audio leg when all its text was forwarded.
+    /// A transcript-only segment still ends the bound audio leg when all its text was forwarded
+    /// and `delivered` through the text chain. A chain cancelled with the words still in it (a cut
+    /// `transcription_node`) ends nothing: the synchroniser would take an audio end with no words
+    /// as a segment of its own, which the next speech's words join (seed 24984).
     pub fn end_unvoiced(
         &self,
         heard: &crate::transcription::Heard,
         leg: Option<TextLegState>,
+        delivered: bool,
     ) -> bool {
         self.audio_output
             && self.text_output
+            && delivered
             && leg.is_some_and(|leg| leg.forwarded)
             && heard.frames == 0
             && heard.complete

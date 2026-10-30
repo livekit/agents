@@ -333,10 +333,9 @@ impl Pump<'_> {
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included. The activated binding decides it.
         let leg_state = text_out.map(|leg| *leg.state());
-        let unvoiced = plan(playback.binding).end_unvoiced(&heard, leg_state);
+        let ended = plan(playback.binding);
         // Its words settle below first: a `transcription_node` emits them later, or never when the
-        // speech is cut, and an audio end the synchroniser took with no words would open a
-        // segment of its own that the next speech's words join (seed 24984).
+        // speech is cut.
         let delivered = match playback.binding.text() {
             Some(text) => {
                 let result = finish_text(text.as_ref(), self.handle, false).await;
@@ -345,7 +344,7 @@ impl Pump<'_> {
             }
             None => true,
         };
-        if unvoiced && delivered {
+        if ended.end_unvoiced(&heard, leg_state, delivered) {
             let audio = playback.binding.audio().expect("bound audio output");
             end_unvoiced(shared, self.handle.id(), audio.as_ref());
         }

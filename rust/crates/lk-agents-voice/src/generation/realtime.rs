@@ -121,12 +121,15 @@ impl RealtimePlayout {
     }
 
     /// A message that played no audio but forwarded words ends the bound audio leg, as the
-    /// pipeline's transcript-only segment does. One with no words ends nothing: its text leg never
-    /// opened a segment, and an audio end alone would open one the next speech's words pair with.
-    pub fn end_unvoiced(&self, heard: &Heard, has_text_output: bool) -> bool {
+    /// pipeline's transcript-only segment does, once the text chain `delivered` them. One with no
+    /// words ends nothing: its text leg never opened a segment, and an audio end alone would open
+    /// one the next speech's words pair with; nor does one whose chain was cancelled with the
+    /// words still in it (a cut `transcription_node`).
+    pub fn end_unvoiced(&self, heard: &Heard, has_text_output: bool, delivered: bool) -> bool {
         heard.frames == 0
             && heard.complete
             && has_text_output
+            && delivered
             && !self.text().is_empty()
             && self.has_audio_output
     }
@@ -384,7 +387,7 @@ mod tests {
         playout.bind(true);
         let _ = playout.handle(started("m1"), observed());
         let silent = Heard::complete(String::new(), Duration::ZERO, 0);
-        assert!(!playout.end_unvoiced(&silent, true), "a message with no words ends nothing");
+        assert!(!playout.end_unvoiced(&silent, true, true), "a message with no words ends nothing");
 
         let delta = rt::TextDelta {
             message_id: "m1".into(),
@@ -393,6 +396,6 @@ mod tests {
             start_time: None,
         };
         let _ = playout.handle(Event::TextDelta(delta), observed());
-        assert!(playout.end_unvoiced(&silent, true), "its words end the audio leg with none");
+        assert!(playout.end_unvoiced(&silent, true, true), "its words end the audio leg with none");
     }
 }
