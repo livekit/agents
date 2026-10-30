@@ -105,6 +105,10 @@ def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
     return NOT_GIVEN
 
 
+def _supports_context_update(model: str, use_vertexai: bool) -> bool:
+    return bool(use_vertexai and "3.8" in model)
+
+
 def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
     """Warn when a known model may not be available on the selected API."""
     if use_vertexai and model in KNOWN_GEMINI_API_MODELS and model not in KNOWN_VERTEXAI_MODELS:
@@ -193,6 +197,7 @@ class _RealtimeOptions:
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    labels: NotGivenOr[dict[str, str]] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
 
 
@@ -270,6 +275,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        labels: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -311,6 +317,7 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
                 thinking_level is not supported by gemini-3.8-live on the Gemini API.
+            labels (dict[str, str], optional): Custom labels to attach to the Vertex AI request. Defaults to None.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
@@ -334,14 +341,14 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
-        if use_vertexai and is_given(tool_response_scheduling):
-            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
                 if use_vertexai
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
+        if use_vertexai and "3.8" not in model and is_given(tool_response_scheduling):
+            _warn_vertex_scheduling_unsupported()
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -353,7 +360,7 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
                 mutable_chat_context=True,
                 mutable_instructions=True,
-                mutable_tools=False,
+                mutable_tools=_supports_context_update(model, use_vertexai),
                 per_response_tool_choice=False,
             )
         )
@@ -436,6 +443,7 @@ class RealtimeModel(llm.RealtimeModel):
             media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            labels=labels,
             credentials=credentials,
         )
 
@@ -557,6 +565,10 @@ class RealtimeSession(llm.RealtimeSession):
         # not carry an id, since the server never issued it. kept for the session's lifetime: a
         # resumption can replay a response long after it was first queued
         self._synthetic_call_ids: set[str] = set()
+        # a context_update changed the instructions/tools of this session. a resumed
+        # session keeps the ones it was created with, so they are sent again on resume
+        self._context_updated = False
+        self._pending_tool_continuation = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -601,6 +613,7 @@ class RealtimeSession(llm.RealtimeSession):
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
+        self._pending_tool_continuation = False
 
     def update_options(
         self,
@@ -629,7 +642,7 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
-            if self._opts.vertexai:
+            if self._opts.vertexai and "3.8" not in self._opts.model:
                 _warn_vertex_scheduling_unsupported()
             # no need to restart
 
@@ -661,8 +674,18 @@ class RealtimeSession(llm.RealtimeSession):
                     self._mark_restart_needed()
                     return
 
-            if not self._realtime_model.capabilities.mutable_instructions:
-                return
+                if not self._realtime_model.capabilities.mutable_instructions:
+                    return
+
+                if _supports_context_update(self._opts.model, self._opts.vertexai):
+                    logger.debug("Updating instructions mid-session via context_update")
+                    self._context_updated = True
+                    self._send_client_event(
+                        types.LiveClientContextUpdate(
+                            system_instruction=types.Content(parts=[types.Part(text=instructions)])
+                        )
+                    )
+                    return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
             logger.debug("Updating instructions mid-session")
@@ -728,9 +751,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
+            supports_scheduling = not self._opts.vertexai or "3.8" in self._opts.model
             supports_silent_scheduling = (
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+                supports_scheduling and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             )
             if not supports_silent_scheduling and (
                 silenced := [
@@ -749,6 +772,7 @@ class RealtimeSession(llm.RealtimeSession):
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
+                supports_scheduling=supports_scheduling,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
                 synthetic_call_ids=self._synthetic_call_ids,
@@ -788,7 +812,22 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = tool_ctx
-        self._mark_restart_needed()
+        if not self._realtime_model.capabilities.mutable_tools:
+            self._mark_restart_needed()
+            return
+
+        async with self._session_lock:
+            if not self._active_session:
+                self._mark_restart_needed()
+                return
+
+            logger.debug("Updating tools mid-session via context_update")
+            self._context_updated = True
+            self._send_client_event(
+                types.LiveClientContextUpdate(
+                    tools=types.LiveClientContextUpdateTools(tools=self._tools_config())
+                )
+            )
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -985,6 +1024,7 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            self._pending_tool_continuation = False
             session = None
             try:
                 config = self._build_connect_config()
@@ -996,6 +1036,22 @@ class RealtimeSession(llm.RealtimeSession):
                     self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
+
+                        if self._session_resumption_handle is not None and self._context_updated:
+                            # the handle restores the conversation, but with the
+                            # instructions/tools the session had when it was created. a
+                            # handle may also predate the last context_update, so the
+                            # current ones are sent again rather than trusting it. sent
+                            # before the pending chat context is taken, so a failure here
+                            # leaves it in place for the retry
+                            await session.send_context_update(
+                                system_instruction=types.Content(
+                                    parts=[types.Part(text=self._opts.instructions)]
+                                )
+                                if is_given(self._opts.instructions)
+                                else None,
+                                tools=list(self._tools_config()),
+                            )
 
                         pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
@@ -1143,6 +1199,19 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
+                    if (
+                        self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+                        and not any(
+                            r.scheduling == types.FunctionResponseScheduling.INTERRUPT
+                            for r in msg.function_responses
+                        )
+                        and not all(
+                            r.scheduling == types.FunctionResponseScheduling.SILENT
+                            for r in msg.function_responses
+                        )
+                    ):
+                        # a WHEN_IDLE continuation will follow; keep the filler audio playing
+                        self._pending_tool_continuation = True
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1154,6 +1223,11 @@ class RealtimeSession(llm.RealtimeSession):
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
                         await session.send_realtime_input(activity_end=msg.activity_end)
+                elif isinstance(msg, types.LiveClientContextUpdate):
+                    await session.send_context_update(
+                        system_instruction=msg.system_instruction,
+                        tools=msg.tools.tools if msg.tools is not None else None,
+                    )
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
@@ -1165,6 +1239,7 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientContent,
                         types.LiveClientToolResponse,
                         types.LiveClientRealtimeInput,
+                        types.LiveClientContextUpdate,
                     ),
                 ):
                     if not isinstance(msg, types.LiveClientRealtimeInput) or not (
@@ -1276,14 +1351,18 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             self._mark_current_generation_done()
 
-    def _build_connect_config(self) -> types.LiveConnectConfig:
-        temp = self._opts.temperature if is_given(self._opts.temperature) else None
-
+    def _tools_config(self) -> list[types.Tool]:
         tools_config, _ = create_tools_config(
             self._tools,
             tool_behavior=self._opts.tool_behavior,
             use_parameters_json_schema=False,
         )
+        return tools_config
+
+    def _build_connect_config(self) -> types.LiveConnectConfig:
+        temp = self._opts.temperature if is_given(self._opts.temperature) else None
+
+        tools_config = self._tools_config()
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             history_config=types.HistoryConfig(initial_history_in_client_content=True)
@@ -1335,6 +1414,8 @@ class RealtimeSession(llm.RealtimeSession):
             conf.realtime_input_config = self._opts.realtime_input_config
         if is_given(self._opts.context_window_compression):
             conf.context_window_compression = self._opts.context_window_compression
+        if is_given(self._opts.labels):
+            conf.labels = self._opts.labels
 
         return conf
 
@@ -1381,6 +1462,8 @@ class RealtimeSession(llm.RealtimeSession):
             generation_event.user_initiated = True
             self._pending_generation_fut.set_result(generation_event)
             self._pending_generation_fut = None
+        elif self._pending_tool_continuation:
+            self._pending_tool_continuation = False
         else:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
@@ -1535,6 +1618,7 @@ class RealtimeSession(llm.RealtimeSession):
             gen.audio_ch.close()
 
     def _handle_input_speech_started(self) -> None:
+        self._pending_tool_continuation = False
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_speech_stopped(self) -> None:
@@ -1560,6 +1644,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         logger.warning("rejecting tool call requested while tool_choice='none'", extra=extra)
+        supports_scheduling = not self._opts.vertexai or "3.8" in self._opts.model
         responses = [
             create_function_response(
                 llm.FunctionCallOutput(
@@ -1569,6 +1654,7 @@ class RealtimeSession(llm.RealtimeSession):
                     is_error=True,
                 ),
                 vertexai=self._opts.vertexai,
+                supports_scheduling=supports_scheduling,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 send_id=bool(fnc_call.id),
             )
@@ -1605,6 +1691,8 @@ class RealtimeSession(llm.RealtimeSession):
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
+        # the cancelled call will not produce a continuation turn
+        self._pending_tool_continuation = False
 
     def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
         current_gen = self._current_generation

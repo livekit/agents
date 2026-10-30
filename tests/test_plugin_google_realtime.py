@@ -11,7 +11,7 @@ import pytest
 from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectOptions, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -651,19 +651,24 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
         assert [r.functions for r in warnings] == [["lookup"], ["search"]]  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("supports_scheduling", [None, False, True])
 @pytest.mark.parametrize("vertexai", [False, True])
-def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> None:
-    """Vertex AI rejects `scheduling`, so it is set only for the Gemini API."""
+def test_function_response_scheduling_only_for_gemini_api(
+    vertexai: bool, supports_scheduling: bool | None
+) -> None:
+    """Vertex AI 2.5 drops `scheduling`, whereas Gemini API and Vertex 3.8 (`supports_scheduling=True`) forward it."""
     res = create_function_response(
         _tool_output(),
         vertexai=vertexai,
+        supports_scheduling=supports_scheduling,
         tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
     )
 
-    if vertexai:
-        assert res.scheduling is None
-    else:
+    expected = (not vertexai) if supports_scheduling is None else supports_scheduling
+    if expected:
         assert res.scheduling == types.FunctionResponseScheduling.SILENT
+    else:
+        assert res.scheduling is None
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
@@ -735,11 +740,12 @@ async def test_tool_response_omits_a_locally_made_call_id(
 def test_vertex_scheduling_warns(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
+    """An explicitly set scheduling is dropped on Vertex AI 2.5, so say so instead of ignoring it."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
 
     with caplog.at_level(logging.WARNING):
         RealtimeModel(
+            model="gemini-live-2.5-flash-native-audio",
             vertexai=True,
             project="p",
             location="us-central1",
@@ -772,6 +778,11 @@ class _FakeLiveSession:
 
     async def send_tool_response(self, *, function_responses: object) -> None:
         self.sent.append(("tool_response", function_responses))
+
+    async def send_context_update(
+        self, *, system_instruction: object = None, tools: object = None
+    ) -> None:
+        self.sent.append(("context_update", (system_instruction, tools)))
 
     async def send_realtime_input(self, **kwargs: object) -> None:
         pass
@@ -1154,3 +1165,358 @@ async def test_reply_instructions_turns_follow_the_model(
         assert len(sent) == 1
         assert sent[0].turn_complete
         assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
+
+
+def test_mutable_tools_and_labels_in_connect_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    v38 = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        labels={"env": "prod", "workload": "voice"},
+    )
+    g38 = RealtimeModel(model="gemini-3.8-live", vertexai=False)
+    v25 = RealtimeModel(
+        model="gemini-live-2.5-flash-native-audio",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+
+    assert v38.capabilities.mutable_tools is True
+    assert g38.capabilities.mutable_tools is False
+    assert v25.capabilities.mutable_tools is False
+
+    session = object.__new__(RealtimeSession)
+    session._opts = v38._opts
+    session._realtime_model = v38
+    session._tools = llm.ToolContext.empty()
+    session._session_resumption_handle = None
+    assert session._build_connect_config().labels == {"env": "prod", "workload": "voice"}
+
+
+async def test_vertex_gemini_3_8_context_update_order_and_resume_resend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.genai.live import AsyncLive
+
+    class _ContextUpdateSession(_FakeLiveSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.block_send = asyncio.Event()
+            self.block_send.set()
+            self.incoming: asyncio.Queue[types.LiveServerMessage] = asyncio.Queue()
+
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            await self.block_send.wait()
+            await super().send_context_update(system_instruction=system_instruction, tools=tools)
+
+        async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+            while not self._closed.is_set():
+                get_task = asyncio.create_task(self.incoming.get())
+                close_task = asyncio.create_task(self._closed.wait())
+                done, pending = await asyncio.wait(
+                    [get_task, close_task], return_when=asyncio.FIRST_COMPLETED
+                )
+                for p in pending:
+                    p.cancel()
+                if get_task in done:
+                    yield get_task.result()
+
+    sockets = [_ContextUpdateSession(), _ContextUpdateSession()]
+    opened: list[_ContextUpdateSession] = []
+    handles: list[str | None] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_ContextUpdateSession]:
+        handles.append(config.session_resumption.handle if config.session_resumption else None)
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    session._session_resumption_handle = "resume-initial"
+    try:
+        while not opened or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert session._context_updated is False
+
+        # updates go out in order; update_tools([]) sends tools=[] rather than dropping the field
+        opened[0].block_send.clear()
+        await session.update_instructions("Speak concisely.")
+        await session.update_tools([_restart_tool])
+        opened[0].block_send.set()
+        await session.update_tools([])
+        while len(opened[0].sent) < 3:
+            await asyncio.sleep(0.01)
+        assert session._context_updated is True
+
+        assert [kind for kind, _ in opened[0].sent] == [
+            "context_update",
+            "context_update",
+            "context_update",
+        ]
+        ctx_0: tuple[Any, Any] = opened[0].sent[0][1]  # type: ignore[assignment]
+        assert ctx_0[0].parts[0].text == "Speak concisely."
+        assert ctx_0[1] is None
+
+        ctx_1: tuple[Any, Any] = opened[0].sent[1][1]  # type: ignore[assignment]
+        assert len(ctx_1[1]) == 1
+
+        ctx_2: tuple[Any, Any] = opened[0].sent[2][1]  # type: ignore[assignment]
+        assert ctx_2[1] == []
+
+        # a handle is still accepted after an update: it keeps the spoken conversation
+        await opened[0].incoming.put(
+            types.LiveServerMessage(
+                session_resumption_update=types.LiveServerSessionResumptionUpdate(
+                    new_handle="handle-after-update", resumable=True
+                )
+            )
+        )
+        while session._session_resumption_handle != "handle-after-update":
+            await asyncio.sleep(0.01)
+
+        # a reconnect resumes that handle and re-sends the current instructions and tools
+        # before anything else, since the handle may predate the last context_update
+        await session.update_tools([_restart_tool])
+        while len(opened[0].sent) < 4:
+            await asyncio.sleep(0.01)
+        session._mark_restart_needed(on_error=True)
+        while len(opened) < 2 or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert handles == ["resume-initial", "handle-after-update"]
+        while len(opened[1].sent) < 1:
+            await asyncio.sleep(0.01)
+        kind, payload = opened[1].sent[0]
+        assert kind == "context_update"
+        resent: tuple[Any, Any] = payload  # type: ignore[assignment]
+        assert resent[0].parts[0].text == "Speak concisely."
+        assert len(resent[1]) == 1
+        assert resent[1][0].function_declarations[0].name == _restart_tool.info.name
+    finally:
+        await session.aclose()
+
+
+async def test_failed_resume_context_update_keeps_pending_chat_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resume that fails while re-sending the context must not drop pending chat context."""
+    from google.genai.live import AsyncLive
+
+    class _FailingContextUpdate(_FakeLiveSession):
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            raise RuntimeError("socket closed during resume")
+
+    sockets: list[_FakeLiveSession] = [_FailingContextUpdate(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0)
+    ).session()
+    session._session_resumption_handle = "resume-me"
+    session._context_updated = True
+    pending = llm.ChatContext.empty()
+    msg = pending.add_message(role="user", content="queued while offline")
+    session._pending_chat_ctx = pending
+    try:
+        while len(opened) < 2 or session._active_session is not opened[1]:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert opened[1].sent[0][0] == "context_update"
+        assert session._chat_ctx.get_by_id(msg.id) is not None
+    finally:
+        await session.aclose()
+
+
+async def test_vertex_gemini_3_8_supports_silent_and_explicit_scheduling(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Vertex AI gemini-3.8-live does not warn on scheduling and forwards both SILENT and explicit scheduling."""
+    with caplog.at_level(logging.WARNING):
+        RealtimeModel(
+            model="gemini-3.8-live",
+            vertexai=True,
+            project="test-project",
+            location="us-central1",
+            tool_response_scheduling=types.FunctionResponseScheduling.WHEN_IDLE,
+        )
+    assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = "gemini-3.8-live"
+        session._opts.vertexai = True
+        session._opts.tool_behavior = types.Behavior.NON_BLOCKING
+        session._opts.tool_response_scheduling = types.FunctionResponseScheduling.WHEN_IDLE
+
+        with caplog.at_level(logging.WARNING):
+            session.update_options(
+                tool_response_scheduling=types.FunctionResponseScheduling.INTERRUPT
+            )
+        assert not any(
+            "tool_response_scheduling is not supported" in r.message for r in caplog.records
+        )
+        session._opts.tool_response_scheduling = types.FunctionResponseScheduling.WHEN_IDLE
+
+        # 1) reply_required=False sends SILENT without warning on Vertex 3.8 NON_BLOCKING
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id="fc_silent"))
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_silent", reply_required=False))
+        await session.update_chat_ctx(chat_ctx)
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert (
+            responses[0].function_responses[0].scheduling == types.FunctionResponseScheduling.SILENT
+        )
+
+        # 2) reply_required=True sends explicit tool_response_scheduling (WHEN_IDLE) on Vertex 3.8
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id="fc_idle"))
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_idle", reply_required=True))
+        await session.update_chat_ctx(chat_ctx)
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert (
+            responses[0].function_responses[0].scheduling
+            == types.FunctionResponseScheduling.WHEN_IDLE
+        )
+
+
+async def test_non_blocking_when_idle_tool_continuation_preserves_filler_and_resets_on_cancel_or_barge_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NON_BLOCKING WHEN_IDLE/None tool continuation skips input_speech_started once, while INTERRUPT, SILENT, barge-in, and cancellation do not."""
+    from google.genai.live import AsyncLive
+
+    fake = _FakeLiveSession()
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        yield fake
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    speech_started_count = 0
+
+    def _on_speech_started(_ev: object) -> None:
+        nonlocal speech_started_count
+        speech_started_count += 1
+
+    session.on("input_speech_started", _on_speech_started)
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+
+        # 1) Initial model turn + tool call starts generation normally (emits input_speech_started)
+        session._start_new_generation()
+        assert speech_started_count == 1
+        session._handle_tool_calls(_tool_call(call_id="fc_1"))
+
+        # Send WHEN_IDLE tool response through _send_task
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_1", reply_required=True))
+        await session.update_chat_ctx(chat_ctx)
+        while len(fake.sent) < 1:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is True
+
+        # Follow-up generation for the tool continuation consumes the flag and does NOT emit input_speech_started
+        session._start_new_generation()
+        assert speech_started_count == 1
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
+
+        # Subsequent normal generation DOES emit input_speech_started
+        session._start_new_generation()
+        assert speech_started_count == 2
+        session._mark_current_generation_done()
+
+        # 2) SILENT tool response does NOT set _pending_tool_continuation
+        session._start_new_generation()
+        assert speech_started_count == 3
+        session._handle_tool_calls(_tool_call(call_id="fc_silent"))
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_silent", reply_required=False))
+        await session.update_chat_ctx(chat_ctx)
+        while len(fake.sent) < 2:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is False
+
+        # 3) Server tool_call_cancellation resets _pending_tool_continuation
+        session._pending_tool_continuation = True
+        session._handle_tool_call_cancellation(
+            types.LiveServerToolCallCancellation(ids=["fc_cancel"])
+        )
+        assert session._pending_tool_continuation is False
+
+        # 4) User barge-in (_handle_input_speech_started) resets _pending_tool_continuation
+        session._pending_tool_continuation = True
+        session._handle_input_speech_started()
+        assert session._pending_tool_continuation is False
+
+        # 5) A mixed batch containing INTERRUPT and WHEN_IDLE does NOT set _pending_tool_continuation
+        session._send_client_event(
+            types.LiveClientToolResponse(
+                function_responses=[
+                    types.FunctionResponse(
+                        id="fc_idle_mix",
+                        name="lookup",
+                        response={"output": "ok"},
+                        scheduling=types.FunctionResponseScheduling.WHEN_IDLE,
+                    ),
+                    types.FunctionResponse(
+                        id="fc_int_mix",
+                        name="lookup",
+                        response={"output": "urgent"},
+                        scheduling=types.FunctionResponseScheduling.INTERRUPT,
+                    ),
+                ]
+            )
+        )
+        while len(fake.sent) < 3:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is False
+    finally:
+        await session.aclose()
