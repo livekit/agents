@@ -38,10 +38,10 @@ impl SessionOptions {
         self.state().layers.clone()
     }
 
-    /// The session built over these options holds the override layers from now on, released
-    /// through it.
-    pub fn hand_over_layers(&self) {
-        self.state().layers.overrides.clear();
+    /// The session built over these options holds the override layers it read from now on,
+    /// released through it. A layer pushed since stays here.
+    pub fn hand_over_layers(&self, ids: &[u64]) {
+        self.state().layers.overrides.retain(|layer| !ids.contains(&layer.id));
     }
 
     pub fn conn(&self) -> SessionConnOptions {
