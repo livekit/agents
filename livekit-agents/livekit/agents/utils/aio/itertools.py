@@ -23,6 +23,7 @@ async def tee_peer(
     peers: list[deque[T]],
     lock: AsyncContextManager[Any],
     exception: list[BaseException | None],
+    closed: list[bool],
 ) -> AsyncGenerator[T, None]:
     # exception is a shared mutable container across all peers. When the upstream
     # iterator raises, only the first peer to call __anext__() would normally see
@@ -62,12 +63,13 @@ async def tee_peer(
                 peers.pop(idx)
                 break
 
-        if not peers and isinstance(iterator, _ACloseable):
+        if not peers and not closed[0] and isinstance(iterator, _ACloseable):
+            closed[0] = True
             await iterator.aclose()
 
 
 class Tee(Generic[T]):
-    __slots__ = ("_iterator", "_buffers", "_children")
+    __slots__ = ("_iterator", "_buffers", "_children", "_closed")
 
     def __init__(
         self,
@@ -77,6 +79,7 @@ class Tee(Generic[T]):
         self._iterator = iterator.__aiter__()
         self._buffers: list[deque[T]] = [deque() for _ in range(n)]
 
+        self._closed = [False]
         lock = asyncio.Lock()
         exception: list[BaseException | None] = [None]
         self._children = tuple(
@@ -86,6 +89,7 @@ class Tee(Generic[T]):
                 peers=self._buffers,
                 lock=lock,
                 exception=exception,
+                closed=self._closed,
             )
             for buffer in self._buffers
         )
@@ -118,7 +122,8 @@ class Tee(Generic[T]):
             except Exception:
                 pass
 
-        if isinstance(self._iterator, _ACloseable):
+        if not self._closed[0] and isinstance(self._iterator, _ACloseable):
+            self._closed[0] = True
             try:
                 await self._iterator.aclose()
             except Exception:
