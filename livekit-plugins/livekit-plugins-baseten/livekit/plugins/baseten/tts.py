@@ -352,7 +352,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             output_emitter.start_segment(segment_id=request_id)
-            async for msg in ws:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
+            while True:
+                msg = await monitor.receive()
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     output_emitter.push(msg.data)
                 elif msg.type in (
@@ -370,6 +374,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts._model_endpoint,
                 headers={"Authorization": f"Api-Key {self._tts._api_key}"},
                 ssl=ssl_context,
+                # the monitor sends its own pings and handles the pongs, so aiohttp
+                # must not answer them itself or they stop counting as activity.
+                autoping=False,
             ) as ws:
                 await ws.send_json(
                     {
