@@ -1,5 +1,7 @@
 //! `APIError` & co. as a plain Rust value, plus the rules its host classes apply.
 
+use crate::errors::ProviderError;
+
 /// Flat; [`ApiErrorKind::is_a`] knows the subclass edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ApiErrorKind {
@@ -90,6 +92,7 @@ pub enum TimeoutPhase {
 /// is `True`, so setting it afterwards is too late for a plugin reading it.
 #[crate::host(error(
     by = kind,
+    cause = cause,
     kinds(
         Api(class = "livekit.agents._exceptions.APIError", kwargs(retryable)),
         Status(
@@ -116,6 +119,9 @@ pub struct ApiError {
     pub request_id: Option<String>,
     /// [`ApiErrorKind::Timeout`] only.
     pub phase: Option<TimeoutPhase>,
+    /// The failure this one was raised from: the host exception's `__cause__`.
+    #[source]
+    pub cause: Option<Box<ProviderError>>,
 }
 
 impl ApiError {
@@ -128,6 +134,7 @@ impl ApiError {
             status_code: None,
             request_id: None,
             phase: None,
+            cause: None,
         }
     }
 
@@ -145,6 +152,7 @@ impl ApiError {
             status_code: Some(status_code),
             request_id,
             phase: None,
+            cause: None,
         }
     }
 
@@ -156,6 +164,7 @@ impl ApiError {
             status_code: None,
             request_id: None,
             phase: None,
+            cause: None,
         }
     }
 
@@ -167,6 +176,7 @@ impl ApiError {
             status_code: None,
             request_id: None,
             phase: None,
+            cause: None,
         }
     }
 

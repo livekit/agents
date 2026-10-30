@@ -24,6 +24,7 @@ pub enum ProviderError {
     Local(#[from] ApiError),
 }
 
+
 impl ProviderError {
     /// The same failure, no longer to be retried: whoever spent the budget already gave up.
     pub fn into_final(self) -> ProviderError {
@@ -49,6 +50,7 @@ impl ProviderError {
                 status_code: *status_code,
                 request_id: None,
                 phase: None,
+                cause: None,
             },
         }
     }
@@ -96,25 +98,4 @@ impl ProviderError {
             ProviderError::Local(err) => &err.message,
         }
     }
-}
-
-/// `raise APIConnectionError(message) from cause`: the host's own exception with the chain the
-/// reference's `__str__` reads its root failure from; without a host, the bare connection error.
-#[cfg_attr(not(feature = "python"), allow(unused_variables))]
-pub fn chained_connection_error(message: String, cause: &ProviderError) -> ProviderError {
-    let local =
-        ProviderError::Local(ApiError { kind: ApiErrorKind::Connection, ..ApiError::new(message) });
-    #[cfg(feature = "python")]
-    {
-        return pyo3::Python::attach(|py| {
-            let err = crate::python::HostException::to_py_err(&local);
-            match crate::python::to_py_exception(py, cause) {
-                Ok(cause) => err.set_cause(py, Some(pyo3::PyErr::from_value(cause.into_bound(py)))),
-                Err(e) => drop(e),
-            }
-            crate::python::capture_value(err.value(py).as_any())
-        });
-    }
-    #[allow(unreachable_code)]
-    local
 }

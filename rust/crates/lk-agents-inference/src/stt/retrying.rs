@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-use lk_agents_abi::errors::{ProviderError, chained_connection_error};
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::stt::HELD_FRAMES;
 use lk_agents_abi::stt::events::{SpeechEvent, SpeechEventType};
 use lk_agents_abi::stt::stt::{Stt, SttCapabilities, SttSink, SttSource};
@@ -99,7 +99,11 @@ impl Failure<'_> {
                 options.max_retry,
                 attempts.retries(),
             ) {
-                Err(chained_connection_error(message, &error))
+                // `raise APIConnectionError(message) from error`.
+                Err(ProviderError::Local(ApiError {
+                    cause: Some(Box::new(error)),
+                    ..ApiError::connection(Some(message))
+                }))
             } else {
                 Err(error)
             }

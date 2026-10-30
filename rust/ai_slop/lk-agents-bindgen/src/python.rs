@@ -17,18 +17,15 @@ pub fn export_fn(attr: TokenStream, f: &syn::ItemFn) -> syn::Result<TokenStream>
     let converters = checked_converters(&s);
     let func = if s.params.iter().any(|p| p.kwargs) {
         let name = &s.name;
-        spread(
-            &s,
-            Spread {
-                head: None,
-                attrs: quote!(#docs #[::pyo3::pyfunction] #[pyo3(name = #name)]),
-                wrapper: wrapper.clone(),
-                recv: TokenStream::new(),
-                ret: ret_ty(&s, None),
-                call: &Call::Free,
-                wrap: None,
-            },
-        )
+        spread(&s, Spread {
+            head: None,
+            attrs: quote!(#docs #[::pyo3::pyfunction] #[pyo3(name = #name)]),
+            wrapper: wrapper.clone(),
+            recv: TokenStream::new(),
+            ret: ret_ty(&s, None),
+            call: &Call::Free,
+            wrap: None,
+        })
     } else {
         let pyo3 = pyo3_attr(Some(&s.name), &s);
         let body = body(&s, &Call::Free);
@@ -193,12 +190,232 @@ pub fn wire_enum(name: &syn::Ident) -> TokenStream {
     }
 }
 
-/// A builtin (`ValueError`) or a dotted host class the runtime imports and instantiates.
-pub(crate) fn raise(kind: &str, message: TokenStream) -> TokenStream {
-    match kind.rsplit_once('.') {
-        Some((module, class)) => {
-            quote!(::lk_agents_abi::python::host_exception(#module, #class, #message))
+/// `#[host(error ..)]`: `HostException`, picked by `lk_agents_abi::python`'s autoref dispatch.
+pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
+    let m = crate::Metas::parse(attr)?;
+    m.only("error", &["error", "error.kind", "error.with", "error.original", "error.declare", "error.by", "error.cause", "error.kinds."])?;
+    let (ident, generics, variants, attrs) = match item {
+        syn::Item::Enum(e) => (&e.ident, &e.generics, Some(&e.variants), &e.attrs),
+        syn::Item::Struct(s) => (&s.ident, &s.generics, None, &s.attrs),
+        other => return Err(syn::Error::new_spanned(other, "#[host(error)] is for an enum or a struct")),
+    };
+    if !generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(generics, "#[host(error)] is for a concrete type"));
+    }
+    let kind = m.text("error.kind")?;
+    let with = m.path("error.with")?;
+    // `declare = "RuntimeError"`: `kind` is a class of `_core`'s own, derived from that builtin.
+    let declared = match (m.text("error.declare")?, kind) {
+        (Some(base), Some(class)) if !class.contains('.') => {
+            let doc = crate::summary(&crate::doc(attrs)).join(" ");
+            Some((format_ident!("{class}"), format_ident!("Py{base}"), doc))
         }
+        (Some(_), _) => {
+            return Err(syn::Error::new_spanned(ident, "`declare` names the base of the class `kind` names, undotted"));
+        }
+        (None, _) => None,
+    };
+    if let Some((class, base, doc)) = &declared {
+        let class_name = class.to_string();
+        return Ok(quote! {
+            #[cfg(feature = "python")]
+            const _: () = {
+                ::pyo3::create_exception!(_core, #class, ::pyo3::exceptions::#base, #doc);
+                impl ::lk_agents_abi::python::HostException for #ident {
+                    fn to_py_err(&self) -> ::pyo3::PyErr { #class::new_err(::std::string::ToString::to_string(self)) }
+                }
+                ::lk_agents_abi::python::inventory::submit! {
+                    ::lk_agents_abi::python::Registration(|m| {
+                        use ::pyo3::types::PyModuleMethods as _;
+                        m.add(#class_name, m.py().get_type::<#class>())
+                    })
+                }
+            };
+            #[allow(dead_code)]
+            impl #ident {
+                /// The host exception class `#[host(kind)]` names for this value.
+                pub fn host_kind(&self) -> &str { #class_name }
+            }
+        });
+    }
+    // The kind table's own reading, for a binding that names the class instead of raising it.
+    let mut host_kind = None;
+    let body = if let Some(by) = m.ident("error.by")? {
+        if kind.is_some() || with.is_some() || m.flag("error.original") || variants.is_some() {
+            return Err(syn::Error::new_spanned(ident, "`by` selects a struct's class by one of its fields, alone"));
+        }
+        let field = match item {
+            syn::Item::Struct(st) => st.fields.iter().find(|f| f.ident.as_ref() == Some(&by)),
+            _ => None,
+        };
+        let Some(field) = field else {
+            return Err(syn::Error::new_spanned(ident, format!("`by = {by}` names a field of this struct")));
+        };
+        let (arms, kind_arms) = kind_selected(ident, &field.ty, &m)?;
+        host_kind = Some(quote!(match self.#by { #(#kind_arms)* }));
+        quote!(match self.#by { #(#arms)* })
+    } else if m.flag("error.original") {
+        if kind.is_some() || with.is_some() {
+            return Err(syn::Error::new_spanned(ident, "`original`, `kind` and `with` are three answers to one question"));
+        }
+        quote!(::lk_agents_abi::python::raise_host_error(::std::clone::Clone::clone(self)))
+    } else if let Some(w) = with {
+        // A converter of the type's own crate, `fn(E) -> PyErr`.
+        if kind.is_some() {
+            return Err(syn::Error::new_spanned(ident, "`with` and `kind` are two answers to one question"));
+        }
+        quote!(#w(::std::clone::Clone::clone(self)))
+    } else {
+        let default_kind = kind.unwrap_or("ValueError");
+        let default = raise(default_kind, quote!(::std::string::ToString::to_string(self)));
+        let mut arms = Vec::new();
+        let mut kind_arms = Vec::new();
+        for v in variants.into_iter().flatten() {
+            let vm = crate::Metas::of(&v.attrs)?;
+            if vm.0.is_empty() {
+                continue;
+            }
+            vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate", "kwargs"])?;
+            let vi = &v.ident;
+            // `delegate = field`: a named variant raises as that field's error.
+            if let Some(field) = vm.ident("delegate")? {
+                if !matches!(&v.fields, syn::Fields::Named(n) if n.named.iter().any(|f| f.ident.as_ref() == Some(&field))) {
+                    return Err(syn::Error::new_spanned(vi, "`delegate = field` names a field of this named variant"));
+                }
+                arms.push(quote!(Self::#vi { #field, .. } => ::lk_agents_abi::python::HostException::to_py_err(#field),));
+                kind_arms.push(quote!(Self::#vi { #field, .. } => #field.host_kind(),));
+                continue;
+            }
+            if vm.flag("delegate") {
+                if !matches!(&v.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1) {
+                    return Err(syn::Error::new_spanned(vi, "`delegate` wraps one error, in a one-field tuple variant"));
+                }
+                arms.push(quote!(Self::#vi(inner) => ::lk_agents_abi::python::HostException::to_py_err(inner),));
+                kind_arms.push(quote!(Self::#vi(inner) => inner.host_kind(),));
+                continue;
+            }
+            let Some(k) = vm.text("kind")? else {
+                return Err(syn::Error::new_spanned(vi, "a variant of an error type takes #[host(kind = \"..\")] or #[host(delegate)]"));
+            };
+            let pat = match &v.fields {
+                syn::Fields::Unit => quote!(Self::#vi),
+                syn::Fields::Unnamed(_) => quote!(Self::#vi(..)),
+                syn::Fields::Named(_) => quote!(Self::#vi { .. }),
+            };
+            let message = quote!(::std::string::ToString::to_string(self));
+            // `kwargs`: the variant's fields are the host class's keyword arguments too.
+            let r = if vm.flag("kwargs") {
+                let (syn::Fields::Named(named), Some((module, class))) = (&v.fields, k.rsplit_once('.')) else {
+                    return Err(syn::Error::new_spanned(vi, "`kwargs` passes a named-field variant's fields to a dotted host class"));
+                };
+                let fields: Vec<_> = named.named.iter().filter_map(|f| f.ident.clone()).collect();
+                let names = fields.iter().map(|f| f.to_string());
+                arms.push(quote!(Self::#vi { #(#fields),* } => ::lk_agents_abi::python::host_exception_with(#module, #class, #message, |kwargs| {
+                    #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, #fields)?; )*
+                    ::std::result::Result::Ok(())
+                }),));
+                kind_arms.push(quote!(#pat => #k,));
+                continue;
+            } else {
+                raise(k, message)
+            };
+            arms.push(quote!(#pat => #r,));
+            kind_arms.push(quote!(#pat => #k,));
+        }
+        host_kind = Some(quote! {
+            #[allow(unreachable_patterns)]
+            match self { #(#kind_arms)* _ => #default_kind, }
+        });
+        if arms.is_empty() {
+            default
+        } else {
+            quote! {
+                #[allow(unreachable_patterns)]
+                match self { #(#arms)* _ => #default, }
+            }
+        }
+    };
+    // `cause = field`: the `Option<Box<E>>` the exception was raised from, its `__cause__`.
+    let body = match m.ident("error.cause")? {
+        Some(field) => quote! {
+            let err = #body;
+            if let ::std::option::Option::Some(cause) = &self.#field {
+                ::pyo3::Python::attach(|py| err.set_cause(py, ::std::option::Option::Some(::lk_agents_abi::python::HostException::to_py_err(&**cause))));
+            }
+            err
+        },
+        None => body,
+    };
+    let host_kind = host_kind.map(|body| {
+        quote! {
+            #[allow(dead_code)]
+            impl #ident {
+                /// The host exception class `#[host(kind)]` names for this value.
+                pub fn host_kind(&self) -> &str { #body }
+            }
+        }
+    });
+    Ok(quote! {
+        #[cfg(feature = "python")]
+        impl ::lk_agents_abi::python::HostException for #ident {
+            fn to_py_err(&self) -> ::pyo3::PyErr { #body }
+        }
+        #host_kind
+    })
+}
+
+/// `error(by = field, kinds(Variant(class = "module.Class", kwargs(a, b)), ..))` on a struct: the
+/// class `field`'s variant names, called with the message and the listed fields as keyword
+/// arguments. Every variant of the field's enum is listed (the match is exhaustive).
+fn kind_selected(
+    ident: &syn::Ident,
+    ty: &syn::Type,
+    m: &crate::Metas,
+) -> syn::Result<(Vec<TokenStream>, Vec<TokenStream>)> {
+    let mut variants: Vec<&str> = Vec::new();
+    for (key, _) in m.under("error.kinds.") {
+        let variant = key.split('.').next().unwrap_or(key);
+        if !variants.contains(&variant) {
+            variants.push(variant);
+        }
+    }
+    if variants.is_empty() {
+        return Err(syn::Error::new_spanned(ident, "`by` takes `kinds(Variant(class = \"module.Class\"), ..)`"));
+    }
+    let (mut arms, mut kind_arms) = (Vec::new(), Vec::new());
+    for variant in variants {
+        let prefix = format!("error.kinds.{variant}.");
+        let class = m.text(&format!("{prefix}class"))?.ok_or_else(|| {
+            syn::Error::new_spanned(ident, format!("`kinds({variant}(..))` names its `class = \"module.Class\"`"))
+        })?;
+        let Some((module, name)) = class.rsplit_once('.') else {
+            return Err(syn::Error::new_spanned(ident, format!("`{class}`: a kind-selected class is dotted")));
+        };
+        let mut fields = Vec::new();
+        for (key, value) in m.under(&prefix) {
+            match (key, value) {
+                ("class", _) => {}
+                (kwarg, crate::meta::Value::Word) if kwarg.starts_with("kwargs.") => {
+                    fields.push(format_ident!("{}", &kwarg["kwargs.".len()..]));
+                }
+                _ => return Err(syn::Error::new_spanned(ident, format!("`kinds({variant}(..))`: `{key}` is not a key here"))),
+            }
+        }
+        let names = fields.iter().map(|f| f.to_string());
+        let v = format_ident!("{variant}");
+        arms.push(quote!(<#ty>::#v => ::lk_agents_abi::python::host_exception_with(#module, #name, ::std::string::ToString::to_string(self), |kwargs| {
+            #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, ::std::clone::Clone::clone(&self.#fields))?; )*
+            ::std::result::Result::Ok(())
+        }),));
+        kind_arms.push(quote!(<#ty>::#v => #class,));
+    }
+    Ok((arms, kind_arms))
+}
+
+/// A builtin (`ValueError`) or a dotted host class the runtime imports and instantiates.
+fn raise(kind: &str, message: TokenStream) -> TokenStream {
+    match kind.rsplit_once('.') {
+        Some((module, class)) => quote!(::lk_agents_abi::python::host_exception(#module, #class, #message)),
         None => {
             let class = format_ident!("Py{kind}");
             quote!(::pyo3::exceptions::#class::new_err(#message))
@@ -212,23 +429,16 @@ pub(crate) fn raise(kind: &str, message: TokenStream) -> TokenStream {
 pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream> {
     let o = crate::read_object(attr, imp)?;
     // A method spreading a keyword record is its own `#[pymethods]` block, beside the class's.
-    let (spread, plain): (Vec<_>, Vec<_>) =
-        o.methods.iter().partition(|m| m.sig.params.iter().any(|p| p.kwargs));
+    let (spread, plain): (Vec<_>, Vec<_>) = o.methods.iter().partition(|m| m.sig.params.iter().any(|p| p.kwargs));
     let methods = plain.iter().map(|m| method(&o, m)).collect::<Vec<_>>();
     let spread = spread.iter().map(|m| method(&o, m)).collect::<Vec<_>>();
     let consts = o.consts.iter().map(class_const).collect::<Vec<_>>();
-    let converters: Vec<_> = o
-        .methods
-        .iter()
-        .map(|m| {
-            let mut sig = m.sig.clone();
-            let mut to_core = SelfTo(o.self_ty.clone());
-            for p in &mut sig.params {
-                to_core.visit_type_mut(&mut p.ty);
-            }
-            checked_converters(&sig)
-        })
-        .collect();
+    let converters: Vec<_> = o.methods.iter().map(|m| {
+        let mut sig = m.sig.clone();
+        let mut to_core = SelfTo(o.self_ty.clone());
+        for p in &mut sig.params { to_core.visit_type_mut(&mut p.ty); }
+        checked_converters(&sig)
+    }).collect();
     let core = &o.self_ty;
     let natives = o.as_dyn.iter().map(|(tr, m)| {
         let class = o.cell.class().map(|c| quote!(#c)).unwrap_or_else(|| quote!(#core));
@@ -273,12 +483,8 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
             let docs = doc_attrs(&crate::summary(&o.doc));
             let (name, module) = (&o.name, &o.module);
             let (field, wrap) = match &o.cell {
-                Cell::Mutex { .. } => {
-                    (quote!(::std::sync::Mutex<#core>), quote!(::std::sync::Mutex::new(self)))
-                }
-                Cell::Arc { .. } => {
-                    (quote!(::std::sync::Arc<#core>), quote!(::std::sync::Arc::new(self)))
-                }
+                Cell::Mutex { .. } => (quote!(::std::sync::Mutex<#core>), quote!(::std::sync::Mutex::new(self))),
+                Cell::Arc { .. } => (quote!(::std::sync::Arc<#core>), quote!(::std::sync::Arc::new(self))),
                 _ => (quote!(#core), quote!(self)),
             };
             // A `value` cell's class options; it is frozen unless a method mutates.
@@ -286,17 +492,10 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
             let input = matches!(o.cell, Cell::Value { input: true, .. });
             let (frozen, options, derive, by_value) = match &o.cell {
                 Cell::Value { pyclass, derive, .. } => {
-                    let options: Vec<TokenStream> =
-                        pyclass.iter().map(|p| p.parse().unwrap_or_default()).collect();
-                    let derive: Option<TokenStream> =
-                        derive.as_ref().map(|d| d.parse().unwrap_or_default());
+                    let options: Vec<TokenStream> = pyclass.iter().map(|p| p.parse().unwrap_or_default()).collect();
+                    let derive: Option<TokenStream> = derive.as_ref().map(|d| d.parse().unwrap_or_default());
                     let extract = pyclass.iter().any(|p| p == "from_py_object");
-                    (
-                        (!mutates).then(|| quote!(frozen,)),
-                        quote!(#(#options,)*),
-                        derive.map(|d| quote!(#[derive(#d)])),
-                        Some(extract),
-                    )
+                    ((!mutates).then(|| quote!(frozen,)), quote!(#(#options,)*), derive.map(|d| quote!(#[derive(#d)])), Some(extract))
                 }
                 _ => (Some(quote!(frozen,)), TokenStream::new(), None, None),
             };
@@ -396,11 +595,7 @@ fn class_const(c: &ConstExport) -> TokenStream {
         }
         None => (quote!(#ty), TokenStream::new(), false),
     };
-    let (lt, pyp) = if py {
-        (quote!(<'py>), quote!(py: ::pyo3::Python<'py>))
-    } else {
-        (TokenStream::new(), TokenStream::new())
-    };
+    let (lt, pyp) = if py { (quote!(<'py>), quote!(py: ::pyo3::Python<'py>)) } else { (TokenStream::new(), TokenStream::new()) };
     quote! {
         #[classattr]
         #[pyo3(name = #name)]
@@ -420,8 +615,7 @@ pub fn class(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<TokenStream
     let c = crate::read_class(attr, st)?;
     let mut st = st.clone();
     let lines = crate::doc(&st.attrs);
-    let docs: Vec<syn::Attribute> =
-        st.attrs.iter().filter(|a| a.path().is_ident("doc")).cloned().collect();
+    let docs: Vec<syn::Attribute> = st.attrs.iter().filter(|a| a.path().is_ident("doc")).cloned().collect();
     st.attrs.retain(|a| !a.path().is_ident("doc"));
     let summary = crate::summary(&lines).into_iter().map(|l| format!(" {l}"));
     let rustdoc = docs.iter().map(|a| {
@@ -434,8 +628,7 @@ pub fn class(attr: TokenStream, st: &syn::ItemStruct) -> syn::Result<TokenStream
     let frozen = (!mutable).then(|| quote!(frozen,));
     let eq = eq.then(|| quote!(eq,));
     let subclass = subclass.then(|| quote!(subclass,));
-    let extract =
-        if *from_py_object { quote!(from_py_object,) } else { quote!(skip_from_py_object,) };
+    let extract = if *from_py_object { quote!(from_py_object,) } else { quote!(skip_from_py_object,) };
     let ident = &st.ident;
     Ok(quote! {
         #(#rustdoc)*
@@ -518,9 +711,7 @@ fn method(o: &Object, m: &Method) -> TokenStream {
     let recv = match s.receiver {
         Receiver::None => TokenStream::new(),
         // A mutex or arc cell's class is frozen: the lock, not the borrow flag, gives `&mut`.
-        Receiver::Mut if matches!(call, Call::Own) || matches!(o.cell, Cell::Value { .. }) => {
-            quote!(&mut self,)
-        }
+        Receiver::Mut if matches!(call, Call::Own) || matches!(o.cell, Cell::Value { .. }) => quote!(&mut self,),
         Receiver::Ref | Receiver::Mut => quote!(&self,),
     };
     let wrap = match (&o.cell, m.kind) {
@@ -530,8 +721,7 @@ fn method(o: &Object, m: &Method) -> TokenStream {
         _ => None,
     };
     // The first paragraph; a `__dunder__` keeps Python's, and constructors/setters get none.
-    let docs = if s.name.starts_with("__") || matches!(m.kind, MethodKind::Setter | MethodKind::New)
-    {
+    let docs = if s.name.starts_with("__") || matches!(m.kind, MethodKind::Setter | MethodKind::New) {
         TokenStream::new()
     } else {
         doc_attrs(&crate::summary(&s.doc))
@@ -539,31 +729,21 @@ fn method(o: &Object, m: &Method) -> TokenStream {
     if s.params.iter().any(|p| p.kwargs) {
         let name = name.map(|n| quote!(#[pyo3(name = #n)]));
         let class = match &o.cell {
-            Cell::Plain => {
-                let c = &o.self_ty;
-                quote!(#c)
-            }
-            c => {
-                let c = c.class().expect("a cell class");
-                quote!(#c)
-            }
+            Cell::Plain => { let c = &o.self_ty; quote!(#c) }
+            c => { let c = c.class().expect("a cell class"); quote!(#c) }
         };
-        return spread(
-            s,
-            Spread {
-                head: Some(quote!(impl #class)),
-                attrs: quote!(#docs #marker #name),
-                wrapper,
-                recv,
-                ret: ret_ty(s, wrap.map(|(c, _)| c)),
-                call: &call,
-                wrap,
-            },
-        );
+        return spread(s, Spread {
+            head: Some(quote!(impl #class)),
+            attrs: quote!(#docs #marker #name),
+            wrapper,
+            recv,
+            ret: ret_ty(s, wrap.map(|(c, _)| c)),
+            call: &call,
+            wrap,
+        });
     }
     let body = body_wrapped(s, &call, wrap);
-    let (lt, py, params, ret) =
-        (generics(s), py_param(s), params(s), ret_ty(s, wrap.map(|(c, _)| c)));
+    let (lt, py, params, ret) = (generics(s), py_param(s), params(s), ret_ty(s, wrap.map(|(c, _)| c)));
     quote! {
         #docs
         #[allow(clippy::too_many_arguments)]
@@ -585,10 +765,7 @@ fn pyo3_attr(name: Option<&str>, s: &Sig) -> TokenStream {
             .then(|| quote!(::lk_agents_abi::Maybe::NotGiven))
     };
     let host: Vec<&crate::Param> = s.params.iter().collect();
-    if !s.defaults.is_empty()
-        || !matches!(s.kw_only, KwOnly::None)
-        || host.iter().any(|p| implied(p).is_some())
-    {
+    if !s.defaults.is_empty() || !matches!(s.kw_only, KwOnly::None) || host.iter().any(|p| implied(p).is_some()) {
         let mut items = Vec::new();
         for (i, p) in host.iter().enumerate() {
             let star = match &s.kw_only {
@@ -600,13 +777,7 @@ fn pyo3_attr(name: Option<&str>, s: &Sig) -> TokenStream {
                 items.push(quote!(*));
             }
             let name = &p.name;
-            match s
-                .defaults
-                .iter()
-                .find(|(d, _)| p.name == d)
-                .map(|(_, v)| v.clone())
-                .or_else(|| implied(p))
-            {
+            match s.defaults.iter().find(|(d, _)| p.name == d).map(|(_, v)| v.clone()).or_else(|| implied(p)) {
                 Some(value) => items.push(quote!(#name = #value)),
                 None => items.push(quote!(#name)),
             }
@@ -667,11 +838,7 @@ fn detaches(s: &Sig) -> bool {
 
 /// To release the GIL, to return an awaitable, or because a conversion needs it.
 fn needs_py(s: &Sig) -> bool {
-    detaches(s)
-        || s.is_async
-        || s.reply.is_some()
-        || inputs(s).iter().flatten().any(|i| i.py)
-        || (!s.is_async && output(s).is_some_and(|o| o.py))
+    detaches(s) || s.is_async || s.reply.is_some() || inputs(s).iter().flatten().any(|i| i.py) || (!s.is_async && output(s).is_some_and(|o| o.py))
 }
 
 fn generics(s: &Sig) -> TokenStream {
@@ -703,9 +870,7 @@ fn checked_param(s: &Sig, p: &crate::Param, input: &crate::shape::In) -> TokenSt
 fn checked_converters(s: &Sig) -> TokenStream {
     let functions = s.params.iter().zip(inputs(s)).filter_map(|(p, input)| {
         let input = input?;
-        if input.prelude.is_some() || !crate::cross::checked_input(&p.ty) {
-            return None;
-        }
+        if input.prelude.is_some() || !crate::cross::checked_input(&p.ty) { return None; }
         let reader = format_ident!("__host_read_{}_{}", s.rust, p.name);
         let label = p.label.clone().unwrap_or_else(|| p.name.to_string());
         let read = crate::cross::from_py_at(&p.ty, &quote!(v), &quote!(#label));
@@ -771,15 +936,10 @@ fn fail_rule(s: &Sig) -> TokenStream {
 
 /// Fork guard and argument conversions, then call, error rule, conversion and `Ok`. A
 /// `#[host(kwargs)]` parameter's fields are converted in between (`crate::kwargs`).
-fn body_parts(
-    s: &Sig,
-    call: &Call,
-    wrap: Option<(&syn::Ident, Wrap)>,
-) -> (TokenStream, TokenStream) {
+fn body_parts(s: &Sig, call: &Call, wrap: Option<(&syn::Ident, Wrap)>) -> (TokenStream, TokenStream) {
     let pid = s.pid.then(|| quote!(::lk_agents_abi::python::check_pid()?;));
     let ins = inputs(s);
-    let preludes: Vec<TokenStream> =
-        ins.iter().filter_map(|i| i.as_ref()?.prelude.clone()).collect();
+    let preludes: Vec<TokenStream> = ins.iter().filter_map(|i| i.as_ref()?.prelude.clone()).collect();
     let rust = &s.rust;
     let args = s.params.iter().zip(&ins).map(|(p, i)| match i {
         Some(i) => i.arg.clone(),
@@ -793,9 +953,7 @@ fn body_parts(
         (Call::Free, _) => quote!(#rust(#(#args),*)),
         (Call::Own, Receiver::None) => quote!(Self::#rust(#(#args),*)),
         (Call::Own, _) => quote!(Self::#rust(self, #(#args),*)),
-        (Call::Locked(core) | Call::Shared(core), Receiver::None) => {
-            quote!(<#core>::#rust(#(#args),*))
-        }
+        (Call::Locked(core) | Call::Shared(core), Receiver::None) => quote!(<#core>::#rust(#(#args),*)),
         (Call::Locked(_), _) => {
             quote!(self.inner.lock().map_err(|_| ::pyo3::exceptions::PyRuntimeError::new_err("native object state is poisoned"))?.#rust(#(#args),*))
         }
@@ -807,9 +965,7 @@ fn body_parts(
         quote!(py.detach(|| -> ::pyo3::PyResult<_> { ::std::result::Result::Ok(#target) })?)
     } else if detaches(s) {
         quote!(py.detach(|| #target))
-    } else {
-        target
-    };
+    } else { target };
     let fail = match &s.ret {
         Ret::Result(_) => fail_rule(s),
         _ => TokenStream::new(),
@@ -866,8 +1022,7 @@ fn body_parts(
         _ => TokenStream::new(),
     };
     if s.is_async {
-        let shared = matches!(call, Call::Shared(_))
-            .then(|| quote!(let inner = ::std::sync::Arc::clone(&self.inner);));
+        let shared = matches!(call, Call::Shared(_)).then(|| quote!(let inner = ::std::sync::Arc::clone(&self.inner);));
         let rest = quote! {
             #shared
             ::lk_agents_abi::python::future_into_py(py, async move {
@@ -895,9 +1050,7 @@ fn result_ok(t: &syn::Type) -> Option<syn::Type> {
         return None;
     }
     let syn::PathArguments::AngleBracketed(a) = &seg.arguments else { return None };
-    a.args
-        .iter()
-        .find_map(|g| if let syn::GenericArgument::Type(t) = g { Some(t.clone()) } else { None })
+    a.args.iter().find_map(|g| if let syn::GenericArgument::Type(t) = g { Some(t.clone()) } else { None })
 }
 
 /// A wrapper with a `#[host(kwargs)]` parameter, assembled by `__host_kwargs_<Struct>!`, which
@@ -938,21 +1091,14 @@ fn spread(s: &Sig, k: Spread) -> TokenStream {
         };
         let star = star.then(|| quote!(*,));
         let name = &p.name;
-        match s
-            .defaults
-            .iter()
-            .find(|(d, _)| p.name == d)
-            .map(|(_, v)| v.clone())
-            .or_else(|| implied(p))
-        {
+        match s.defaults.iter().find(|(d, _)| p.name == d).map(|(_, v)| v.clone()).or_else(|| implied(p)) {
             Some(value) => quote!(#star #name = #value,),
             None => quote!(#star #name,),
         }
     };
     let host: Vec<(usize, &crate::Param)> = s.params.iter().enumerate().collect();
     let pos = host.iter().position(|(i, _)| *i == kw).expect("kwargs is a host parameter");
-    let sig_pre: Vec<TokenStream> =
-        host[..pos].iter().enumerate().map(|(j, (_, p))| sig_item(j, p)).collect();
+    let sig_pre: Vec<TokenStream> = host[..pos].iter().enumerate().map(|(j, (_, p))| sig_item(j, p)).collect();
     // The fields take the kwargs parameter's place, `*` before them when it starts the keywords.
     let star = match &s.kw_only {
         KwOnly::All => pos == 0,
@@ -960,8 +1106,7 @@ fn spread(s: &Sig, k: Spread) -> TokenStream {
         KwOnly::None => false,
     };
     let sig_pre = if star { quote!(#(#sig_pre)* *,) } else { quote!(#(#sig_pre)*) };
-    let sig_post: Vec<TokenStream> =
-        host[pos + 1..].iter().map(|(_, p)| sig_item(usize::MAX, p)).collect();
+    let sig_post: Vec<TokenStream> = host[pos + 1..].iter().map(|(_, p)| sig_item(usize::MAX, p)).collect();
     let param = |i: usize| -> Option<TokenStream> {
         let p = &s.params[i];
         let input = ins[i].as_ref()?;

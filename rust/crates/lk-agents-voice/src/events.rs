@@ -78,6 +78,7 @@ fn journal_error(
                 status_code: *status_code,
                 request_id: None,
                 phase: None,
+                cause: None,
             })
         }
         ProviderError::Local(api) => ProviderError::Local(api.clone()),

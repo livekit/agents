@@ -139,14 +139,14 @@ async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
 }
 
 // Catches: a batch recognition retried past its budget, or exhausted without the reference's
-// message.
+// message and the last failure as its cause.
 #[tokio::test(start_paused = true)]
 async fn a_recognition_gives_up_after_its_budget() {
-    // Exhausting it raises the host's chained connection error, so the interpreter must exist.
     let inner = Arc::new(Flaky::default());
     let stt = retrying(Arc::clone(&inner), 1);
     let error = stt.recognize(&[], None).await.unwrap_err();
     assert_eq!(error.message(), "failed to recognize speech after 2 attempts");
+    assert!(matches!(error, ProviderError::Local(ApiError { cause: Some(_), .. })), "{error:?}");
     assert_eq!(*inner.reports.lock(), vec![true, false]);
 }
 
