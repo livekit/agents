@@ -1,7 +1,7 @@
 import os
 from collections.abc import AsyncIterator
 
-from livekit.agents import Agent, AgentHandler, JobContext, LiveSession
+from livekit.agents import Agent, AgentHandler, JobContext, LiveSession, inference
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
 from livekit.plugins import openai
@@ -42,7 +42,11 @@ front_desk = AgentHandler()  # the worker's own lane: the phone and the text doo
 
 @front_desk.rtc_session()
 async def phone(ctx: JobContext) -> None:
-    session = LiveSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
+    # a local VAD, so the back office's progress and answers wait for the patient to stop talking
+    # (with the model's own turn detection, the default VAD is left out)
+    session = LiveSession(
+        llm=openai.realtime.RealtimeModel(), vad=inference.VAD(model="silero"), thread=ctx.thread
+    )
     await session.start(agent=voice, room=ctx.room)
     if not session.history.items:
         await session.generate_reply(instructions="Greet the patient and offer to book a visit.")
