@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 import weakref
 from collections.abc import Iterator
 from pathlib import Path
@@ -1043,4 +1044,123 @@ def test_a_warn_threshold_below_the_tick_floor_is_raised_to_it(
         assert any("raised to 20ms" in r.getMessage() for r in caplog.records)
     finally:
         loop_monitor.stop_monitoring(loop)
+        loop.close()
+
+
+def test_watchdog_sample_under_lock_is_visible_to_tick() -> None:
+    """Sampling under the lock means a tick that ends the block waits for the sample
+    and then reports it (issue #7599 case A).
+    """
+    reports: list[BlockedReport] = []
+    loop = asyncio.new_event_loop()
+    mon = EventLoopMonitor(
+        loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK, emit_spans=False
+    )
+    mon._on_report = reports.append
+    mon.start()
+    try:
+        mon._last_tick_at = time.monotonic() - (WARN + TICK)
+        mon._tick_seq = 0
+        mon._incident = None
+
+        entered = threading.Event()
+        release = threading.Event()
+        fake = loop_monitor._StackSample(
+            lag=WARN + TICK,
+            task_name="task",
+            frames=[traceback.FrameSummary(__file__, 1, "blocked", line="time.sleep(1)")],
+        )
+
+        def slow_sample(lag: float):
+            entered.set()
+            assert release.wait(5)
+            return fake
+
+        mon._sample_loop_thread = slow_sample  # type: ignore[method-assign]
+
+        w = threading.Thread(target=mon._watchdog_check)
+        w.start()
+        assert entered.wait(5)
+
+        tick_done = threading.Event()
+
+        def run_tick() -> None:
+            mon._on_tick()
+            tick_done.set()
+
+        t = threading.Thread(target=run_tick)
+        t.start()
+        time.sleep(0.05)
+        assert not tick_done.is_set(), "tick should be waiting for the watchdog lock"
+        release.set()
+        w.join(timeout=5)
+        t.join(timeout=5)
+        assert tick_done.is_set()
+        assert reports, "tick should have reported the block"
+        assert reports[0].stacks and reports[0].stacks[0].startswith("# loop thread sampled"), (
+            reports[0].stacks
+        )
+    finally:
+        mon.stop()
+        loop.close()
+
+
+def test_watchdog_does_not_replace_incident_on_torn_tick_read() -> None:
+    """When the tick has advanced ``_tick_seq`` but not yet ``_last_tick_at``, the
+    watchdog must leave the existing sampled incident alone (issue #7599 case B).
+    """
+    reports: list[BlockedReport] = []
+    loop = asyncio.new_event_loop()
+    mon = EventLoopMonitor(
+        loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK, emit_spans=False
+    )
+    mon._on_report = reports.append
+    mon.start()
+    try:
+        mon._last_tick_at = time.monotonic() - (WARN + TICK)
+        mon._tick_seq = 0
+        fake = loop_monitor._StackSample(
+            lag=WARN + TICK,
+            task_name="task",
+            frames=[traceback.FrameSummary(__file__, 1, "blocked", line="time.sleep(1)")],
+        )
+        mon._sample_loop_thread = lambda lag: fake  # type: ignore[method-assign]
+        mon._watchdog_check()
+        assert mon._incident is not None and mon._incident.samples
+        sampled_incident = mon._incident
+
+        between = (
+            next(
+                i
+                for i, line in enumerate(inspect.getsourcelines(EventLoopMonitor._on_tick)[0])
+                if "self._last_tick_at = now" in line
+            )
+            + inspect.getsourcelines(EventLoopMonitor._on_tick)[1]
+        )
+        ran_watchdog = threading.Event()
+
+        def on_tick_line(frame, event, arg):  # noqa: ARG001
+            if (
+                event == "line"
+                and frame.f_code is EventLoopMonitor._on_tick.__code__
+                and frame.f_lineno == between
+            ):
+                mon._watchdog_check()
+                ran_watchdog.set()
+            return on_tick_line
+
+        sys.settrace(on_tick_line)
+        try:
+            mon._on_tick()
+        finally:
+            sys.settrace(None)
+
+        assert ran_watchdog.is_set()
+        assert reports, "tick should have reported the original block"
+        assert reports[0].stacks and reports[0].stacks[0].startswith("# loop thread sampled"), (
+            reports[0].stacks
+        )
+        assert sampled_incident.samples
+    finally:
+        mon.stop()
         loop.close()
