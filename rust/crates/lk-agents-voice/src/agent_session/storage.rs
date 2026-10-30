@@ -32,8 +32,15 @@ impl StorageTurns {
 }
 
 impl Driver {
-    pub(crate) fn storage_reloaded(&mut self, history: Vec<ChatItem>, out: &mut Out) {
-        self.session.chat_ctx.replace_transport(history, &self.activity.agent);
+    pub(crate) fn storage_reloaded(
+        &mut self,
+        read: BTreeSet<String>,
+        history: Vec<ChatItem>,
+        out: &mut Out,
+    ) {
+        if !self.session.chat_ctx.reload_transport(&read, history, &self.activity.agent) {
+            return;
+        }
         self.publish_activity();
         out.machine().emit(SessionEvent::HistoryReloaded {
             items: self.session.chat_ctx.items().cloned().collect(),

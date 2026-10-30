@@ -169,7 +169,7 @@ fn label(event: &Event) -> &'static str {
             Input::InputStarted { .. } => "InputStarted",
             Input::GateSilenced(_) => "GateSilenced",
             Input::InputCensus(_) => "InputCensus",
-            Input::StorageReloaded(_) => "StorageReloaded",
+            Input::StorageReloaded { .. } => "StorageReloaded",
             Input::StorageSettled(_) => "StorageSettled",
             Input::StorageAbandoned(_) => "StorageAbandoned",
             Input::StorageLost(_) => "StorageLost",

@@ -2,7 +2,7 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use crate::generation::INSTRUCTIONS_MESSAGE_ID;
 use lk_agents_abi::{ChatContext, ChatItem, Vocabulary};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Why an item exists. Carried on `ItemAdded`, in the trace, and on the record.
 #[derive(Debug, Clone, PartialEq, Eq, Vocabulary)]
@@ -269,21 +269,48 @@ impl SessionChatCtx {
         (entry, outcome)
     }
 
-    /// A newly acquired transport snapshot replaces every old row, preserving database order.
-    pub(crate) fn replace_transport(&mut self, items: Vec<ChatItem>, agent: &str) {
-        self.agent = agent.to_owned();
+    /// The lane as storage reloaded it for a turn that read `read`, in the lane's order. Rows the
+    /// turn read are the lane's to change: another turn's edits replace them, and rows it
+    /// removed, compacted away or abandoned leave. Rows the turn did not read (another agent's,
+    /// one dropped from the view, one committed since) stay where their instant puts them, and
+    /// what another turn added joins as the host's, everyone's to read. An entry kept keeps its
+    /// source, visibility and agent. True when the record changed.
+    pub(crate) fn reload_transport(
+        &mut self,
+        read: &BTreeSet<String>,
+        items: Vec<ChatItem>,
+        agent: &str,
+    ) -> bool {
+        let before: Vec<ChatItem> = self.items.iter().map(|entry| entry.item.clone()).collect();
+        let mut held: BTreeMap<String, Committed> =
+            self.items.drain(..).map(|entry| (entry.item.id().to_owned(), entry)).collect();
+        // A row the turn read that the record does not hold is the request's own (its prompt, its
+        // new message): never the lane's to add.
         self.items = items
             .into_iter()
             .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
-            .map(|item| Committed {
-                item,
-                source: Source::HostCtx,
-                visibility: Visibility::Both,
-                agent: agent.to_owned(),
+            .filter_map(|item| match held.remove(item.id()) {
+                Some(entry) => Some(Committed { item, ..entry }),
+                None if read.contains(item.id()) => None,
+                None => Some(Committed {
+                    item,
+                    source: Source::HostCtx,
+                    visibility: Visibility::Both,
+                    agent: agent.to_owned(),
+                }),
             })
             .collect();
         self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
-        self.version += 1;
+        for (id, entry) in held.into_iter().filter(|(id, _)| !read.contains(id)) {
+            let at = self.find_insertion_index(&entry.item);
+            self.ids.insert(id);
+            self.items.insert(at, entry);
+        }
+        let changed = !before.iter().eq(self.items.iter().map(|entry| &entry.item));
+        if changed {
+            self.version += 1;
+        }
+        changed
     }
 
     /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items` (the version is kept).
