@@ -13,6 +13,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
@@ -108,28 +109,37 @@ pub fn media_pool() -> MediaPool {
 }
 
 /// A process-wide value made on first use in each process: a forked child, whose copy has no
-/// threads and may hold state its parent's threads owned, makes its own. The parent's copy is
-/// abandoned, never dropped.
+/// threads and may hold state (a lock, a permit) its parent's threads owned, makes its own
+/// without touching the parent's, which is leaked. Reading it takes no lock, so a lock held at
+/// the fork cannot block the child.
 pub struct PerProcess<T> {
-    slot: Mutex<Option<(u32, T)>>,
+    current: AtomicPtr<(u32, T)>,
     make: fn() -> T,
 }
 
 impl<T: Clone> PerProcess<T> {
     pub const fn new(make: fn() -> T) -> Self {
-        Self { slot: Mutex::new(None), make }
+        Self { current: AtomicPtr::new(std::ptr::null_mut()), make }
     }
 
     pub fn get(&self) -> T {
         let pid = std::process::id();
-        let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
-        match &*slot {
-            Some((owner, value)) if *owner == pid => value.clone(),
-            _ => {
-                std::mem::forget(slot.take());
-                let value = (self.make)();
-                *slot = Some((pid, value.clone()));
-                value
+        loop {
+            let current = self.current.load(Ordering::Acquire);
+            // SAFETY: a published value is leaked, never freed.
+            if let Some((owner, value)) = unsafe { current.as_ref() }
+                && *owner == pid
+            {
+                return value.clone();
+            }
+            let made = Box::into_raw(Box::new((pid, (self.make)())));
+            match self.current.compare_exchange(current, made, Ordering::AcqRel, Ordering::Acquire)
+            {
+                // SAFETY: just published and never freed.
+                Ok(_) => return unsafe { (*made).1.clone() },
+                // Another thread of this process published first: ours was never shared.
+                // SAFETY: `made` came from Box::into_raw above and nothing else holds it.
+                Err(_) => drop(unsafe { Box::from_raw(made) }),
             }
         }
     }
@@ -146,6 +156,9 @@ struct State {
 }
 
 struct Shared {
+    /// The process the pool's threads run in: a forked child's inherited permits and jobs leave
+    /// the parent's state alone.
+    pid: u32,
     thread_name: &'static str,
     total: usize,
     limits: Box<[usize]>,
@@ -163,6 +176,9 @@ impl Shared {
     }
 
     fn release(&self, class: usize) {
+        if self.pid != std::process::id() {
+            return;
+        }
         let waiters = {
             let mut state = self.lock();
             state.used[class] -= 1;
@@ -173,19 +189,22 @@ impl Shared {
     }
 
     fn run(self: &Arc<Self>, task: Task) {
-        let mut state = self.lock();
-        state.tasks.push_back(task);
-        if state.tasks.len() <= state.idle {
+        let spawn = {
+            let mut state = self.lock();
+            state.tasks.push_back(task);
+            state.tasks.len() > state.idle
+        };
+        if !spawn {
             self.work.notify_one();
-        } else {
-            // One thread per queued job beyond the idle ones, so no job waits behind a long-lived
-            // one; every job holds a permit, so threads never outnumber the total ceiling.
-            let shared = self.clone();
-            std::thread::Builder::new()
-                .name(self.thread_name.into())
-                .spawn(move || work(shared))
-                .expect("spawning a pool thread");
+            return;
         }
+        // One thread per queued job beyond the idle ones, so no job waits behind a long-lived
+        // one; every job holds a permit, so threads never outnumber the total ceiling.
+        let shared = self.clone();
+        std::thread::Builder::new()
+            .name(self.thread_name.into())
+            .spawn(move || work(shared))
+            .expect("spawning a pool thread");
     }
 }
 
@@ -274,7 +293,9 @@ impl Future for CapacityAvailable {
         if self.shared.fits(&state, self.class) {
             return Poll::Ready(());
         }
-        state.capacity_waiters.push(cx.waker().clone());
+        if !state.capacity_waiters.iter().any(|waiter| waiter.will_wake(cx.waker())) {
+            state.capacity_waiters.push(cx.waker().clone());
+        }
         Poll::Pending
     }
 }
@@ -299,6 +320,7 @@ impl<C: Class> Pool<C> {
         };
         Ok(Self {
             shared: Arc::new(Shared {
+                pid: std::process::id(),
                 thread_name,
                 total,
                 limits: limits.into(),
