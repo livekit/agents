@@ -173,6 +173,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     "returning the task results without it",
                     exc_info=True,
                 )
+                self._preserve_function_call_history = True
                 self.complete(TaskGroupResult(task_results=task_results, summarize_error=e))
                 return
 

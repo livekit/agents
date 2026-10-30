@@ -37,6 +37,21 @@ class _TalkingTask(AgentTask[str]):
         self.complete(self._value)
 
 
+class _ToolResultTask(_DoneTask):
+    async def on_enter(self) -> None:
+        ctx = self.chat_ctx.copy()
+        ctx.insert(
+            [
+                llm.FunctionCall(call_id=self._value, name="lookup", arguments="{}"),
+                llm.FunctionCallOutput(
+                    call_id=self._value, name="lookup", output=self._value, is_error=False
+                ),
+            ]
+        )
+        await self.update_chat_ctx(ctx, exclude_invalid_function_calls=False)
+        self.complete(self._value)
+
+
 class _SummarizeFailsLLM(FakeLLM):
     """Every summarization call fails the way a rate-limited or dropped provider would."""
 
@@ -53,6 +68,8 @@ class _Group(Agent):
         self._summarize = summarize
         self.outcome: object = None
         self.ctx_items: int = 0
+        self.returned_ctx = llm.ChatContext.empty()
+        self.summarize_error: Exception | None = None
         self.finished = asyncio.Event()
 
     async def on_enter(self) -> None:
@@ -62,9 +79,11 @@ class _Group(Agent):
         try:
             res = await tg
             self.outcome = ("ok", res.task_results)
+            self.summarize_error = res.summarize_error
         except BaseException as e:  # noqa: BLE001
             self.outcome = ("raised", type(e).__name__, str(e))
-        self.ctx_items = len(self.chat_ctx.copy().items)
+        self.returned_ctx = self.chat_ctx.copy()
+        self.ctx_items = len(self.returned_ctx.items)
         self.finished.set()
 
 
@@ -116,3 +135,21 @@ async def test_working_llm_still_summarizes_into_one_turn() -> None:
 
     assert outcome[0] == "ok"
     assert outcome[1] == {"a": "alpha", "b": "beta"}
+
+
+@pytest.mark.asyncio
+async def test_failed_summary_preserves_tool_results_in_parent_context() -> None:
+    parent = _Group(_ToolResultTask, summarize=True)
+    async with AgentSession(llm=_SummarizeFailsLLM()) as session:
+        await session.start(parent)
+        await asyncio.wait_for(parent.finished.wait(), 10)
+        assert parent.outcome == ("ok", {"a": "alpha", "b": "beta"})
+        assert isinstance(parent.summarize_error, RuntimeError)
+        assert [
+            item.output
+            for item in parent.returned_ctx.items
+            if isinstance(item, llm.FunctionCallOutput)
+        ] == ["alpha", "beta"]
+        assert [
+            item.call_id for item in parent.returned_ctx.items if isinstance(item, llm.FunctionCall)
+        ] == ["alpha", "beta"]
