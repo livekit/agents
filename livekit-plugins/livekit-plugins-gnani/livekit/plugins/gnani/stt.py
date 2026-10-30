@@ -96,9 +96,6 @@ _SESSION_TUNING: dict[str, tuple[str, float, float, type]] = {
     "max_speech_s": ("x-max-speech-s", 5.0, 120.0, float),
 }
 
-# How long to wait for the final transcript after the caller ended the audio input.
-_INPUT_DRAIN_MIN_S = 0.5
-_INPUT_DRAIN_MAX_S = 3.0
 # A session that the server closes this quickly is not an idle timeout: stop reconnecting.
 _QUICK_CLOSE_S = 2.0
 _MAX_QUICK_CLOSES = 3
@@ -660,6 +657,10 @@ class SpeechStream(stt.RecognizeStream):
     # defaults at class level so the message handlers work on a partially built stream
     _ws: Any = None
     _speaking: bool = False
+    # audio was sent since the last `commit`
+    _audio_since_commit: bool = False
+    # a `commit` closed an utterance whose transcript (or error) has not arrived yet
+    _awaiting_result: bool = False
     _last_error: str | None = None
 
     def __init__(
@@ -761,6 +762,8 @@ class SpeechStream(stt.RecognizeStream):
         ws_url = self._build_ws_url()
         headers = _build_ws_headers(self._opts)
         self._last_error = None
+        self._audio_since_commit = False
+        self._awaiting_result = False
 
         try:
             async with websockets.connect(
@@ -829,26 +832,44 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError(f"Gnani STT WebSocket error: {e}") from e
 
     async def _drain_after_input(self, recv_task: asyncio.Task[None]) -> None:
-        """After the input ended (a `commit` was sent), wait for the transcript that is
-        still in flight, then let the caller finish."""
-        start = time.monotonic()
-        while time.monotonic() - start < _INPUT_DRAIN_MAX_S:
-            if recv_task.done():
+        """The audio input ended and its last utterance was committed: keep receiving
+        until that utterance's transcript (or error) has arrived, the server ended the
+        session, or the connection timeout runs out.
+
+        Completion is tracked explicitly (``_awaiting_result``) rather than inferred from
+        speech events, because the server may take a while to answer: a short clip can
+        yield ``speech_start`` and the transcript well after the ``commit`` was sent.
+        """
+        deadline = time.monotonic() + self._conn_options.timeout
+        while self._awaiting_result and not recv_task.done():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # e.g. the last utterance held no speech, so the server never answers
+                logger.debug("Gnani STT: no transcript for the final utterance before timeout")
                 return
-            if not self._speaking and time.monotonic() - start >= _INPUT_DRAIN_MIN_S:
-                return
-            await asyncio.sleep(0.05)
+            await asyncio.wait({recv_task}, timeout=min(remaining, 0.05))
 
     async def _send_audio(self, ws: Any) -> None:
         audio_buffer = bytearray()
 
+        async def send_audio(data: bytes) -> None:
+            await ws.send(data)
+            self._audio_since_commit = True
+
+        async def commit() -> None:
+            # close the open utterance now instead of waiting for trailing silence
+            # flag before sending, so a fast reply cannot be cleared by this coroutine
+            if self._audio_since_commit:
+                self._audio_since_commit = False
+                self._awaiting_result = True
+            await ws.send(json.dumps({"type": "commit"}))
+
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 if audio_buffer:
-                    await ws.send(bytes(audio_buffer))
+                    await send_audio(bytes(audio_buffer))
                     audio_buffer.clear()
-                # close the open utterance now instead of waiting for trailing silence
-                await ws.send(json.dumps({"type": "commit"}))
+                await commit()
                 continue
 
             frame: rtc.AudioFrame = data
@@ -858,11 +879,11 @@ class SpeechStream(stt.RecognizeStream):
             while len(audio_buffer) >= STREAM_CHUNK_BYTES:
                 chunk = bytes(audio_buffer[:STREAM_CHUNK_BYTES])
                 audio_buffer = audio_buffer[STREAM_CHUNK_BYTES:]
-                await ws.send(chunk)
+                await send_audio(chunk)
 
         if audio_buffer:
-            await ws.send(bytes(audio_buffer))
-        await ws.send(json.dumps({"type": "commit"}))
+            await send_audio(bytes(audio_buffer))
+        await commit()
 
     def _handle_error(self, data: dict[str, Any]) -> None:
         message = data.get("message", "Unknown error")
@@ -876,6 +897,7 @@ class SpeechStream(stt.RecognizeStream):
         # the remembered message becomes the error.
         logger.warning(f"Gnani STT error: {message}")
         self._last_error = message
+        self._awaiting_result = False
         self._end_speech_nowait()
 
     def _end_speech_nowait(self) -> None:
@@ -896,6 +918,8 @@ class SpeechStream(stt.RecognizeStream):
 
             if msg_type == "transcript":
                 self._mark_provider_progress()
+                # the committed utterance has been answered (even with an empty text)
+                self._awaiting_result = False
                 # partials are disabled, so every transcript is final; ignore any other
                 if not data.get("is_final", True):
                     continue

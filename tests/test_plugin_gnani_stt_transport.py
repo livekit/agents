@@ -40,6 +40,10 @@ class FakeVachanaSTT:
         # per-session behaviour by index: "idle" | "reject" | "quick_close"
         self.behaviours: dict[int, str] = {}
         self.utterance_errors_left = 0
+        # seconds the server takes before it answers the audio it received (speech_start
+        # and the transcript both come late), and a switch for a server that never answers
+        self.reply_delay = 0.0
+        self.silent = False
         self.rest_calls: list[dict[str, Any]] = []
         self.rest_status = 200
 
@@ -76,8 +80,10 @@ class FakeVachanaSTT:
                     await ws.send_json({"type": "session_end", "reason": "idle_timeout"})
                     await ws.close(code=1001, message=b"idle_timeout")
                     break
-                if not s.speaking:
+                if not s.speaking and not self.silent:
                     s.speaking = True
+                    if self.reply_delay:
+                        await asyncio.sleep(self.reply_delay)
                     await ws.send_json({"type": "speech_start", "utterance_id": "u1"})
             elif msg.type == aiohttp.WSMsgType.TEXT:
                 body = json.loads(msg.data)
@@ -289,6 +295,67 @@ async def test_end_input_commits_so_the_last_utterance_is_not_lost(server):
     events = await _collect(stream)
 
     assert FINAL in _types(events)
+
+
+async def test_end_input_waits_for_a_late_transcript_of_the_final_utterance(server):
+    """The server may take far longer than a fixed grace period to answer a short clip:
+    speech_start and the transcript both arrive after end_input(). They must not be lost."""
+    server.reply_delay = 1.2
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    stream.push_frame(FRAME)
+    stream.end_input()
+
+    events = await _collect(stream)
+
+    assert _types(events) == [SOS, FINAL, EOS]
+    assert events[1].alternatives[0].text == server.text
+
+
+async def test_end_input_returns_once_the_final_utterance_failed(server):
+    """An utterance error answers the commit too, so there is nothing left to wait for."""
+    server.reply_delay = 0.3
+    server.utterance_errors_left = 1
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=30))
+    stream.push_frame(FRAME)
+    stream.end_input()
+
+    started = asyncio.get_running_loop().time()
+    events = await _collect(stream)
+
+    assert FINAL not in _types(events)
+    assert asyncio.get_running_loop().time() - started < 5  # well below the 30 s timeout
+
+
+async def test_end_input_gives_up_at_the_connection_timeout_when_never_answered(server):
+    """A final utterance without speech is never answered: wait for the configured
+    timeout (not forever) and finish quietly."""
+    server.silent = True
+    errors: list[stt.STTError] = []
+    stt_ = _make_stt(server, language="hi-IN")
+    stt_.on("error", errors.append)
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1))
+    stream.push_frame(FRAME)
+    stream.end_input()
+
+    started = asyncio.get_running_loop().time()
+    events = await _collect(stream)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert events == []
+    assert not errors
+    assert 0.9 < elapsed < 4
+
+
+async def test_end_input_does_not_wait_when_nothing_was_sent(server):
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=30))
+    stream.end_input()
+
+    started = asyncio.get_running_loop().time()
+    assert await _collect(stream) == []
+    assert asyncio.get_running_loop().time() - started < 5
 
 
 async def test_partial_frames_are_chunked_to_1024_bytes(server):

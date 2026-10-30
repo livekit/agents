@@ -155,7 +155,10 @@ What Prisma v3.0 adds, and what the plugin does with it:
 - The plugin advertises `manual_flush`: when LiveKit flushes the stream (for example at the end
   of a turn) the plugin sends a `commit` message so the server finalises the utterance
   immediately instead of waiting for its own silence detection. `commit` is also sent when the
-  audio input ends, so the last utterance is never lost.
+  audio input ends, and the stream then keeps receiving until the last utterance's transcript
+  (or error) arrives, however long the server takes, up to the connection timeout
+  (`APIConnectOptions.timeout`). If that last chunk held no speech the server never answers, so
+  the stream finishes once the timeout elapses.
 - Each stream emits `START_OF_SPEECH`, then `FINAL_TRANSCRIPT`, then `END_OF_SPEECH`. The API
   sends one final transcript per utterance and no interim results. `END_OF_SPEECH` is therefore
   emitted right after the final transcript, which matters only with `turn_detection="stt"`.
