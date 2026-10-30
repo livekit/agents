@@ -5,8 +5,8 @@
 use super::calls::Calls;
 use super::shared::{PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
-use crate::voice::session::Tx;
 use crate::voice::resources::Resources;
+use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
@@ -177,7 +177,8 @@ pub struct DriverBuilder {
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: lk_agents_voice::tool_executor::Toolset,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
-    pub session_id: String,
+    /// `None` mints one at start.
+    pub session_id: Option<String>,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
@@ -234,7 +235,7 @@ impl DriverBuilder {
             video_sampler: None,
             realtime: None,
             toolset: Default::default(),
-            session_id: lk_agents_net::strings::shortuuid("AS_"),
+            session_id: None,
             storage: None,
             journal: Default::default(),
         }
@@ -247,6 +248,8 @@ impl DriverBuilder {
     ) -> Result<(SessionCores, SessionHandle), DriverError> {
         // `agent_session` and `session_start` run from here.
         let built = self.time.wall_secs();
+        let session_id =
+            self.session_id.take().unwrap_or_else(|| lk_agents_net::strings::shortuuid("AS_"));
         let keyterms = self.keyterms.take().map(|mut setup| {
             let llm = setup.llm.take().map(|llm| self.resources.register_llm(llm).id);
             (setup, llm)
@@ -281,7 +284,7 @@ impl DriverBuilder {
             self.audio_out.clone().map(|o| resources.register_audio_output(o)),
             self.text_out.clone().map(|o| resources.register_text_output(o)),
         );
-        let shared = self.shared(&queue, closing, outputs.clone());
+        let shared = self.shared(&queue, closing, outputs.clone(), session_id.clone());
         let shared_calls = Arc::clone(&shared.calls);
         // The session's id sequence: the core's speeches and items, and a host speech call's id.
         let speech_ids = Arc::new(std::sync::atomic::AtomicU64::new(1));
@@ -313,7 +316,7 @@ impl DriverBuilder {
                 room_link: self.room_link.take(),
                 agent: self.agent.clone(),
                 chat_ctx: self.chat_ctx.clone(),
-                session_id: self.session_id.clone(),
+                session_id,
                 storage_enabled: self.storage.is_some(),
             },
             instructions: std::mem::take(&mut self.instructions),
@@ -395,6 +398,7 @@ impl DriverBuilder {
         queue: &Tx,
         closing: tokio::sync::watch::Sender<bool>,
         outputs: lk_agents_voice::agent_session::Outputs,
+        session_id: String,
     ) -> Arc<SessionShared> {
         Arc::new(SessionShared {
             view: self.view.clone(),
@@ -412,7 +416,7 @@ impl DriverBuilder {
             hook_host: self.hook_bound.is_some(),
             spawner: Arc::clone(&self.spawner),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
-            session_id: self.session_id.clone(),
+            session_id,
             resources: self.resources.clone(),
             chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
                 .0,

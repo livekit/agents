@@ -4,8 +4,8 @@ use super::*;
 use crate::voice::session::{DriverBuilder, SessionExecutor, SessionHandle, Timebase};
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::trace::{Journal, Step};
-use std::future::Future as _;
 use parking_lot::Mutex;
+use std::future::Future as _;
 use std::time::Duration;
 
 type Steps = Arc<Mutex<Vec<Step>>>;
@@ -21,7 +21,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
     let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
     let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
     builder.journal = Journal::observed(move |step| observed.lock().push(step.clone()));
-    builder.session_id = name.into();
+    builder.session_id = Some(name.into());
     (builder, steps)
 }
 
@@ -39,11 +39,7 @@ async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
     let before = steps.lock().clone();
     let effects = runtime.driver.open(runtime.shared.time.read());
     assert!(handle.events.try_recv().is_err(), "the decision step delivered a host event");
-    assert_eq!(
-        steps.lock().clone(),
-        before,
-        "the decision step invoked the journal observer"
-    );
+    assert_eq!(steps.lock().clone(), before, "the decision step invoked the journal observer");
     runtime.perform_voice(effects);
     assert!(handle.events.try_recv().is_ok(), "runtime never delivered the opening event");
     assert!(
