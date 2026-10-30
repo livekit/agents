@@ -616,16 +616,6 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
     assert!(invalid(api.set_io_enabled("microphone".into(), true)).contains("microphone"));
     assert!(invalid(api.collect_dtmf(4, false, 4.0, "x".into())).contains("\"x\""));
     assert!(invalid(api.collect_dtmf(4, false, -1.0, "#".into())).contains("timeout"));
-    use lk_agents_abi::metrics::base::{AgentMetrics, EouMetrics};
-    let eou = AgentMetrics::Eou(EouMetrics {
-        timestamp: 0.0,
-        end_of_utterance_delay: 0.0,
-        transcription_delay: 0.0,
-        on_user_turn_completed_delay: 0.0,
-        speech_id: None,
-        metadata: None,
-    });
-    assert!(invalid(api.host_metrics(eou)).contains("count it twice"));
     assert!(api.aclose("bogus".into(), false).is_err());
     // Well-formed, but nothing runs yet.
     assert!(matches!(

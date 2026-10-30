@@ -31,6 +31,7 @@ from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
+from .metrics import AvatarMetrics
 from .room_io import _StreamInfo
 from .session_options import (
     InterruptionGateVerdict,
@@ -482,6 +483,10 @@ class VoiceSession:
         timeout fired short, and is cancelled when the session closes or another collection
         starts. With `ask_for_confirmation` the digits are read back instead and the task's
         `confirm_inputs` tool completes it. A cancelled await stops the collection.
+        """
+    def report_avatar_metrics(self, metrics: AvatarMetrics) -> None:
+        """An `AvatarSession`'s own measurements (its join and playback latency), recorded with the
+        session's metrics.
         """
     def set_audio_input(self, source: AudioInput | None) -> None:
         """`session.input.audio = ..` after `start()`; `None` detaches."""

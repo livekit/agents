@@ -19,7 +19,7 @@ use lk_agents_voice::agent_activity::scheduling::SpeechKind;
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
-    Llm, Tts, frame, history, patch, session_stt, tool_specs, turn_detection, vad_metrics,
+    Llm, Tts, frame, history, patch, session_stt, tool_specs, turn_detection, avatar_metrics,
 };
 use super::*;
 mod wait;
@@ -636,7 +636,7 @@ impl Run {
                 let Some(id) = self.hook_id(Ref::new(hook.nth)) else { return false };
                 self.answer_hook(id, *answer, text.clone())
             }
-            Input::HostMetrics {} => api.host_metrics(vad_metrics()).is_ok(),
+            Input::HostMetrics {} => api.report_avatar_metrics(avatar_metrics()).is_ok(),
             Input::Ivr { input, silence, text: UserText(text) } => match input {
                 IvrInput::Start => api.ivr_start(secs(*silence), None, None).is_ok(),
                 IvrInput::SeedTranscript => api.ivr_final(text.clone()).is_ok(),

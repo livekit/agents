@@ -738,17 +738,16 @@ pub(super) fn history(roles: &[Role], text: &str) -> Vec<ChatItem> {
         .collect()
 }
 
-/// Metrics from a leg the host owns. The values say nothing; that the driver accepts and forwards
+/// An avatar's own measurements. The values say nothing; that the driver accepts and forwards
 /// them is the whole of what `HostMetrics` exercises.
-pub(super) fn vad_metrics() -> AgentMetrics {
-    AgentMetrics::Vad(lk_agents_abi::metrics::base::VadMetrics {
-        label: "fake::vad".into(),
+pub(super) fn avatar_metrics() -> lk_agents_abi::metrics::base::AvatarMetrics {
+    lk_agents_abi::metrics::base::AvatarMetrics {
         timestamp: 0.0,
-        idle_time: 0.0,
-        inference_duration_total: 0.0,
-        inference_count: 0,
+        playback_latency: 0.1,
+        session_started_time: None,
+        avatar_joined_time: None,
         metadata: None,
-    })
+    }
 }
 
 /// One live option, changed alone. The knob picks the field and the payload supplies whichever

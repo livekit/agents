@@ -287,7 +287,8 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
 
     def _emit_metrics(self, metrics: AvatarMetrics) -> None:
         assert self._agent_session is not None
-
+        if (core := self._agent_session._core) is not None:
+            core.report_avatar_metrics(metrics)
         self.emit("metrics_collected", metrics)
 
 

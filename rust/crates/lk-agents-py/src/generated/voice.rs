@@ -1353,6 +1353,16 @@ impl VoiceSession {
         })
     }
 
+    /// An `AvatarSession`'s own measurements (its join and playback latency), recorded with the
+    /// session's metrics.
+    #[pyo3(signature = (metrics))]
+    fn report_avatar_metrics(&self, metrics: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::host::check_pid()?;
+        let metrics = crate::generated::records::metrics::avatar_metrics_from_py(&metrics)?;
+        <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::report_avatar_metrics(&self.0, metrics).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
     /// `session.input.audio = ..` after `start()`; `None` detaches.
     #[pyo3(signature = (source))]
     fn set_audio_input(&self, source: Option<Bound<'_, PyAny>>) -> PyResult<()> {

@@ -818,29 +818,6 @@ impl VoiceSession {
         let clock = self.time.clock();
         self.tasks.spawn(self.spawner.as_ref(), "say feed", pusher.feed(source, clock));
     }
-
-    /// A metrics record only a plugin can measure, emitted as `metrics_collected`. Engine-computed
-    /// kinds are refused (they would count twice).
-    pub fn host_metrics(
-        &self,
-        record: lk_agents_abi::metrics::base::AgentMetrics,
-    ) -> Result<(), CommandRefused> {
-        use lk_agents_abi::metrics::base::AgentMetrics as M;
-        match &record {
-            M::Llm(_) | M::Tts(_) | M::Stt(_) | M::Eou(_) => {
-                return Err(CommandRefused::Invalid(format!(
-                    "host_metrics: {} records are the engine's own; handing one in would count it twice",
-                    record.type_literal()
-                )));
-            }
-            M::Vad(_)
-            | M::EotInference(_)
-            | M::RealtimeModel(_)
-            | M::Interruption(_)
-            | M::Avatar(_) => {}
-        }
-        Ok(self.send(Command::HostMetrics(Box::new(record)))?)
-    }
 }
 
 /// For a host that stopped moving time (awaiting `aclose()`). Paced on real time (1 ms per step) so

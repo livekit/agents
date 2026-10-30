@@ -415,6 +415,14 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         stop_event: String,
     ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused>;
 
+    /// An `AvatarSession`'s own measurements (its join and playback latency), recorded with the
+    /// session's metrics.
+    #[host(call)]
+    fn report_avatar_metrics(
+        &self,
+        metrics: crate::metrics::base::AvatarMetrics,
+    ) -> Result<(), SessionRefused>;
+
     /// `session.input.audio = ..` after `start()`; `None` detaches.
     #[host(call)]
     fn set_audio_input(&self, source: Option<Arc<dyn AudioInput>>) -> Result<(), SessionRefused>;

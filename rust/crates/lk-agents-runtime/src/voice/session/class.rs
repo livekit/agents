@@ -375,6 +375,14 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }))
     }
 
+    fn report_avatar_metrics(
+        &self,
+        metrics: lk_agents_abi::metrics::base::AvatarMetrics,
+    ) -> Result<(), SessionRefused> {
+        let record = lk_agents_abi::metrics::base::AgentMetrics::Avatar(metrics);
+        self.send(Command::HostMetrics(Box::new(record)))
+    }
+
     fn set_audio_input(&self, source: Option<Arc<dyn AudioInput>>) -> Result<(), SessionRefused> {
         self.send(ActivityCommand::SetAudioInput(source.map(HostAudio)))
     }
