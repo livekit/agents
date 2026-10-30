@@ -84,8 +84,13 @@ def _ensure_strict_json_schema(
 
     # object types
     # { 'type': 'object', 'properties': { 'a':  {...} } }
+    #
+    # An empty `properties` still needs `required: []`. Strict mode requires the
+    # key to be present and to name every declared property, so a tool taking no
+    # arguments must send an empty list rather than omit it -- endpoints that
+    # enforce the strict dialect reject the object otherwise (livekit#7637).
     properties = json_schema.get("properties")
-    if is_dict(properties) and properties:
+    if is_dict(properties):
         json_schema["required"] = list(properties.keys())
         json_schema["properties"] = {
             key: _ensure_strict_json_schema(
