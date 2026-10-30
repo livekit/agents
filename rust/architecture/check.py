@@ -63,6 +63,17 @@ BANNED = {
     "livekit-api",
     "lk-agents-runtime",
 }
+# The platforms the extension ships wheels for (.github/workflows/build.yml). Closures are resolved
+# per platform: an edge only another target takes (chrono -> js-sys on wasm32) is never built.
+PLATFORMS = (
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+)
 # Crates whose `cargo check --tests` output has no compiler warning. This list only grows.
 WARNING_CLEAN = {
     f"lk-agents-{name}"
@@ -441,23 +452,29 @@ def read_baselines(root: Path, paths: dict[str, str]) -> tuple[set[str], list[st
     return baseline, errors
 
 
+def cargo_metadata(manifest: Path, *args: str) -> dict:
+    """The all-feature resolved graph; Cargo's own errors reach stderr."""
+    command = ["cargo", "metadata", "--manifest-path", str(manifest), "--locked", "--all-features"]
+    result = subprocess.run(
+        [*command, "--format-version", "1", *args], check=True, stdout=subprocess.PIPE, text=True
+    )
+    return json.loads(result.stdout)
+
+
+def shipped_dependency_violations(manifest: Path) -> set[str]:
+    """Dependency violations of the closures the shipped platforms build."""
+    return set().union(
+        *(
+            dependency_violations(cargo_metadata(manifest, "--filter-platform", platform))
+            for platform in PLATFORMS
+        )
+    )
+
+
 def check_boundaries() -> int:
     root = Path(__file__).resolve().parents[2]
-    command = [
-        "cargo",
-        "metadata",
-        "--manifest-path",
-        str(root / "rust/Cargo.toml"),
-        "--locked",
-        "--all-features",
-        "--format-version",
-        "1",
-    ]
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode:
-        sys.stderr.write(result.stderr)
-        return result.returncode
-    metadata = json.loads(result.stdout)
+    manifest = root / "rust/Cargo.toml"
+    metadata = cargo_metadata(manifest)
     expected = {name for name in PURE if (root / "rust/crates" / name / "Cargo.toml").exists()}
     members = set(metadata["workspace_members"])
     found = {p["name"] for p in metadata["packages"] if p["id"] in members}
@@ -468,7 +485,7 @@ def check_boundaries() -> int:
         raise ValueError("no tracked Rust files found")
     errors = []
     baseline, history_errors = read_baselines(root, DEPENDENCY_BASELINES)
-    actual = dependency_violations(metadata)
+    actual = shipped_dependency_violations(manifest)
     errors.extend(ratchet(actual, baseline))
     errors.extend(stale(actual, baseline))
     errors.extend(history_errors)

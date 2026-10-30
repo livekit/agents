@@ -14,12 +14,5 @@
   "dependency:lk-agents-abi:pyo3-macros",
   "dependency:lk-agents-abi:pyo3-macros-backend",
   "dependency:lk-agents-abi:tokio",
-  "dependency:lk-agents-abi:tokio-macros",
-  "dependency:lk-agents-voice:futures-channel",
-  "dependency:lk-agents-voice:futures-core",
-  "dependency:lk-agents-voice:futures-io",
-  "dependency:lk-agents-voice:futures-macro",
-  "dependency:lk-agents-voice:futures-sink",
-  "dependency:lk-agents-voice:futures-task",
-  "dependency:lk-agents-voice:futures-util"
+  "dependency:lk-agents-abi:tokio-macros"
 ]

@@ -18,6 +18,7 @@ from check import (
     pyo3_violations,
     ratchet,
     read_baselines,
+    shipped_dependency_violations,
     stale,
     tracked_rust_paths,
     use_violations,
@@ -73,6 +74,36 @@ class DependencyContracts(unittest.TestCase):
             )
             self.assertEqual(dependency_violations(default), set())
             self.assertIn("dependency:lk-agents-voice:livekit-ffi", dependency_violations(enabled))
+
+    def test_a_platform_specific_edge_counts_only_on_a_shipped_platform(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers=["voice", "tokio", "futures-util"]\nresolver="3"\n'
+            )
+            for name in ("lk-agents-voice", "tokio", "futures-util"):
+                directory = "voice" if name == "lk-agents-voice" else name
+                (root / directory / "src").mkdir(parents=True)
+                (root / directory / "src/lib.rs").write_text("")
+                manifest = f'[package]\nname="{name}"\nversion="0.0.0"\nedition="2024"\n'
+                if name == "lk-agents-voice":
+                    manifest += (
+                        "[target.'cfg(windows)'.dependencies]\n"
+                        'tokio={path="../tokio"}\n'
+                        "[target.'cfg(target_arch = \"wasm32\")'.dependencies]\n"
+                        'futures-util={path="../futures-util"}\n'
+                    )
+                (root / directory / "Cargo.toml").write_text(manifest)
+            subprocess.run(
+                ["cargo", "generate-lockfile", "--offline"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            self.assertEqual(
+                shipped_dependency_violations(root / "Cargo.toml"),
+                {"dependency:lk-agents-voice:tokio"},
+            )
 
     def test_all_feature_resolved_closure_rejects_sdk_and_async_dependencies(self):
         for banned in (

@@ -11,7 +11,9 @@ From the repository root, `make -C rust architecture` runs the same gate.
 checks formatting followed by the architecture gate. Run `make -C rust` for help.
 
 - `check.py` validates all-feature Cargo dependency closures, including normal,
-  build and dev edges, and workspace layering against the documented crate graph
+  build and dev edges, resolved for each platform a wheel ships for (an edge only
+  another target takes, such as wasm32's, is never built), and workspace layering
+  against the documented crate graph
   (`GRAPH`, rust-core.md "Crates and dependencies").
   Forbidden executor, transport, host and SDK families include Tokio, futures,
   PyO3, rusqlite and LiveKit SDKs; protocol records are allowed.
