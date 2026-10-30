@@ -470,6 +470,29 @@ fn a_refused_close_fails_the_task_storage_unavailable() {
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
 }
 
+/// A2A_SEED=14313 (one_task_per_message, Refusable): on a `reject` lane the message's row is
+/// written by its commit; a refused commit was answered `failed storage-unavailable` with a task no
+/// row holds, and the resend created another. A failure that writes no row answers the database's
+/// error, so the resend runs the message as the first send.
+#[test]
+fn a_refused_commit_of_an_unwritten_receipt_answers_the_error() {
+    let mut m = machine(Policy::Reject);
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
+    m.pending = Some(1);
+    assert!(matches!(step(&mut m, opened(true, false)), Operation::CloseRun));
+    let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
+    let pickup = operation(at(&mut m, Duration::ZERO, Err(refused)));
+    assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
+    assert!(
+        matches!(step(&mut m, Completion::Picked(None)), Operation::ReadTask(t) if t == "receipt")
+    );
+    let effects = at(&mut m, Duration::ZERO, Ok(Completion::Task(None)));
+    assert!(
+        matches!(&effects[..], [Effect::Finished(Err(StorageError::Unavailable(_)))]),
+        "{effects:?}"
+    );
+}
+
 /// A2A_SEED=68 88 130 (one_question_pending, Lane): a reply naming a question that a turn ahead
 /// already merged found no pending question and asked its own beside the newer one still waiting.
 /// The reply answers the question waiting now.

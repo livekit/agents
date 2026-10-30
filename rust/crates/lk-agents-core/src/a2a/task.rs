@@ -853,6 +853,11 @@ impl TaskMachine {
             }
             (Phase::Resolve, Completion::Done) => self.answer_task(None),
             (Phase::Answer { reason }, Completion::Done) => self.answer_task(reason),
+            (Phase::Answer { .. }, Completion::Task(None)) if self.error.is_some() => {
+                // the failed run's message has no row (a `reject` lane writes it in the commit):
+                // a failure would name a task no row holds, so the client hears the error
+                return Err(Finish::Error(self.error.take().expect("the run's error")));
+            }
             (Phase::Answer { reason }, Completion::Task(task)) => {
                 let answer = Answer::row(self.answering(), task, reason);
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
@@ -1054,6 +1059,7 @@ impl TaskMachine {
                     // the save was refused, whatever the reason: the message's own task fails;
                     // its staged changes are absent, so a question it answered still waits
                     _ => {
+                        self.error = Some(error);
                         let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
                         self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
                     }
