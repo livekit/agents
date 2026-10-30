@@ -114,6 +114,69 @@ stt = STT(
 )
 ```
 
+### Speech-to-Text (Prisma v3.0)
+
+Prisma v3.0 is opt-in: pass `model="prisma-v3.0"`. Without `model`, the API default
+(`prisma-v2.5`) is used and requests are unchanged. (The `3` in the `/stt/v3` URL is the API
+version, not the model version.)
+
+```python
+from livekit.plugins.gnani import STT
+
+stt = STT(
+    model="prisma-v3.0",
+    language="hi-IN",
+    format="codemix",  # "verbatim" | "transcribe" | "codemix" | "transliterate"
+    keyterms=["Vachana", "Prisma"],  # up to 200 terms to bias recognition towards
+    topic="banking support call",  # optional context (<= 1600 characters)
+    previous_text="Namaste, how can I help you?",  # optional; the last 600 characters are used
+    speaker_names=["Customer", "Agent"],  # optional, 1 to 4 names
+)
+```
+
+What Prisma v3.0 adds, and what the plugin does with it:
+
+- **Several languages at once.** `language` can be a list, `["en-IN", "hi-IN"]` (up to 4), or
+  `"indic-auto"` to detect among all Indic languages. Final transcripts carry the language the
+  API detected (`detected_language_code`) instead of the configured one. A list needs
+  `model="prisma-v3.0"`; on `prisma-v2.5` the plugin raises a `ValueError` at construction.
+- **Formats.** `codemix` (Hindi/English mixed script) and `transliterate` are v3.0 only.
+  `transliterate` responses carry no detected language, so the configured one is reported.
+- **Keyterms and context.** `keyterms` also receive the terms LiveKit itself passes to the
+  session (for example from `AgentSession(keyterms=...)`), merged and capped at 200.
+  `topic`, `previous_text` and `speaker_names` are context hints for the model.
+- **Tuning.** `idle_timeout_sec`, `vad_threshold`, `min_silence_ms`, `min_speech_ms`,
+  `min_segment_ms` and `max_speech_s` set the server-side VAD/idle behaviour for the
+  streaming session. Out-of-range values are rejected up front rather than silently clamped
+  by the server.
+
+#### Streaming behaviour
+
+- The plugin advertises `manual_flush`: when LiveKit flushes the stream (for example at the end
+  of a turn) the plugin sends a `commit` message so the server finalises the utterance
+  immediately instead of waiting for its own silence detection. `commit` is also sent when the
+  audio input ends, so the last utterance is never lost.
+- Each stream emits `START_OF_SPEECH`, then `FINAL_TRANSCRIPT`, then `END_OF_SPEECH`. The API
+  sends one final transcript per utterance and no interim results. `END_OF_SPEECH` is therefore
+  emitted right after the final transcript, which matters only with `turn_detection="stt"`.
+- The server ends a session after a period without speech (`idle_timeout_sec`). The plugin
+  reconnects transparently while the audio input is still open; this is not reported as an
+  error. If the server keeps closing sessions immediately, the stream fails with a clear
+  `APIConnectionError` instead of looping.
+- A rejected handshake (bad key, unsupported option) is a non-retryable `APIStatusError` that
+  includes the server's message. A per-utterance failure (for example unclear audio) is logged
+  and the stream keeps running.
+- `stt.update_options(language=..., format=..., keyterms=...)` applies to running streams
+  through `update_settings`, without reconnecting. A multi-language list cannot be changed
+  mid-session; it applies on the next reconnect.
+
+> **Migration:** `language="en-IN,hi-IN"` (a comma-joined string) never worked against the API
+> for streaming and failed on REST for `prisma-v2.5`. It is still accepted, and treated as a
+> list, but now requires `model="prisma-v3.0"` (a `ValueError` otherwise). Streaming sends the
+> API's `indic-auto` plus a candidate list, because the API rejects a comma list there.
+> `preferred_language` is not part of Gnani's current documentation and is kept only for
+> backwards compatibility.
+
 ### Text-to-Speech (REST)
 
 ```python
@@ -212,11 +275,22 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 from livekit.plugins.gnani import STT
 
 stt = STT(
-    language="en-IN",  # Default: "en-IN"
+    language="en-IN",  # str | list[str]; Default: "en-IN". Lists / "indic-auto" need prisma-v3.0
+    model=None,  # Default: None (API default, prisma-v2.5); also "prisma-v3.0"
     sample_rate=16000,  # Default: 16000 (also: 8000, 44100, 48000)
-    format="verbatim",  # Default: "verbatim" (also: "transcribe" for ITN)
-    itn_native_numerals=False,  # Default: False
+    format="verbatim",  # "verbatim" | "transcribe" (ITN) | "codemix" | "transliterate" (v3.0 only)
+    itn_native_numerals=False,  # Default: False (prisma-v2.5 only)
     use_streaming=True,  # Default: True (WebSocket); False = REST + VAD
+    keyterms=None,  # up to 200 terms; prisma-v3.0 only
+    topic=None,  # context, <= 1600 characters; prisma-v3.0 only
+    previous_text=None,  # context, last 600 characters used; prisma-v3.0 only
+    speaker_names=None,  # 1 to 4 names; prisma-v3.0 only
+    idle_timeout_sec=None,  # streaming: server-side idle expiry (the plugin reconnects)
+    vad_threshold=None,  # streaming: server-side VAD tuning (None = server default)
+    min_silence_ms=None,
+    min_speech_ms=None,
+    min_segment_ms=None,
+    max_speech_s=None,
     api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
@@ -247,7 +321,7 @@ tts = TTS(
 
 ### STT Languages (Prisma)
 
-STT uses BCP-47 locale codes (e.g. `hi-IN`, `bn-IN`).
+STT uses BCP-47 locale codes (e.g. `hi-IN`, `bn-IN`), plus `indic-auto` on `prisma-v3.0`.
 
 For the full list of supported languages, see:
 

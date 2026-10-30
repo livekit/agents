@@ -4,6 +4,18 @@ from typing import Literal
 #                                    STT                                       #
 ###############################################################################
 
+GnaniSTTModels = Literal["prisma-v2.5", "prisma-v3.0"]
+"""Prisma model. The ``3`` in the ``/stt/v3`` URL is the API version, *not* the model
+version: leaving ``model`` unset selects the server default, ``prisma-v2.5``."""
+
+PRISMA_V25 = "prisma-v2.5"
+PRISMA_V30 = "prisma-v3.0"
+STT_MODELS = (PRISMA_V25, PRISMA_V30)
+DEFAULT_STT_MODEL = PRISMA_V25
+"""What the API uses when no ``model`` is sent."""
+
+INDIC_AUTO = "indic-auto"
+
 GnaniSTTLanguages = Literal[
     "bn-IN",
     "en-IN",
@@ -15,11 +27,16 @@ GnaniSTTLanguages = Literal[
     "pa-IN",
     "ta-IN",
     "te-IN",
-    "en-IN,hi-IN",
+    "indic-auto",
 ]
-"""BCP-47 locale codes accepted by Prisma STT. A comma-separated pair such as
-``"en-IN,hi-IN"`` enables auto-detection. See
+"""BCP-47 locale codes accepted by Prisma STT, plus ``"indic-auto"`` (the language is
+detected per utterance). With ``model="prisma-v3.0"`` you can also pass 2-4 codes as a
+list (``["hi-IN", "en-IN"]``) or a comma-separated string (``"hi-IN,en-IN"``) to restrict
+detection to those languages. See
 https://docs.gnani.ai/api/STT/stt-websocket#supported-languages"""
+
+GnaniSTTFormats = Literal["verbatim", "transcribe", "codemix", "transliterate"]
+"""Output style. ``codemix`` and ``transliterate`` need ``model="prisma-v3.0"``."""
 
 ###############################################################################
 #                                    TTS                                       #
