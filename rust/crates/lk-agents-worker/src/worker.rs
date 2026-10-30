@@ -69,7 +69,7 @@ pub use lk_agents_abi::worker::worker::{
 pub struct WorkerClient {
     tx: tokio::sync::mpsc::Sender<WorkerCommand>,
     control: tokio::sync::watch::Sender<WorkerControl>,
-    snapshot: Arc<lk_agents_net::lock::Mutex<Snapshot>>,
+    snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
 }
 
@@ -161,7 +161,7 @@ pub struct Worker {
     cpu: Option<CpuMonitor>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
     control: tokio::sync::watch::Receiver<WorkerControl>,
-    snapshot: Arc<lk_agents_net::lock::Mutex<Snapshot>>,
+    snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
     load_pending: bool,
@@ -529,7 +529,7 @@ impl Worker {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
         let (notifications, _) = tokio::sync::broadcast::channel(128);
-        let snapshot = Arc::new(lk_agents_net::lock::Mutex::new(Snapshot::default()));
+        let snapshot = Arc::new(parking_lot::Mutex::new(Snapshot::default()));
         let handle = WorkerClient {
             tx,
             control: control_tx,
@@ -579,7 +579,7 @@ impl Worker {
         )
     }
 
-    fn shared(&self) -> lk_agents_net::lock::MutexGuard<'_, Snapshot> {
+    fn shared(&self) -> parking_lot::MutexGuard<'_, Snapshot> {
         self.snapshot.lock()
     }
 

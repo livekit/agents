@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as _;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use lk_agents_inference::eot::*;
 

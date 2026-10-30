@@ -356,10 +356,10 @@ class ClippyContracts(unittest.TestCase):
 
 
 class IoPolicyContracts(unittest.TestCase):
-    """The I/O policy refuses a raw lock (only lk_agents_net::lock waits without the GIL) and every
-    entry to Tokio's blocking pool (blocking work runs on our pools)."""
+    """The I/O policy refuses std's poisoning locks (parking_lot's do not poison) and every entry
+    to Tokio's blocking pool (blocking work runs on our pools)."""
 
-    def test_the_io_policy_rejects_raw_locks_and_the_tokio_blocking_pool(self):
+    def test_the_io_policy_rejects_poisoning_locks_and_the_tokio_blocking_pool(self):
         io = next(policy for policy in clippy.POLICIES if policy.name == "io")
         env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / io.conf)}
         command = [
@@ -385,11 +385,6 @@ class IoPolicyContracts(unittest.TestCase):
         for name in (
             "std::sync::Mutex",
             "std::sync::RwLock",
-            "parking_lot::Mutex",
-            "parking_lot::RwLock",
-            "parking_lot::ReentrantMutex",
-            "parking_lot::FairMutex",
-            "lock_api::Mutex",
             "tokio::task::spawn_blocking",
             "tokio::runtime::Handle::spawn_blocking",
             "tokio::task::block_in_place",

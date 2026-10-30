@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use std::sync::Arc;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 /// A recorded `connect` call: the URL and its headers.
 pub type ConnectRecord = (String, Vec<(String, String)>);

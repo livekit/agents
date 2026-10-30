@@ -148,18 +148,18 @@ pub enum CommitFault {
 /// frame over its limit is), and an unreachable database for a while.
 pub struct Faulty {
     inner: Box<dyn SqliteConnection>,
-    commit: lk_agents_net::lock::Mutex<Option<CommitFault>>,
-    unreachable_for: lk_agents_net::lock::Mutex<Option<Duration>>,
-    unreachable_until: lk_agents_net::lock::Mutex<Option<tokio::time::Instant>>,
+    commit: parking_lot::Mutex<Option<CommitFault>>,
+    unreachable_for: parking_lot::Mutex<Option<Duration>>,
+    unreachable_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Faulty {
     pub fn new(inner: Box<dyn SqliteConnection>) -> Self {
         Self {
             inner,
-            commit: lk_agents_net::lock::Mutex::new(None),
-            unreachable_for: lk_agents_net::lock::Mutex::new(None),
-            unreachable_until: lk_agents_net::lock::Mutex::new(None),
+            commit: parking_lot::Mutex::new(None),
+            unreachable_for: parking_lot::Mutex::new(None),
+            unreachable_until: parking_lot::Mutex::new(None),
         }
     }
 
@@ -244,7 +244,7 @@ impl Fixture {
 /// `unixepoch()` read from `clock`: storage as a deterministic simulation runs it, on its virtual
 /// time. Clones share the database; `close` leaves it open.
 #[derive(Clone)]
-pub struct MemoryConnection(Arc<lk_agents_net::lock::Mutex<rusqlite::Connection>>);
+pub struct MemoryConnection(Arc<parking_lot::Mutex<rusqlite::Connection>>);
 
 impl MemoryConnection {
     pub fn new(clock: Arc<dyn lk_agents_abi::Clock>) -> Result<Self, StorageError> {
@@ -261,7 +261,7 @@ impl MemoryConnection {
         // `unixepoch('subsec')`, the one modifier the schema uses.
         conn.create_scalar_function("unixepoch", 1, flags, move |_| Ok(wall()))
             .map_err(crate::sqlite::sqlite_error)?;
-        Ok(Self(Arc::new(lk_agents_net::lock::Mutex::new(conn))))
+        Ok(Self(Arc::new(parking_lot::Mutex::new(conn))))
     }
 }
 

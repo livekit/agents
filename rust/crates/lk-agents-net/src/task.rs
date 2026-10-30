@@ -8,7 +8,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
-use crate::lock::Mutex;
+use parking_lot::Mutex;
 use std::task::Poll;
 
 use lk_agents_abi::{

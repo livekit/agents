@@ -100,7 +100,7 @@ impl Connect {
 pub struct OpenAIRealtime {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.
-    opts: lk_agents_net::lock::Mutex<SessionOptions>,
+    opts: parking_lot::Mutex<SessionOptions>,
     connect: Arc<Connect>,
     transport: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
@@ -113,7 +113,7 @@ pub struct OpenAIRealtime {
     /// The host class's `label`, stamped on errors and metrics; `None` names the dialect.
     label: Option<String>,
     /// `self._sessions`: the live sessions an `update_options` reaches.
-    sessions: lk_agents_net::lock::Mutex<Vec<Weak<super::queue::Ingress>>>,
+    sessions: parking_lot::Mutex<Vec<Weak<super::queue::Ingress>>>,
 }
 
 impl OpenAIRealtime {
@@ -129,7 +129,7 @@ impl OpenAIRealtime {
         let connect = Connect::openai(api_key, dialect.default_base_url);
         OpenAIRealtime {
             dialect,
-            opts: lk_agents_net::lock::Mutex::new(opts),
+            opts: parking_lot::Mutex::new(opts),
             connect: Arc::new(connect),
             transport,
             spawner,
@@ -138,13 +138,13 @@ impl OpenAIRealtime {
             ids: Arc::new(RandomIds),
             turn_detection_given: false,
             label: None,
-            sessions: lk_agents_net::lock::Mutex::new(Vec::new()),
+            sessions: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
     /// `turn_detection_given` is `is_given(turn_detection)` before a default was applied.
     pub fn with_options(mut self, opts: SessionOptions, turn_detection_given: bool) -> Self {
-        self.opts = lk_agents_net::lock::Mutex::new(opts);
+        self.opts = parking_lot::Mutex::new(opts);
         self.turn_detection_given = turn_detection_given;
         self
     }
@@ -164,7 +164,7 @@ impl OpenAIRealtime {
         self
     }
 
-    fn options(&self) -> lk_agents_net::lock::MutexGuard<'_, SessionOptions> {
+    fn options(&self) -> parking_lot::MutexGuard<'_, SessionOptions> {
         self.opts.lock()
     }
 
@@ -290,10 +290,10 @@ impl OpenAIRealtime {
         let (ev_tx, ev_rx) = super::queue::events();
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
-            caps: lk_agents_net::lock::Mutex::new(caps),
+            caps: parking_lot::Mutex::new(caps),
             closing: tokio::sync::Notify::new(),
-            cleanup: lk_agents_net::lock::Mutex::new(None),
-            retirement: lk_agents_net::lock::Mutex::new(None),
+            cleanup: parking_lot::Mutex::new(None),
+            retirement: parking_lot::Mutex::new(None),
             retirement_wake: Arc::new(tokio::sync::Notify::new()),
             context_ready: tokio::sync::Notify::new(),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
@@ -327,7 +327,7 @@ impl OpenAIRealtime {
             shared,
             commands,
             events: Mutex::new(ev_rx),
-            pump: lk_agents_net::lock::Mutex::new(Some(pump)),
+            pump: parking_lot::Mutex::new(Some(pump)),
             clock: self.clock.clone(),
             ids: self.ids.clone(),
         }
@@ -337,14 +337,14 @@ impl OpenAIRealtime {
 pub(super) struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
     pub(super) closing: tokio::sync::Notify,
-    cleanup: lk_agents_net::lock::Mutex<Option<crate::realtime::ConnectionEffect>>,
+    cleanup: parking_lot::Mutex<Option<crate::realtime::ConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
-    retirement: lk_agents_net::lock::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    retirement: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     retirement_wake: Arc<tokio::sync::Notify>,
     context_ready: tokio::sync::Notify,
     retirement_closing: std::sync::atomic::AtomicBool,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
-    caps: lk_agents_net::lock::Mutex<RealtimeCapabilities>,
+    caps: parking_lot::Mutex<RealtimeCapabilities>,
     /// Socket closes and context retirement, which outlive their caller's budget.
     disposal: Arc<lk_agents_net::task::TaskSet>,
 }
@@ -375,7 +375,7 @@ pub struct OpenAIRealtimeSession {
     /// One consumer is the contract.
     events: Mutex<super::queue::EventReceiver>,
     /// Taken by the first close.
-    pump: lk_agents_net::lock::Mutex<Option<lk_agents_abi::OwnedTask>>,
+    pump: parking_lot::Mutex<Option<lk_agents_abi::OwnedTask>>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
 }

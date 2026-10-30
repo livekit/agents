@@ -107,10 +107,10 @@ pub struct HostRealtimeLeg {
     host: Arc<dyn HostRealtimeSession>,
     caps: RealtimeCapabilities,
     lane: tokio::sync::mpsc::UnboundedSender<RealtimeCommand>,
-    requests: Arc<lk_agents_net::lock::Mutex<Requests>>,
+    requests: Arc<parking_lot::Mutex<Requests>>,
     events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Event>>,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
-    tasks: lk_agents_net::lock::Mutex<Vec<lk_agents_abi::OwnedTask>>,
+    tasks: parking_lot::Mutex<Vec<lk_agents_abi::OwnedTask>>,
     /// The host's event pump, apart from `tasks`: it runs until the host reports the end, so a
     /// close loses no event.
     forward: std::sync::OnceLock<lk_agents_abi::OwnedTask>,

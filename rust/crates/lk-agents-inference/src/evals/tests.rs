@@ -8,7 +8,7 @@ use lk_agents_abi::{
     AgentConfigUpdate, AgentHandoffItem, ChoiceDelta, Closed, FunctionCall, FunctionCallOutput,
     FunctionToolCall, LlmStream, Ts,
 };
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
 use super::*;

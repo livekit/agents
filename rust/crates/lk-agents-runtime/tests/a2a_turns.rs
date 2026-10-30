@@ -16,7 +16,7 @@ use lk_agents_core::a2a::{
     TurnResult, Verdict,
 };
 use lk_agents_net::clock::RealClock;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::db::Receive;

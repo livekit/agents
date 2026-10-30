@@ -1,4 +1,4 @@
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

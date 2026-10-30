@@ -499,9 +499,9 @@ fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
 async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result() {
     use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
     struct StalledImage {
-        started: lk_agents_net::lock::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-        release: lk_agents_net::lock::Mutex<std::sync::mpsc::Receiver<()>>,
-        settled: lk_agents_net::lock::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        started: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+        settled: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     }
     impl ImageResolver for StalledImage {
         fn resolve(&self, image: &lk_agents_abi::ImageContent) -> Result<SerializedImage, String> {
@@ -527,9 +527,9 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(StalledImage {
-            started: lk_agents_net::lock::Mutex::new(Some(started)),
-            release: lk_agents_net::lock::Mutex::new(wait),
-            settled: lk_agents_net::lock::Mutex::new(Some(settled)),
+            started: parking_lot::Mutex::new(Some(started)),
+            release: parking_lot::Mutex::new(wait),
+            settled: parking_lot::Mutex::new(Some(settled)),
         }),
     );
     let session = model.session(false).await;
@@ -625,7 +625,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         settled: Arc<tokio::sync::Notify>,
-        owner: lk_agents_net::lock::Mutex<Option<std::sync::Weak<dyn WsSender>>>,
+        owner: parking_lot::Mutex<Option<std::sync::Weak<dyn WsSender>>>,
     }
     #[async_trait::async_trait]
     impl WsTransport for Transport {

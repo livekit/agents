@@ -1,7 +1,7 @@
 //! Bounded room observations and admitted SDK streams, using the shared source lifecycle.
 
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};

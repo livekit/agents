@@ -10,8 +10,8 @@
 //! run as tasks the invoker owns, are cancelled through the host (their calls still settle), and
 //! release their captured context when they settle.
 //!
-//! No entry runs while its thread holds one of the I/O crates' locks: debug and test builds panic
-//! ([`lk_agents_net::lock::assert_unlocked`]). Log lines are queued and need no such rule.
+//! No host call is made while a lock is held (rust-core.md "HostInvoker"): an entry may wait for
+//! the GIL. Log lines are queued and never wait for it.
 
 use std::collections::BTreeMap;
 
@@ -35,7 +35,6 @@ pub fn call<E: HostEntry>(
     requires: &[Scope],
     call: E::Call,
 ) -> BoxFuture<'static, Result<E::Value, E::Error>> {
-    lk_agents_net::lock::assert_unlocked(label);
     match admit(scope, requires) {
         Ok(context) => entry.enter(context, call),
         Err(refusal) => {
@@ -47,7 +46,6 @@ pub fn call<E: HostEntry>(
 
 /// Runs `call` through `entry` in place, on the calling thread: a read the host answers at once.
 pub fn call_now<E: HostEntry>(entry: &E, call: E::Call) -> Result<E::Value, E::Error> {
-    lk_agents_net::lock::assert_unlocked("a host read");
     entry.enter_now(call)
 }
 
@@ -61,7 +59,6 @@ pub fn notify<N: HostNotices>(
     lossy: bool,
     call: N::Call,
 ) {
-    lk_agents_net::lock::assert_unlocked(label);
     match admit(scope, requires) {
         Ok(context) => notices.notify(context.clone(), label, lossy, call),
         Err(refusal) => log::warn!(target: "livekit.agents", "{label} failed: {refusal}"),

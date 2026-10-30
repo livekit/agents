@@ -61,7 +61,7 @@ mod tests {
     use super::*;
     use lk_agents_abi::tts::streams::TtsStream as _;
     use lk_agents_abi::{StreamSource, TtsSource};
-    use lk_agents_net::lock::Mutex;
+    use parking_lot::Mutex;
 
     #[derive(Clone, Default)]
     struct Input(Arc<Mutex<Vec<&'static str>>>);

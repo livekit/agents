@@ -22,6 +22,7 @@ license.workspace = true
 # one of them (§1.0's table); it defines none of its own.
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-net = { path = "../lk-agents-net" }
+parking_lot.workspace = true
 # Chat formatting, strict tool schemas and JSON repair: the gateway LLM's, the realtime model's and
 # the judges' request bodies (sans-IO, no executor in its closure).
 lk-agents-core = { path = "../lk-agents-core" }

@@ -15,7 +15,7 @@ use lk_agents_abi::{
 use lk_agents_abi::{
     ApiConnectOptions, ChoiceDelta, LlmChunk, SpeechData, SpeechEvent, SpeechEventType,
 };
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::fallback::ChainPolicy;

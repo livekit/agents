@@ -22,6 +22,7 @@ lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # Owned renewal tasks, and the HTTP transport, WebSocket and SSE decoder AgentDB reaches the
 # network through.
 lk-agents-net = { path = "../lk-agents-net" }
+parking_lot.workspace = true
 # The chat items and the thread schema: `livekit.agent` records; threads through the Cloud API.
 livekit-protocol.workspace = true
 livekit-api.workspace = true

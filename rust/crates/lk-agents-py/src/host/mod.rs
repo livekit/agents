@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use lk_agents_runtime::net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::BoxFuture;

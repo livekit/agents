@@ -23,7 +23,7 @@ use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
 use lk_agents_voice::trace::Step;
 use std::future::Future as _;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use std::sync::atomic::{AtomicBool, Ordering};

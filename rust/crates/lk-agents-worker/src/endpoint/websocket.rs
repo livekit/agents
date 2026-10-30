@@ -62,7 +62,7 @@ pub struct WsExchange {
     io: Arc<dyn StreamIo>,
     key: Vec<u8>,
     subprotocols: Vec<String>,
-    ws: lk_agents_net::lock::Mutex<WebSocket<Pipe>>,
+    ws: parking_lot::Mutex<WebSocket<Pipe>>,
 
     /// Holds the order of writes: bytes are taken from the pipe and written under it.
     write_lock: Mutex<()>,
@@ -83,7 +83,7 @@ struct InboxEvent {
 }
 
 impl WsExchange {
-    fn ws(&self) -> lk_agents_net::lock::MutexGuard<'_, WebSocket<Pipe>> {
+    fn ws(&self) -> parking_lot::MutexGuard<'_, WebSocket<Pipe>> {
         self.ws.lock()
     }
 
@@ -388,7 +388,7 @@ pub(super) async fn serve_ws(
         io,
         key,
         subprotocols,
-        ws: lk_agents_net::lock::Mutex::new(WebSocket::from_raw_socket(pipe, Role::Server, Some(config))),
+        ws: parking_lot::Mutex::new(WebSocket::from_raw_socket(pipe, Role::Server, Some(config))),
         write_lock: Mutex::new(()),
         events,
         inbox: Mutex::new(inbox),

@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use std::collections::BTreeMap;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -174,7 +174,7 @@ impl Drop for Restore {
 }
 
 impl TransferRun {
-    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, Running> {
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Running> {
         self.running.lock()
     }
 

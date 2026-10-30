@@ -10,7 +10,7 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::tokenize::language::{ThresholdError, ThresholdOptions};
 use lk_agents_abi::turn::eot::PredictionEvent;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::eot::{EotTransport, EotWarning, PredictionListener, TransportPrediction};

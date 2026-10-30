@@ -2,7 +2,7 @@
 //! the calling thread, so a runtime inherited across a fork has no workers. The process records
 //! its owner and refuses to serve another.
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
@@ -33,7 +33,7 @@ struct State {
 
 static PROCESS: Mutex<State> = Mutex::new(State { started: None, owner: None });
 
-fn state() -> lk_agents_net::lock::MutexGuard<'static, State> {
+fn state() -> parking_lot::MutexGuard<'static, State> {
     PROCESS.lock()
 }
 

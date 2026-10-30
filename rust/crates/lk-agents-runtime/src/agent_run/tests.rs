@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};

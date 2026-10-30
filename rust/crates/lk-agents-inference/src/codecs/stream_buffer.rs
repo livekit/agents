@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::thread::Thread;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 /// Writes are kept whole, so a reader can take them as the writer made them.
 #[derive(Default)]

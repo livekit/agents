@@ -1,6 +1,6 @@
 //! Runtime avatar audio output: byte writers, RPC execution, task ownership and deadlines.
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;

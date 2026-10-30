@@ -17,7 +17,7 @@ use lk_agents_abi::worker::server_host::{
     EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
 };
 use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
-use lk_agents_net::lock::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::endpoint::host::{Endpoints, NativeStream};
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};

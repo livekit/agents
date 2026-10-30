@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::watch;
 

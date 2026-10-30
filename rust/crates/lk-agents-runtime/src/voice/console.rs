@@ -8,7 +8,7 @@
 
 use lk_agents_net::task::TaskSet;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::console::ConsolePort;

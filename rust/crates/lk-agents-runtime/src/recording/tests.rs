@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::mpsc as sync_mpsc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use lk_agents_media::recorder::{EncodeError, PCM_ENCODER_TRAILER};
 

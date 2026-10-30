@@ -50,12 +50,12 @@ checks formatting followed by the architecture gate. Run `make -C rust` for help
   directory defines the policy. The checker explicitly sets `CLIPPY_CONF_DIR`
   to this directory and selects only ABI, core, voice and media with `-p`.
 - A second policy, `io/clippy.toml`, covers runtime, worker, net, inference, storage and py
-  (default and all-feature configurations): no raw `std::sync`/`parking_lot`/`lock_api` lock,
-  and no entry to Tokio's blocking pool (`spawn_blocking`, `block_in_place`, `tokio::fs`,
-  `lookup_host`, Tokio's stdio, tokio-tungstenite's resolving connects). Their one lock is `lk_agents_net::lock`, whose contended wait releases the host
-  lock (Python's GIL), so a host call made under a lock cannot deadlock against a host thread
-  waiting for it (review13). Its sites need no source exemption; `io/clippy-baseline.json`
-  holds the existing ones and only shrinks.
+  (default and all-feature configurations): no poisoning `std::sync` lock (they lock with
+  `parking_lot`), and no entry to Tokio's blocking pool (`spawn_blocking`, `block_in_place`,
+  `tokio::fs`, `lookup_host`, Tokio's stdio, tokio-tungstenite's resolving connects). No lock is
+  held across a host call, and every generated synchronous Python entry releases the GIL for
+  its Rust call (rust-core.md "The GIL boundary"), so a lock never deadlocks against the GIL.
+  `io/clippy-baseline.json` holds the existing sites and only shrinks.
 - Codegen's shared source visitor inventories reasoned lint exemptions, identifies
   compiler sites and validates export placement, including inactive branches and
   macro bodies. Effective exemptions are required for every compiler site.

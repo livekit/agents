@@ -42,7 +42,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use wire::FallbackModel;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 const WHAT: &str = "LiveKit Inference TTS";
 

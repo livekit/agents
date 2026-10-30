@@ -4,7 +4,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use crate::voice::session::Timebase;

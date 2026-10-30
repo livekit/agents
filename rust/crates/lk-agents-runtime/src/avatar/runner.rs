@@ -11,7 +11,7 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 pub use lk_agents_voice::avatar_runner::Event;
 use lk_agents_voice::avatar_runner::{CallId, Effect, IoOp, RunnerCore};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};

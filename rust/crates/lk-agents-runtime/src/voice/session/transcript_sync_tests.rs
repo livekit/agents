@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 /// A physical output that latches each frame's segment key; the test reports its playback.
 #[derive(Default)]
-struct KeyedPlayback(Arc<PlaybackTracker>, lk_agents_net::lock::Mutex<Option<PlaybackSegment>>);
+struct KeyedPlayback(Arc<PlaybackTracker>, parking_lot::Mutex<Option<PlaybackSegment>>);
 
 impl AudioOutput for KeyedPlayback {
     fn label(&self) -> &str {

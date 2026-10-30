@@ -14,7 +14,7 @@ use lk_agents_voice::room_io::output::{
 };
 use lk_agents_voice::room_io::publication::Publication;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
 
@@ -43,7 +43,7 @@ struct Shared {
 impl Shared {
     /// Never held across an await, nor across a call into the source: a host source takes the GIL,
     /// which a host thread calling into this leg already holds.
-    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, State> {
+    fn lock(&self) -> parking_lot::MutexGuard<'_, State> {
         self.state.lock()
     }
 

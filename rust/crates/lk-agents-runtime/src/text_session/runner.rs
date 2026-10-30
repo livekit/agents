@@ -8,7 +8,7 @@ use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 #[derive(Clone)]
 struct Control {

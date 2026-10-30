@@ -29,7 +29,7 @@ use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::{Notify, mpsc, watch};
 
 const ROOM_EVENT_CAPACITY: usize = 64;

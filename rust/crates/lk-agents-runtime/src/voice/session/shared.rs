@@ -13,7 +13,7 @@ use lk_agents_voice::agent_session::{
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::trace::{Journal, Step};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 /// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
@@ -196,7 +196,7 @@ pub struct SessionShared {
     pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
     pub output: tokio::sync::watch::Sender<Outputs>,
-    pub recorder: Arc<lk_agents_net::lock::RwLock<Option<lk_agents_voice::recorder_io::RecorderTap>>>,
+    pub recorder: Arc<parking_lot::RwLock<Option<lk_agents_voice::recorder_io::RecorderTap>>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool

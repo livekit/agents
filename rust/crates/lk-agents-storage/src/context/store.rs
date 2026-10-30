@@ -8,7 +8,7 @@ use lk_agents_abi::storage::context::{
     AppStatement, ContextActivation as HostContextActivation, ContextField, ContextScope,
     ContextScopeWrite, ContextValues,
 };
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use serde_json::Value;
 
 use super::ContextActivation as Activation;

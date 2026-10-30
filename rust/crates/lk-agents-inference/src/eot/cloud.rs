@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };

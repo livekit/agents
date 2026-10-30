@@ -28,7 +28,7 @@ use lk_agents_abi::llm::realtime::{
     Modalities, RealtimeModelError,
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest};
 use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy, backend_resource};

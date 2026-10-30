@@ -7,7 +7,7 @@ use lk_agents_abi::{
 };
 use lk_agents_inference::fallback::ChainPolicy;
 use lk_agents_inference::testkit::fallback::{Frames, NO_DEADLINE, boom, parts, until, within};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

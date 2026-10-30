@@ -204,69 +204,13 @@ impl generated::Implementations for Selected {
     type Storage = lk_agents_runtime::storage::namespace::Namespace;
 }
 
-/// A contended Rust lock is waited for without the GIL: the Rust thread holding it may be making a
-/// host call, which needs the GIL this thread would otherwise keep.
-fn wait_without_the_gil(wait: &mut dyn FnMut()) {
-    // SAFETY: the thread state is saved only by a thread holding the GIL, and restored by it.
-    if crate::host::holds_gil() {
-        let state = unsafe { pyo3::ffi::PyEval_SaveThread() };
-        wait();
-        unsafe { pyo3::ffi::PyEval_RestoreThread(state) };
-    } else {
-        wait();
-    }
-}
-
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nothing here may spawn, connect, or allocate a runtime. The core's `log` lines reach the
     // Python logger of the same name from import on (installing a logger starts nothing).
-    lk_agents_runtime::net::lock::set_host_wait(wait_without_the_gil);
     runtime::register_all(m)?;
     generated::register(m)?;
     host::logging::install(m)
-}
-
-#[cfg(test)]
-mod lock_tests {
-    use lk_agents_runtime::net::lock::{Mutex, set_host_wait};
-    use pyo3::prelude::*;
-    use std::sync::{Arc, mpsc};
-    use std::time::Duration;
-
-    // Catches: review13's deadlock. A thread holding the GIL blocks on a Rust lock whose holder
-    // makes a host call; the waiter must wait without the GIL.
-    #[test]
-    fn a_host_call_under_a_lock_does_not_deadlock_against_a_gil_holder() {
-        Python::initialize();
-        set_host_wait(super::wait_without_the_gil);
-        let lock = Arc::new(Mutex::new(0));
-        let (locked, holding) = mpsc::channel();
-        let (attached, attaching) = mpsc::channel();
-        let (done, finished) = mpsc::channel();
-        let holder = std::thread::spawn({
-            let lock = lock.clone();
-            move || {
-                let mut guard = lock.lock();
-                locked.send(()).unwrap();
-                attaching.recv().unwrap();
-                // The host call, under the lock.
-                Python::attach(|py| py.run(c"x = 1", None, None).unwrap());
-                *guard += 1;
-            }
-        });
-        holding.recv().unwrap();
-        let waiter = std::thread::spawn(move || {
-            Python::attach(|_| {
-                attached.send(()).unwrap();
-                *lock.lock() += 1;
-            });
-            done.send(()).unwrap();
-        });
-        assert!(finished.recv_timeout(Duration::from_secs(10)).is_ok(), "deadlocked");
-        holder.join().unwrap();
-        waiter.join().unwrap();
-    }
 }
 
 #[cfg(test)]

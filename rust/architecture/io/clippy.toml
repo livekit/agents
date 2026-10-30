@@ -2,15 +2,8 @@
 # the host. Selected with CLIPPY_CONF_DIR by architecture/check.py; see architecture/README.md.
 
 disallowed-types = [
-  { path = "std::sync::Mutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
-  { path = "std::sync::RwLock", reason = "Use lk_agents_net::lock::RwLock: a contended wait releases the host lock (Python's GIL)." },
-  { path = "parking_lot::Mutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
-  { path = "parking_lot::RwLock", reason = "Use lk_agents_net::lock::RwLock: a contended wait releases the host lock (Python's GIL)." },
-  { path = "parking_lot::ReentrantMutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
-  { path = "parking_lot::FairMutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
-  { path = "lock_api::Mutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
-  { path = "lock_api::RwLock", reason = "Use lk_agents_net::lock::RwLock: a contended wait releases the host lock (Python's GIL)." },
-  { path = "lock_api::ReentrantMutex", reason = "Use lk_agents_net::lock::Mutex: a contended wait releases the host lock (Python's GIL)." },
+  { path = "std::sync::Mutex", reason = "Use parking_lot::Mutex: it does not poison." },
+  { path = "std::sync::RwLock", reason = "Use parking_lot::RwLock: it does not poison." },
   { path = "tokio::fs::File", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::OpenOptions", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::DirBuilder", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },

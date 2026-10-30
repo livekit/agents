@@ -15,7 +15,7 @@ use lk_agents_abi::{
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_net::env::ProcessEnv;

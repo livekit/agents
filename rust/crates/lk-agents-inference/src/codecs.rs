@@ -13,7 +13,7 @@ use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::{AudioFormat, CodecError};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use lk_agents_net::env::ProcessEnv;

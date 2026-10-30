@@ -1,10 +1,1 @@
-[
-  "allow:rust/crates/lk-agents-net/src/lock.rs::clippy::disallowed_types:allow:always:1",
-  "site:rust/crates/lk-agents-net/src/lock.rs:impl  Mutex < T >/fn new:clippy::disallowed_types:use of a disallowed type `parking_lot::Mutex`:Self(parking_lot::Mutex::new(value)):1",
-  "site:rust/crates/lk-agents-net/src/lock.rs:impl  RwLock < T >/fn new:clippy::disallowed_types:use of a disallowed type `parking_lot::RwLock`:Self(parking_lot::RwLock::new(value)):1",
-  "site:rust/crates/lk-agents-net/src/lock.rs:struct Mutex/field 0 parking_lot :: Mutex < T >:clippy::disallowed_types:use of a disallowed type `parking_lot::Mutex`:pub struct Mutex<T: ?Sized>(parking_lot::Mutex<T>);:1",
-  "site:rust/crates/lk-agents-net/src/lock.rs:struct RwLock/field 0 parking_lot :: RwLock < T >:clippy::disallowed_types:use of a disallowed type `parking_lot::RwLock`:pub struct RwLock<T: ?Sized>(parking_lot::RwLock<T>);:1",
-  "site:rust/crates/lk-agents-worker/src/cli_signals.rs:impl CliSignalsPort CliSignals/fn new:clippy::disallowed_types:use of a disallowed type `parking_lot::Mutex`:state: Arc::new((Mutex::new(ExitSignals::new()), Condvar::new())),:1",
-  "site:rust/crates/lk-agents-worker/src/cli_signals.rs:struct CliSignals/field state:clippy::disallowed_types:use of a disallowed type `parking_lot::Mutex`:state: Arc<(Mutex<ExitSignals>, Condvar)>,:1",
-  "site:rust/crates/lk-agents-worker/src/cli_signals.rs:use parking_lot :: { Condvar , Mutex }:clippy::disallowed_types:use of a disallowed type `parking_lot::Mutex`:use parking_lot::{Condvar, Mutex};:1"
-]
+[]

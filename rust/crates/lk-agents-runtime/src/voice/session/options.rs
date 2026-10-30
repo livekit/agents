@@ -10,7 +10,7 @@ use lk_agents_abi::voice::session_options::{
 use lk_agents_voice::agent_activity::options::{
     AgentSessionOptions, ConfigStack, LegSet, resolved_session_options, session_layer, update_layer,
 };
-use lk_agents_net::lock::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 
 /// Shared with the session built over it: a later `update` before `start()` is read at assembly.

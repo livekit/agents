@@ -4,7 +4,7 @@ use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 

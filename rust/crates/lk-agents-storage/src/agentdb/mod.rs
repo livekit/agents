@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};

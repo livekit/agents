@@ -1,6 +1,6 @@
 //! The remote interaction binding owns synchronization only; A2A owns every decision.
 
-use crate::lock::Mutex;
+use parking_lot::Mutex;
 
 use lk_agents_abi::a2a::client::{AgentClientError, Message, MessagePart, TaskUpdate};
 use lk_agents_abi::a2a::remote::{RemoteEvent, RemoteInteraction as Port};

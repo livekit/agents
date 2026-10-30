@@ -10,6 +10,7 @@ name = "_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+parking_lot.workspace = true
 # `extension-module` is deliberately NOT on by default: with it enabled pyo3 does not link
 # libpython, so `cargo test` cannot resolve Python symbols and the test binary fails to link on
 # macOS (§1.3). maturin turns it on via `features = ["pyo3/extension-module"]` in the pyproject.

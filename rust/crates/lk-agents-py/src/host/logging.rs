@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lk_agents_runtime::net::lock::Mutex;
+use parking_lot::Mutex;
 use log::{Level, LevelFilter, Log, Metadata, Record};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;

@@ -1,7 +1,7 @@
 //! The process's clocks: Tokio time for scheduling, the OS clock (or a synthetic one) for wall
 //! stamps. The `Clock` contract and the virtual clock the DST moves stay in `lk_agents_abi`.
 
-use crate::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::{Clock, TICK_EPSILON, Ts, simulated_epoch};

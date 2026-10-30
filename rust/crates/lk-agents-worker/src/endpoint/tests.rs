@@ -7,10 +7,10 @@ use super::*;
 /// The node's side of one stream, in memory.
 #[derive(Default)]
 struct Fake {
-    inbox: lk_agents_net::lock::Mutex<VecDeque<Vec<u8>>>,
-    out: lk_agents_net::lock::Mutex<Vec<u8>>,
+    inbox: parking_lot::Mutex<VecDeque<Vec<u8>>>,
+    out: parking_lot::Mutex<Vec<u8>>,
     finished: AtomicBool,
-    reset: lk_agents_net::lock::Mutex<Option<Reset>>,
+    reset: parking_lot::Mutex<Option<Reset>>,
 }
 
 impl Fake {

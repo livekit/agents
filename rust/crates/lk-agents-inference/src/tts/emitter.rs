@@ -18,7 +18,7 @@ use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::pool::MediaPool;
 use lk_agents_media::{AudioDecoding, Decoder};
-use lk_agents_net::lock::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 use tokio::sync::{Notify, watch};
 
 use crate::codecs::{self, DecoderInput, decoder_limits};

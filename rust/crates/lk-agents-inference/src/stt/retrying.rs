@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use lk_agents_abi::errors::{ProviderError, chained_connection_error};

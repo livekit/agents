@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::EotPrediction;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::eot::{CancelReason, EotRequestId, EotWarning};
 

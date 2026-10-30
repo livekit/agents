@@ -11,7 +11,7 @@ use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamSource};
 use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use lk_agents_core::tts::markup::{Markup, MarkupExt};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

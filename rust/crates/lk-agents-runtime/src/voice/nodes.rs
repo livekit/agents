@@ -3,7 +3,7 @@
 //! drains its output and calls nothing but the node. [`Nodes`]: a registered `llm_node`, `tts_node` or
 //! `stt_node` as the leg the session runs, speaking as the provider below it.
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

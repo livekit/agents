@@ -11,7 +11,7 @@ use lk_agents_abi::turn::inference::EotStream as AbiEotStream;
 use lk_agents_abi::utils::resample::{Quality, Resampler};
 use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use lk_agents_media::pool::{JobClass, MediaPoolError};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
@@ -135,7 +135,7 @@ impl EotStream {
         DetectorStream(stream)
     }
 
-    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, Inner> {
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Inner> {
         self.inner.lock()
     }
 

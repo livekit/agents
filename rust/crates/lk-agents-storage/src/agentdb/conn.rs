@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 pub use livekit_protocol::agent_db::wire;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::transport::TransportError;
 use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};

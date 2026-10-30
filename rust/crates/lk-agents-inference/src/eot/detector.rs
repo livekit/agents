@@ -10,7 +10,7 @@ use lk_agents_abi::tokenize::language::{
 };
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModelFactory};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame};
-use lk_agents_net::lock::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 
 use super::{
     CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,

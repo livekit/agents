@@ -7,7 +7,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use super::{ReportAdmission, TRANSCRIPT_BYTES, upload_error};
 use crate::env::ProcessEnv;
-use crate::lock::Mutex;
+use parking_lot::Mutex;
 
 pub(super) const TRANSCRIPT_ITEMS: usize = 10_000;
 pub(super) const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;

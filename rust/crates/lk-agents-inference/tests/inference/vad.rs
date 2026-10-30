@@ -7,7 +7,7 @@ use std::time::Duration;
 use lk_agents_abi::{AudioFrame, StreamSink, StreamSource, VadEventType};
 use lk_agents_inference::vad::machine::VadOptions;
 use lk_agents_inference::vad::{LocalVad, VadModel, VadModelFactory};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 struct Model {
     calls: Arc<Mutex<Vec<(&'static str, ThreadId)>>>,

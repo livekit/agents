@@ -45,7 +45,7 @@ pub struct FallbackSession {
 }
 
 impl FallbackSession {
-    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, SessionState> {
+    fn lock(&self) -> parking_lot::MutexGuard<'_, SessionState> {
         self.state.lock()
     }
 

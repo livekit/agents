@@ -15,7 +15,7 @@
 //! order. The caller never converts or waits; a full queue or a failed delivery refuses the next
 //! push.
 
-use lk_agents_runtime::net::lock::Mutex;
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 

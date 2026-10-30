@@ -5,7 +5,7 @@ use crate::voice::session::{DriverBuilder, SessionExecutor, SessionHandle, Timeb
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::trace::{Journal, Step};
 use std::future::Future as _;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 type Steps = Arc<Mutex<Vec<Step>>>;

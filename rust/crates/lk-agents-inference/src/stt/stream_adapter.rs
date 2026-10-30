@@ -231,7 +231,7 @@ mod tests {
     use lk_agents_abi::{StreamSink, VadCapabilities, VadEvent};
     use std::collections::VecDeque;
 
-    use lk_agents_net::lock::Mutex;
+    use parking_lot::Mutex;
 
     struct Ignore;
 

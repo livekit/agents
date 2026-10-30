@@ -22,7 +22,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 use crate::env::ProcessEnv;
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
-use crate::lock::Mutex;
+use parking_lot::Mutex;
 use crate::source::{NativeSource, PullError, Pulled};
 use crate::sse::SseDecoder;
 use crate::task::TokioSpawner;

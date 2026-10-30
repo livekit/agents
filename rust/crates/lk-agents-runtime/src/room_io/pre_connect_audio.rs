@@ -1,7 +1,7 @@
 //! Runtime subscriptions, bounded receiving and decoder cleanup for pre-connect audio.
 
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::voice::io::{IoError, Result};

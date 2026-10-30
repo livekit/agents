@@ -8,7 +8,7 @@ use lk_agents_abi::{AudioFrame, Clock, Spawner};
 use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
 use lk_agents_media::{Mixer, StreamId};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_net::task::TaskSet;
 use std::collections::BTreeMap;
 use std::future::Future;

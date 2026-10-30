@@ -37,7 +37,7 @@ struct Peer {
     url: String,
     requests: Arc<AtomicUsize>,
     /// Each request's `X-LiveKit-Session-ID`, in arrival order.
-    sessions: Arc<lk_agents_net::lock::Mutex<Vec<String>>>,
+    sessions: Arc<parking_lot::Mutex<Vec<String>>>,
     /// Connections the client closed while the peer was still serving them.
     released: Arc<AtomicUsize>,
 }
@@ -48,7 +48,7 @@ impl Peer {
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
         let replies = Arc::new(Mutex::new(replies.into_iter()));
         let (requests, released) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-        let sessions = Arc::new(lk_agents_net::lock::Mutex::new(Vec::new()));
+        let sessions = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let (req, rel, ses) = (requests.clone(), released.clone(), sessions.clone());
         tokio::spawn(async move {
             loop {
@@ -67,7 +67,7 @@ async fn serve(
     replies: Arc<Mutex<std::vec::IntoIter<Reply>>>,
     requests: Arc<AtomicUsize>,
     released: Arc<AtomicUsize>,
-    sessions: Arc<lk_agents_net::lock::Mutex<Vec<String>>>,
+    sessions: Arc<parking_lot::Mutex<Vec<String>>>,
 ) {
     // Requests on a kept-alive connection are served in turn.
     loop {

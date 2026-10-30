@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use super::machine::{ChainEffect, ChainEvent, ChainRequest, FallbackPolicy};
 use async_trait::async_trait;

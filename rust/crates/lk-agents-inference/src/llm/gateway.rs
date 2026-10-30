@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::headers::{Headers, identification_headers};
 use crate::llm::lifecycle::{

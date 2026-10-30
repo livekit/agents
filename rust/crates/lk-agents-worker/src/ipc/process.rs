@@ -12,7 +12,7 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, watch};
 

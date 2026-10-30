@@ -34,7 +34,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 use stream::{DeferredExtra, SinkCmd, StreamControl};
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 pub use stream::{RecognitionInput, RecognitionOutput};
 
 use lk_agents_net::env::ProcessEnv;

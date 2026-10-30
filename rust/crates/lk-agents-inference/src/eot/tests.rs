@@ -12,7 +12,7 @@ use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdError, ThresholdOptions, TurnDetectorModel,
 };
 use lk_agents_abi::{ApiConnectOptions, EotInferenceMetrics};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use prost::Message as _;
 

@@ -41,10 +41,10 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
     );
     let shared = Arc::new(Shared {
         machine: Mutex::new(machine),
-        caps: lk_agents_net::lock::Mutex::new(caps),
+        caps: parking_lot::Mutex::new(caps),
         closing: tokio::sync::Notify::new(),
-        cleanup: lk_agents_net::lock::Mutex::new(None),
-        retirement: lk_agents_net::lock::Mutex::new(None),
+        cleanup: parking_lot::Mutex::new(None),
+        retirement: parking_lot::Mutex::new(None),
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),

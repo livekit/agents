@@ -16,7 +16,7 @@ use lk_agents_voice::avatar::{
 };
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 
 struct RxInner {

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::tts::sentence_adapter::StreamAdapter;
 use async_trait::async_trait;

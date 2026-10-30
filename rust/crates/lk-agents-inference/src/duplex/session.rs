@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use super::host::{HostSession, SessionGate, provider_error};
 pub use crate::duplex::{
@@ -102,7 +102,7 @@ pub struct DuplexSession {
 }
 
 impl DuplexSession {
-    fn lock(&self) -> lk_agents_net::lock::MutexGuard<'_, State> {
+    fn lock(&self) -> parking_lot::MutexGuard<'_, State> {
         self.state.lock()
     }
 

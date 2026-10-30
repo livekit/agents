@@ -2,7 +2,7 @@
 
 use lk_agents_abi::voice::rtc::PlaybackInfo;
 use lk_agents_voice::room_io::playout::PlayoutLedger as Ledger;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 #[derive(Default)]

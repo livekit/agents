@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;

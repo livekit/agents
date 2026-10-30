@@ -21,7 +21,7 @@ use lk_agents_voice::room_io::transcription::{
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 struct WriterState {

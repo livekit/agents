@@ -47,7 +47,7 @@ use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_voice::tool_executor::Toolset;
 use lk_agents_voice::trace::{CoreStep, Step};
 use std::sync::atomic::{AtomicU64, Ordering};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 

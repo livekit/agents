@@ -18,7 +18,7 @@ use lk_agents_voice::room_io::input_state::{
 };
 use std::future::Future;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use super::pre_connect_audio::PreConnectAudioHandler;

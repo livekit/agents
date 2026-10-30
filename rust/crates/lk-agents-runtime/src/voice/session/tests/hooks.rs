@@ -7,7 +7,7 @@ use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 struct NoRegistry;
 

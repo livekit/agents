@@ -12,7 +12,7 @@ use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, HostRealtimeError, RealtimeCapabilities, RealtimeError,
 };
 use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt, WallAnchor};
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use super::session::DuplexAdapterModel;
@@ -25,7 +25,7 @@ use lk_agents_net::env::ProcessEnv;
 pub struct GateClass<G>(Arc<Mutex<G>>);
 
 impl<G: AudioGate> GateClass<G> {
-    fn gate(&self) -> lk_agents_net::lock::MutexGuard<'_, G> {
+    fn gate(&self) -> parking_lot::MutexGuard<'_, G> {
         self.0.lock()
     }
 }

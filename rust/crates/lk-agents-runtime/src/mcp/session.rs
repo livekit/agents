@@ -3,7 +3,7 @@
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use futures_util::StreamExt;

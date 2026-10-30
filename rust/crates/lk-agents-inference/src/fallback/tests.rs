@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::fallback::chain::StreamTask;
 use async_trait::async_trait;

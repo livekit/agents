@@ -1,4 +1,4 @@
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 

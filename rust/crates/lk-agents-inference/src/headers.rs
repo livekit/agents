@@ -128,7 +128,7 @@ pub fn gateway_headers(
 /// hands the client to a session. Each connection carries them with a fresh session id, as the
 /// reference mints one per call; unbound, the native headers.
 #[derive(Debug, Default)]
-pub struct BoundIdentity(lk_agents_net::lock::Mutex<Option<Headers>>);
+pub struct BoundIdentity(parking_lot::Mutex<Option<Headers>>);
 
 impl BoundIdentity {
     pub fn bind(&self, headers: Headers) {

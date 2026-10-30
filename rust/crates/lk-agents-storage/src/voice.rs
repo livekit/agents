@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lk_agents_net::lock::Mutex;
+use parking_lot::Mutex;
 
 use crate::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
