@@ -61,8 +61,9 @@ def _new_stream(
         previous_text=None,
     )
 
-    # These synchronous parser tests do not run the stream lifecycle or own tasks.
-    # Initialize its provider state and retry counter without replacing the scheduler.
+    # These parser tests do not run the stream lifecycle or own tasks. Initialize its provider
+    # state and retry counter without replacing the scheduler; the attempt loop reads the running
+    # loop's clock, so every caller is an async test.
     from livekit.agents import _bindings
 
     stream = object.__new__(elevenlabs_stt.SpeechStream)
@@ -116,7 +117,7 @@ def _interim_texts(stream: elevenlabs_stt.SpeechStream) -> list[str]:
     ]
 
 
-def test_advancing_partial_transcripts_are_forwarded() -> None:
+async def test_advancing_partial_transcripts_are_forwarded() -> None:
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
 
     stream._process_stream_event(_partial_transcript("yeah"))
@@ -125,7 +126,7 @@ def test_advancing_partial_transcripts_are_forwarded() -> None:
     assert _interim_texts(stream) == ["yeah", "yeah please"]
 
 
-def test_re_sent_partial_transcript_is_dropped() -> None:
+async def test_re_sent_partial_transcript_is_dropped() -> None:
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
 
     for _ in range(5):
@@ -138,7 +139,7 @@ def test_re_sent_partial_transcript_is_dropped() -> None:
     ]
 
 
-def test_the_same_words_after_a_commit_are_forwarded_again() -> None:
+async def test_the_same_words_after_a_commit_are_forwarded_again() -> None:
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
 
     stream._process_stream_event(_partial_transcript("right"))
@@ -148,7 +149,7 @@ def test_the_same_words_after_a_commit_are_forwarded_again() -> None:
     assert _interim_texts(stream) == ["right", "right"]
 
 
-def test_the_same_words_after_an_empty_commit_are_forwarded_again() -> None:
+async def test_the_same_words_after_an_empty_commit_are_forwarded_again() -> None:
     stream = _new_stream(server_vad=None)
 
     stream._process_stream_event(_partial_transcript("right"))
@@ -158,7 +159,7 @@ def test_the_same_words_after_an_empty_commit_are_forwarded_again() -> None:
     assert _interim_texts(stream) == ["right", "right"]
 
 
-def test_server_vad_commit_emits_end_of_speech() -> None:
+async def test_server_vad_commit_emits_end_of_speech() -> None:
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
 
     stream._process_stream_event(_committed_transcript("hello"))
@@ -172,7 +173,7 @@ def test_server_vad_commit_emits_end_of_speech() -> None:
     assert stream._speaking is False
 
 
-def test_manual_commit_still_waits_for_empty_commit() -> None:
+async def test_manual_commit_still_waits_for_empty_commit() -> None:
     stream = _new_stream(server_vad=None)
 
     stream._process_stream_event(_committed_transcript("hello"))
@@ -282,7 +283,7 @@ async def test_connect_ws_escapes_query_delimiters_in_keyterms() -> None:
     assert URL(url).query.getall("keyterms") == ["Smith & Sons", "C#"]
 
 
-def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
+async def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
     stream = _new_stream()
     stream._reconnect_event = asyncio.Event()
 
@@ -349,7 +350,7 @@ async def test_connect_ws_omits_language_detection_when_explicitly_disabled() ->
     assert "include_language_detection" not in url
 
 
-def test_final_transcript_reports_the_detected_language() -> None:
+async def test_final_transcript_reports_the_detected_language() -> None:
     # with detection on, the detected language only reaches the delayed copy of the
     # commit, so that copy has to be the final one or every transcript is labelled
     # with the pinned language (or "en" when nothing is pinned).
@@ -374,7 +375,7 @@ def test_final_transcript_reports_the_detected_language() -> None:
     assert finals[0].alternatives[0].language == "ru"
 
 
-def test_autodetected_language_reaches_the_final_transcript() -> None:
+async def test_autodetected_language_reaches_the_final_transcript() -> None:
     # without a pinned language the plugin asks the server to detect one; that language
     # only rides on the delayed copy, so dropping it labelled every transcript "en"
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5}, language=None)
@@ -396,7 +397,7 @@ def test_autodetected_language_reaches_the_final_transcript() -> None:
     assert finals[0].alternatives[0].words is None
 
 
-def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
+async def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5}, language="es")
 
     stream._process_stream_event(_committed_transcript("hola"))
@@ -428,7 +429,7 @@ def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
         (None, {"language_code": "fra"}, "fr"),
     ],
 )
-def test_transcript_language_falls_back_to_configured_language(
+async def test_transcript_language_falls_back_to_configured_language(
     message_type: str,
     language: str | None,
     language_data: dict[str, str | None],
@@ -563,7 +564,7 @@ def test_speech_confidence_defaults_to_zero_without_logprobs() -> None:
     assert elevenlabs_stt._speech_confidence([{"text": "hi", "start": 0.1, "end": 0.4}]) == 0.0
 
 
-def test_committed_transcript_sets_confidence() -> None:
+async def test_committed_transcript_sets_confidence() -> None:
     stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
 
     stream._process_stream_event(
