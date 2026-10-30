@@ -189,6 +189,23 @@ async fn close_flushes_then_drains_the_peer_to_its_end() {
     assert!(matches!(a.send((0, Vec::new())).await, Err(SendError::Closed)));
 }
 
+// Catches: a close that waits for EOF, which a Windows named pipe never gives while its peer
+// process lives: the end frame ends the stream on every transport.
+#[tokio::test]
+async fn the_end_frame_ends_the_stream_without_eof() {
+    let (channel, mut peer) = raw().await;
+    peer.write_all(&preamble(VERSION)).await.unwrap();
+    peer.write_all(&[0; 4]).await.unwrap();
+    assert!(matches!(within(channel.recv()).await, Err(ChannelError::Closed)));
+    let started = std::time::Instant::now();
+    within(channel.close()).await;
+    assert!(started.elapsed() < Duration::from_secs(1), "the peer already ended");
+    let mut end = [1; 4];
+    peer.read_exact(&mut end).await.unwrap();
+    assert_eq!(end, [0; 4], "this side ends with its own end frame");
+    drop(peer);
+}
+
 // Catches: the job process's end inherited by what the job spawns, which keeps the connection
 // open after the job process dies.
 #[cfg(unix)]

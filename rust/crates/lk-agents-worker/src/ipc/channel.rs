@@ -2,7 +2,8 @@
 //! the only code that touches its bytes.
 //!
 //! Each side first writes [`MAGIC`] and its [`VERSION`] (big-endian), then frames of a 4-byte
-//! big-endian length and a postcard-encoded message of at most [`MAX_FRAME`] bytes. A reader task
+//! big-endian length and a postcard-encoded message of at most [`MAX_FRAME`] bytes, and last an
+//! empty frame: its end, which a named pipe cannot signal by half-closing. A reader task
 //! and a writer task own the two halves, so a caller that stops waiting never cuts a frame.
 //!
 //! Transports: a socketpair on Unix, a named pipe on Windows, a bounded `tokio::io::duplex` in
@@ -209,6 +210,9 @@ async fn read_frame<In: DeserializeOwned, R: AsyncRead + Unpin>(
     let mut len = [0; 4];
     read_start(r, &mut len).await?;
     let len = u32::from_be_bytes(len) as usize;
+    if len == 0 {
+        return Err(ChannelError::Closed);
+    }
     if len > MAX_FRAME {
         return Err(ChannelError::TooLarge(len));
     }
@@ -252,7 +256,7 @@ async fn read_frames<In: DeserializeOwned, R: AsyncRead + Unpin>(
 }
 
 /// The preamble, then the queued frames until the queue closes or the peer finished (then what
-/// is already queued); then it finishes the stream. A failure other than the peer going away is
+/// is already queued); then the end frame, and it finishes the stream. A failure other than the peer going away is
 /// reported to the receiving side (the reader reports that one itself).
 async fn write_frames<In, W: AsyncWrite + Unpin>(
     mut w: W,
@@ -281,6 +285,7 @@ async fn write_frames<In, W: AsyncWrite + Unpin>(
             w.write_all(&frame).await?;
             w.flush().await?;
         }
+        w.write_all(&[0; 4]).await?;
         w.shutdown().await
     };
     if let Err(error) = written.await {
