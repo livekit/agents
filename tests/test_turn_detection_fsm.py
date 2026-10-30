@@ -13,10 +13,11 @@ turn commits) lives in ``AudioRecognition`` and is covered by
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
     _BaseStreamingTurnDetectorStream,
@@ -32,6 +33,7 @@ class _FakeTransport:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, ...]] = []
+        self.audio_events: list[tuple[str, Any]] = []
         self._stream: _BaseStreamingTurnDetectorStream | None = None
         self.session_id: str | None = None
 
@@ -46,10 +48,13 @@ class _FakeTransport:
         self.events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:
-        pass
+        self.audio_events.append(("push_frame", frame.samples_per_channel))
+
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self.audio_events.append(("on_start_of_turn", elapsed))
 
     def flush(self) -> None:
-        pass
+        self.audio_events.append(("flush", None))
 
     def detach(self) -> None:
         pass
@@ -86,6 +91,29 @@ def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
 
 class TestAudioTurnDetectionRequests:
     """Request lifecycle and hook dispatch for ``_BaseStreamingTurnDetectorStream``."""
+
+    async def test_start_of_turn_reaches_transport_in_audio_order(self) -> None:
+        """The turn length is measured when the start is queued, and it lands between the
+        frames pushed before and after the call, however late the transport drains it."""
+        s = _make_stream()
+        try:
+            frame = rtc.AudioFrame(
+                data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160
+            )
+            s.push_audio(frame)
+            with patch("livekit.agents.inference.eot.base.time.time", return_value=1000.25):
+                s.on_start_of_turn(1000.0)
+            s.push_audio(frame)
+            s.end_input()
+            await s._task
+            assert s._fake_transport.audio_events == [
+                ("push_frame", 160),
+                ("on_start_of_turn", 0.25),
+                ("push_frame", 160),
+                ("flush", None),
+            ]
+        finally:
+            await s.aclose()
 
     async def test_predict_starts_inference(self) -> None:
         s = _make_stream()
