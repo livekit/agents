@@ -485,6 +485,14 @@ fn unicode_float_and_newtype_boundaries_keep_their_declared_semantics() {
 #[derive(Default)]
 struct GuardedValue(u32);
 
+// What `lk-agents-py` links in the extension: the fixture's entries pass the fork guard first.
+inventory::submit! {
+    super::bridge::HostRuntime {
+        check_pid: || Ok(()),
+        future_into_py: |_, _| unreachable!("no fixture awaits"),
+    }
+}
+
 #[crate::host(object(cell = "mutex", rust_name = GuardedFixture))]
 impl GuardedValue {
     #[host(method)]
