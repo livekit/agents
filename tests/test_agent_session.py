@@ -1427,7 +1427,6 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
 
 
 def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, list[str]]:
-    """STT turn detection with an STT attached; returns the transcripts it commits."""
     committed: list[str] = []
 
     class _CommitRecordingHooks(_TestRecognitionHooks):
@@ -1471,20 +1470,13 @@ async def _send_vad_end(recognition: AudioRecognition) -> None:
 @pytest.mark.parametrize(
     ("min_delay", "first_turns"),
     [
-        # the delay ends before the late final, which then commits on its own
         pytest.param(0.0, ["I need the OTP.", "For the guard."], id="committed-before-final"),
-        # the late final lands within the delay and joins the pending turn
         pytest.param(0.5, ["I need the OTP. For the guard."], id="final-within-delay"),
     ],
 )
 async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
     min_delay: float, first_turns: list[str]
 ) -> None:
-    """A final that lands after a later END_OF_SPEECH still ends a turn (#7699).
-
-    The user resumes between an utterance's END_OF_SPEECH and its final, so the next
-    END_OF_SPEECH commits the earlier text and that utterance's final arrives afterwards.
-    """
     recognition, committed = _make_stt_turn_recognition(min_delay=min_delay)
     try:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
@@ -1498,7 +1490,6 @@ async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
         assert committed == first_turns
         assert recognition._audio_transcript == ""
 
-        # the next turn commits on its own END_OF_SPEECH, not one utterance late
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
         await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Thanks.")
         await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
@@ -1512,12 +1503,7 @@ async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
 
 
 async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
-    """An END_OF_SPEECH not yet committed still lets a delayed VAD end commit its final.
-
-    The user resumes before the previous utterance's final and its VAD end arrive; that
-    final must still commit on the VAD end rather than merge into the next reply, and that
-    commit must not let a final of the resumed utterance end it before its END_OF_SPEECH.
-    """
+    """A pending STT end can complete on delayed VAD silence after speech resumes."""
     recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
     try:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
@@ -1527,7 +1513,6 @@ async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
         await _send_vad_end(recognition)
         assert committed == ["I need the OTP."]
 
-        # the resumed utterance pauses mid-sentence before its own END_OF_SPEECH
         await _send_vad_end(recognition)
         await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
         assert committed == ["I need the OTP."]
@@ -1541,7 +1526,6 @@ async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
 
 
 async def test_stt_turn_end_does_not_carry_into_manual_turn_detection() -> None:
-    """After switching from STT to manual turn detection, a final does not end the turn."""
     recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
     try:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
@@ -1562,11 +1546,6 @@ async def test_stt_turn_end_does_not_carry_into_manual_turn_detection() -> None:
 
 
 async def test_stt_turn_is_not_ended_by_vad_after_the_user_resumes() -> None:
-    """Once the user starts a new utterance, only the STT's END_OF_SPEECH ends it.
-
-    The previous turn's end must not let a final that follows a VAD pause mid-sentence
-    commit the new utterance early.
-    """
     recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
     try:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
@@ -1588,7 +1567,6 @@ async def test_stt_turn_is_not_ended_by_vad_after_the_user_resumes() -> None:
 
 
 async def test_stt_cleared_turn_waits_for_its_own_end_of_speech() -> None:
-    """After clear_user_turn, a final does not end a turn until a new END_OF_SPEECH."""
     recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
     try:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)

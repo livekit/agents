@@ -273,9 +273,7 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
-        # STT turn detection: set on END_OF_SPEECH, cleared on START_OF_SPEECH; unlike
-        # _user_turn_committed it outlives the commit, so a final that arrives after its
-        # END_OF_SPEECH was already used still ends a turn
+        # Preserve the provider's end boundary across commits so late finals can end a turn.
         self._stt_turn_ended = False
 
         self._sample_rate: int | None = None
