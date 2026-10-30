@@ -119,17 +119,21 @@ class _VADStream(vad.VADStream):
         native = self._native
 
         async def _push() -> None:
-            async for item in self.input:
-                if isinstance(item, self.Flush):
-                    native.flush()
-                else:
-                    native.push(item)
-            native.end_input()
+            # a refused push (capacity) still ends the input, so its error reaches the reader
+            try:
+                async for item in self.input:
+                    if isinstance(item, self.Flush):
+                        native.flush()
+                    else:
+                        native.push(item)
+            finally:
+                native.end_input()
 
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
                 self.send(ev)
+            await push
         finally:
             await aio.cancel_and_wait(push)
             await native.aclose()

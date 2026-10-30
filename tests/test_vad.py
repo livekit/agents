@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from livekit.agents import APIError
 from livekit.agents.inference import VAD
 
 from . import utils
@@ -12,19 +13,25 @@ pytestmark = pytest.mark.plugin("silero")
 
 
 @pytest.mark.parametrize("sample_rate", [16000, 44100])
-@pytest.mark.parametrize("chunk_duration_ms", [10, None])
+@pytest.mark.parametrize("chunk_duration_ms", [10, 1000])
 async def test_speech_segments_survive_input_reframing(
-    sample_rate: int, chunk_duration_ms: int | None
+    sample_rate: int, chunk_duration_ms: int
 ) -> None:
     frames, *_ = await utils.make_test_speech(
         sample_rate=sample_rate, chunk_duration_ms=chunk_duration_ms
     )
     detector = VAD(min_speech_duration=0.5, min_silence_duration=0.75)
     async with detector.stream() as stream:
-        for frame in frames:
-            stream.push_frame(frame)
-        stream.end_input()
+        # paced at 10x real time: the stream bounds pending audio
+        async def push() -> None:
+            for frame in frames:
+                stream.push_frame(frame)
+                await asyncio.sleep(frame.duration / 10)
+            stream.end_input()
+
+        task = asyncio.create_task(push())
         events = [event async for event in stream]
+        await task
 
     starts = [event for event in events if event.type == "start_of_speech"]
     ends = [event for event in events if event.type == "end_of_speech"]
@@ -64,3 +71,16 @@ async def test_flush_allows_another_complete_speech_segment() -> None:
                 except asyncio.CancelledError:
                     pass
             stream.flush()
+
+
+async def test_audio_beyond_capacity_fails_the_stream() -> None:
+    """Audio pushed beyond the stream's capacity is an API error, never a stream that hangs."""
+    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
+    async with VAD().stream() as stream:
+        for frame in frames:
+            stream.push_frame(frame)
+        stream.end_input()
+        with pytest.raises(APIError, match="capacity"):
+            async with asyncio.timeout(30):
+                async for _ in stream:
+                    pass
