@@ -46,10 +46,7 @@ impl Run {
         ];
         let mut out: Vec<Input> = Vec::new();
         for (kind, make) in each {
-            // A synthesis stream the case did not hold produces on its own: nothing to release.
-            let held =
-                |nth: &u32| self.controls.get(&Slot { kind, nth: *nth }).is_none_or(Control::held);
-            out.extend(self.record.live().of(kind).into_iter().filter(held).map(make));
+            out.extend(self.record.live().of(kind).into_iter().map(make));
         }
         // A realtime turn the server is still speaking is the case's to end.
         if let Some(socket) = self.record.live().of(Kind::Realtime).first().copied() {
