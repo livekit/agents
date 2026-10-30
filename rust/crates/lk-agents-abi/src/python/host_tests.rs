@@ -199,22 +199,6 @@ rtc.AudioFrame = AudioFrame
         })
     }
 
-    // Catches: `rtc.AudioFrame` keys drifting, or `data` crossing as `list[int]` instead of bytes.
-    #[test]
-    fn an_audio_frame_keys_four_names_and_carries_its_samples_as_bytes() {
-        attach_rtc(|py| {
-            let frame = crate::AudioFrame::new(vec![1u8, 2, 3, 4], 24_000, 1, 2);
-            let host = (&frame).into_pyobject(py).unwrap();
-            assert_eq!(host.getattr("sample_rate").unwrap().extract::<u32>().unwrap(), 24_000);
-            assert_eq!(host.getattr("num_channels").unwrap().extract::<u16>().unwrap(), 1);
-            assert_eq!(host.getattr("samples_per_channel").unwrap().extract::<u32>().unwrap(), 2);
-            assert!(
-                host.getattr("data").unwrap().is_instance_of::<pyo3::types::PyBytes>(),
-                "a list[int] here is read as a buffer of the wrong width"
-            );
-        });
-    }
-
     // Catches: a provider payload's tagged bytes reaching the host as a dict, or a user dict with
     // more than the one key mistaken for bytes.
     #[test]

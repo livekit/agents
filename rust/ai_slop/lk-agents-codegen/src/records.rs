@@ -654,7 +654,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 "",
                 is_a(&format!("{PACKAGE}.{module}"), name),
             ),
-            Ty::Record(Record { host: HostForm::Annotation(text), .. }) => {
+            Ty::Record(Record { host: HostForm::Annotation(text) | HostForm::Converted(text), .. }) => {
                 let names = crate::class_stub::annotation_names(text);
                 let [(range, path)] = names.as_slice() else {
                     return Err(format!("{}::{}: an opaque transparent member names one host class", r.rust, v.rust_name));

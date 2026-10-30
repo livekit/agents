@@ -113,8 +113,9 @@ pub struct InferenceVadStream(::std::boxed::Box<InferenceVadStreamImpl>, ::lk_ag
 
 #[pymethods]
 impl InferenceVadStream {
-    fn push(&self, py: Python<'_>, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let item = crate::conversions::audio_frame_from_py(&item)?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
     }
 
@@ -374,7 +375,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
                 };
             let o = out.bind(py);
-            let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(crate::generated::records::vad::vad_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::conversions::audio_frame_to_py(py, v)?), |o| Ok(crate::generated::records::vad::vad_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

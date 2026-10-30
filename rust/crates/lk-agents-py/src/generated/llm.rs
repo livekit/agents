@@ -116,8 +116,9 @@ impl FixedGate {
 
     /// True while the frame belongs to an open burst of output.
     #[pyo3(signature = (frame))]
-    fn update(&self, py: Python<'_>, frame: ::lk_agents_abi::AudioFrame) -> PyResult<bool> {
+    fn update(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
+        let frame = crate::conversions::audio_frame_from_py(&frame)?;
         let out = py.detach(|| <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
@@ -178,8 +179,9 @@ impl AdaptiveNoiseGate {
 
     /// True while the frame belongs to an open burst of output.
     #[pyo3(signature = (frame))]
-    fn update(&self, py: Python<'_>, frame: ::lk_agents_abi::AudioFrame) -> PyResult<bool> {
+    fn update(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
+        let frame = crate::conversions::audio_frame_from_py(&frame)?;
         let out = py.detach(|| <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
@@ -1219,7 +1221,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::audio_frame_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("update")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
@@ -1429,7 +1431,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         ::lk_agents_runtime::host::notify(&self.notifier, "DuplexSession._core_push_audio", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::audio_frame_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_push_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

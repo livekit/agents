@@ -689,7 +689,7 @@ pub fn stt_node(py: Python<'_>, stt: Bound<'_, PyAny>, audio: Bound<'_, PyAny>, 
     crate::host::check_pid()?;
     let env = crate::process::env();
     let stt = crate::generated::stt::SttProxy::from_host(&stt)?;
-    let audio = crate::host::capture_context(audio.py()).and_then(|context| crate::host::stream::HostStream::open(audio.py(), &audio, &context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)?;
+    let audio = crate::host::capture_context(audio.py()).and_then(|context| crate::host::stream::HostStream::open(audio.py(), &audio, &context, |o| Ok(crate::conversions::audio_frame_from_py(&o)?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)?;
     let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
     let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
     let out = py.detach(|| <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::stt_node(&env, stt, audio, conn_options, vad)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -1775,7 +1775,7 @@ impl VoiceSession {
     #[pyo3(signature = (text, audio, *, allow_interruptions = None, add_to_chat_ctx = true, origin = None))]
     fn say_audio(&self, py: Python<'_>, text: ::std::string::String, audio: Bound<'_, PyAny>, allow_interruptions: ::std::option::Option<bool>, add_to_chat_ctx: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
         crate::host::check_pid()?;
-        let audio = crate::host::capture_context(audio.py()).and_then(|context| crate::host::stream::HostStream::open(audio.py(), &audio, &context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)?;
+        let audio = crate::host::capture_context(audio.py()).and_then(|context| crate::host::stream::HostStream::open(audio.py(), &audio, &context, |o| Ok(crate::conversions::audio_frame_from_py(&o)?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)?;
         let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::say_audio(&self.0, text, audio, allow_interruptions, add_to_chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::handles::SpeechHandle::from(out))
     }
@@ -2109,7 +2109,7 @@ impl RoomAudioInput {
         crate::host::future_into_py(py, async move {
             let out = <RoomAudioInputImpl as ::lk_agents_abi::voice::room_owner::RoomAudioInput>::read_frame(&this, )
                 .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::audio_frame_to_py(py, value)?)).transpose()?, py))
         })
     }
 
@@ -2789,7 +2789,7 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::AudioFrame>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (crate::conversions::audio_frame_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -2969,7 +2969,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::AudioFrame>()).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (crate::conversions::audio_frame_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -3192,7 +3192,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = ::std::clone::Clone::clone(frame);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AudioOutput._core_capture", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::audio_frame_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_capture")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -3558,7 +3558,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.realtime_audio: the call captured no host context")));
                 };
             let o = out.bind(py);
-            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::conversions::audio_frame_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -3590,7 +3590,7 @@ pub struct NodeAudio(::lk_agents_runtime::net::source::NativeSource<::lk_agents_
 impl NodeAudio {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+        crate::host::source::recv(&self.0, py, |py, item| Ok(crate::conversions::audio_frame_to_py(py, item)?.unbind()))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -4391,7 +4391,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = ::std::clone::Clone::clone(frame);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AudioSource._core_capture", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::audio_frame_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_capture")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -4889,7 +4889,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AudioInputStream._core_frames: the call captured no host context")));
                 };
             let o = out.bind(py);
-            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::conversions::audio_frame_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -4898,7 +4898,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frames_arg = frames;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AudioInputStream._core_process_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frames_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(py, frames_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
                 Ok((host.bind(py).getattr("_core_process_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -4911,7 +4911,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::AudioFrame>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::audio_frame_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

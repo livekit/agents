@@ -516,7 +516,7 @@ pub mod agent_nodes {
     pub fn node_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::nodes::NodeFrame) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::nodes::NodeFrame { frame, timed_transcript, started_time } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("frame", ::pyo3::IntoPyObjectExt::into_bound_py_any(frame, py)?)?;
+            kwargs.set_item("frame", crate::conversions::audio_frame_to_py(py, frame)?)?;
             kwargs.set_item("timed_transcript", ::pyo3::types::PyList::new(py, timed_transcript.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("started_time", match started_time { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(NODE_FRAME.import(py, "livekit.agents._generated.agent_nodes", "NodeFrame")?.as_any(), (), Some(&kwargs))
@@ -1159,7 +1159,7 @@ pub mod avatar {
 
     pub fn media_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::MediaFrame> {
         if obj.is_instance(MEDIA_FRAME__AUDIO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("AudioFrame")?.unbind()))?.bind(obj.py()))? {
-            return Ok(::lk_agents_abi::utils::video::MediaFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::utils::video::MediaFrame::Audio(crate::conversions::audio_frame_from_py(obj)?));
         }
         if obj.is_instance(MEDIA_FRAME__VIDEO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("VideoFrame")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::utils::video::MediaFrame::Video(obj.extract::<::lk_agents_abi::utils::video::VideoFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
@@ -1169,7 +1169,7 @@ pub mod avatar {
 
     pub fn media_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::MediaFrame) -> PyResult<Bound<'py, PyAny>> {
         Ok(match value {
-            ::lk_agents_abi::utils::video::MediaFrame::Audio(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::MediaFrame::Audio(x) => crate::conversions::audio_frame_to_py(py, x)?,
             ::lk_agents_abi::utils::video::MediaFrame::Video(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
         })
     }
@@ -1181,7 +1181,7 @@ pub mod avatar {
 
     pub fn avatar_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::AvatarFrame> {
         if obj.is_instance(AVATAR_FRAME__AUDIO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("AudioFrame")?.unbind()))?.bind(obj.py()))? {
-            return Ok(::lk_agents_abi::utils::video::AvatarFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::utils::video::AvatarFrame::Audio(crate::conversions::audio_frame_from_py(obj)?));
         }
         if obj.is_instance(AVATAR_FRAME__VIDEO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("VideoFrame")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::utils::video::AvatarFrame::Video(obj.extract::<::lk_agents_abi::utils::video::VideoFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
@@ -1194,7 +1194,7 @@ pub mod avatar {
 
     pub fn avatar_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::AvatarFrame) -> PyResult<Bound<'py, PyAny>> {
         Ok(match value {
-            ::lk_agents_abi::utils::video::AvatarFrame::Audio(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::AvatarFrame::Audio(x) => crate::conversions::audio_frame_to_py(py, x)?,
             ::lk_agents_abi::utils::video::AvatarFrame::Video(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             ::lk_agents_abi::utils::video::AvatarFrame::SegmentEnd => crate::host::construct(py.import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.as_any(), (), None)?,
         })
@@ -1206,7 +1206,7 @@ pub mod avatar {
 
     pub fn audio_receiver_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::AudioReceiverFrame> {
         if obj.is_instance(AUDIO_RECEIVER_FRAME__AUDIO_FRAME.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.rtc")?.getattr("AudioFrame")?.unbind()))?.bind(obj.py()))? {
-            return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(crate::conversions::audio_frame_from_py(obj)?));
         }
         if obj.is_instance(AUDIO_RECEIVER_FRAME__AUDIO_SEGMENT_END.get_or_try_init(obj.py(), || PyResult::Ok(obj.py().import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.unbind()))?.bind(obj.py()))? {
             return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::SegmentEnd);
@@ -1216,7 +1216,7 @@ pub mod avatar {
 
     pub fn audio_receiver_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::AudioReceiverFrame) -> PyResult<Bound<'py, PyAny>> {
         Ok(match value {
-            ::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(x) => crate::conversions::audio_frame_to_py(py, x)?,
             ::lk_agents_abi::utils::video::AudioReceiverFrame::SegmentEnd => crate::host::construct(py.import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.as_any(), (), None)?,
         })
     }
@@ -1724,7 +1724,7 @@ pub mod duplex {
                 return Err(super::not_a(obj, "DuplexAudio"));
             }
             Ok(::lk_agents_abi::llm::duplex::DuplexAudio {
-                frame: ::lk_agents_abi::python::attr_with(obj, "DuplexAudio", "frame", |v| v.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into))?,
+                frame: ::lk_agents_abi::python::attr_with(obj, "DuplexAudio", "frame", |v| crate::conversions::audio_frame_from_py(v))?,
                 start_ms: ::lk_agents_abi::python::attr_with(obj, "DuplexAudio", "start_ms", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "DuplexAudio.start_ms")).map(Some) })?,
             })
     }
@@ -1732,7 +1732,7 @@ pub mod duplex {
     pub fn duplex_audio_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::duplex::DuplexAudio) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::llm::duplex::DuplexAudio { frame, start_ms } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("frame", ::pyo3::IntoPyObjectExt::into_bound_py_any(frame, py)?)?;
+            kwargs.set_item("frame", crate::conversions::audio_frame_to_py(py, frame)?)?;
             kwargs.set_item("start_ms", match start_ms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(DUPLEX_AUDIO.import(py, "livekit.agents._generated.duplex", "DuplexAudio")?.as_any(), (), Some(&kwargs))
     }
@@ -3045,7 +3045,7 @@ pub mod realtime_wire {
             Ok(::lk_agents_abi::AudioDelta {
                 message_id: ::lk_agents_abi::python::attr_with(obj, "AudioDelta", "message_id", |v| v.extract::<::std::string::String>())?,
                 response_id: ::lk_agents_abi::python::attr_with(obj, "AudioDelta", "response_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                frame: ::lk_agents_abi::python::attr_with(obj, "AudioDelta", "frame", |v| v.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into))?,
+                frame: ::lk_agents_abi::python::attr_with(obj, "AudioDelta", "frame", |v| crate::conversions::audio_frame_from_py(v))?,
             })
     }
 
@@ -3341,7 +3341,7 @@ pub mod realtime_wire {
     pub fn push_audio_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::PushAudio) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::PushAudio { frame } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("frame", ::pyo3::IntoPyObjectExt::into_bound_py_any(frame, py)?)?;
+            kwargs.set_item("frame", crate::conversions::audio_frame_to_py(py, frame)?)?;
             crate::host::construct(PUSH_AUDIO.import(py, "livekit.agents._generated.realtime_wire", "PushAudio")?.as_any(), (), Some(&kwargs))
     }
 
@@ -6543,7 +6543,7 @@ pub mod vad {
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
             kwargs.set_item("speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration, py)?)?;
             kwargs.set_item("silence_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(silence_duration, py)?)?;
-            kwargs.set_item("frames", ::pyo3::types::PyList::new(py, frames.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("frames", ::pyo3::types::PyList::new(py, frames.into_iter().map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
             kwargs.set_item("inference_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(inference_duration, py)?)?;
             kwargs.set_item("speaking", ::pyo3::IntoPyObjectExt::into_bound_py_any(speaking, py)?)?;

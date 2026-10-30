@@ -146,8 +146,9 @@ impl AudioEmitter {
     }
 
     #[pyo3(signature = (frame))]
-    fn push_frame(&self, py: Python<'_>, frame: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push_frame(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let frame = crate::conversions::audio_frame_from_py(&frame)?;
         py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push_frame(&self.0, frame)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -276,7 +277,7 @@ impl AudioDecoder {
         crate::host::future_into_py(py, async move {
             let out = <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::next(&this, )
                 .await.map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::audio_frame_to_py(py, value)?)).transpose()?, py))
         })
     }
 
@@ -476,7 +477,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         let is_final_arg = is_final;
         let timed_transcript_arg = timed_transcript;
         ::lk_agents_runtime::host::notify(&self.notifier, "EmitterOutput.send", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 5] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::types::PyList::new(py, timed_transcript_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 5] = [crate::conversions::audio_frame_to_py(py, frame_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::types::PyList::new(py, timed_transcript_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
                 Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

@@ -92,36 +92,6 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for MediaRef {
     }
 }
 
-impl MediaRef {
-    /// Validate every audio frame a host list holds; a stale reference or invalid frame fails.
-    pub fn audio_frames(&self) -> Result<Vec<crate::AudioFrame>, crate::errors::ProviderError> {
-        #[cfg(feature = "python")]
-        {
-            use pyo3::types::PyAnyMethods as _;
-            pyo3::Python::attach(|py| {
-                let owned = self.belongs_to(crate::python::media().registry());
-                let list = resolve_owned(py, self.id(), owned).map_err(crate::python::captured)?;
-                let mut frames = Vec::new();
-                for (index, item) in
-                    list.bind(py).try_iter().map_err(crate::python::captured)?.enumerate()
-                {
-                    let frame = item
-                        .and_then(|item| item.extract::<crate::AudioFrame>())
-                        .map_err(|e| crate::python::at_path(py, e, &format!("frames[{index}]")));
-                    frames.push(frame.map_err(crate::python::captured)?);
-                }
-                Ok(frames)
-            })
-        }
-        #[cfg(not(feature = "python"))]
-        Err(crate::errors::ApiError {
-            retryable: false,
-            ..crate::errors::ApiError::new("host media cannot be read without a host runtime")
-        }
-        .into())
-    }
-}
-
 /// The host object `id` names, provided its handle was issued by this runtime's registry.
 #[cfg(feature = "python")]
 fn resolve_owned(

@@ -156,19 +156,6 @@ fn foreign_host_reference_cannot_resolve_an_existing_local_id() {
 }
 
 #[test]
-fn media_collection_failure_keeps_the_invalid_element_path() {
-    attach(|py| {
-        let source = module(py, "frames = [object()]\n").getattr("frames").unwrap();
-        let reference = intern_media(source.unbind());
-        let error = HostException::to_py_err(
-            &reference.audio_frames().expect_err("invalid frames must not become an empty list"),
-        );
-        let notes = error.value(py).getattr("__notes__").unwrap().extract::<Vec<String>>().unwrap();
-        assert!(notes.iter().any(|note| note.contains("frames[0]")));
-    });
-}
-
-#[test]
 fn large_video_snapshots_remain_isolated_from_mutable_host_aliases() {
     attach(|py| {
         let m = module(
@@ -336,39 +323,6 @@ broken = Broken()
         )
         .unwrap_err();
         assert!(err.value(py).is(&obj.getattr("failure").unwrap()));
-    });
-}
-
-#[test]
-fn audio_frame_reads_the_buffer_protocol_without_calling_tobytes() {
-    attach(|py| {
-        let m = module(
-            py,
-            r#"
-from types import SimpleNamespace
-class Samples(bytearray):
-    def tobytes(self):
-        raise AssertionError('must use buffer protocol')
-samples = Samples(b'\x01\x00\x02\x00')
-frame = SimpleNamespace(data=samples, sample_rate=16000, num_channels=1, samples_per_channel=2)
-"#,
-        );
-        let frame = m.getattr("frame").unwrap().extract::<crate::AudioFrame>().unwrap();
-        m.getattr("samples").unwrap().set_item(0, 9).unwrap();
-        assert_eq!(&*frame.data, &[1, 0, 2, 0]);
-        let host = (&frame).into_pyobject(py).unwrap();
-        let data = host.getattr("data").unwrap();
-        if data.getattr("readonly").unwrap().extract::<bool>().unwrap() {
-            assert!(data.set_item(0, 9).is_err());
-        } else {
-            data.set_item(0, 9).unwrap();
-        }
-        assert_eq!(&*frame.data, &[1, 0, 2, 0], "host output must not alias native storage");
-        m.getattr("frame").unwrap().setattr("sample_rate", true).unwrap();
-        assert!(
-            m.getattr("frame").unwrap().extract::<crate::AudioFrame>().is_err(),
-            "frame integer metadata rejects bool"
-        );
     });
 }
 

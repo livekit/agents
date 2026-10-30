@@ -1,7 +1,9 @@
 //! The host conversions no declaration expresses: a type declared `handwritten(.., py)` in ABI
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
-use lk_agents_abi::python::MaybeNull;
+use lk_agents_abi::python::{
+    BufferFormat, MaybeNull, attr_with, number_from_py, snapshot_buffer,
+};
 use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
 use lk_agents_abi::voice::session_options::{
     BackchannelBoundary, Expressive, ExpressiveConfig, HostValue, Instructions, SessionConnOptions,
@@ -20,7 +22,7 @@ use std::time::Duration;
 use lk_agents_abi::llm::llm::ProviderToolDeclaration;
 use lk_agents_abi::llm::provider_format::tools::ToolFlag;
 use lk_agents_abi::{
-    AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef, SynthesizedAudio, TimedString,
+    AlignedTranscript, ApiConnectOptions, AudioFrame, ImageSource, MediaRef, SynthesizedAudio, TimedString,
     ToolChoice, ToolFlags, ToolSpec, VadEvent, VadEventType,
 };
 use pyo3::exceptions::PyValueError;
@@ -430,7 +432,7 @@ pub fn synthesized_audio_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Synthesized
         None => Vec::new(),
     };
     Ok(SynthesizedAudio {
-        frame: frame.extract()?,
+        frame: audio_frame_from_py(&frame)?,
         request_id: obj.getattr("request_id")?.extract()?,
         is_final: obj.getattr("is_final")?.extract()?,
         segment_id: obj.getattr("segment_id")?.extract()?,
@@ -448,7 +450,7 @@ pub fn synthesized_audio_to_py<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
     let types = py.import("livekit.agents.types")?;
-    let frame = pyo3::IntoPyObjectExt::into_bound_py_any(value.frame, py)?;
+    let frame = audio_frame_to_py(py, value.frame)?;
     let userdata = frame.getattr("userdata")?;
     if !value.timed_transcript.is_empty() {
         let words = value
@@ -486,7 +488,7 @@ pub fn vad_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<VadEvent> {
         speech_duration: number("speech_duration")?,
         silence_duration: number("silence_duration")?,
         frames: match kind == VadEventType::EndOfSpeech && !frames.is_none() {
-            true => frames.extract()?,
+            true => frames.extract::<Vec<Bound<'_, PyAny>>>()?.iter().map(audio_frame_from_py).collect::<PyResult<_>>()?,
             false => Vec::new(),
         },
         probability: number("probability")?,
@@ -695,6 +697,34 @@ pub fn date_to_py<'py>(py: Python<'py>, value: Date) -> PyResult<Bound<'py, PyAn
     Ok(PyDate::new(py, value.year(), value.month() as u8, value.day() as u8)?.into_any())
 }
 
+/// `data` is snapshotted once through the buffer protocol. The scalars are read first, so an
+/// object that is not an audio frame (a video frame tried as one) fails before its buffer is
+/// copied.
+pub fn audio_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<AudioFrame> {
+    const OWNER: &str = "AudioFrameFromPy";
+    let sample_rate =
+        attr_with(obj, OWNER, "sample_rate", |v| number_from_py(v, "AudioFrame.sample_rate"))?;
+    let num_channels =
+        attr_with(obj, OWNER, "num_channels", |v| number_from_py(v, "AudioFrame.num_channels"))?;
+    let samples_per_channel = attr_with(obj, OWNER, "samples_per_channel", |v| {
+        number_from_py(v, "AudioFrame.samples_per_channel")
+    })?;
+    let data = attr_with(obj, OWNER, "data", |v| {
+        snapshot_buffer(v, BufferFormat::I16Le, "AudioFrame.data", None)
+    })?;
+    Ok(AudioFrame { data, sample_rate, num_channels, samples_per_channel })
+}
+
+pub fn audio_frame_to_py<'py>(py: Python<'py>, value: AudioFrame) -> PyResult<Bound<'py, PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("data", PyBytes::new(py, &value.data))?;
+    kwargs.set_item("sample_rate", value.sample_rate)?;
+    kwargs.set_item("num_channels", value.num_channels)?;
+    kwargs.set_item("samples_per_channel", value.samples_per_channel)?;
+    crate::host::construct(CLASS.import(py, "livekit.rtc", "AudioFrame")?, (), Some(&kwargs))
+}
+
 #[cfg(test)]
 mod tests {
     use pyo3::prelude::*;
@@ -787,6 +817,38 @@ class VADEvent:
             let program = c"from types import SimpleNamespace\nout = SimpleNamespace(year=2024, month=2, day=30)\n";
             py.run(program, Some(&globals), None).unwrap();
             assert!(super::date_from_py(&globals.get_item("out").unwrap().unwrap()).is_err());
+        });
+    }
+
+    // Catches: reading `data` through `tobytes()` or keeping a view the host can still mutate, a
+    // bool taken as frame metadata, or the frame crossing back with its samples aliased.
+    #[test]
+    fn an_audio_frame_snapshots_its_buffer_both_ways() {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            let program = c"
+from types import SimpleNamespace
+class Samples(bytearray):
+    def tobytes(self):
+        raise AssertionError('must use buffer protocol')
+samples = Samples(b'\\x01\\x00\\x02\\x00')
+frame = SimpleNamespace(data=samples, sample_rate=16000, num_channels=1, samples_per_channel=2)
+";
+            py.run(program, Some(&globals), None).unwrap();
+            let get = |name: &str| globals.get_item(name).unwrap().unwrap();
+            let frame = super::audio_frame_from_py(&get("frame")).unwrap();
+            get("samples").set_item(0, 9).unwrap();
+            assert_eq!(&*frame.data, &[1, 0, 2, 0]);
+            let host = super::audio_frame_to_py(py, frame.clone()).unwrap();
+            assert_eq!(host.getattr("samples_per_channel").unwrap().extract::<u32>().unwrap(), 2);
+            let data = host.getattr("data").unwrap();
+            if !data.getattr("readonly").unwrap().extract::<bool>().unwrap() {
+                data.set_item(0, 9).unwrap();
+            }
+            assert_eq!(&*frame.data, &[1, 0, 2, 0], "host output must not alias native storage");
+            get("frame").setattr("sample_rate", true).unwrap();
+            assert!(super::audio_frame_from_py(&get("frame")).is_err(), "metadata rejects bool");
         });
     }
 }

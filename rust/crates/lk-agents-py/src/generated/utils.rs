@@ -50,23 +50,23 @@ impl AudioByteStream {
 
     /// Buffer ``data`` and emit every whole frame it completes.
     #[pyo3(signature = (data))]
-    fn push(&mut self, #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+    fn push<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_audio_byte_stream_push_data)] data: ::std::vec::Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
         let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::push(&mut self.0, data);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// Public alias of ``push`` in the reference.
     #[pyo3(signature = (data))]
-    fn write(&mut self, #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+    fn write<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
         let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::write(&mut self.0, data);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
     /// for the next push.
-    fn flush(&mut self) -> PyResult<::std::vec::Vec<::lk_agents_abi::AudioFrame>> {
+    fn flush<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out = <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::flush(&mut self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// Seconds of audio waiting for the next frame.

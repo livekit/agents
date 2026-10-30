@@ -174,8 +174,9 @@ impl EotStream {
     }
 
     #[pyo3(signature = (frame))]
-    fn push_audio(&self, py: Python<'_>, frame: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push_audio(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let frame = crate::conversions::audio_frame_from_py(&frame)?;
         py.detach(|| <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::push_audio(&self.0, frame));
         Ok(())
     }
@@ -358,7 +359,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         ::lk_agents_runtime::host::notify(&self.notifier, "EotDetector._core_push_audio", &self.context, &[], true, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::audio_frame_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_push_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

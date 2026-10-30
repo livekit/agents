@@ -78,8 +78,9 @@ impl FallbackStt {
 
     /// `_recognize_impl`: the batch path, over whichever entry answers.
     #[pyo3(signature = (frames, language = None, conn_options = None))]
-    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    fn recognize<'py>(&self, py: Python<'py>, frames: Bound<'_, PyAny>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let frames = frames.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::audio_frame_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -123,8 +124,9 @@ pub struct FallbackRecognizeStream(::std::boxed::Box<FallbackRecognizeStreamImpl
 
 #[pymethods]
 impl FallbackRecognizeStream {
-    fn push(&self, py: Python<'_>, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let item = crate::conversions::audio_frame_from_py(&item)?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
     }
 
@@ -264,8 +266,9 @@ pub struct InferenceSttStream(::std::boxed::Box<InferenceSttStreamImpl>, ::lk_ag
 
 #[pymethods]
 impl InferenceSttStream {
-    fn push(&self, py: Python<'_>, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let item = crate::conversions::audio_frame_from_py(&item)?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
     }
 
@@ -328,8 +331,9 @@ impl SttStreamAdapter {
 
     /// `_recognize_impl`: the wrapped STT's batch path.
     #[pyo3(signature = (frames, language = None, conn_options = None))]
-    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    fn recognize<'py>(&self, py: Python<'py>, frames: Bound<'_, PyAny>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let frames = frames.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::audio_frame_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let conn_options = conn_options.map(|v| crate::conversions::api_connect_options_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -373,8 +377,9 @@ pub struct SttAdapterStream(::std::boxed::Box<SttAdapterStreamImpl>, ::lk_agents
 
 #[pymethods]
 impl SttAdapterStream {
-    fn push(&self, py: Python<'_>, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+    fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let item = crate::conversions::audio_frame_from_py(&item)?;
         py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
     }
 
@@ -546,7 +551,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "Stt._core_recognize", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(buffer_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::types::PyList::new(py, buffer_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::audio_frame_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(crate::conversions::api_connect_options_to_py(py, bound)?);
@@ -596,7 +601,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Stt._core_stream: the call captured no host context")));
                 };
             let o = out.bind(py);
-            let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(crate::generated::records::stt::speech_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::conversions::audio_frame_to_py(py, v)?), |o| Ok(crate::generated::records::stt::speech_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

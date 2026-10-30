@@ -6,7 +6,7 @@ use std::sync::Arc;
 /// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.
 /// The field names are `rtc.AudioFrame(..)`'s keyword arguments.
-#[crate::host(handwritten(extract, emit, host = "livekit.rtc.AudioFrame"))]
+#[crate::host(handwritten(extract, emit, host = "livekit.rtc.AudioFrame", py))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioFrame {
     /// `bytes`, not a list of ints (which `rtc.AudioFrame` would read as garbage).
@@ -14,71 +14,6 @@ pub struct AudioFrame {
     pub sample_rate: u32,
     pub num_channels: u16,
     pub samples_per_channel: u32,
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &AudioFrame {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        use pyo3::types::{PyAnyMethods as _, PyDictMethods as _};
-        static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
-            pyo3::sync::PyOnceLock::new();
-        let kwargs = pyo3::types::PyDict::new(py);
-        kwargs.set_item("data", pyo3::types::PyBytes::new(py, &self.data))?;
-        kwargs.set_item("sample_rate", self.sample_rate)?;
-        kwargs.set_item("num_channels", self.num_channels)?;
-        kwargs.set_item("samples_per_channel", self.samples_per_channel)?;
-        CLASS.import(py, "livekit.rtc", "AudioFrame")?.call((), Some(&kwargs))
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for AudioFrame {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        (&self).into_pyobject(py)
-    }
-}
-
-/// `data` is snapshotted once through the buffer protocol. The
-/// scalars are read first, so an object that is not an audio frame (a video frame tried as one)
-/// fails before its buffer is copied.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr_with, number_from_py};
-        const OWNER: &str = "AudioFrameFromPy";
-        let obj = &*obj;
-        let sample_rate =
-            attr_with(obj, OWNER, "sample_rate", |v| number_from_py(v, "AudioFrame.sample_rate"))?;
-        let num_channels = attr_with(obj, OWNER, "num_channels", |v| {
-            number_from_py(v, "AudioFrame.num_channels")
-        })?;
-        let samples_per_channel = attr_with(obj, OWNER, "samples_per_channel", |v| {
-            number_from_py(v, "AudioFrame.samples_per_channel")
-        })?;
-        Ok(AudioFrame {
-            data: attr_with(obj, OWNER, "data", |v| {
-                crate::python::snapshot_buffer(
-                    v,
-                    crate::python::BufferFormat::I16Le,
-                    "AudioFrame.data",
-                    None,
-                )
-            })?,
-            sample_rate,
-            num_channels,
-            samples_per_channel,
-        })
-    }
 }
 
 impl AudioFrame {
