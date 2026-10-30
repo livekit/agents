@@ -6,23 +6,17 @@ use lk_agents_abi::agent::{Invocation, OutputCandidate, ValidatedOutput};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// The generated models, as the package holds them (they import nothing at runtime).
+/// The package itself, beside the crate: the generated models import the SDK and the rest of the
+/// package. Its dependencies come from the dev venv's site-packages on `PYTHONPATH`, whose `.pth`
+/// installs (the protocol and SDK packages) only a site directory processes.
 const MODELS: &str = r#"
-import importlib.util, sys, types
-
-for parent in ("livekit", "livekit.agents", "livekit.agents.voice", "livekit.agents._generated"):
-    sys.modules.setdefault(parent, types.ModuleType(parent))
-reports = MODELS.rsplit("/", 1)[0] + "/tool_report.py"
-for name, path in (("agent_run", MODELS), ("tool_report", reports)):
-    spec = importlib.util.spec_from_file_location("livekit.agents._generated." + name, path)
-    loaded = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = loaded
-    spec.loader.exec_module(loaded)
-host_module = types.ModuleType("livekit.agents.voice.agent_host")
-class ToolArgumentError(Exception):
-    pass
-host_module.ToolArgumentError = ToolArgumentError
-sys.modules["livekit.agents.voice.agent_host"] = host_module
+import site, sys
+for path in [p for p in sys.path if p.endswith("site-packages")]:
+    site.addsitedir(path)
+sys.path.insert(0, PACKAGE)
+import livekit.agents._generated.agent_run
+import livekit.agents._generated.tool_report
+import livekit.agents.voice.agent_host
 "#;
 
 const HOST: &str = r#"
@@ -81,19 +75,16 @@ class Host:
 host = Host()
 "#;
 
-/// Installs `MODELS` once per process, as the conversions cache the classes they load; outside
-/// the interpreter lock, so a test waiting for the install never holds it.
+/// Imports `MODELS` once per process, outside the interpreter lock, so a test waiting for the
+/// import never holds it.
 fn install_models() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
         Python::initialize();
         Python::attach(|py| {
             let globals = PyDict::new(py);
-            let path = concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
-            );
-            globals.set_item("MODELS", path).unwrap();
+            let package = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../livekit-agents-next");
+            globals.set_item("PACKAGE", package).unwrap();
             py.run(&std::ffi::CString::new(MODELS).unwrap(), Some(&globals), None).unwrap();
         });
     });

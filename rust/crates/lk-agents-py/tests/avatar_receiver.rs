@@ -9,6 +9,17 @@ use pyo3::prelude::*;
 fn receiver_frames_keep_the_sdk_audio_and_public_segment_end_types() {
     Python::initialize();
     Python::attach(|py| {
+        // The package itself, beside the crate; its dependencies come from the dev venv's
+        // site-packages on `PYTHONPATH` (its `.pth` installs need a site directory).
+        let setup = concat!(
+            "import site, sys\n",
+            "for path in [p for p in sys.path if p.endswith('site-packages')]:\n",
+            "    site.addsitedir(path)\n",
+            "sys.path.insert(0, '",
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../livekit-agents-next')\n",
+        );
+        py.run(&std::ffi::CString::new(setup).unwrap(), None, None).unwrap();
         py.import("livekit.agents").unwrap();
         let frame = AudioFrame::new(vec![0; 640], 16000, 1, 320);
         let audio = audio_receiver_frame_to_py(py, AudioReceiverFrame::Audio(frame)).unwrap();
