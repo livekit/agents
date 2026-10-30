@@ -47,9 +47,10 @@ fn _extract_image_functions_serialize_image_frame_inference_height(obj: &Bound<'
 
 #[pyfunction]
 #[pyo3(signature = (frame, *, format = "JPEG".to_owned(), quality = None, resize_width = None, resize_height = None, resize_strategy = None))]
-pub fn encode_image<'py>(py: Python<'py>, frame: ::lk_agents_abi::MediaRef, format: ::std::string::String, #[pyo3(from_py_with = _extract_image_functions_encode_image_quality)] quality: ::std::option::Option<u8>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_width)] resize_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_height)] resize_height: ::std::option::Option<u32>, resize_strategy: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+pub fn encode_image<'py>(py: Python<'py>, frame: Bound<'_, PyAny>, format: ::std::string::String, #[pyo3(from_py_with = _extract_image_functions_encode_image_quality)] quality: ::std::option::Option<u8>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_width)] resize_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_height)] resize_height: ::std::option::Option<u32>, resize_strategy: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
+    let frame = crate::conversions::media_ref_from_py(&frame)?;
     crate::host::future_into_py(py, async move {
         let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::encode_image(&env, frame, format, quality, resize_width, resize_height, resize_strategy).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -59,9 +60,10 @@ pub fn encode_image<'py>(py: Python<'py>, frame: ::lk_agents_abi::MediaRef, form
 /// A frame as JPEG bytes, resized to its inference size when it has one.
 #[pyfunction]
 #[pyo3(signature = (frame, inference_width = None, inference_height = None))]
-pub fn serialize_image_frame<'py>(py: Python<'py>, frame: ::lk_agents_abi::MediaRef, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_width)] inference_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_height)] inference_height: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
+pub fn serialize_image_frame<'py>(py: Python<'py>, frame: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_width)] inference_width: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_height)] inference_height: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let env = crate::process::env();
+    let frame = crate::conversions::media_ref_from_py(&frame)?;
     crate::host::future_into_py(py, async move {
         let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_frame(&env, frame, inference_width, inference_height).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -406,7 +408,7 @@ impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = ::std::clone::Clone::clone(frame);
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::media_ref_to_py(py, frame_arg)?];
                 Ok((host.bind(py).getattr("_core_rgba")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {

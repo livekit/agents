@@ -22,10 +22,11 @@ pub struct VoiceAgent(pub(crate) ::std::sync::Arc<VoiceAgentImpl>);
 impl VoiceAgent {
     #[new]
     #[pyo3(signature = (definition, host, host_context))]
-    fn new(py: Python<'_>, definition: Bound<'_, PyAny>, host: Bound<'_, PyAny>, host_context: ::lk_agents_abi::HostRef) -> PyResult<VoiceAgent> {
+    fn new(py: Python<'_>, definition: Bound<'_, PyAny>, host: Bound<'_, PyAny>, host_context: Bound<'_, PyAny>) -> PyResult<VoiceAgent> {
         crate::host::check_pid()?;
         let definition = crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
         let host = crate::generated::agent::AgentCallbacksProxy::from_host(&host)?;
+        let host_context = crate::conversions::host_ref_from_py(&host_context)?;
         let out = py.detach(|| <VoiceAgentImpl as ::lk_agents_abi::agent::VoiceAgent>::new(definition, host, host_context));
         Ok(VoiceAgent(::std::sync::Arc::new(out)))
     }
@@ -353,7 +354,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentCallbacks.read_back", invocation, &[::lk_agents_abi::invoke::Scope::ToolCall], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, crate::conversions::host_ref_to_py(py, prepared_arg)?];
                 Ok((host.bind(py).getattr("read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -377,7 +378,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentCallbacks.run_tool", invocation, &[::lk_agents_abi::invoke::Scope::ToolCall], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, crate::conversions::host_ref_to_py(py, prepared_arg)?];
                 Ok((host.bind(py).getattr("run_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

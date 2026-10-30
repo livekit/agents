@@ -74,9 +74,10 @@ pub struct DataStreamAudioOutput(pub(crate) ::std::sync::Arc<DataStreamAudioOutp
 impl DataStreamAudioOutput {
     #[new]
     #[pyo3(signature = (room, *, destination_identity, sample_rate = None, wait_remote_track = None, clear_buffer_timeout = Some(2.0), wait_playback_start = false))]
-    fn new(py: Python<'_>, room: ::lk_agents_abi::HostRef, destination_identity: ::std::string::String, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_sample_rate)] sample_rate: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_wait_remote_track)] wait_remote_track: ::std::option::Option<i32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_clear_buffer_timeout)] clear_buffer_timeout: ::std::option::Option<f64>, wait_playback_start: bool) -> PyResult<DataStreamAudioOutput> {
+    fn new(py: Python<'_>, room: Bound<'_, PyAny>, destination_identity: ::std::string::String, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_sample_rate)] sample_rate: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_wait_remote_track)] wait_remote_track: ::std::option::Option<i32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_clear_buffer_timeout)] clear_buffer_timeout: ::std::option::Option<f64>, wait_playback_start: bool) -> PyResult<DataStreamAudioOutput> {
         crate::host::check_pid()?;
         let env = crate::process::env();
+        let room = crate::conversions::host_ref_from_py(&room)?;
         let out = py.detach(|| <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::new(&env, room, destination_identity, sample_rate, wait_remote_track, clear_buffer_timeout, wait_playback_start)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(DataStreamAudioOutput(::std::sync::Arc::new(out)))
     }
@@ -721,17 +722,18 @@ impl SpeechHandle {
     /// The host's object for this speech, as it set it; `None` until then.
     #[getter]
     #[pyo3(name = "host")]
-    fn host_object(&self, py: Python<'_>) -> PyResult<::std::option::Option<::lk_agents_abi::HostRef>> {
+    fn host_object<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::host_object(&self.0));
-        Ok(out)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::host_ref_to_py(py, value)?)).transpose()?)
     }
 
     /// Set by the host when it creates its handle over this one: from then on every event, tool
     /// and hook naming the speech hands back this object.
     #[setter(host)]
-    fn set_host_object(&self, py: Python<'_>, host: ::lk_agents_abi::HostRef) -> PyResult<()> {
+    fn set_host_object(&self, py: Python<'_>, host: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let host = crate::conversions::host_ref_from_py(&host)?;
         py.detach(|| <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::set_host_object(&self.0, host));
         Ok(())
     }
@@ -1409,7 +1411,7 @@ impl VoiceSession {
         let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::run_voice_task(&self.0, frame, origin, opens_with_reply)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         crate::host::future_into_py(py, async move {
             let out = call.await.map_err(|e: ::lk_agents_abi::voice::session::VoiceTaskEnded| <::lk_agents_abi::voice::session::VoiceTaskEnded as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::conversions::host_ref_to_py(py, out)?, py))
         })
     }
 
@@ -1481,9 +1483,10 @@ impl VoiceSession {
     /// `Agent.update_tools()` on a running agent. All three parts go together: the agent hosts
     /// its tools.
     #[pyo3(signature = (tools, *, tools_host, voice_agent))]
-    fn update_tools(&self, py: Python<'_>, tools: Option<Bound<'_, PyAny>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    fn update_tools(&self, py: Python<'_>, tools: Option<Bound<'_, PyAny>>, tools_host: Option<Bound<'_, PyAny>>, voice_agent: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
         let tools = tools.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let tools_host = tools_host.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let voice_agent = voice_agent.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_tools(&self.0, tools, tools_host, voice_agent)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -1539,11 +1542,12 @@ impl VoiceSession {
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
     /// apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
     #[pyo3(signature = (*, user_input = None, instructions = None, allow_interruptions = None, tool_choice = None, chat_ctx = None, tools = None, tools_host = None, voice_agent = None, on_enter = false, origin = None))]
-    fn generate_reply(&self, py: Python<'_>, user_input: ::std::option::Option<::std::string::String>, instructions: ::std::option::Option<::std::string::String>, allow_interruptions: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, chat_ctx: Option<Bound<'_, PyAny>>, tools: Option<Bound<'_, PyAny>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>, on_enter: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
+    fn generate_reply(&self, py: Python<'_>, user_input: ::std::option::Option<::std::string::String>, instructions: ::std::option::Option<::std::string::String>, allow_interruptions: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, chat_ctx: Option<Bound<'_, PyAny>>, tools: Option<Bound<'_, PyAny>>, tools_host: Option<Bound<'_, PyAny>>, voice_agent: Option<Bound<'_, PyAny>>, on_enter: bool, origin: ::std::option::Option<::std::string::String>) -> PyResult<crate::handles::SpeechHandle> {
         crate::host::check_pid()?;
         let tool_choice = tool_choice.map(|v| crate::conversions::tool_choice_from_py(&v)).transpose()?;
         let chat_ctx = chat_ctx.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let tools = tools.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let tools_host = tools_host.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let voice_agent = voice_agent.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).transpose()?;
         let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, allow_interruptions, tool_choice, chat_ctx, tools, tools_host, voice_agent, on_enter, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::handles::SpeechHandle::from(out))
@@ -1552,9 +1556,10 @@ impl VoiceSession {
     /// `IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
     /// `IVRActivity.tools`. A second start is journalled, not run.
     #[pyo3(signature = (max_silence = 5.0, tools = None, *, tools_host = None))]
-    fn ivr_start(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_voice_session_ivr_start_max_silence)] max_silence: f64, tools: Option<Bound<'_, PyAny>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<()> {
+    fn ivr_start(&self, py: Python<'_>, #[pyo3(from_py_with = _extract_voice_session_ivr_start_max_silence)] max_silence: f64, tools: Option<Bound<'_, PyAny>>, tools_host: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
         let tools = tools.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::tool_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let tools_host = tools_host.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::ivr_start(&self.0, max_silence, tools, tools_host)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -1563,10 +1568,11 @@ impl VoiceSession {
     /// optional STT. It listens once the callee answers in the session's room; the verdict comes
     /// back as `amd_result`. A second attach is refused.
     #[pyo3(signature = (cfg, llm, tools, stt, participant_identity))]
-    fn attach_amd(&self, py: Python<'_>, cfg: Bound<'_, PyAny>, llm: Bound<'_, PyAny>, tools: ::std::option::Option<::lk_agents_abi::HostRef>, stt: Option<Bound<'_, PyAny>>, participant_identity: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+    fn attach_amd(&self, py: Python<'_>, cfg: Bound<'_, PyAny>, llm: Bound<'_, PyAny>, tools: Option<Bound<'_, PyAny>>, stt: Option<Bound<'_, PyAny>>, participant_identity: ::std::option::Option<::std::string::String>) -> PyResult<()> {
         crate::host::check_pid()?;
         let cfg = crate::generated::records::amd::amd_config_from_py(&cfg)?;
         let llm = crate::generated::llm::LlmProxy::from_host(&llm)?;
+        let tools = tools.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let stt = stt.map(|v| crate::generated::stt::SttProxy::from_host(&v)).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::attach_amd(&self.0, cfg, llm, tools, stt, participant_identity)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -1608,8 +1614,9 @@ impl VoiceSession {
     /// `RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s
     /// idle say `text` (or ask `source`), then repeat every `interval`. Returns the scope's number.
     #[pyo3(signature = (call_id, speech_id, *, delay, interval = None, max_steps = None, text = None, source = None))]
-    fn filler_start(&self, py: Python<'_>, call_id: ::std::string::String, speech_id: ::std::string::String, #[pyo3(from_py_with = _extract_voice_session_filler_start_delay)] delay: f64, #[pyo3(from_py_with = _extract_voice_session_filler_start_interval)] interval: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_voice_session_filler_start_max_steps)] max_steps: ::std::option::Option<u32>, text: ::std::option::Option<::std::string::String>, source: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<u64> {
+    fn filler_start(&self, py: Python<'_>, call_id: ::std::string::String, speech_id: ::std::string::String, #[pyo3(from_py_with = _extract_voice_session_filler_start_delay)] delay: f64, #[pyo3(from_py_with = _extract_voice_session_filler_start_interval)] interval: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_voice_session_filler_start_max_steps)] max_steps: ::std::option::Option<u32>, text: ::std::option::Option<::std::string::String>, source: Option<Bound<'_, PyAny>>) -> PyResult<u64> {
         crate::host::check_pid()?;
+        let source = source.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::filler_start(&self.0, call_id, speech_id, delay, interval, max_steps, text, source)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
@@ -1746,8 +1753,9 @@ impl VoiceSession {
     /// `VoiceSession._run(user_input=)`, answered on the stream: every run event carries `host`,
     /// the host's run recorder.
     #[pyo3(signature = (*, user_input = None, origin = None, host = None))]
-    fn run(&self, py: Python<'_>, user_input: ::std::option::Option<::std::string::String>, origin: ::std::option::Option<::std::string::String>, host: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<()> {
+    fn run(&self, py: Python<'_>, user_input: ::std::option::Option<::std::string::String>, origin: ::std::option::Option<::std::string::String>, host: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let host = host.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::run(&self.0, user_input, origin, host)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -2160,7 +2168,7 @@ impl RoomVideoInput {
         crate::host::future_into_py(py, async move {
             let out = <RoomVideoInputImpl as ::lk_agents_abi::voice::room_owner::RoomVideoInput>::read_frame(&this, )
                 .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::media_ref_to_py(py, value)?)).transpose()?, py))
         })
     }
 
@@ -4966,7 +4974,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_enter", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, agent_arg)?];
                 Ok((host.bind(py).getattr("_core_on_enter")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -4989,7 +4997,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_exit", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, agent_arg)?];
                 Ok((host.bind(py).getattr("_core_on_exit")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -5012,7 +5020,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = agent.map(::std::borrow::ToOwned::to_owned);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_close_toolsets", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [match agent_arg { None => py.None().into_bound(py), Some(x) => crate::conversions::host_ref_to_py(py, x)? }];
                 Ok((host.bind(py).getattr("_core_close_toolsets")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -5026,7 +5034,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let tools_arg = ::std::clone::Clone::clone(tools);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_setup_tools", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(tools_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, tools_arg)?];
                 Ok((host.bind(py).getattr("_core_setup_tools")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -5074,7 +5082,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let new_transcript_arg = new_transcript.to_owned();
         let transcript_confidence_arg = transcript_confidence;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_user_turn_completed", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::types::PyList::new(py, chat_ctx_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [crate::conversions::host_ref_to_py(py, agent_arg)?, ::pyo3::types::PyList::new(py, chat_ctx_arg.into_iter().map(|x| PyResult::Ok(crate::generated::records::chat_items::chat_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
                 Ok((host.bind(py).getattr("_core_on_user_turn_completed")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -5098,7 +5106,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let agent_arg = ::std::clone::Clone::clone(agent);
         let ev_arg = ::std::clone::Clone::clone(ev);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_user_turn_exceeded", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, crate::generated::records::events::user_turn_exceeded_event_to_py(py, ev_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::conversions::host_ref_to_py(py, agent_arg)?, crate::generated::records::events::user_turn_exceeded_event_to_py(py, ev_arg)?];
                 Ok((host.bind(py).getattr("_core_on_user_turn_exceeded")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -5146,7 +5154,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let source_arg = ::std::clone::Clone::clone(source);
         let step_arg = step;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_filler_source", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(source_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(step_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::conversions::host_ref_to_py(py, source_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(step_arg, py)?];
                 Ok((host.bind(py).getattr("_core_filler_source")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -5315,7 +5323,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::HostRef>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (crate::conversions::host_ref_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -5325,7 +5333,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
         let host = ::std::sync::Arc::clone(&self.host);
         let hold_arg = hold;
         ::lk_agents_runtime::host::notify(&self.notifier, "TransferHost._core_stop_hold", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(hold_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, hold_arg)?];
                 Ok((host.bind(py).getattr("_core_stop_hold")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

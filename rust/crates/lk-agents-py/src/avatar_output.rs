@@ -30,7 +30,7 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
                     lk_agents_abi::python::duration_from_secs(seconds, "clear_buffer_timeout")
                 })
                 .transpose()?;
-            let room = (&room).into_pyobject(py)?;
+            let room = crate::conversions::host_ref_to_py(py, room)?;
             let factory =
                 py.import("livekit.agents.voice.room_io")?.getattr("Room")?.getattr("of")?;
             let room = crate::host::construct(&factory, (room,), None)?;

@@ -12,6 +12,7 @@ use lk_agents_abi::voice::session_options::{
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
 use lk_agents_abi::utils::dates::Date;
+use lk_agents_abi::utils::host_ref::StaleHostRef;
 use lk_agents_abi::utils::video::VideoFrame;
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::session_effects::FillerReply;
@@ -23,7 +24,7 @@ use std::time::Duration;
 use lk_agents_abi::llm::llm::ProviderToolDeclaration;
 use lk_agents_abi::llm::provider_format::tools::ToolFlag;
 use lk_agents_abi::{
-    AlignedTranscript, ApiConnectOptions, AudioFrame, ImageSource, MediaRef, SynthesizedAudio, TimedString,
+    AlignedTranscript, ApiConnectOptions, AudioFrame, HostRef, ImageSource, MediaRef, SynthesizedAudio, TimedString,
     ToolChoice, ToolFlags, ToolSpec, VadEvent, VadEventType,
 };
 use pyo3::exceptions::PyValueError;
@@ -157,7 +158,7 @@ pub fn instructions_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Instructions> {
 pub fn image_source_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ImageSource> {
     Ok(match obj.cast::<PyString>() {
         Ok(url) => ImageSource::Url(url.to_str()?.to_owned()),
-        Err(_) => ImageSource::Frame(obj.extract::<MediaRef>()?),
+        Err(_) => ImageSource::Frame(media_ref_from_py(obj)?),
     })
 }
 
@@ -165,7 +166,7 @@ pub fn image_source_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ImageSource> {
 pub fn image_source_to_py<'py>(py: Python<'py>, value: ImageSource) -> PyResult<Bound<'py, PyAny>> {
     match value {
         ImageSource::Url(url) => Ok(PyString::new(py, &url).into_any()),
-        ImageSource::Frame(frame) => frame.into_pyobject(py),
+        ImageSource::Frame(frame) => media_ref_to_py(py, frame),
     }
 }
 
@@ -514,8 +515,8 @@ pub fn room_io_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<RoomIoConfig> 
             sample_rate: a.get_item("sample_rate")?.extract()?,
             num_channels: a.get_item("num_channels")?.extract()?,
             frame_size_ms: a.get_item("frame_size_ms")?.extract()?,
-            noise_cancellation: a.get_item("noise_cancellation")?.extract()?,
-            session: a.get_item("session")?.extract()?,
+            noise_cancellation: optional_host_ref(&a.get_item("noise_cancellation")?)?,
+            session: optional_host_ref(&a.get_item("session")?)?,
             auto_gain_control: a.get_item("auto_gain_control")?.extract()?,
             pre_connect_audio: a.get_item("pre_connect_audio")?.extract()?,
             pre_connect_audio_timeout: Duration::from_secs_f64(
@@ -745,6 +746,36 @@ pub fn video_frame_to_py<'py>(py: Python<'py>, value: VideoFrame) -> PyResult<Bo
     crate::host::construct(CLASS.import(py, "livekit.rtc", "VideoFrame")?, args, None)
 }
 
+/// Interned; the key keeps it alive.
+pub fn host_ref_from_py(obj: &Bound<'_, PyAny>) -> PyResult<HostRef> {
+    Ok(lk_agents_abi::python::intern_host(obj.clone().unbind()))
+}
+
+/// The interned object itself: callers compare by identity. A stale or foreign key raises.
+pub fn host_ref_to_py<'py>(py: Python<'py>, value: HostRef) -> PyResult<Bound<'py, PyAny>> {
+    resolve_owned(py, value.id(), value.belongs_to(lk_agents_abi::python::media().registry()))
+}
+
+pub fn media_ref_from_py(obj: &Bound<'_, PyAny>) -> PyResult<MediaRef> {
+    Ok(lk_agents_abi::python::intern_media(obj.clone().unbind()))
+}
+
+pub fn media_ref_to_py<'py>(py: Python<'py>, value: MediaRef) -> PyResult<Bound<'py, PyAny>> {
+    resolve_owned(py, value.id(), value.belongs_to(lk_agents_abi::python::media().registry()))
+}
+
+fn optional_host_ref(obj: &Bound<'_, PyAny>) -> PyResult<Option<HostRef>> {
+    if obj.is_none() { Ok(None) } else { host_ref_from_py(obj).map(Some) }
+}
+
+/// The host object `id` names, provided its key was issued by this runtime's table.
+fn resolve_owned(py: Python<'_>, id: u64, owned: bool) -> PyResult<Bound<'_, PyAny>> {
+    if !owned {
+        return Err(lk_agents_abi::python::HostException::to_py_err(&StaleHostRef { id }));
+    }
+    Ok(lk_agents_abi::python::resolve_key(py, id)?.into_bound(py))
+}
+
 #[cfg(test)]
 mod tests {
     use pyo3::prelude::*;
@@ -891,6 +922,29 @@ frame = SimpleNamespace(data=memoryview(owner)[2:6], width=1, height=1, type=0)
             assert_eq!(&*frame.data, b"2345");
             get("frame").setattr("width", true).unwrap();
             assert!(super::video_frame_from_py(&get("frame")).is_err(), "metadata rejects bool");
+        });
+    }
+
+    // Catches: a stale or foreign key resolving to null, or a foreign table's key resolving the
+    // local entry that happens to share its id.
+    #[test]
+    fn a_host_ref_resolves_only_from_the_table_that_issued_it() {
+        use lk_agents_abi::python::{Table, intern_host, media};
+        Python::initialize();
+        Python::attach(|py| {
+            let stale_name = |r: lk_agents_abi::HostRef| {
+                let error = super::host_ref_to_py(py, r).unwrap_err();
+                error.get_type(py).name().unwrap().to_string()
+            };
+            assert_eq!(stale_name(lk_agents_abi::HostRef::new(u64::MAX, media().registry())), "StaleHandle");
+            let original = PyDict::new(py);
+            let local = intern_host(original.clone().into_any().unbind());
+            assert!(super::host_ref_to_py(py, local.clone()).unwrap().is(&original));
+            let foreign_table = Table::new();
+            let foreign_id = foreign_table.insert(PyDict::new(py).into_any().unbind());
+            let foreign = lk_agents_abi::HostRef::new(foreign_id, foreign_table.registry());
+            assert_ne!(foreign, local);
+            assert_eq!(stale_name(foreign), "StaleHandle");
         });
     }
 }

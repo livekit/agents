@@ -22,10 +22,11 @@ pub struct CoreJudgeRunner(pub(crate) ::std::sync::Arc<CoreJudgeRunnerImpl>);
 impl CoreJudgeRunner {
     #[new]
     #[pyo3(signature = (llm, tools, host))]
-    fn new(py: Python<'_>, llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<CoreJudgeRunner> {
+    fn new(py: Python<'_>, llm: Option<Bound<'_, PyAny>>, tools: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<CoreJudgeRunner> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
+        let tools = crate::conversions::host_ref_from_py(&tools)?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
         let out = py.detach(|| <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host));
         Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
@@ -126,7 +127,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let evaluator_arg = ::std::clone::Clone::clone(evaluator);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "EvaluationHost.evaluate", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(evaluator_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, evaluator_arg)?];
                 Ok((host.bind(py).getattr("evaluate")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

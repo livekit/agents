@@ -705,8 +705,9 @@ impl ProcPool {
     }
 
     #[pyo3(signature = (job_id, info))]
-    fn launch_job<'py>(&self, py: Python<'py>, job_id: ::std::string::String, info: ::lk_agents_abi::HostRef) -> PyResult<Bound<'py, PyAny>> {
+    fn launch_job<'py>(&self, py: Python<'py>, job_id: ::std::string::String, info: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let info = crate::conversions::host_ref_from_py(&info)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::ProcessPool>::launch_job(&this, job_id, info)
@@ -778,8 +779,9 @@ impl JobRun {
     /// `callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
     /// framework callback runs in the shutdown's span, any other in its own span named `name`.
     #[pyo3(signature = (callback, takes_reason, framework, name))]
-    fn add_shutdown_callback(&self, py: Python<'_>, callback: ::lk_agents_abi::HostRef, takes_reason: bool, framework: bool, name: ::std::string::String) -> PyResult<()> {
+    fn add_shutdown_callback(&self, py: Python<'_>, callback: Bound<'_, PyAny>, takes_reason: bool, framework: bool, name: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
+        let callback = crate::conversions::host_ref_from_py(&callback)?;
         py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::add_shutdown_callback(&self.0, callback, takes_reason, framework, name));
         Ok(())
     }
@@ -837,8 +839,10 @@ impl JobRun {
 
     /// A participant joined, or was in the room when it connected; `job` is the `JobContext`.
     #[pyo3(signature = (job, participant, identity, kind))]
-    fn participant_joined(&self, py: Python<'_>, job: ::lk_agents_abi::HostRef, participant: ::lk_agents_abi::HostRef, identity: ::std::string::String, #[pyo3(from_py_with = _extract_job_run_participant_joined_kind)] kind: i32) -> PyResult<()> {
+    fn participant_joined(&self, py: Python<'_>, job: Bound<'_, PyAny>, participant: Bound<'_, PyAny>, identity: ::std::string::String, #[pyo3(from_py_with = _extract_job_run_participant_joined_kind)] kind: i32) -> PyResult<()> {
         crate::host::check_pid()?;
+        let job = crate::conversions::host_ref_from_py(&job)?;
+        let participant = crate::conversions::host_ref_from_py(&participant)?;
         let context = crate::host::entered();
         py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::participant_joined(&self.0, job, participant, identity, kind, context));
         Ok(())
@@ -855,15 +859,16 @@ impl JobRun {
     /// caller awaits it, and it is cancelled once the job ends. A console job makes no call: it
     /// resolves to `console_result`.
     #[pyo3(signature = (call, name, console_result))]
-    fn api_call<'py>(&self, py: Python<'py>, call: Bound<'_, PyAny>, name: ::std::string::String, console_result: ::lk_agents_abi::HostRef) -> PyResult<Bound<'py, PyAny>> {
+    fn api_call<'py>(&self, py: Python<'py>, call: Bound<'_, PyAny>, name: ::std::string::String, console_result: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let call = crate::generated::worker::JobCallProxy::from_host(&call)?;
+        let console_result = crate::conversions::host_ref_from_py(&console_result)?;
         let context = crate::host::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::api_call(&this, call, name, console_result, context)
                 .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::conversions::host_ref_to_py(py, out)?, py))
         })
     }
 
@@ -1876,7 +1881,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
         let info_arg = info;
         let launched_at_arg = launched_at;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobExecutor._core_launch_job", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(info_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(launched_at_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::conversions::host_ref_to_py(py, info_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(launched_at_arg, py)?];
                 Ok((host.bind(py).getattr("_core_launch_job")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2101,7 +2106,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::HostRef>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -2111,7 +2116,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let task_arg = task;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_wait", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(task_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, task_arg)?];
                 Ok((host.bind(py).getattr("_core_wait")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2134,7 +2139,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let task_arg = task;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_cancel", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(task_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, task_arg)?];
                 Ok((host.bind(py).getattr("_core_cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2203,7 +2208,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let span_arg = span;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_session_end", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(span_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, span_arg)?];
                 Ok((host.bind(py).getattr("_core_session_end")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2226,7 +2231,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let span_arg = span;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_upload", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(span_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, span_arg)?];
                 Ok((host.bind(py).getattr("_core_upload")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2249,7 +2254,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let span_arg = span;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_disconnect", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(span_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::conversions::host_ref_to_py(py, span_arg)?];
                 Ok((host.bind(py).getattr("_core_disconnect")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2274,7 +2279,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let reason_arg = reason;
         let span_arg = span;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "JobProcess._core_shutdown_callback", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(callback_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(span_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [crate::conversions::host_ref_to_py(py, callback_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?, match span_arg { None => py.None().into_bound(py), Some(x) => crate::conversions::host_ref_to_py(py, x)? }];
                 Ok((host.bind(py).getattr("_core_shutdown_callback")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2309,7 +2314,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::HostRef>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -2320,7 +2325,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let error_arg = error;
         let timed_out_arg = timed_out;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(span_arg, py)?, match error_arg { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [crate::conversions::host_ref_to_py(py, span_arg)?, match error_arg { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?];
                 Ok((host.bind(py).getattr("_core_span_end")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
@@ -2413,7 +2418,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::HostRef>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -2462,7 +2467,7 @@ impl ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint for ParticipantEnt
         let job_arg = job;
         let participant_arg = participant;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ParticipantEntrypoint.__call__", context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(job_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(participant_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::conversions::host_ref_to_py(py, job_arg)?, crate::conversions::host_ref_to_py(py, participant_arg)?];
                 Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

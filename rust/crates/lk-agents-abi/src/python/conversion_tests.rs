@@ -130,32 +130,6 @@ fn duration_refuses_invalid_seconds_before_constructing_duration() {
 }
 
 #[test]
-fn stale_host_reference_is_an_error_instead_of_null() {
-    attach(|py| {
-        let registry = media().registry();
-        let stale = crate::HostRef::new(u64::MAX, registry);
-        let error = (&stale).into_pyobject(py).unwrap_err();
-        assert_eq!(error.get_type(py).name().unwrap().to_str().unwrap(), "StaleHandle");
-    });
-}
-
-#[test]
-fn foreign_host_reference_cannot_resolve_an_existing_local_id() {
-    attach(|py| {
-        let original = PyDict::new(py);
-        let local = intern_host(original.clone().into_any().unbind());
-        assert!((&local).into_pyobject(py).unwrap().is(&original));
-        let foreign_table = Table::new();
-        let foreign_id = foreign_table.insert(PyDict::new(py).into_any().unbind());
-        assert_eq!(foreign_id, local.id());
-        let foreign = crate::HostRef::new(foreign_id, foreign_table.registry());
-        let error = (&foreign).into_pyobject(py).unwrap_err();
-        assert_eq!(error.get_type(py).name().unwrap().to_str().unwrap(), "StaleHandle");
-        assert_ne!(foreign, local);
-    });
-}
-
-#[test]
 fn large_video_snapshots_remain_isolated_from_mutable_host_aliases() {
     attach(|py| {
         let m = module(

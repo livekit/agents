@@ -30,7 +30,7 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallback {
             let children = models
                 .into_iter()
                 .map(|model| {
-                    let model = model.into_pyobject(py)?;
+                    let model = crate::conversions::host_ref_to_py(py, model)?;
                     match native::<dyn Realtime>(&model) {
                         Some(native) => Ok(ChainModel::Native(native)),
                         None => crate::generated::llm::HostRealtimeProxy::from_host(&model)
@@ -42,7 +42,7 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallback {
                 .collect::<PyResult<Vec<_>>>()?;
             let observer: Arc<dyn ChainObserver> = match on_availability {
                 Some(observer) => crate::generated::llm::ChainObserverProxy::from_host(
-                    &observer.into_pyobject(py)?,
+                    &crate::conversions::host_ref_to_py(py, observer)?,
                 )?,
                 None => Arc::new(IgnoreEvents),
             };

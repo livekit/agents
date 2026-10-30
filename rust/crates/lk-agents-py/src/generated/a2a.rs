@@ -290,9 +290,10 @@ impl CoreA2ADoor {
     }
 
     #[pyo3(signature = (body, principal, *, version = None, offset = None, body_size = None, host_context = None))]
-    fn dispatch<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body)] body: ::std::vec::Vec<u8>, principal: Bound<'_, PyAny>, version: ::std::option::Option<::std::string::String>, offset: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body_size)] body_size: ::std::option::Option<usize>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
+    fn dispatch<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body)] body: ::std::vec::Vec<u8>, principal: Bound<'_, PyAny>, version: ::std::option::Option<::std::string::String>, offset: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body_size)] body_size: ::std::option::Option<usize>, host_context: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let principal = crate::generated::records::a2a_auth::auth_principal_from_py(&principal)?;
+        let host_context = host_context.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreA2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::dispatch(&this, body, principal, version, offset, body_size, host_context)

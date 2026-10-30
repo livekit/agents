@@ -6,14 +6,14 @@ use crate::errors::side_table::side_table_ref;
 
 /// A key into the binding's side table for an opaque host object (`extra`,
 /// `AgentConfigUpdate._tools`).
-#[crate::host(handwritten(extract, emit, host = "object"))]
+#[crate::host(handwritten(extract, emit, host = "object", py))]
 #[derive(Clone)]
 pub struct HostRef(std::sync::Arc<crate::errors::side_table::Entry>);
 side_table_ref!(HostRef);
 
 /// A key into the binding's side table for a host media object (`rtc.VideoFrame`,
 /// `list[rtc.AudioFrame]`).
-#[crate::host(handwritten(extract, emit, host = "object"))]
+#[crate::host(handwritten(extract, emit, host = "object", py))]
 #[derive(Clone)]
 pub struct MediaRef(std::sync::Arc<crate::errors::side_table::Entry>);
 side_table_ref!(MediaRef);
@@ -24,85 +24,6 @@ side_table_ref!(MediaRef);
 #[error("host reference {id} is stale or belongs to another runtime")]
 pub struct StaleHostRef {
     pub id: u64,
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for HostRef {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        (&self).into_pyobject(py)
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &HostRef {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        let owned = self.belongs_to(crate::python::media().registry());
-        Ok(resolve_owned(py, self.id(), owned)?.into_bound(py))
-    }
-}
-
-/// Interned; the key keeps it alive.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for HostRef {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Ok(crate::python::intern_host(obj.to_owned().unbind()))
-    }
-}
-
-/// Callers compare by identity; a missing entry raises.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for MediaRef {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        (&self).into_pyobject(py)
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &MediaRef {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        let owned = self.belongs_to(crate::python::media().registry());
-        Ok(resolve_owned(py, self.id(), owned)?.into_bound(py))
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for MediaRef {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Ok(crate::python::intern_media(obj.to_owned().unbind()))
-    }
-}
-
-/// The host object `id` names, provided its handle was issued by this runtime's registry.
-#[cfg(feature = "python")]
-fn resolve_owned(
-    py: pyo3::Python<'_>,
-    id: u64,
-    owned: bool,
-) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-    if !owned {
-        return Err(crate::python::HostException::to_py_err(&StaleHostRef { id }));
-    }
-    crate::python::resolve_key(py, id)
 }
 
 #[cfg(test)]
