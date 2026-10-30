@@ -52,7 +52,7 @@ class RealtimeOptions:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class NativeRealtimeConfig:
+class OpenAIRealtimeConfig:
     api_key: str | None
     base_url: str
     conn_options: APIConnectOptions

@@ -135,7 +135,7 @@ impl generated::Implementations for Selected {
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
-    type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime;
+    type OpenAIRealtimeModel = lk_agents_runtime::inference::realtime::openai::OpenAIRealtime;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
     type HostRealtimeModel = lk_agents_runtime::inference::realtime::host::HostRealtimeModel;
     type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient;
@@ -170,8 +170,7 @@ impl generated::Implementations for Selected {
     type JoinTokens = lk_agents_runtime::net::token::JoinTokens;
     type InferenceModels = lk_agents_runtime::inference::models::Models;
     type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;
-    type SessionReportProjection =
-        lk_agents_runtime::cores::ReportProjection;
+    type SessionReportProjection = lk_agents_runtime::cores::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
     type EventRetention = lk_agents_runtime::net::session_report::EventRetention;
     type PreparedTranscript = lk_agents_runtime::net::session_report::TranscriptBuilder;

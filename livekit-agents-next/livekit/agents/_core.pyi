@@ -117,7 +117,7 @@ from ._generated._core_llm import (
     InferenceLlmChunks as InferenceLlmChunks,
     LlmChoiceParser as LlmChoiceParser,
     McpSession as McpSession,
-    NativeRealtimeModel as NativeRealtimeModel,
+    OpenAIRealtimeModel as OpenAIRealtimeModel,
     RealtimeFallbackModel as RealtimeFallbackModel,
     TtsTokenLog as TtsTokenLog,
     _core_mcp_timeout_check as _core_mcp_timeout_check,

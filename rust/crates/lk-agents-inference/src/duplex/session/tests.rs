@@ -131,7 +131,7 @@ async fn duplex_command_outcome_wakes_a_reader_parked_without_host_output() {
 #[tokio::test]
 async fn duplex_command_backlog_preserves_a_terminal_overload_outcome() {
     let session = session(None, Arc::new(VirtualClock::new())).await;
-    let capacity = crate::realtime::native::queue::EVENT_BACKLOG;
+    let capacity = crate::realtime::openai::queue::EVENT_BACKLOG;
     for index in 0..capacity + 2 {
         session.send(reply(&format!("request_{index}")));
     }

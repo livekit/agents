@@ -1,4 +1,4 @@
-//! The ABI-declared native realtime facade. Provider defaults and option resolution stay here.
+//! The ABI-declared OpenAI-protocol realtime facade. Provider defaults and option resolution stay here.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,13 +6,13 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime::{
-    NativeRealtimeConfig, RealtimeConfigurationError, RealtimeJsonOption, RealtimeOptions,
-    NativeRealtimeModel,
+    OpenAIRealtimeConfig, OpenAIRealtimeModel, RealtimeConfigurationError, RealtimeJsonOption,
+    RealtimeOptions,
 };
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
 
-use super::session::{Auth, Connect, NativeRealtime};
+use super::session::{Auth, Connect, OpenAIRealtime};
 use super::wire::Azure;
 use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
@@ -53,12 +53,12 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl NativeRealtimeModel for NativeRealtime {
+impl OpenAIRealtimeModel for OpenAIRealtime {
     type Env = ProcessEnv;
 
     fn new(
         env: &ProcessEnv,
-        config: NativeRealtimeConfig,
+        config: OpenAIRealtimeConfig,
     ) -> Result<Self, RealtimeConfigurationError> {
         let dialect = match config.dialect {
             Some(name) => name.parse().map_err(|e: crate::realtime::dialect::UnknownDialect| {
@@ -132,7 +132,7 @@ impl NativeRealtimeModel for NativeRealtime {
         };
         let runtime =
             (env.runtime)().map_err(|error| ApiError::new(error).with_retryable(false))?;
-        let mut native = NativeRealtime::new(
+        let mut native = OpenAIRealtime::new(
             dialect,
             "",
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),

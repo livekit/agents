@@ -1,6 +1,6 @@
 //! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
 
-use crate::realtime::native::queue::{self, Delivery, EventReceiver};
+use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};

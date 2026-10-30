@@ -759,7 +759,7 @@ pub fn audio_frame(pcm: Vec<u8>) -> lk_agents_abi::AudioFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::realtime::native::testfix::{TIME, msg};
+    use crate::realtime::openai::testfix::{TIME, msg};
     use crate::testkit::NoImages;
 
     #[test]

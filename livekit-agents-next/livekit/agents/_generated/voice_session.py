@@ -22,7 +22,7 @@ if TYPE_CHECKING:
         DuplexRealtimeModel,
         HostRealtimeModel,
         InterruptionDetector,
-        NativeRealtimeModel,
+        OpenAIRealtimeModel,
         RealtimeFallbackModel,
         VoiceAgent,
         _core_VoiceStore,
@@ -99,7 +99,7 @@ class VoiceSessionArgs:
     stt: STT | None = None
     vad: VAD | None = None
     llm: LLM | None = None
-    realtime: DuplexRealtimeModel | HostRealtimeModel | NativeRealtimeModel | RealtimeFallbackModel | None = None
+    realtime: DuplexRealtimeModel | HostRealtimeModel | OpenAIRealtimeModel | RealtimeFallbackModel | None = None
     tts: TTS | None = None
     on_event: VoiceSession | None = None
     """Receives each session event, on the calling loop."""

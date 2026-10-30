@@ -4,7 +4,7 @@ use super::testfix::{RealtimeMachine, Step};
 use super::wire;
 use crate::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, XAI};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
-use crate::realtime::native::testfix::{machine, msg};
+use crate::realtime::openai::testfix::{machine, msg};
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::llm::realtime::*;
 use lk_agents_abi::llm::realtime::{
@@ -744,7 +744,7 @@ fn the_session_carries_every_option_as_the_reference_sends_it() {
         OPENAI,
         opts,
         caps,
-        Arc::new(crate::realtime::native::wire::SeqIds::default()),
+        Arc::new(crate::realtime::openai::wire::SeqIds::default()),
         Arc::new(crate::testkit::NoImages),
     );
     let s = &m.open(at(0)).frames[0]["session"];

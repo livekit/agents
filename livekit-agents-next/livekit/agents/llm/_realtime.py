@@ -1,6 +1,6 @@
 """The OpenAI Realtime API, and every provider speaking it (Azure OpenAI, xAI, LiveKit Inference).
 
-The model is the core's (``_core.NativeRealtimeModel``): the socket, the session options, the
+The model is the core's (``_core.OpenAIRealtimeModel``): the socket, the session options, the
 reconnects and the conversation mirror are Rust, and a ``VoiceSession`` drives it directly. This
 class keeps the plugin's constructor and hands its arguments over as given.
 """
@@ -11,7 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
-from .._generated.realtime_options import NativeRealtimeConfig
+from .._generated.realtime_options import OpenAIRealtimeConfig
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from . import realtime as llm_realtime
@@ -123,8 +123,8 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             if type(self) is RealtimeModel
             else f"{type(self).__module__}.{type(self).__name__}"
         )
-        self._native = _core.NativeRealtimeModel(
-            NativeRealtimeConfig(
+        self._native = _core.OpenAIRealtimeModel(
+            OpenAIRealtimeConfig(
                 dialect=self._dialect,
                 api_key=api_key,
                 base_url=(base_url if is_given(base_url) else "")
@@ -277,7 +277,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
         )
 
-    def _core_native(self) -> _core.NativeRealtimeModel:
+    def _core_native(self) -> _core.OpenAIRealtimeModel:
         """The model as a ``VoiceSession`` drives it."""
         return self._native
 

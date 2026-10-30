@@ -108,10 +108,10 @@ appropriate transport phases. Call `get(conn_options=...)` or use
 context manager returns a healthy connection to the pool and retires it on
 failure. `await pool.aclose()` releases the pool's connections.
 
-## Native realtime context updates
+## Realtime context updates over the OpenAI protocol
 
-Native realtime sessions retain superseded conversation snapshots until admitted cleanup
-workers release them. Preparation pauses when cleanup needs capacity. Interruption, close,
+Realtime sessions over the OpenAI realtime protocol (OpenAI, Azure, xAI and LiveKit Inference)
+retain superseded conversation snapshots until admitted cleanup workers release them. Preparation pauses when cleanup needs capacity. Interruption, close,
 incoming protocol events and already written response deadlines continue to run.
 
 Additional `update_chat_ctx()` calls can exhaust the retained-context limit while cleanup

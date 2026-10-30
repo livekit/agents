@@ -1,4 +1,4 @@
-"""OpenAI options over the shared native realtime protocol."""
+"""OpenAI options over the shared OpenAI realtime protocol."""
 
 from livekit.agents.llm._realtime import (
     DEFAULT_VOICE as DEFAULT_VOICE,

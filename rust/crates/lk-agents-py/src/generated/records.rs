@@ -2969,35 +2969,35 @@ pub mod realtime_options {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
-    static NATIVE_REALTIME_CONFIG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static OPEN_AI_REALTIME_CONFIG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn native_realtime_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::NativeRealtimeConfig> {
+    pub fn open_ai_realtime_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig> {
         let py = obj.py();
-            if !obj.is_instance(NATIVE_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "NativeRealtimeConfig")?)? {
-                return Err(super::not_a(obj, "NativeRealtimeConfig"));
+            if !obj.is_instance(OPEN_AI_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "OpenAIRealtimeConfig")?)? {
+                return Err(super::not_a(obj, "OpenAIRealtimeConfig"));
             }
-            Ok(::lk_agents_abi::llm::realtime::NativeRealtimeConfig {
-                api_key: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "api_key", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                base_url: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "base_url", |v| v.extract::<::std::string::String>())?,
-                conn_options: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
-                options: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "options", |v| crate::generated::records::realtime_options::realtime_options_from_py(v))?,
-                dialect: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "dialect", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                model: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "model", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                voice: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "voice", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                modalities: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "modalities", |v| if v.is_none() { Ok(None) } else { (v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
-                azure_deployment: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "azure_deployment", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                entra_token: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "entra_token", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                azure_defaults: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "azure_defaults", |v| v.extract::<bool>())?,
-                api_secret: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "api_secret", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                inference_provider: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "inference_provider", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                inference_class: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "inference_class", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                label: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "label", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+            Ok(::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig {
+                api_key: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "api_key", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                base_url: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "base_url", |v| v.extract::<::std::string::String>())?,
+                conn_options: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
+                options: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "options", |v| crate::generated::records::realtime_options::realtime_options_from_py(v))?,
+                dialect: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "dialect", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                model: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "model", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                voice: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "voice", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                modalities: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "modalities", |v| if v.is_none() { Ok(None) } else { (v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                azure_deployment: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "azure_deployment", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                entra_token: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "entra_token", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                azure_defaults: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "azure_defaults", |v| v.extract::<bool>())?,
+                api_secret: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "api_secret", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                inference_provider: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "inference_provider", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                inference_class: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "inference_class", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                label: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "label", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
             })
     }
 
-    pub fn native_realtime_config_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::NativeRealtimeConfig) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime::NativeRealtimeConfig { api_key, base_url, conn_options, options, dialect, model, voice, modalities, azure_deployment, entra_token, azure_defaults, api_secret, inference_provider, inference_class, label } = value;
+    pub fn open_ai_realtime_config_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig { api_key, base_url, conn_options, options, dialect, model, voice, modalities, azure_deployment, entra_token, azure_defaults, api_secret, inference_provider, inference_class, label } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("api_key", match api_key { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("base_url", ::pyo3::IntoPyObjectExt::into_bound_py_any(base_url, py)?)?;
@@ -3014,7 +3014,7 @@ pub mod realtime_options {
             kwargs.set_item("inference_provider", match inference_provider { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("inference_class", match inference_class { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("label", match label { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            crate::host::construct(NATIVE_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "NativeRealtimeConfig")?.as_any(), (), Some(&kwargs))
+            crate::host::construct(OPEN_AI_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "OpenAIRealtimeConfig")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -6196,7 +6196,7 @@ pub mod voice_session {
                 stt: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "stt", |v| if v.is_none() { Ok(None) } else { (crate::generated::stt::SttProxy::from_host(&v)).map(Some) })?,
                 vad: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "vad", |v| if v.is_none() { Ok(None) } else { (crate::generated::vad::VadProxy::from_host(&v)).map(Some) })?,
                 llm: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "llm", |v| if v.is_none() { Ok(None) } else { (crate::generated::llm::LlmProxy::from_host(&v)).map(Some) })?,
-                realtime: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "realtime", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Realtime>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.realtime", ": expected NativeRealtimeModel")))).map(Some) })?,
+                realtime: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "realtime", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Realtime>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.realtime", ": expected OpenAIRealtimeModel")))).map(Some) })?,
                 tts: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "tts", |v| if v.is_none() { Ok(None) } else { (crate::generated::tts::TtsProxy::from_host(&v)).map(Some) })?,
                 on_event: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "on_event", |v| if v.is_none() { Ok(None) } else { (crate::generated::voice::SessionEventsProxy::from_host(&v)).map(Some) })?,
                 hooks: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "hooks", |v| if v.is_none() { Ok(None) } else { (crate::generated::voice::SessionHooksProxy::from_host(&v)).map(Some) })?,

@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, mpsc};
 use crate::headers::BoundIdentity;
 use crate::realtime::dialect::{Dialect, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
-use crate::realtime::native::wire::{self, Azure, IdGen, RandomIds, WireShape};
+use crate::realtime::openai::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
 use lk_agents_net::env::MediaPoolSource;
 
@@ -98,7 +98,7 @@ impl Connect {
 }
 
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
-pub struct NativeRealtime {
+pub struct OpenAIRealtime {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.
     opts: std::sync::Mutex<SessionOptions>,
@@ -118,7 +118,7 @@ pub struct NativeRealtime {
     sessions: std::sync::Mutex<Vec<Weak<super::queue::Ingress>>>,
 }
 
-impl NativeRealtime {
+impl OpenAIRealtime {
     pub fn new(
         dialect: Dialect,
         api_key: impl Into<String>,
@@ -130,7 +130,7 @@ impl NativeRealtime {
     ) -> Self {
         let opts = SessionOptions::from_dialect(&dialect, false);
         let connect = Connect::openai(api_key, dialect.default_base_url);
-        NativeRealtime {
+        OpenAIRealtime {
             dialect,
             opts: std::sync::Mutex::new(opts),
             connect: Arc::new(connect),
@@ -226,7 +226,7 @@ pub(crate) enum Cmd {
     Close,
 }
 
-impl NativeRealtime {
+impl OpenAIRealtime {
     /// `provider`: `urlparse(base_url).netloc`.
     pub fn provider(&self) -> String {
         let url = &self.connect.base_url;
@@ -268,7 +268,7 @@ impl NativeRealtime {
 
     /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
     /// model stays reusable.
-    pub async fn session(&self, turn_detection_disabled: bool) -> NativeRealtimeSession {
+    pub async fn session(&self, turn_detection_disabled: bool) -> OpenAIRealtimeSession {
         let mut opts = self.options().clone();
         if turn_detection_disabled && self.dialect.supports_turn_detection_disabled {
             opts.turn_detection = None;
@@ -328,7 +328,7 @@ impl NativeRealtime {
         };
         let pump = self.spawner.spawn(pump.run(cmd_rx));
 
-        NativeRealtimeSession {
+        OpenAIRealtimeSession {
             shared,
             commands,
             events: Mutex::new(ev_rx),
@@ -380,9 +380,9 @@ impl Shared {
     }
 }
 
-/// A live session. Cheap to clone the way the swapper needs (`Arc<NativeRealtimeSession>`), and every
+/// A live session. Cheap to clone the way the swapper needs (`Arc<OpenAIRealtimeSession>`), and every
 /// mutating method takes `&self`.
-pub struct NativeRealtimeSession {
+pub struct OpenAIRealtimeSession {
     shared: Arc<Shared>,
     commands: Arc<super::queue::Ingress>,
     /// One consumer is the contract.
@@ -393,7 +393,7 @@ pub struct NativeRealtimeSession {
     ids: Arc<dyn IdGen>,
 }
 
-impl NativeRealtimeSession {
+impl OpenAIRealtimeSession {
     pub fn capabilities(&self) -> RealtimeCapabilities {
         *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -873,13 +873,13 @@ enum Outcome {
 // The `lk-agents-abi` seam
 // =============================================================================================
 
-impl lk_agents_abi::Realtime for NativeRealtime {
+impl lk_agents_abi::Realtime for OpenAIRealtime {
     fn label(&self) -> String {
-        NativeRealtime::label(self)
+        OpenAIRealtime::label(self)
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {
-        NativeRealtime::capabilities(self)
+        OpenAIRealtime::capabilities(self)
     }
 
     fn session(
@@ -891,31 +891,31 @@ impl lk_agents_abi::Realtime for NativeRealtime {
     > {
         Box::pin(async move {
             // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
-            Ok(Arc::new(NativeRealtime::session(self, turn_detection_disabled).await)
+            Ok(Arc::new(OpenAIRealtime::session(self, turn_detection_disabled).await)
                 as Arc<dyn lk_agents_abi::RealtimeSession>)
         })
     }
 }
 
-impl lk_agents_abi::RealtimeSession for NativeRealtimeSession {
+impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
     fn capabilities(&self) -> RealtimeCapabilities {
-        NativeRealtimeSession::capabilities(self)
+        OpenAIRealtimeSession::capabilities(self)
     }
 
     fn send(&self, cmd: lk_agents_abi::RealtimeCommand) {
-        NativeRealtimeSession::send(self, cmd);
+        OpenAIRealtimeSession::send(self, cmd);
     }
 
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
-        Box::pin(async move { NativeRealtimeSession::next_event(self).await })
+        Box::pin(async move { OpenAIRealtimeSession::next_event(self).await })
     }
 
     fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, ChatContext> {
-        Box::pin(async move { NativeRealtimeSession::chat_ctx(self).await })
+        Box::pin(async move { OpenAIRealtimeSession::chat_ctx(self).await })
     }
 
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(async move { NativeRealtimeSession::aclose(self).await })
+        Box::pin(async move { OpenAIRealtimeSession::aclose(self).await })
     }
 }
 

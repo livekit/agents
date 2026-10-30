@@ -534,7 +534,7 @@ async def native_realtime() -> None:
     session.on("session_usage_updated", lambda ev: usage.append(ev.usage.model_usage))
     await session.start(Agent(instructions="You are realtime.", name="native"), room=None)
     handle = session.generate_reply(instructions="greet the user")
-    await until(handle.done, "the native realtime reply did not finish")
+    await until(handle.done, "the OpenAI-protocol realtime reply did not finish")
     assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
     await session.aclose()
     await runner.cleanup()
@@ -1368,7 +1368,7 @@ async def main() -> int:
     print("== realtime fallback")
     await realtime_fallback()
 
-    print("== native realtime")
+    print("== OpenAI-protocol realtime")
     await native_realtime()
 
     await console()

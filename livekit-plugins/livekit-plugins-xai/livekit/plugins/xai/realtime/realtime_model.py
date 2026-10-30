@@ -1,4 +1,4 @@
-"""xAI options over the shared native realtime protocol and request lifecycle."""
+"""xAI options over the shared OpenAI realtime protocol and request lifecycle."""
 
 from __future__ import annotations
 

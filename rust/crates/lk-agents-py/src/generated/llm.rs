@@ -931,47 +931,47 @@ impl HostRealtimeModel {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
-type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
+type OpenAIRealtimeModelImpl = <crate::Selected as super::Implementations>::OpenAIRealtimeModel;
 
-#[pyclass(frozen, name = "NativeRealtimeModel", module = "livekit.agents._core")]
-pub struct NativeRealtimeModel(pub(crate) ::std::sync::Arc<NativeRealtimeModelImpl>);
+#[pyclass(frozen, name = "OpenAIRealtimeModel", module = "livekit.agents._core")]
+pub struct OpenAIRealtimeModel(pub(crate) ::std::sync::Arc<OpenAIRealtimeModelImpl>);
 
 #[pymethods]
-impl NativeRealtimeModel {
+impl OpenAIRealtimeModel {
     #[new]
     #[pyo3(signature = (config))]
-    fn new(config: Bound<'_, PyAny>) -> PyResult<NativeRealtimeModel> {
+    fn new(config: Bound<'_, PyAny>) -> PyResult<OpenAIRealtimeModel> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let config = crate::generated::records::realtime_options::native_realtime_config_from_py(&config)?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(NativeRealtimeModel(::std::sync::Arc::new(out)))
+        let config = crate::generated::records::realtime_options::open_ai_realtime_config_from_py(&config)?;
+        let out = <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(OpenAIRealtimeModel(::std::sync::Arc::new(out)))
     }
 
     #[getter]
     fn provider(&self) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::provider(&self.0);
+        let out = <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::provider(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn model(&self) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::model(&self.0);
+        let out = <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::model(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn label(&self) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::label(&self.0);
+        let out = <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::label(&self.0);
         Ok(out)
     }
 
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::capabilities(&self.0);
+        let out = <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::capabilities(&self.0);
         Ok(out)
     }
 
@@ -979,14 +979,14 @@ impl NativeRealtimeModel {
     fn update_options(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let options = crate::generated::records::realtime_options::realtime_options_from_py(&options)?;
-        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::update_options(&self.0, options);
+        <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::update_options(&self.0, options);
         Ok(())
     }
 
     #[pyo3(signature = (headers))]
     fn bind_identification(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::bind_identification(&self.0, headers);
+        <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::bind_identification(&self.0, headers);
         Ok(())
     }
 }
@@ -996,7 +996,7 @@ impl NativeRealtimeModel {
     ::lk_agents_abi::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
         read: |obj| {
-            let this = obj.cast::<NativeRealtimeModel>().ok()?;
+            let this = obj.cast::<OpenAIRealtimeModel>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },

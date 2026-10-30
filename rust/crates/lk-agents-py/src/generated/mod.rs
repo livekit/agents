@@ -67,7 +67,7 @@ pub trait Implementations: 'static {
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
-    type NativeRealtimeModel: ::lk_agents_abi::llm::realtime::NativeRealtimeModel;
+    type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime::RealtimeFallbackModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
     type FrameReaderInstall: ::lk_agents_abi::media::images::FrameReaderInstall;
@@ -256,7 +256,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::parse_function_arguments, m)?)?;
     m.add_function(wrap_pyfunction!(llm::inject_confirm_duplicate, m)?)?;
     m.add_class::<llm::HostRealtimeModel>()?;
-    m.add_class::<llm::NativeRealtimeModel>()?;
+    m.add_class::<llm::OpenAIRealtimeModel>()?;
     m.add_class::<llm::RealtimeFallbackModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
     m.add_function(wrap_pyfunction!(media::_core_install_frame_reader, m)?)?;

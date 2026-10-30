@@ -324,8 +324,7 @@ pub struct TokenUsage {
 /// A host session reports one event at a time, the reference's stream of streams flattened by the
 /// generated `RealtimeSession._core_drain`. The native variants are not on that wire.
 #[crate::host(record(module = "realtime_wire", extract, transparent))]
-#[derive(Debug, Clone, PartialEq)]
-#[derive(lk_agents_host_derive::Vocabulary)]
+#[derive(Debug, Clone, PartialEq, lk_agents_host_derive::Vocabulary)]
 pub enum Event {
     /// Server-side VAD; also what drives interruption.
     InputSpeechStarted(InputSpeechStarted),
@@ -400,7 +399,7 @@ impl Event {
 
 /// A session is a socket that outlives every turn, so the driver opens one per agent frame.
 /// `async fn session` because the reference's session starts running in its constructor.
-#[crate::host(native(refused = "expected NativeRealtimeModel"))]
+#[crate::host(native(refused = "expected OpenAIRealtimeModel"))]
 pub trait Realtime: Send + Sync + 'static {
     /// The host model's identity; `None` for a native model.
     fn instance_id(&self) -> Option<usize> {
@@ -442,8 +441,7 @@ pub trait RealtimeSession: Send + Sync {
 /// (`HostRealtimeSession::send`) and the reply requests; the leg answers the native ones itself or
 /// through the session's update calls.
 #[crate::host(record(module = "realtime_wire", emit, transparent))]
-#[derive(Debug, Clone)]
-#[derive(lk_agents_host_derive::Vocabulary)]
+#[derive(Debug, Clone, lk_agents_host_derive::Vocabulary)]
 #[vocabulary(kind = RealtimeCommandKind)]
 pub enum RealtimeCommand {
     /// The handoff's three: a new agent's frame goes over the same socket, keeping the mirror.
@@ -669,7 +667,10 @@ pub trait HostRealtimeSession: Send + Sync {
 
     /// One item appended to the plugin's chat context.
     #[host(await, name = "_core_push_item")]
-    fn push_item(&self, item: ChatItem) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+    fn push_item(
+        &self,
+        item: ChatItem,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
     /// The tools the session offers, by name: the host owns the `FunctionTool` objects.
     #[host(await, name = "_core_update_tools")]
@@ -738,7 +739,8 @@ impl crate::python::FromHostErr for RealtimeError {
     }
 }
 
-// Native realtime clients and their presence-aware option boundary.
+// The OpenAI-protocol realtime client (OpenAI/Azure, xAI, LiveKit Inference) and its
+// presence-aware option boundary.
 
 /// A supplied JSON option, including explicit null. An absent wrapper means omitted.
 #[crate::host(record(module = "realtime_options", extract, emit))]
@@ -789,7 +791,7 @@ pub struct RealtimeOptions {
 
 #[crate::host(record(module = "realtime_options", extract, emit))]
 #[derive(Debug, Clone)]
-pub struct NativeRealtimeConfig {
+pub struct OpenAIRealtimeConfig {
     pub api_key: Option<String>,
     pub base_url: String,
     pub conn_options: ApiConnectOptions,
@@ -831,8 +833,8 @@ pub enum RealtimeConfigurationError {
     Host(#[from] HostError),
 }
 
-#[crate::host(class(name = "NativeRealtimeModel", native = Realtime))]
-pub trait NativeRealtimeModel: Send + Sync + Sized + 'static {
+#[crate::host(class(name = "OpenAIRealtimeModel", native = Realtime))]
+pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -840,7 +842,7 @@ pub trait NativeRealtimeModel: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        config: NativeRealtimeConfig,
+        config: OpenAIRealtimeConfig,
     ) -> Result<Self, RealtimeConfigurationError>;
     #[host(getter)]
     fn provider(&self) -> String;

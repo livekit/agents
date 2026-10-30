@@ -21,7 +21,7 @@ from .._core import TtsStream
 from .chat_items import ChatItem, ChatRole
 from .llm import ChatChunk, SerializedImage
 from .mcp import MCPToolOptions, ResolvedToolOptions
-from .realtime_options import NativeRealtimeConfig, RealtimeOptions
+from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
 
 def chat_ctx_copy_plan(
     facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
@@ -355,8 +355,8 @@ class HostRealtimeModel:
     """
     def __init__(self, model: RealtimeModel) -> None: ...
 
-class NativeRealtimeModel:
-    def __init__(self, config: NativeRealtimeConfig) -> None: ...
+class OpenAIRealtimeModel:
+    def __init__(self, config: OpenAIRealtimeConfig) -> None: ...
     @property
     def provider(self) -> str: ...
     @property

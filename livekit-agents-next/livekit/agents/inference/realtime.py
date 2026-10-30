@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
-from .._generated.realtime_options import NativeRealtimeConfig
+from .._generated.realtime_options import OpenAIRealtimeConfig
 from ..llm import realtime as llm_realtime
 from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession
 from ..llm._realtime_options import realtime_options
@@ -55,8 +55,8 @@ class RealtimeModel(_RealtimeModel):
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
         api_key, api_secret = resolve_credentials(api_key, api_secret)
         self._inference_class = inference_class
-        self._native = _core.NativeRealtimeModel(
-            NativeRealtimeConfig(
+        self._native = _core.OpenAIRealtimeModel(
+            OpenAIRealtimeConfig(
                 dialect="inference",
                 api_key=api_key,
                 api_secret=api_secret,
@@ -92,7 +92,7 @@ class RealtimeModel(_RealtimeModel):
     def provider(self) -> str:
         return "livekit"
 
-    def _core_native(self) -> _core.NativeRealtimeModel:
+    def _core_native(self) -> _core.OpenAIRealtimeModel:
         """The model, identified as the current job's, as a ``VoiceSession`` drives it."""
         headers = get_inference_headers(inference_class=self._inference_class)
         self._native.bind_identification(list(headers.items()))

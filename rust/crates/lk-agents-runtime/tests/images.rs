@@ -71,7 +71,7 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
         std::time::SystemTime::UNIX_EPOCH,
     ));
     assert!(
-        lk_agents_runtime::inference::realtime::native::wire::to_wire_item(
+        lk_agents_runtime::inference::realtime::openai::wire::to_wire_item(
             &item,
             &lk_agents_media::images::Images::default()
         )
