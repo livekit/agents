@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NotRequired
+from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
@@ -34,18 +34,18 @@ class ResolvedToolOptions(TypedDict):
     """The tool's `retries=`; `None` reads the run's tool budget."""
 
 
-class MCPToolOptions(TypedDict):
+class MCPToolOptions(TypedDict, total=False):
     """Per-tool behavior for MCP tools exposed by an MCPToolset."""
 
-    flags: NotRequired[ToolFlag]
+    flags: ToolFlag
     """Flags passed to the @function_tool decorator, using ToolFlag."""
-    on_duplicate: NotRequired[DuplicateMode]
+    on_duplicate: DuplicateMode
     """Behavior when a tool is called multiple times in the same context."""
-    duplicate_scope: NotRequired[DuplicateScope]
+    duplicate_scope: DuplicateScope
     """What counts as a duplicate, e.g. ``"name_and_args"`` to compare arguments too."""
-    report_progress: NotRequired[bool]
+    report_progress: bool
     """Whether to forward the tool's progress notifications to ctx.update()."""
-    retries: NotRequired[int]
+    retries: int
     """The tool's retry budget, in place of the agent's ``retries['tools']``."""
 
 

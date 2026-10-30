@@ -51,19 +51,19 @@ class SessionKwargs(TypedDict):
     conn_options: SessionConnectOptions
 
 
-class UpdateKwargs(TypedDict):
+class UpdateKwargs(TypedDict, total=False):
     """`AgentSession.update_options(..)`'s option surface."""
 
-    endpointing_opts: NotRequired[EndpointingOptions]
-    turn_detection: NotRequired[TurnDetectionMode | None]
+    endpointing_opts: EndpointingOptions
+    turn_detection: TurnDetectionMode | None
     """`None` reverts to automatic selection (`Auto`)."""
-    expressive: NotRequired[bool | ExpressiveOptions | None]
-    keyterms: NotRequired[list[str]]
+    expressive: bool | ExpressiveOptions | None
+    keyterms: list[str]
     """The user-defined keyterms, replaced; the detected ones stay."""
-    interruption: NotRequired[InterruptionOptions]
+    interruption: InterruptionOptions
     """Merged over the session's interruption handling; its `mode` is set at construction."""
-    min_consecutive_speech_delay: NotRequired[float]
-    tts_text_transforms: NotRequired[Sequence[TextTransforms] | None]
+    min_consecutive_speech_delay: float
+    tts_text_transforms: Sequence[TextTransforms] | None
 
 
 class SessionLegs(TypedDict):
@@ -121,13 +121,13 @@ class ResolvedUserTurnLimit(TypedDict):
     max_duration: float | None
 
 
-class EndpointingOverrides(TypedDict):
+class EndpointingOverrides(TypedDict, total=False):
     """The session layer's sparse endpointing (`AgentSessionOptions.endpointing_overrides`)."""
 
-    mode: NotRequired[str]
-    min_delay: NotRequired[float]
-    max_delay: NotRequired[float]
-    alpha: NotRequired[float]
+    mode: str
+    min_delay: float
+    max_delay: float
+    alpha: float
 
 
 class ResolvedSessionOptions(TypedDict):

@@ -110,7 +110,8 @@ impl Markup {
 
     /// The instructions teaching the LLM this voice's markup, `None` without markup.
     #[pyo3(signature = (*, speech_steering = None))]
-    fn llm_instructions(&self, py: Python<'_>, speech_steering: ::std::option::Option<::lk_agents_abi::tts::markup::SpeechSteering>) -> PyResult<::std::option::Option<::std::string::String>> {
+    fn llm_instructions(&self, py: Python<'_>, speech_steering: Option<Bound<'_, PyAny>>) -> PyResult<::std::option::Option<::std::string::String>> {
+        let speech_steering = speech_steering.map(|v| crate::generated::records::expressive::speech_steering_options_from_py(&v)).transpose()?;
         let out = py.detach(|| <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::llm_instructions(&self.0, speech_steering));
         Ok(out)
     }

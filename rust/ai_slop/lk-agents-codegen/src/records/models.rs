@@ -508,27 +508,42 @@ fn model(
     match &r.body {
         RecordBody::Struct(fields) if r.typed_dict => {
             runtime.add("typing_extensions", "TypedDict");
-            let mut s = format!("\n\nclass {}(TypedDict):\n", r.name);
+            // The annotations are strings (`from __future__ import annotations`), which hide a
+            // `NotRequired` from the class's runtime `__required_keys__`: a dict whose every key is
+            // optional says so with `total=False` instead.
+            let omittable = |f: &crate::decl::Field| {
+                f.annotation.is_none() && (matches!(f.ty, Ty::Maybe(_)) || f.default.is_some())
+            };
+            let total = !fields.iter().all(omittable);
+            let mut s = if total {
+                format!("\n\nclass {}(TypedDict):\n", r.name)
+            } else {
+                format!("\n\nclass {}(TypedDict, total=False):\n", r.name)
+            };
             s.push_str(&docstring(&r.doc, "    "));
             if !r.doc.is_empty() {
                 s.push('\n');
             }
             for f in fields {
-                let ann = match &f.ty {
-                    _ if let Some(text) = &f.annotation => typing.annotation(text, &r.rust),
-                    Ty::Maybe(inner) => {
-                        runtime.add("typing", "NotRequired");
-                        format!("NotRequired[{}]", annotation(inner, module, own, out, false, typing))
-                    }
+                let inner = match &f.ty {
+                    _ if f.annotation.is_some() => None,
+                    Ty::Maybe(inner) => Some(&**inner),
                     Ty::Optional(inner) if f.default == Some(crate::decl::Literal::None) => {
+                        Some(&**inner)
+                    }
+                    ty if f.default.is_some() => Some(ty),
+                    _ => None,
+                };
+                let ann = match (&f.annotation, inner) {
+                    (Some(text), _) => typing.annotation(text, &r.rust),
+                    (None, Some(inner)) if !total => {
+                        annotation(inner, module, own, out, false, typing)
+                    }
+                    (None, Some(inner)) => {
                         runtime.add("typing", "NotRequired");
                         format!("NotRequired[{}]", annotation(inner, module, own, out, false, typing))
                     }
-                    ty if f.default.is_some() => {
-                        runtime.add("typing", "NotRequired");
-                        format!("NotRequired[{}]", annotation(ty, module, own, out, false, typing))
-                    }
-                    ty => annotation(ty, module, own, out, false, typing),
+                    (None, None) => annotation(&f.ty, module, own, out, false, typing),
                 };
                 s.push_str(&format!("    {}: {ann}\n", f.host_name()));
                 s.push_str(&docstring(&f.doc, "    "));

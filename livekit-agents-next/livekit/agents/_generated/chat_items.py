@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Annotated, Literal, NotRequired, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, JsonValue, PrivateAttr
 from typing_extensions import TypedDict
@@ -88,54 +88,54 @@ class AudioContent(BaseModel):
 ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
-class MetricsMetadata(TypedDict):
-    model_name: NotRequired[str]
-    model_provider: NotRequired[str]
+class MetricsMetadata(TypedDict, total=False):
+    model_name: str
+    model_provider: str
 
 
-class MetricsReport(TypedDict):
-    started_speaking_at: NotRequired[float]
-    stopped_speaking_at: NotRequired[float]
-    transcription_delay: NotRequired[float]
+class MetricsReport(TypedDict, total=False):
+    started_speaking_at: float
+    stopped_speaking_at: float
+    transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech
 
     User `ChatMessage` only
     """
-    end_of_turn_delay: NotRequired[float]
+    end_of_turn_delay: float
     """Amount of time between the end of speech and the decision to end the user's turn
 
     User `ChatMessage` only
     """
-    on_user_turn_completed_delay: NotRequired[float]
+    on_user_turn_completed_delay: float
     """Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
 
     User `ChatMessage` only
     """
-    llm_node_ttft: NotRequired[float]
+    llm_node_ttft: float
     """Time taken for the `llm_node` to return the first token
 
     Assistant `ChatMessage` only
     """
-    llm_node_tps: NotRequired[float]
+    llm_node_tps: float
     """LLM output tokens per second for this turn, measured at the `llm_node` over the
     streaming window (first to last text chunk). Absent for a reply that arrived in a
     single chunk, which has no measurable rate
 
     Assistant `ChatMessage` only
     """
-    llm_node_ttfs: NotRequired[float]
+    llm_node_ttfs: float
     """Time from LLM generation start until the first sentence reached the TTS provider, as
     segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
     an interruption before the first frame, or a `tts_node` synthesizing audio on its own
 
     Assistant `ChatMessage` only
     """
-    tts_node_ttfb: NotRequired[float]
+    tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
 
     Assistant `ChatMessage` only
     """
-    playback_latency: NotRequired[float]
+    playback_latency: float
     """Delay between forwarding the first audio frame and the `AudioOutput` reporting
     playback started. Near-zero for the default room output (self-reported when the frame
     is pushed to the track, so it doesn't account for network delivery to the client);
@@ -144,20 +144,20 @@ class MetricsReport(TypedDict):
 
     Assistant `ChatMessage` only
     """
-    e2e_latency: NotRequired[float]
+    e2e_latency: float
     """Time from when the user finished speaking to when the agent began responding
 
     Assistant `ChatMessage` only
     """
-    provider_request_ids: NotRequired[list[str]]
+    provider_request_ids: list[str]
     """Provider-known request or response IDs associated with this turn.
 
     Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
     provider-side logs.
     """
-    llm_metadata: NotRequired[MetricsMetadata]
-    tts_metadata: NotRequired[MetricsMetadata]
-    stt_metadata: NotRequired[MetricsMetadata]
+    llm_metadata: MetricsMetadata
+    tts_metadata: MetricsMetadata
+    stt_metadata: MetricsMetadata
 
 
 class ChatMessage(BaseModel):

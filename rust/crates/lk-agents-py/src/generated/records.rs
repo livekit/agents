@@ -2010,6 +2010,71 @@ pub mod events {
     }
 }
 
+pub mod expressive {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+
+    pub fn nonverbal_sounds_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tts::markup::NonverbalSounds> {
+        if obj.is_instance_of::<::pyo3::types::PyBool>() {
+            return Ok(::lk_agents_abi::tts::markup::NonverbalSounds::Enabled(obj.extract::<bool>()?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::tts::markup::NonverbalSounds::Per(crate::generated::records::expressive::nonverbal_options_from_py(obj)?));
+        }
+        Err(super::not_a(obj, "NonverbalSounds"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+
+    pub fn nonverbal_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tts::markup::NonverbalOptions> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::tts::markup::NonverbalOptions {
+                laughing: match obj.get_item("laughing")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                breathing: match obj.get_item("breathing")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                sighing: match obj.get_item("sighing")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                crying: match obj.get_item("crying")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                vocalizing: match obj.get_item("vocalizing")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                mouth_sounds: match obj.get_item("mouth_sounds")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                reflex_sounds: match obj.get_item("reflex_sounds")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+
+    pub fn pace_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tts::markup::Pace> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "slow" => Ok(::lk_agents_abi::tts::markup::Pace::Slow),
+                "normal" => Ok(::lk_agents_abi::tts::markup::Pace::Normal),
+                "fast" => Ok(::lk_agents_abi::tts::markup::Pace::Fast),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("Pace: {other:?} is not one of 'slow', 'normal', 'fast'"))),
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+
+    pub fn speech_steering_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tts::markup::SpeechSteering> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::tts::markup::SpeechSteering {
+                disfluencies: match obj.get_item("disfluencies")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                nonverbal_sounds: match obj.get_item("nonverbal_sounds")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::expressive::nonverbal_sounds_from_py(v))?) }, _ => None },
+                pace: match obj.get_item("pace")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::expressive::pace_from_py(v))?) }, _ => None },
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn expressive_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::ExpressiveConfig> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::voice::session_options::ExpressiveConfig {
+                speech_steering: match obj.get_item("speech_steering")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::expressive::speech_steering_options_from_py(v))?) }, _ => None },
+                tts_instructions_template: match obj.get_item("tts_instructions_template")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::conversions::instructions_from_py(v))?) }, _ => None },
+                tts_instructions_append: match obj.get_item("tts_instructions_append")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
+            })
+    }
+}
+
 pub mod inference_stt {
     use pyo3::prelude::*;
 

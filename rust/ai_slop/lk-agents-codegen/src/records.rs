@@ -641,6 +641,12 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             {
                 ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".to_owned())
             }
+            // A `TypedDict` has no instances of its own: it is a plain dict.
+            Ty::Record(Record { rust: held, host: HostForm::Record { .. }, .. })
+                if decls.records.iter().any(|o| o.rust == *held && o.typed_dict) =>
+            {
+                ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".to_owned())
+            }
             Ty::Record(Record {
                 host: HostForm::Record { module, name } | HostForm::Model { module, name },
                 ..

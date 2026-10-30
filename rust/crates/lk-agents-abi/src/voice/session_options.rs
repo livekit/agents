@@ -4,7 +4,7 @@
 use crate::Maybe;
 use crate::Modality;
 use crate::tts::markup::SpeechSteering;
-use lk_agents_host_derive::{Host, Vocabulary};
+use lk_agents_host_derive::Vocabulary;
 use std::fmt;
 
 /// A public literal nobody recognises; `ValueError` carries the message verbatim.
@@ -660,6 +660,8 @@ pub trait InterruptionGateFunctions {
 // Declared in `telemetry::report`; re-exported so the generated `session_options` module resolves.
 pub use crate::telemetry::report::RecordingOptions;
 
+/// Instructions with optional per-modality additions; the host gives the common text.
+#[crate::host(handwritten(extract, host = "str", py))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Instructions {
     pub common: String,
@@ -704,20 +706,20 @@ impl Instructions {
 //
 // What the user wrote, sparse; `ExpressiveInputs` in `lk-agents-voice` is what resolving it
 // produced.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
+#[crate::host(record(
     module = "expressive",
+    name = "ExpressiveOptions",
     path = "livekit.agents.voice.agent_session",
-    name = "ExpressiveOptions"
-)]
+    typed_dict,
+    extract
+))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExpressiveConfig {
-    #[python(ty = "SpeechSteeringOptions")]
+    #[host(default = None)]
     pub speech_steering: Option<SpeechSteering>,
-    #[python(ty = "str")]
+    #[host(default = None)]
     pub tts_instructions_template: Option<Instructions>,
-    #[python(ty = "str")]
+    #[host(default = None)]
     pub tts_instructions_append: Option<String>,
 }
 

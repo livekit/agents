@@ -1,38 +1,18 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
-#     rust/crates/lk-agents-abi/src/voice/session_options.rs
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/tts/markup/steering.rs
+#     rust/crates/lk-agents-abi/src/voice/session_options.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from typing_extensions import TypedDict
-
-
-class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
-    or ``Agent(expressive=...)`` (the agent value overrides the session's).
-
-    Controls how TTS markup instructions are injected into the LLM when expressive is
-    enabled. All keys are optional; common shapes:
-
-    - ``{"speech_steering": {...}}`` — steer delivery and non-verbal sounds on top of
-      the provider-agnostic default instructions.
-    - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
-    - ``{"tts_instructions_append": "..."}`` — your own rules appended to the template.
-
-    Any explicit template overrides the default; unset parts fall back to the
-    provider-agnostic default.
-    """
-
-    speech_steering: SpeechSteeringOptions
-    tts_instructions_template: str
-    tts_instructions_append: str
 
 
 class NonverbalOptions(TypedDict, total=False):
@@ -60,6 +40,9 @@ class NonverbalOptions(TypedDict, total=False):
     """cough, clearing the throat, yawn"""
 
 
+Pace: TypeAlias = Literal["slow", "normal", "fast"]
+
+
 class SpeechSteeringOptions(TypedDict, total=False):
     """Steers verbal delivery and non-verbal sounds in generated speech.
 
@@ -74,22 +57,42 @@ class SpeechSteeringOptions(TypedDict, total=False):
     """Filler words such as "um" / "uh". On by default
     (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out.
     """
-    nonverbal_sounds: bool | NonverbalOptions
+    nonverbal_sounds: NonverbalSounds
     """Which non-verbal sounds the TTS may make. ``True`` (and omitting the
     key) keeps the provider's full vocabulary, ``False`` disables every sound,
     and a ``NonverbalOptions`` dict toggles per category (omitted categories
     stay enabled).
     """
-    pace: Literal["slow", "normal", "fast"]
+    pace: Pace
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
-ExpressiveOptions.__module__ = "livekit.agents.voice.agent_session"
+class ExpressiveOptions(TypedDict, total=False):
+    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
+    or ``Agent(expressive=...)`` (the agent value overrides the session's).
+
+    Controls how TTS markup instructions are injected into the LLM when expressive is
+    enabled. All keys are optional; common shapes:
+
+    - ``{"speech_steering": {...}}`` — steer delivery and non-verbal sounds on top of
+      the provider-agnostic default instructions.
+    - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+    - ``{"tts_instructions_append": "..."}`` — your own rules appended to the template.
+
+    Any explicit template overrides the default; unset parts fall back to the
+    provider-agnostic default.
+    """
+
+    speech_steering: SpeechSteeringOptions
+    tts_instructions_template: str
+    tts_instructions_append: str
+
+
+NonverbalSounds: TypeAlias = bool | NonverbalOptions
+"""`nonverbal_sounds: bool | NonverbalOptions`. `Enabled(true)` and `Per(default)` stay apart so a
+round-tripped config is not rewritten.
+"""
+
+
 NonverbalOptions.__module__ = "livekit.agents.voice.agent_session"
 SpeechSteeringOptions.__module__ = "livekit.agents.voice.agent_session"
+ExpressiveOptions.__module__ = "livekit.agents.voice.agent_session"

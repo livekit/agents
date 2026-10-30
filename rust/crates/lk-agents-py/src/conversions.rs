@@ -86,21 +86,15 @@ pub fn turn_detection_kwarg_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TurnDete
 /// `bool | ExpressiveOptions`: `False`/`None` is off, `True` the default options, a dict (even an
 /// empty one) on with those options.
 pub fn expressive_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Expressive> {
-    let Ok(d) = obj.cast::<PyDict>() else {
+    if obj.cast::<PyDict>().is_err() {
         return Ok(Expressive(obj.is_truthy()?.then(ExpressiveConfig::default)));
-    };
-    let get = |key: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-        Ok(d.get_item(key)?.filter(|v| !v.is_none()))
-    };
-    Ok(Expressive(Some(ExpressiveConfig {
-        speech_steering: get("speech_steering")?.map(|v| v.extract()).transpose()?,
-        tts_instructions_template: get("tts_instructions_template")?
-            .map(|v| v.extract::<String>().map(Instructions::plain))
-            .transpose()?,
-        tts_instructions_append: get("tts_instructions_append")?
-            .map(|v| v.extract())
-            .transpose()?,
-    })))
+    }
+    Ok(Expressive(Some(crate::generated::records::expressive::expressive_options_from_py(obj)?)))
+}
+
+/// An instructions string, as its common text.
+pub fn instructions_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Instructions> {
+    Ok(Instructions::plain(obj.extract::<String>()?))
 }
 
 /// A URL as itself; any other image (an `rtc.VideoFrame`) by its side-table key.
