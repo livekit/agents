@@ -167,8 +167,6 @@ pub struct Acquire<'a> {
     /// for a run with no row (a voice turn).
     pub task_id: &'a str,
     pub run_started: EventWrite,
-    /// The turn's `submitted` row, written first in the same batch.
-    pub submit: Option<&'a TaskWrite>,
     /// Take `task_id`'s row to `working` under the lease, in the same batch.
     pub pickup: bool,
     /// Load the lane's newest task rows, this many.
@@ -187,34 +185,21 @@ pub struct Acquired {
     /// The newest task rows, newest first.
     pub tasks: Vec<TaskRow>,
     pub context_scopes: Vec<ContextScope>,
-    /// Whether `submit` inserted its row; `Some(false)` is a `task_id` or `messageId` that
-    /// already had one.
-    pub submitted: Option<bool>,
     /// Whether `pickup` moved the row to `working`; `false` when it is terminal or missing.
     pub picked_up: bool,
 }
 
-/// The lane's outcome of an acquire attempt: taken, or held by another holder.
-#[derive(Debug)]
-pub enum AcquireOutcome {
-    Acquired(Box<Acquired>),
-    /// Not taken; `submitted` says whether this attempt's `submit` inserted its row.
-    Held {
-        submitted: Option<bool>,
-    },
-}
-
 /// Takes the lease and loads the lane, one atomic batch, `schema` prepended for a fresh
-/// database. A retried `run_id` loads as `already_committed` and writes nothing.
+/// database; `None` while another holder has the lane. A retried `run_id` loads as
+/// `already_committed` and writes nothing.
 pub(crate) async fn acquire(
     conn: &dyn SqliteConnection,
     req: &Acquire<'_>,
     schema: Vec<Statement>,
-) -> Result<AcquireOutcome, StorageError> {
+) -> Result<Option<Acquired>, StorageError> {
     let (lane, token) = (req.lane, req.token);
     let mut b = Batch(schema);
     b.0.push(Statement::raw(crate::context::db::SCHEMA));
-    let submitted = req.submit.map(|task| b.add(submitted_task(lane, task)));
     b.add(InsertLane { lane });
     let take = b.add(TakeLease {
         lane,
@@ -241,9 +226,8 @@ pub(crate) async fn acquire(
     let context_scopes = b.0.len() - 1;
     let out = conn.batch(b.0).await?;
 
-    let submitted = submitted.map(|i| out.at(i).map(|r| r.rows_affected() > 0)).transpose()?;
     let Some(version) = out.at(take)?.first_int() else {
-        return Ok(AcquireOutcome::Held { submitted }); // the reads are discarded
+        return Ok(None); // the reads are discarded
     };
     let lane_row = out
         .at(lane_row)?
@@ -260,16 +244,15 @@ pub(crate) async fn acquire(
         token: token.to_owned(),
         version,
     };
-    Ok(AcquireOutcome::Acquired(Box::new(Acquired {
+    Ok(Some(Acquired {
         fence,
         already_committed: !out.at(committed)?.rows().is_empty(),
         lane: LaneRow::from_row(lane_row)?,
         items: rows(&out, items, ItemRow::from_row)?,
         tasks: rows(&out, tasks, TaskRow::from_row)?,
         context_scopes: crate::context::db::from_rows(out.at(context_scopes)?.rows())?,
-        submitted,
         picked_up,
-    })))
+    }))
 }
 
 fn rows<T>(
