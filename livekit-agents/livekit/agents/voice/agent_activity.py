@@ -70,6 +70,7 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
+    RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -4179,6 +4180,21 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
+            elif speech_handle.done() and not draining:
+                # interrupted while its tools ran in the background, the speech was ended by the
+                # interruption timeout before they returned, so whatever interrupted it went on
+                # without these results: voice them in a deferred reply, as for a tool released
+                # at the timeout (#7759)
+                for sanitized_out in tool_output.output:
+                    run_ctx = RunContext(
+                        session=self._session,
+                        speech_handle=speech_handle,
+                        function_call=sanitized_out.fnc_call,
+                        activity=self,
+                    )
+                    self._tool_executor._schedule_reply(
+                        run_ctx, [sanitized_out.fnc_call, sanitized_out.fnc_call_out], self._agent
+                    )
 
         if not chain_continues:
             self._session._unanswered_user_metrics = None
