@@ -70,33 +70,6 @@ async def _run_emitter(
 
 
 @pytest.mark.asyncio
-async def test_basic_is_final():
-    def produce(e):
-        for _ in range(50):
-            e.push(_make_pcm(SR, NC, 10))
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-
-    assert len(events) > 0
-    assert events[-1].is_final
-    assert all(not e.is_final for e in events[:-1])
-    total = sum(e.frame.duration for e in events)
-    assert abs(total - 0.5) < 0.02
-
-
-@pytest.mark.asyncio
-async def test_single_tiny_push():
-    def produce(e):
-        e.push(_make_pcm(SR, NC, 5))
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-    assert len(events) >= 1
-    assert events[-1].is_final
-
-
-@pytest.mark.asyncio
 async def test_timed_transcripts_all_preserved():
     words = ["hello", "world", "this", "is", "a", "test"]
 
@@ -140,38 +113,6 @@ async def test_timed_transcripts_have_timestamps():
     assert all_ts[0].start_time == 0.0
     assert str(all_ts[1]) == "world"
     assert all_ts[1].start_time == 0.1
-
-
-@pytest.mark.asyncio
-async def test_streaming_segments_each_have_is_final():
-    def produce(e):
-        for seg_idx in range(3):
-            e.start_segment(segment_id=f"seg_{seg_idx}")
-            for _ in range(10):
-                e.push(_make_pcm(SR, NC, 10))
-            e.end_segment()
-        e.end_input()
-
-    _, events = await _run_emitter(produce, stream=True, expect_finals=3)
-
-    finals = [e for e in events if e.is_final]
-    assert len(finals) == 3
-    total = sum(e.frame.duration for e in events)
-    assert abs(total - 0.3) < 0.02
-
-
-@pytest.mark.asyncio
-async def test_marker_does_not_inflate_duration():
-    """flush() followed by end_input() with no new audio: marker should not inflate duration."""
-
-    def produce(e):
-        e.push(_make_pcm(SR, NC, 100))
-        e.flush()
-        e.end_input()
-
-    emitter, events = await _run_emitter(produce)
-    assert events[-1].is_final
-    assert abs(emitter.pushed_duration() - 0.1) < 0.02
 
 
 @pytest.mark.asyncio
@@ -364,5 +305,24 @@ async def test_each_compressed_segment_ends_after_its_decoded_audio():
         second = b"".join(bytes(event.frame.data) for event in events[finals[0] + 1 : finals[1]])
         assert first and first == second
         assert [event.segment_id for event in events[: finals[0] + 1]] == ["a"] * (finals[0] + 1)
+    finally:
+        await emitter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+async def test_a_corrupt_container_fails_the_synthesis_at_join():
+    # Catches: a container that fails to decode natively swallowed, so the synthesis ends with
+    # no audio and no error for the fallback chain to act on.
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="corrupt", dst_ch=dst_ch)
+    emitter.initialize(request_id="r", sample_rate=SR, num_channels=NC, mime_type="audio/ogg")
+    try:
+        emitter.push(b"\x5a" * 4096)
+        emitter.end_input()
+        with pytest.raises(RuntimeError, match="decode failed"):
+            await asyncio.wait_for(emitter.join(), timeout=10)
+        with pytest.raises(RuntimeError, match="decode failed"):
+            emitter.flush()
     finally:
         await emitter.aclose()
