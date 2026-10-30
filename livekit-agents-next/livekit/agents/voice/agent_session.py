@@ -14,6 +14,7 @@ import contextvars
 import copy
 import dataclasses
 import inspect
+import logging
 import time
 import weakref
 from collections import deque
@@ -1251,7 +1252,15 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         span.end(end_time=int(wire.end_time * 1e9))
 
     def _on_error(self, wire: SessionErrorWire) -> None:
-        logger.error("session error", extra={"source": wire.source, "error": str(wire.error)})
+        # A recoverable error is one the call goes on through; a processor's own exception keeps
+        # its traceback.
+        failure = wire.processor_failure
+        logger.log(
+            logging.WARNING if wire.recoverable else logging.ERROR,
+            "session error",
+            extra={"source": wire.source, "error": str(wire.error)},
+            exc_info=cast(BaseException, failure.error) if failure is not None else None,
+        )
         error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
 

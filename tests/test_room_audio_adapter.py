@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any, cast
@@ -120,7 +121,9 @@ async def test_each_processor_reports_its_own_failure_and_the_other_still_runs()
     assert len(_frames(items)) == 1 and len(processed) == 1, "AGC skipped after NC failed"
 
 
-def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor() -> None:
+def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     from livekit.agents import VoiceSession
     from livekit.agents._generated.session_wire import SessionErrorWire
     from livekit.agents.voice.events import ErrorEvent
@@ -138,13 +141,16 @@ def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor() -
         SessionErrorWire(
             source="audio_processing_error",
             recoverable=True,
-            label=failure.label,
+            label="engine",
             error=RuntimeError(failure.message),
             speech_id=None,
             processor_failure=failure,
         )
     )
     [event] = errors[0]
+    [logged] = [r for r in caplog.records if r.getMessage() == "session error"]
+    assert logged.levelno == logging.WARNING, "a recoverable failure is logged as an error"
+    assert logged.exc_info is not None and logged.exc_info[1] is cause, "traceback dropped"
     assert isinstance(event.error, AudioProcessingError)
     assert (event.error.label, event.error.error, event.source) == (
         "plugin.Denoiser",

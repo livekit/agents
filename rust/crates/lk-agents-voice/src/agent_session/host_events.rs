@@ -328,10 +328,9 @@ impl ErrorEvent {
         lk_agents_abi::voice::events::SessionErrorWire {
             source: self.source.as_str().to_owned(),
             recoverable: self.recoverable,
-            label: match (&self.processor_failure, &self.error) {
-                (Some(p), _) => p.label.clone(),
-                (None, lk_agents_abi::errors::ProviderError::Host { .. }) => "host".to_owned(),
-                (None, _) => "engine".to_owned(),
+            label: match &self.error {
+                lk_agents_abi::errors::ProviderError::Host { .. } => "host".to_owned(),
+                _ => "engine".to_owned(),
             },
             error: self.error.clone(),
             speech_id: self.speech.map(|id| id.to_string()),

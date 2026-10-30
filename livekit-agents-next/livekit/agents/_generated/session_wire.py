@@ -318,9 +318,7 @@ class SessionErrorWire:
     """`ErrorSource::as_str`."""
     recoverable: bool
     label: str
-    """The failing input processor's label; otherwise `"host"` when the error was captured off
-    a plugin object, else `"engine"`.
-    """
+    """`"host"` when the error was captured off a plugin object, else `"engine"`."""
     error: BaseException
     """The host's own exception when the provider raised one, else an `APIError`."""
     speech_id: str | None
