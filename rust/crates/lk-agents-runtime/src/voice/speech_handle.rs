@@ -254,6 +254,12 @@ impl SpeechHandle {
         let pending = std::mem::take(&mut inner.pending);
         if created && inner.view.done {
             inner.requested &= inner.view.interrupted;
+            // The setters asked meanwhile are the handle's own, as on any ended speech.
+            for command in pending {
+                if let SpeechCommand::SetAllowInterruptions { allow, .. } = command {
+                    inner.view.allow_interruptions = allow;
+                }
+            }
         } else if created {
             for command in pending {
                 self.requests.send(&mut requests, command);
@@ -583,19 +589,22 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         SpeechHandle::allow_interruptions(self)
     }
 
+    /// Checked and asked under the list's lock, as `interrupt()` is: a speech not done here is one
+    /// the request reaches before anything ends it.
     fn set_allow_interruptions(&self, value: bool) -> Result<(), HostRefused> {
+        let mut requests = self.requests.lock();
         let mut inner = self.inner.lock();
         inner.view.host_set_allow_interruptions(value, inner.requested).map_err(refused)?;
-        // A detached handle's setter is its own, with no loop to tell.
-        if *self.creation.borrow() == Creation::Detached {
+        // A detached handle, or a speech that ended: nothing is left to tell, the value is the
+        // handle's own.
+        if *self.creation.borrow() == Creation::Detached || inner.view.done {
             inner.view.allow_interruptions = value;
             return Ok(());
         }
-        drop(inner);
         let Some(speech) = self.created().or(self.reserved) else {
             return Err(refused(SpeechRefused::Detached));
         };
-        self.request(SpeechCommand::SetAllowInterruptions { speech, allow: value });
+        self.ask(&mut requests, &mut inner, SpeechCommand::SetAllowInterruptions { speech, allow: value });
         Ok(())
     }
 

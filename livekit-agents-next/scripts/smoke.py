@@ -1299,7 +1299,14 @@ async def main() -> int:
     assert late == ["late"], "a callback added after done runs soon"
 
     print("== wait_if_not_interrupted")
-    handle = session.say("A long sentence the agent will not finish saying.")
+
+    async def unfinished() -> AsyncIterator[str]:
+        # Words that never end, so the speech is still running when it is interrupted: with no
+        # audio output a fixed sentence can end before `interrupt()`, which is then a no-op.
+        yield "A long sentence the agent will not finish saying."
+        await asyncio.Event().wait()
+
+    handle = session.say(unfinished())
     work: asyncio.Future[None] = asyncio.get_running_loop().create_future()
     waiting = asyncio.ensure_future(handle.wait_if_not_interrupted([work]))
     handle.interrupt()

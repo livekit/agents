@@ -172,3 +172,25 @@ fn the_host_reads_the_loops_verdict_on_its_interrupt() {
     pending.answered(true);
     assert!(!HostSpeech::interrupted(&*pending), "a request the speech never heard was recorded");
 }
+
+// Catches: `handle.allow_interruptions = False` lost when the speech ended before the request
+// reached the loop (smoke's "the setter before creation was lost": a say with no audio output
+// ends within the call): the setter checked the view, released it, and asked a speech the loop
+// had already let go. An ended speech's setter is the handle's own, as in 1.x.
+#[test]
+fn a_setter_on_an_ended_speech_keeps_the_hosts_value() {
+    let mut speech = Speech::created(true);
+    let handle = speech.handle();
+    speech.state.mark_done(None);
+    speech.publish();
+    HostSpeech::set_allow_interruptions(&*handle, false).unwrap();
+    assert!(!HostSpeech::allow_interruptions(&*handle));
+
+    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(5), true);
+    HostSpeech::set_allow_interruptions(&*pending, false).unwrap();
+    let mut speech = Speech::over(&pending, SpeechId(5), true);
+    speech.state.mark_done(None);
+    speech.publish();
+    pending.answered(true);
+    assert!(!HostSpeech::allow_interruptions(&*pending), "asked before a speech created done");
+}
