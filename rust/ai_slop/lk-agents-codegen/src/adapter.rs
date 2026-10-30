@@ -635,7 +635,7 @@ fn signature(params: &[Param]) -> String {
         }
         match &p.default {
             None if matches!(p.ty, Ty::Maybe(_)) => {
-                parts.push(format!("{} = ::lk_agents_abi::python::Omittable::NOT_GIVEN", p.name))
+                parts.push(format!("{} = crate::conversions::Omittable::NOT_GIVEN", p.name))
             }
             None => parts.push(p.name.clone()),
             Some(d) => parts.push(format!("{} = {}", p.name, rust_literal(d, &p.ty))),
@@ -712,8 +712,8 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     }
     match &p.ty {
         Ty::Maybe(inner) => Ok((
-            "::lk_agents_abi::python::Omittable<'_>".into(),
-            Some(maybe_input(&format!("{}.0", p.name), inner, &path, at)?),
+            "crate::conversions::Omittable<'_>".into(),
+            Some(maybe_input(&p.name, inner, &path, at)?),
         )),
         Ty::Optional(inner) => {
             if p.default.as_ref().is_some_and(|d| *d != Literal::None) {
@@ -749,10 +749,7 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
 
 /// Convert a supplied value while preserving the existing omission sentinel.
 fn maybe_input(value: &str, inner: &Ty, path: &str, at: &str) -> Result<String, String> {
-    Ok(format!(
-        "match {value} {{ ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given(({})?) }}",
-        from_object("value", inner, path, at)?
-    ))
+    Ok(format!("{value}.map(|value| {})?", from_object("value", inner, path, at)?))
 }
 
 /// `PyResult<T>` of the object `v`.
@@ -768,7 +765,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Maybe(inner) => format!(
             "Ok({})",
             maybe_input(
-                &format!("{v}.extract::<::lk_agents_abi::python::Omittable<'_>>()?.0"),
+                &format!("{v}.extract::<crate::conversions::Omittable<'_>>()?"),
                 inner,
                 path,
                 at

@@ -11,6 +11,7 @@ use lk_agents_abi::voice::session_options::{
 };
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
+use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::CapturedError;
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::utils::host_ref::StaleHostRef;
@@ -779,6 +780,32 @@ fn resolve_owned(py: Python<'_>, id: u64, owned: bool) -> PyResult<Bound<'_, PyA
         return Err(lk_agents_abi::python::HostException::to_py_err(&StaleHostRef { id }));
     }
     Ok(lk_agents_abi::python::resolve_key(py, id)?.into_bound(py))
+}
+
+/// A parameter whose omission (`NOT_GIVEN`, or left out) differs from every value, `None`
+/// included: the value is converted by the declared type's own rule.
+pub struct Omittable<'py>(Maybe<Bound<'py, PyAny>>);
+
+impl<'py> Omittable<'py> {
+    pub const NOT_GIVEN: Self = Omittable(Maybe::NotGiven);
+
+    pub fn map<T>(self, convert: impl FnOnce(Bound<'py, PyAny>) -> PyResult<T>) -> PyResult<Maybe<T>> {
+        Ok(match self.0 {
+            Maybe::NotGiven => Maybe::NotGiven,
+            Maybe::Given(value) => Maybe::Given(convert(value)?),
+        })
+    }
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for Omittable<'py> {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        Ok(Omittable(match lk_agents_abi::python::is_not_given(&ob)? {
+            true => Maybe::NotGiven,
+            false => Maybe::Given(ob.to_owned()),
+        }))
+    }
 }
 
 #[cfg(test)]
