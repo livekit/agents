@@ -205,9 +205,6 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
 """.strip(),
         )
 
-    async def on_enter(self) -> None:
-        self.session.say(GREETING)
-
     @function_tool
     async def verify_identity(
         self,
@@ -290,9 +287,6 @@ Once verified, describe the flagged purchase exactly as it came back: where, whi
 {GOODBYE}
 """.strip(),
         )
-
-    async def on_enter(self) -> None:
-        self.session.say(outbound_greeting())
 
     @function_tool
     async def verify_identity(self, full_name: str, date_of_birth: str) -> str:
