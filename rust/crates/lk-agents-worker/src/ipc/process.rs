@@ -594,6 +594,60 @@ mod tests {
         await_exit(&mut process);
         assert_eq!(process.poll_reaped().unwrap(), Some(-i64::from(libc::SIGKILL)));
     }
+
+    /// A forkserver child whose reaping receipt the test writes on `receipt`.
+    fn forkserver_runner(child: &OwnedChild) -> (JobProcess, UnixStream) {
+        let (sentinel, receipt) = UnixStream::pair().unwrap();
+        let host = Arc::new(crate::ipc::pool::tests::Numbered(0));
+        let resource = ProcessResource::new(
+            child.0.id(),
+            sentinel.into_raw_fd().into(),
+            StartMethod::ForkServer,
+            Vec::new(),
+        )
+        .unwrap();
+        (JobProcess::watch(host, resource, None), receipt)
+    }
+
+    async fn pending(runner: &JobProcess) -> bool {
+        tokio::time::timeout(POLL * 5, runner.finished()).await.is_err()
+    }
+
+    fn write_receipt(receipt: &mut UnixStream, code: i64) {
+        use std::io::Write;
+        receipt.write_all(&code.to_ne_bytes()).unwrap();
+    }
+
+    // Catches: an OS exit ending the runner before the start method's reaping receipt, and the
+    // exit code taken from the OS observation instead of the receipt.
+    #[tokio::test]
+    async fn finished_waits_for_the_reaping_receipt_and_reports_its_code() {
+        let child = OwnedChild(Command::new("sh").args(["-c", "exit 17"]).spawn().unwrap());
+        let (runner, mut receipt) = forkserver_runner(&child);
+        for _ in 0..1_000 {
+            if runner.process.lock().exited {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert!(runner.process.lock().exited, "child did not exit within the fixture deadline");
+        assert!(pending(&runner).await, "an OS exit alone released the process");
+        write_receipt(&mut receipt, 3);
+        let exit = tokio::time::timeout(Duration::from_secs(5), runner.finished()).await.unwrap();
+        assert_eq!(exit, Exit { code: 3, killed: false });
+    }
+
+    // Catches: a reaping receipt releasing a process the OS has not seen exit.
+    #[tokio::test]
+    async fn a_receipt_without_an_os_exit_keeps_the_process_owned() {
+        let mut child = OwnedChild(Command::new("sleep").arg("30").spawn().unwrap());
+        let (runner, mut receipt) = forkserver_runner(&child);
+        write_receipt(&mut receipt, 9);
+        assert!(pending(&runner).await, "a receipt released a live process");
+        child.0.kill().unwrap();
+        let exit = tokio::time::timeout(Duration::from_secs(5), runner.finished()).await.unwrap();
+        assert_eq!(exit, Exit { code: 9, killed: false });
+    }
 }
 
 /// The process's footprint in MB: its PSS where Linux reports it, else its RSS. Blocking: called
@@ -676,19 +730,8 @@ impl JobExecutor for ProcessExecutor {
                 None => unreachable!("a receipt was reported"),
             });
         };
-        let process = Arc::new(Mutex::new(Tracked {
-            resource,
-            stopping: false,
-            killed: false,
-            exited: false,
-            failed: false,
-        }));
-        let (exit, finished) = watch::channel(None);
-        let host = self.host.clone();
         let launching = launch.is_none().then_some(launching);
-        let watching = TokioSpawner::current().spawn(watch(process.clone(), launching, exit, host));
-        let host = self.host.clone();
-        Ok((Box::new(JobProcess { host, process, finished, _watching: watching }), connection))
+        Ok((Box::new(JobProcess::watch(self.host.clone(), resource, launching)), connection))
     }
 }
 
@@ -784,6 +827,26 @@ struct JobProcess {
     _watching: OwnedTask,
 }
 
+impl JobProcess {
+    fn watch(
+        host: Arc<dyn ipc_host::JobExecutor>,
+        resource: ProcessResource,
+        launching: Option<OwnedTask<Result<(), HostError>>>,
+    ) -> Self {
+        let process = Arc::new(Mutex::new(Tracked {
+            resource,
+            stopping: false,
+            killed: false,
+            exited: false,
+            failed: false,
+        }));
+        let (exit, finished) = watch::channel(None);
+        let watching =
+            TokioSpawner::current().spawn(watch(process.clone(), launching, exit, host.clone()));
+        Self { host, process, finished, _watching: watching }
+    }
+}
+
 #[async_trait::async_trait]
 impl Runner for JobProcess {
     async fn finished(&self) -> Exit {
@@ -796,12 +859,13 @@ impl Runner for JobProcess {
         }
     }
 
-    fn stop(&self) {
+    fn stop(&self) -> bool {
         let mut process = self.process.lock();
         process.stopping = true;
         if let Err(error) = process.kill() {
             process.report(&self.host, format!("process termination failed: {error}"));
         }
+        true
     }
 
     fn memory_mb(&self) -> Option<f64> {

@@ -45,7 +45,7 @@ impl Host {
 }
 
 /// The pool sees a process only by its identity: no step reaches the host's executor.
-struct Numbered(usize);
+pub(in crate::ipc) struct Numbered(pub(in crate::ipc) usize);
 
 impl JobExecutor for Numbered {
     fn launch<'a>(&'a self, _: &'a CallContext, _: i64) -> BoxFuture<'a, Result<(), HostError>> {
