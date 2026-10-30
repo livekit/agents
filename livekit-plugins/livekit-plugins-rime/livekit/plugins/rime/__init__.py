@@ -17,11 +17,18 @@
 See https://docs.livekit.io/agents/integrations/tts/rime/ for more information.
 """
 
+from importlib import import_module
+from types import ModuleType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from . import realtime
+
 from .models import CustomLexiconEntry
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "CustomLexiconEntry", "__version__"]
+__all__ = ["TTS", "ChunkedStream", "CustomLexiconEntry", "realtime", "__version__"]
 
 from livekit.agents import Plugin
 
@@ -41,3 +48,17 @@ __pdoc__ = {}
 
 for n in NOT_IN_ALL:
     __pdoc__[n] = False
+
+
+def __getattr__(name: str) -> ModuleType:
+    if name == "realtime":
+        try:
+            module = import_module(".realtime", __name__)
+        except ImportError as error:
+            raise ImportError(
+                "Rime realtime requires Python 3.11+ and the Prism-enabled rimelabs-sdk. "
+                "Install livekit-plugins-rime[realtime]."
+            ) from error
+        globals()[name] = module
+        return module
+    raise AttributeError(name)
