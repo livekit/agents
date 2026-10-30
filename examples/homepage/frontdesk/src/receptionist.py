@@ -307,6 +307,7 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
         """
         name = self._appointment.patient
         context.userdata.caller = Caller(name, _date(date_of_birth))
+        await self._clinic.publish_caller(name)
         return json.dumps(
             {
                 "verified": True,

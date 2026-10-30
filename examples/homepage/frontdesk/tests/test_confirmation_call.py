@@ -65,9 +65,12 @@ async def test_nothing_changes_before_the_patient_is_verified(
         await agent.add_note_for_doctor(context, appointment.id, "knee hurts")
 
 
-async def test_any_date_of_birth_verifies_in_the_demo(agent, context, appointment):
+async def test_any_date_of_birth_verifies_in_the_demo(
+    agent, context, appointment, published
+):
     verified = json.loads(await agent.verify_patient(context, "2000-01-01"))
     assert verified["verified"] and context.userdata.caller.name == appointment.patient
+    assert published["caller"] == {"name": appointment.patient, "new": False}
 
 
 async def test_confirming_and_a_note_reach_the_published_calendar(

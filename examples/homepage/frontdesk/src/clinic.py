@@ -107,7 +107,7 @@ class Clinic:
     async def verify(self, name: str, date_of_birth: date) -> bool:
         if self.patients.get(name) != date_of_birth:
             return False
-        await self._publish_caller(name)
+        await self.publish_caller(name)
         return True
 
     async def register(self, name: str, date_of_birth: date) -> None:
@@ -120,7 +120,7 @@ class Clinic:
                 "the caller to check it."
             )
         self.patients[name] = date_of_birth
-        await self._publish_caller(name)
+        await self.publish_caller(name)
 
     async def check_availability(
         self, earliest: date, latest: date, part_of_day: PartOfDay = "any"
@@ -194,7 +194,7 @@ class Clinic:
         self.appointments.append(appointment)
         return appointment
 
-    async def _publish_caller(self, name: str) -> None:
+    async def publish_caller(self, name: str) -> None:
         await self.publish(
             "caller", {"name": name, "new": name not in PATIENTS_ON_FILE}
         )
