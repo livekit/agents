@@ -2890,6 +2890,12 @@ class AgentActivity(RecognitionHooks):
         ):
             return
 
+        # an answer to a delegate's question takes no model step, and only the committed turn
+        # answers it: an early transcript would relay it once and then run it as a turn
+        front = next((q for q in self._questions if q.asked), None)
+        if front is not None and front.relays:
+            return
+
         # a newer attempt supersedes the current one; if one is created below it continues the
         # discarded attempt's agent_turn (the cancelled speech only ends once the loop runs)
         discarded = (

@@ -18,6 +18,11 @@ from livekit.agents.llm import InputSpeechStartedEvent
 from livekit.agents.llm.tool_context import SAY_EXACTLY
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.storage.resolve import Thread
+from livekit.agents.voice.audio_recognition import (
+    _EndOfTurnInfo,
+    _EndOfTurnMetrics,
+    _PreemptiveGenerationInfo,
+)
 
 from .a2a_driver import AGENT, Door, Reply, ScriptedLLM, call, no_project_env  # noqa: F401
 from .fake_io import FakeAudioOutput
@@ -69,6 +74,38 @@ async def test_the_answer_goes_to_the_tool_that_asked_with_no_model_step(
     assert answered == asked and text == "tuesday"
     assert not any(said("tuesday")(r) for r in model.requests), "no model step took the answer"
     assert spoken(session) == ["Which day?", "You are booked for Tuesday."]
+
+
+@pytest.mark.rule("B99")
+async def test_a_spoken_answer_on_a_pipeline_call_is_one_turn(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    """The STT's early transcript starts no relay: the committed turn is the one answer."""
+    heard: list[tuple[str, str]] = []
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
+        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
+    )
+    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        await session.run(user_input="change my visit")
+        await soon(lambda: "Which day?" in spoken(session), "the question")
+        activity = session._activity
+        assert activity is not None
+        # what the STT's audio recognition calls: an early transcript, then the turn's end
+        activity.on_preemptive_generation(_PreemptiveGenerationInfo("tuesday", 1.0, time.time()))
+        activity.on_end_of_turn(
+            _EndOfTurnInfo(False, "tuesday", 1.0, _EndOfTurnMetrics(None, None, None, None))
+        )
+        await soon(lambda: "You are booked for Tuesday." in spoken(session), "the result")
+        await asyncio.sleep(0.2)
+
+    (asked, _), (answered, text) = heard
+    assert answered == asked and text == "tuesday"
+    users = [i for i in session.history.items if i.type == "message" and i.role == "user"]
+    assert [i.text_content for i in users].count("tuesday") == 1
+    assert not any(said("tuesday")(r) for r in model.requests), "no model step took the answer"
 
 
 @pytest.mark.rule("R37")
