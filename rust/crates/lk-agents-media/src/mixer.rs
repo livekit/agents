@@ -5,8 +5,6 @@
 //! when exhausted and empty. Sums stay in `f32` and clip.
 
 use std::collections::BTreeMap;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The reference keys on the iterator object, a host object; the host keeps the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -15,33 +13,11 @@ pub struct StreamId(pub u64);
 /// The reference's one `logger.warning`, counted so a silently non-playing sound is observable.
 #[derive(Debug, Default)]
 pub struct MixerCounters {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `AudioMixer: stream {stream} timeout, ignoring`.
-    pub stream_timeouts: AtomicU64,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    pub stream_timeouts: u64,
     /// Routine at a sound's end; sustained means sources cannot keep up with the block rate.
-    pub padded_contributions: AtomicU64,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub empty_rounds: AtomicU64,
-}
-
-impl MixerCounters {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn bump(counter: &AtomicU64) {
-        counter.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn stream_timeouts(&self) -> u64 {
-        self.stream_timeouts.load(Ordering::Relaxed)
-    }
-
-    pub fn padded_contributions(&self) -> u64 {
-        self.padded_contributions.load(Ordering::Relaxed)
-    }
-
-    pub fn empty_rounds(&self) -> u64 {
-        self.empty_rounds.load(Ordering::Relaxed)
-    }
+    pub padded_contributions: u64,
+    pub empty_rounds: u64,
 }
 
 #[derive(Debug, Default)]
@@ -135,13 +111,13 @@ impl Mixer {
     }
 
     pub fn note_timeout(&mut self, _id: StreamId) {
-        MixerCounters::bump(&self.counters.stream_timeouts);
+        self.counters.stream_timeouts += 1;
     }
 
     /// `None` when no stream had data: the caller must not emit a frame.
     pub fn mix(&mut self) -> Option<Vec<i16>> {
         if self.streams.is_empty() {
-            MixerCounters::bump(&self.counters.empty_rounds);
+            self.counters.empty_rounds += 1;
             return None;
         }
 
@@ -181,10 +157,10 @@ impl Mixer {
         }
 
         if padded {
-            MixerCounters::bump(&self.counters.padded_contributions);
+            self.counters.padded_contributions += 1;
         }
         if !any_data {
-            MixerCounters::bump(&self.counters.empty_rounds);
+            self.counters.empty_rounds += 1;
             return None;
         }
 
@@ -214,7 +190,7 @@ mod tests {
         let mut m = mixer(4);
         m.add_stream();
         assert_eq!(m.mix(), None);
-        assert_eq!(m.counters.empty_rounds(), 1);
+        assert_eq!(m.counters.empty_rounds, 1);
 
         // ...and so does a mixer with no streams at all.
         let mut m = mixer(4);
@@ -244,7 +220,7 @@ mod tests {
         let a = m.add_stream();
         m.push(a, &[100, 200]);
         assert_eq!(m.mix(), Some(vec![100, 200, 0, 0]));
-        assert_eq!(m.counters.padded_contributions(), 1);
+        assert_eq!(m.counters.padded_contributions, 1);
 
         // The two samples were CONSUMED. Nothing is carried into the next round.
         m.push(a, &[300]);
@@ -319,7 +295,7 @@ mod tests {
         m.push(a, &[10, 20]);
         m.note_timeout(b);
         assert_eq!(m.mix(), Some(vec![10, 20]), "the other stream still plays");
-        assert_eq!(m.counters.stream_timeouts(), 1);
+        assert_eq!(m.counters.stream_timeouts, 1);
     }
 
     // Catches: a stream added mid-call inheriting the block clock wrongly, or its first empty
