@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import os
 import signal
 import threading
+from collections.abc import Iterator
 from types import FrameType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -206,8 +208,40 @@ class AgentsConsole:
                 sess.output.transcription = text_output
 
 
+@contextlib.contextmanager
+def _dev_mode_env(devmode: bool) -> Iterator[None]:
+    """Expose dev mode through ``LIVEKIT_DEV_MODE`` for the duration of a run.
+
+    ``utils.is_dev_mode()`` only reads the environment, so the variable has to
+    be set before anything that consults it is created and while the worker
+    spawns job processes. Restoring the previous value keeps a later production
+    run in the same process (e.g. direct ``_run_worker`` calls from the legacy
+    CLI or Jupyter) from inheriting dev mode.
+    """
+    if not devmode:
+        yield
+        return
+
+    previous = os.environ.get("LIVEKIT_DEV_MODE")
+    os.environ["LIVEKIT_DEV_MODE"] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("LIVEKIT_DEV_MODE", None)
+        else:
+            os.environ["LIVEKIT_DEV_MODE"] = previous
+
+
 def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = False) -> None:
     """Run console in TCP mode — connects to the Go CLI's TCP server."""
+    # console is a dev-only mode; is_dev_mode() reads the env, not the
+    # run(devmode=...) argument
+    with _dev_mode_env(True):
+        _run_tcp_console_impl(server=server, connect_addr=connect_addr, record=record)
+
+
+def _run_tcp_console_impl(*, server: AgentServer, connect_addr: str, record: bool = False) -> None:
     from ..voice.remote_session import TcpSessionTransport
     from .tcp_console import TcpAudioInput, TcpAudioOutput
 
@@ -288,6 +322,11 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = F
 
 
 def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
+    with _dev_mode_env(args.dev):
+        _run_worker_impl(server, args)
+
+
+def _run_worker_impl(server: AgentServer, args: proto.CliArgs) -> None:
     kwargs: dict = {}
     if args.url:
         kwargs["ws_url"] = args.url
