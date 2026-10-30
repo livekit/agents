@@ -3102,6 +3102,10 @@ class Peer:
             self.running.setdefault(body["response_id"], set()).add(body["item_id"])
         elif kind == "response.done":
             self.running.pop(body["response"]["id"], None)
+        elif kind == "conversation.item.truncated" and "prism_kept_text" in body:
+            for item in self.server_items:
+                if item["id"] == body["item_id"]:
+                    item["text"] = body["prism_kept_text"]
         await self.socket.send(json.dumps({"type": kind, "event_id": "server", **body}))
 
     async def handler(self, socket):

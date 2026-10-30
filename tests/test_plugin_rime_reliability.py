@@ -471,6 +471,229 @@ async def test_observed_interruption_variant_appends_without_rebuild():
         assert provider.chat_ctx.get_by_id(item_id).text_content == "Full "
 
 
+async def emit_caller(peer, item_id, text):
+    await peer.emit("input_audio_buffer.speech_started", item_id=item_id, audio_start_ms=0)
+    await peer.emit("input_audio_buffer.speech_stopped", item_id=item_id, audio_end_ms=20)
+    await peer.emit("input_audio_buffer.committed", item_id=item_id)
+    await peer.emit(
+        "conversation.item.input_audio_transcription.completed", item_id=item_id, transcript=text
+    )
+
+
+async def emit_note_call(peer, response):
+    await peer.emit(
+        "response.function_call_arguments.done",
+        response_id=response,
+        item_id="note-tool",
+        call_id="note-call",
+        name="save_note",
+        arguments="{}",
+    )
+    return await peer.message(response, text="Got it, I'm making a note of that.")
+
+
+async def retain_note_prefix(peer, provider, item_id):
+    await peer.emit(
+        "conversation.item.truncated",
+        item_id=item_id,
+        content_index=0,
+        audio_end_ms=10,
+        prism_kept_text="Got it",
+    )
+    await wait_until(lambda: provider.chat_ctx.get_by_id(item_id).text_content == "Got it")
+
+
+async def end_note_response(peer, provider, response):
+    ended = asyncio.Event()
+
+    @provider.on("rime_server_event_received")
+    def on_event(event):
+        if isinstance(event.payload, r.ResponseEnded):
+            if event.payload.response.response_id == response:
+                ended.set()
+
+    await peer.end(response)
+    await asyncio.wait_for(ended.wait(), 3)
+
+
+async def pending_note_snapshot(peer, provider):
+    await provider.update_instructions("test")
+    await emit_caller(peer, "caller-1", "Next week.")
+    response = await peer.start()
+    item_id = await emit_note_call(peer, response)
+    await end_note_response(peer, provider, response)
+    await wait_until(lambda: provider.chat_ctx.get_by_id(item_id) is not None)
+    desired = provider.chat_ctx.copy()
+    desired.items.append(
+        llm.FunctionCallOutput(
+            call_id="note-call",
+            name="save_note",
+            output="The note was saved.",
+            is_error=False,
+            reply_required=False,
+        )
+    )
+    await retain_note_prefix(peer, provider, item_id)
+    return desired, item_id
+
+
+async def test_tool_result_survives_concurrent_playback_history_change():
+    async with peer_model(context_mode="shared") as (peer, model, _):
+        provider = model.session()
+        errors = []
+        provider.on("error", errors.append)
+        desired, item_id = await pending_note_snapshot(peer, provider)
+        before = len(peer.history_operations)
+        await provider.update_chat_ctx(desired)
+        operations = peer.history_operations[before:]
+        assert len(operations) == 1
+        assert operations[0]["type"] == "conversation.item.create"
+        assert operations[0]["item"]["type"] == "function_call_output"
+        assert operations[0]["item"]["call_id"] == "note-call"
+        assert operations[0]["item"]["output"] == "The note was saved."
+        assert not peer.imported_calls
+        assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
+        assert next(i for i in peer.server_items if i["id"] == item_id)["text"] == "Got it"
+
+        # A later LiveKit sync may still carry the old transcript and the same result.
+        await provider.update_chat_ctx(desired.copy())
+        await provider.update_chat_ctx(provider.chat_ctx.copy())
+        assert len(peer.history_operations) == before + 1
+        assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
+        assert next(i for i in peer.server_items if i["id"] == item_id)["text"] == "Got it"
+        await emit_caller(peer, "caller-2", "Thank you.")
+        response = await peer.start()
+        next_id = await peer.message(response, text="You're welcome.")
+        await peer.end(response)
+        await wait_until(lambda: provider.chat_ctx.get_by_id(next_id) is not None)
+        assert not errors
+        assert peer.connections == 1
+        assert len([i for i in peer.items if i.get("call_id") == "note-call"]) == 1
+
+
+async def test_strict_tool_result_rejects_concurrent_playback_history_change():
+    async with peer_model(context_mode="strict") as (peer, model, _):
+        provider = model.session()
+        desired, item_id = await pending_note_snapshot(peer, provider)
+        before = len(peer.history_operations)
+        with pytest.raises(
+            PrismHistoryUpdateError,
+            match="Finish active replies and tool calls before replacing history",
+        ):
+            await provider.update_chat_ctx(desired)
+        assert len(peer.history_operations) == before
+        assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
+        # The original call is still live. A fresh, exact snapshot can settle it.
+        fresh = provider.chat_ctx.copy()
+        fresh.items.append(desired.items[-1])
+        await provider.update_chat_ctx(fresh)
+        assert len(peer.history_operations) == before + 1
+        assert not peer.imported_calls
+
+
+async def test_shared_pending_tool_result_rejects_unknown_text_change():
+    async with peer_model(context_mode="shared") as (peer, model, _):
+        provider = model.session()
+        desired, item_id = await pending_note_snapshot(peer, provider)
+        desired.get_by_id(item_id).content = ["An unrelated intentional edit."]
+        before = len(peer.history_operations)
+        with pytest.raises(PrismHistoryUpdateError, match="conflicts with confirmed content"):
+            await provider.update_chat_ctx(desired)
+        assert len(peer.history_operations) == before
+        assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
+
+
+async def test_agent_session_interrupted_tool_sync_survives_playback_history_change(
+    monkeypatch, caplog
+):
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    copied = asyncio.Event()
+    apply = asyncio.Event()
+    executions = []
+    snapshots = []
+
+    @function_tool
+    async def save_note() -> str:
+        """Save the caller's note."""
+        executions.append("save")
+        started.set()
+        try:
+            await finish.wait()
+        except asyncio.CancelledError:
+            # The external write finishes despite speech interruption.
+            await finish.wait()
+        return "The note was saved."
+
+    async with peer_model(context_mode="shared") as (peer, model, _):
+        async with AgentSession(llm=model) as session:
+            sink = ControlledOutput()
+            session.output.audio = sink
+            agent = Agent(instructions="test", tools=[save_note])
+            await session.start(agent)
+            provider = model._session
+            real_update = provider.update_chat_ctx
+
+            async def schedule_update(chat_ctx):
+                if any(isinstance(i, llm.FunctionCallOutput) for i in chat_ctx.items):
+                    snapshots.append(chat_ctx.copy())
+                    copied.set()
+                    await apply.wait()
+                # Only schedule the race at the public boundary. All history
+                # decisions and SDK writes use the real plugin implementation.
+                await real_update(chat_ctx)
+
+            monkeypatch.setattr(provider, "update_chat_ctx", schedule_update)
+            speech = session.generate_reply(user_input="Next week.")
+            response = await peer.start(await peer.next())
+            item_id = await emit_note_call(peer, response)
+            await end_note_response(peer, provider, response)
+            await asyncio.wait_for(started.wait(), 3)
+            await wait_until(lambda: bool(sink.segments))
+            before = len(peer.history_operations)
+            speech.interrupt()
+            finish.set()
+            try:
+                await asyncio.wait_for(copied.wait(), 3)
+                assert snapshots[0].get_by_id(item_id).text_content == (
+                    "Got it, I'm making a note of that."
+                )
+                assert snapshots[0].items[-1].output == "The note was saved."
+                assert snapshots[0].items[-1].reply_required is False
+                await retain_note_prefix(peer, provider, item_id)
+            finally:
+                apply.set()
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            await wait_until(lambda: any(i.get("call_id") == "note-call" for i in peer.items))
+            assert executions == ["save"]
+            assert speech.interrupted
+            assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
+            operations = peer.history_operations[before:]
+            assert len(operations) == 1
+            assert operations[0]["item"]["type"] == "function_call_output"
+            assert operations[0]["item"]["call_id"] == "note-call"
+            assert operations[0]["item"]["output"] == "The note was saved."
+            assert not peer.imported_calls
+            await provider.update_chat_ctx(snapshots[0])
+            assert len(peer.history_operations) == before + 1
+            assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
+            assert next(i for i in peer.server_items if i["id"] == item_id)["text"] == "Got it"
+            sink.synchronous = True
+            next_speech = session.generate_reply(user_input="Thank you.")
+            next_response = await peer.start(await peer.next())
+            await peer.message(next_response, text="You're welcome.")
+            await peer.end(next_response)
+            await asyncio.wait_for(next_speech.wait_for_playout(), 3)
+            assert executions == ["save"]
+            assert len([i for i in peer.items if i.get("call_id") == "note-call"]) == 1
+            assert peer.connections == 1
+            assert "failed to sync the tool results of an interrupted generation" not in caplog.text
+            assert "Prism history update failed" not in caplog.text
+            assert (
+                "Finish active replies and tool calls before replacing history" not in caplog.text
+            )
+
+
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "unconsumed", "unrelated", "detach"])
 async def test_unproven_playback_never_reports_finished(mutation):
     async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.05)) as (peer, model, _):
