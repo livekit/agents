@@ -154,7 +154,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             audio_output: true,
             sink_can_pause: true,
         };
-        let held = options.as_ref().map(SessionOptions::layers).unwrap_or_default();
+        let held = options.as_ref().map(SessionOptions::take_layers).unwrap_or_default();
         let stack = ConfigStack {
             session: held.session,
             overrides: held.overrides,

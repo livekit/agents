@@ -33,9 +33,14 @@ impl SessionOptions {
         self.0.lock()
     }
 
-    /// The session layer and the held override layers the session starts with.
-    pub fn layers(&self) -> ConfigStack {
-        self.state().layers.clone()
+    /// The session layer and the held override layers, for the session starting with them: the
+    /// override layers are the session's from then on, released through it.
+    pub fn take_layers(&self) -> ConfigStack {
+        let mut state = self.state();
+        ConfigStack {
+            overrides: std::mem::take(&mut state.layers.overrides),
+            ..state.layers.clone()
+        }
     }
 
     pub fn conn(&self) -> SessionConnOptions {
@@ -88,7 +93,7 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
     }
 
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
-        let layers = self.layers();
+        let layers = self.state().layers.clone();
         resolved_session_options(&layers.resolve(&LegSet::from(legs)), &layers.session)
     }
 }
