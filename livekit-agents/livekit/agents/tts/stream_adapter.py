@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -22,7 +22,7 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
-class StreamAdapter(TTS):
+class StreamAdapter(TTS[Literal["fallback_activated"]]):
     def __init__(
         self,
         *,
@@ -48,6 +48,7 @@ class StreamAdapter(TTS):
             self._stream_pacer = text_pacing
 
         self._wrapped_tts.on("metrics_collected", self._on_metrics_collected)
+        self._wrapped_tts.on("fallback_activated", self._on_fallback_activated)
 
     class Markup(TTS.Markup):
         # a pass-through speaks whatever dialect it wraps
@@ -104,8 +105,12 @@ class StreamAdapter(TTS):
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 
+    def _on_fallback_activated(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("fallback_activated", *args, **kwargs)
+
     async def aclose(self) -> None:
         self._wrapped_tts.off("metrics_collected", self._on_metrics_collected)
+        self._wrapped_tts.off("fallback_activated", self._on_fallback_activated)
 
 
 class StreamAdapterWrapper(SynthesizeStream):

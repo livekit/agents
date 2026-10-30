@@ -15,6 +15,7 @@ from livekit.agents.tts import (
     AvailabilityChangedEvent,
     ChunkedStream,
     FallbackAdapter,
+    StreamAdapter,
     TTSCapabilities,
     TTSError,
 )
@@ -24,7 +25,7 @@ from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
 from .fake_session import FakeActions, create_session, run_session
-from .fake_tts import FakeSynthesizeStream, FakeTTS
+from .fake_tts import FakeChunkedStream, FakeSynthesizeStream, FakeTTS
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -83,6 +84,158 @@ def _metrics_listener_count(tts_impl: TTS) -> int:
 def _set_non_streaming(tts_impl: FakeTTS) -> FakeTTS:
     tts_impl._capabilities.streaming = False
     return tts_impl
+
+
+class _NotifyingTTS(FakeTTS):
+    """Emits a fallback notice per request, as an inference TTS does on gateway fallback."""
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeChunkedStream:
+        self.emit("fallback_activated", text)
+        return super().synthesize(text, conn_options=conn_options)
+
+
+async def test_forwards_fallback_activated_only_for_served_requests() -> None:
+    source = _NotifyingTTS(fake_audio_duration=1.0)
+    fallback_adapter = FallbackAdapter([source])
+    events: list[object] = []
+    fallback_adapter.on("fallback_activated", events.append)
+
+    async with fallback_adapter.synthesize("served") as stream:
+        assert [frame async for frame in stream]
+    # a recovery probe runs with no user attempt in flight
+    source.emit("fallback_activated", "probe")
+    await fallback_adapter.aclose()
+    source.emit("fallback_activated", "after-close")
+
+    assert events == ["served"]
+
+
+class _ProbeRaceTTS(FakeTTS):
+    """Fails its first request, then emits a notice from inside each later request's own task,
+    as inference TTS does. The second request is the recovery probe: it emits only once the
+    third (the user's retry) is serving the same instance."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.user_serving = asyncio.Event()
+        self.probe_emitted = asyncio.Event()
+        self._requests = 0
+
+    async def _before_audio(self, request: int) -> None:
+        if request == 2:
+            await self.user_serving.wait()
+            self.emit("fallback_activated", "probe")
+            self.probe_emitted.set()
+        else:
+            self.emit("fallback_activated", "user")
+            self.user_serving.set()
+            await self.probe_emitted.wait()
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeChunkedStream:
+        self._requests += 1
+        request, race = self._requests, self
+
+        class _Chunked(FakeChunkedStream):
+            async def _run(self, output_emitter: AudioEmitter) -> None:
+                if request == 1:
+                    raise APIConnectionError("primary down")
+                await race._before_audio(request)
+                await super()._run(output_emitter)
+
+        stream = _Chunked(tts=self, input_text=text, conn_options=conn_options)
+        self._synthesize_ch.send_nowait(stream)
+        return stream
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeSynthesizeStream:
+        self._requests += 1
+        request, race = self._requests, self
+
+        class _Streamed(FakeSynthesizeStream):
+            async def _run(self, output_emitter: AudioEmitter) -> None:
+                if request == 1:
+                    # fail after the input is read, so the adapter has text to probe with
+                    async for _ in self._input_ch:
+                        pass
+                    raise APIConnectionError("primary down")
+                await race._before_audio(request)
+                await super()._run(output_emitter)
+
+        stream = _Streamed(tts=self, conn_options=conn_options)
+        self._stream_ch.send_nowait(stream)
+        return stream
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_probe_notice_not_forwarded_while_user_attempt_serves(streamed: bool) -> None:
+    # every instance down: the user's retry serves the instance whose probe is still running
+    source = _ProbeRaceTTS(fake_audio_duration=0.5)
+    fallback_adapter = FallbackAdapter([source], max_retry_per_tts=0)
+    events: list[object] = []
+    fallback_adapter.on("fallback_activated", events.append)
+    requests = source.stream_ch if streamed else source.synthesize_ch
+
+    async def _request() -> None:
+        if streamed:
+            async with fallback_adapter.stream() as stream:
+                stream.push_text("hello test")
+                stream.end_input()
+                async for _ in stream:
+                    pass
+        else:
+            async with fallback_adapter.synthesize("hello test") as chunked:
+                async for _ in chunked:
+                    pass
+
+    with pytest.raises(APIConnectionError):
+        await _request()
+    assert await asyncio.wait_for(requests.recv(), 1.0)  # the failed attempt
+    assert await asyncio.wait_for(requests.recv(), 1.0)  # its recovery probe, parked
+
+    await _request()
+
+    assert source.probe_emitted.is_set()
+    assert events == ["user"]
+    await fallback_adapter.aclose()
+
+
+async def test_stream_adapter_forwards_fallback_activated() -> None:
+    source = _NotifyingTTS(fake_audio_duration=1.0)
+    adapter = StreamAdapter(tts=source)
+    events: list[object] = []
+    adapter.on("fallback_activated", events.append)
+
+    async with adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+        assert [frame async for frame in stream]
+    await adapter.aclose()
+    source.emit("fallback_activated", "after-close")
+
+    assert len(events) == 1
+    assert "after-close" not in events
+
+
+async def test_streamed_fallback_through_temporary_adapter_notifies_once() -> None:
+    source = _set_non_streaming(_NotifyingTTS(fake_audio_duration=1.0))
+    fallback_adapter = FallbackAdapter([source])
+    events: list[object] = []
+    fallback_adapter.on("fallback_activated", events.append)
+
+    try:
+        async with fallback_adapter.stream() as stream:
+            stream.push_text("hello test")
+            stream.end_input()
+            assert [frame async for frame in stream]
+    finally:
+        await fallback_adapter.aclose()
+
+    assert len(events) == 1
 
 
 async def test_stream_closes_temporary_adapter_after_each_request() -> None:
