@@ -5,28 +5,10 @@ import pytest
 from livekit.agents import tokenize
 from livekit.agents.tokenize import basic, blingfire
 from livekit.agents.tokenize._basic_paragraph import split_paragraphs
-from livekit.plugins import nltk
+
+from .tokenizer_data import TEXT
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
-
-# Download the punkt tokenizer, will only download if not already present
-nltk.NltkPlugin().download_files()
-
-TEXT = (
-    "Hi! "
-    "LiveKit is a platform for live audio and video applications and services. \n\n"
-    "R.T.C stands for Real-Time Communication... again R.T.C. "
-    "Mr. Theo is testing the sentence tokenizer. "
-    "\nThis is a test. Another test. "
-    "A short sentence.\n"
-    "A longer sentence that is longer than the previous sentence. "
-    "f(x) = x * 2.54 + 42. "
-    "Hey!\n Hi! Hello! "
-    "\n\n"
-    "This is a sentence. 这是一个中文句子。これは日本語の文章です。"
-    "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。"
-    "\nThis is a sentence contains   consecutive spaces."
-)
 
 EXPECTED_MIN_20 = [
     "Hi! LiveKit is a platform for live audio and video applications and services.",
@@ -54,18 +36,6 @@ EXPECTED_MIN_20_RETAIN_FORMAT = [
     "\nThis is a sentence contains   consecutive spaces.",
 ]
 
-EXPECTED_MIN_20_NLTK = [
-    "Hi! LiveKit is a platform for live audio and video applications and services.",
-    "R.T.C stands for Real-Time Communication... again R.T.C.",
-    "Mr. Theo is testing the sentence tokenizer.",
-    "This is a test. Another test.",
-    "A short sentence. A longer sentence that is longer than the previous sentence.",
-    "f(x) = x * 2.54 + 42.",
-    "Hey! Hi! Hello! This is a sentence.",
-    # nltk does not support character-based languages like CJK
-    "这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台。\nThis is a sentence contains   consecutive spaces.",  # noqa: E501
-]
-
 EXPECTED_MIN_20_BLINGFIRE = [
     "Hi! LiveKit is a platform for live audio and video applications and services.",
     "R.T.C stands for Real-Time Communication... again R.T.C. Mr. Theo is testing the sentence tokenizer.",
@@ -79,7 +49,6 @@ EXPECTED_MIN_20_BLINGFIRE = [
 
 
 SENT_TOKENIZERS = [
-    (nltk.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20_NLTK),
     (basic.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
     (
         basic.SentenceTokenizer(min_sentence_len=20, retain_format=True),
