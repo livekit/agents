@@ -124,7 +124,7 @@ class ExitSignals:
     def closed(self) -> None:
         """Disarm the deadline only after the host event loop has actually closed."""
 
-class ProcSupervisor:
+class JobSupervisor:
     def __new__(
         cls,
         host: JobExecutor,

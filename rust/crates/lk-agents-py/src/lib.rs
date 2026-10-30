@@ -152,7 +152,7 @@ impl generated::Implementations for Selected {
     type EndpointCard = lk_agents_runtime::cores::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
-    type ProcessSupervisor = lk_agents_runtime::worker::ipc::ProcessOwner;
+    type JobSupervisor = lk_agents_runtime::worker::ipc::JobSupervisor;
     type IpcClient = lk_agents_runtime::worker::ipc::ChildChannel;
     type ProcessPool = lk_agents_runtime::worker::ipc::ProcessPool;
     type JobRun = lk_agents_runtime::worker::ipc::JobRun;

@@ -7,12 +7,13 @@
 //!   a thread of the worker ([`ThreadExecutor`]) or a process ([`ProcessExecutor`]).
 //! - [`process`]: the process executor, the only code touching the OS process: spawn receipts,
 //!   exit, kill, reaping receipts, memory.
-//! - [`ProcSupervisor`] ([`supervisor`]): the worker's policy for one job runner over its channel,
-//!   its initialization, pings, memory sampling, shutdown and cleanup, whatever runs the job.
+//! - [`RunnerSupervisor`] ([`supervisor`]): the worker's policy for one job runner over its
+//!   channel, its initialization, pings, memory sampling, shutdown and cleanup, whatever runs the
+//!   job.
 //! - [`ChildChannel`] ([`child`]): the job process's side, with the self health check. The child
 //!   answers pings from its own event loop, so a pong still measures that loop's responsiveness.
 //! - [`pool`]: the warm processes. Spawning them stays with the host language.
-//! - [`ProcessOwner`], [`ProcessPool`], [`ChildChannel`] and [`JobRun`]: the classes the host
+//! - [`JobSupervisor`], [`ProcessPool`], [`ChildChannel`] and [`JobRun`]: the classes the host
 //!   drives them through, calling back into it only through declared proxies.
 
 pub mod channel;
@@ -32,7 +33,7 @@ pub use channel::{Channel, ChannelError, SendError};
 pub use child::ChildChannel;
 pub use executor::{Exit, JobExecutor, Runner, ThreadExecutor};
 pub use job_run::JobRun;
-pub use owner::ProcessOwner;
+pub use owner::JobSupervisor;
 pub use process::ProcessExecutor;
 pub use process_pool::ProcessPool;
 pub use supervisor::secs;
@@ -40,7 +41,7 @@ pub use supervisor::{
     Extra, ExtraValue, InitError, Level, ProtocolError, StartJobError, SupervisorOptions,
     extra_fields,
 };
-pub use supervisor::{ProcSupervisor, ProcessCallbacks};
+pub use supervisor::{RunnerSupervisor, SupervisorCallbacks};
 pub use wire::{Hello, StartJob, ToChild, ToParent};
 
 /// The child's grace on top of the parent's `ping_timeout` before it calls itself orphaned.

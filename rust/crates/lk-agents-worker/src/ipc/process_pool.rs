@@ -9,9 +9,9 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{JobExecutor, PoolCallbacks, WorkerError};
 
-use super::owner::{ProcessOwner, queue_diagnostic};
+use super::owner::{JobSupervisor, queue_diagnostic};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
-use super::{Level, ProcSupervisor, secs};
+use super::{Level, RunnerSupervisor, secs};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
 
@@ -19,7 +19,7 @@ use lk_agents_net::task::TokioSpawner;
 #[derive(Clone)]
 pub struct Executor {
     pub(super) host: Arc<dyn JobExecutor>,
-    supervisor: Arc<OnceLock<ProcSupervisor>>,
+    supervisor: Arc<OnceLock<RunnerSupervisor>>,
 }
 
 impl Executor {
@@ -50,8 +50,8 @@ impl Executors for HostExecutors {
     async fn start(&self, proc: &Executor) -> Result<(), HostError> {
         let started: Arc<dyn Any + Send + Sync> = proc.host.start(&self.context).await?;
         let owner = started
-            .downcast::<ProcessOwner>()
-            .map_err(|_| HostError::new("the executor started a foreign ProcSupervisor"))?;
+            .downcast::<JobSupervisor>()
+            .map_err(|_| HostError::new("the executor started a foreign JobSupervisor"))?;
         proc.supervisor
             .set(owner.sup.clone())
             .map_err(|_| HostError::new("process start already reported"))

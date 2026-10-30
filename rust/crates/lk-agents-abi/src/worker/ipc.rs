@@ -1,4 +1,4 @@
-//! Process completion keeps the OS exit status separate from its control protocol's failure.
+//! A job runner's completion keeps its OS exit status separate from its control protocol's failure.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[crate::host(record(module = "worker_ipc", emit))]
@@ -12,7 +12,7 @@ pub enum IpcFailure {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[crate::host(record(module = "worker_ipc", emit))]
-pub struct ProcessCompletion {
+pub struct JobCompletion {
     pub exit_code: Option<i32>,
     pub failure: Option<IpcFailure>,
 }

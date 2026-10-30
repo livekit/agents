@@ -70,7 +70,7 @@ impl Default for FakeHost {
     }
 }
 
-impl ProcessCallbacks for Arc<FakeHost> {
+impl SupervisorCallbacks for Arc<FakeHost> {
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.logs.lock().push((level, msg.to_owned(), extra));
         self.logged.notify_one();
@@ -143,7 +143,7 @@ impl FakeHost {
 }
 
 /// The runner ended and the supervisor saw it.
-async fn finish(sup: &ProcSupervisor, host: &FakeHost, code: i64) {
+async fn finish(sup: &RunnerSupervisor, host: &FakeHost, code: i64) {
     host.finish(code);
     assert!(sup.wait_exit().await);
 }
@@ -171,15 +171,19 @@ fn executor(parent: Channel<ToChild, ToParent>, host: &Arc<FakeHost>) -> FakeExe
     FakeExecutor { launch, gate: None, refusal: None }
 }
 
-fn start(executor: FakeExecutor, host: &Arc<FakeHost>, opts: SupervisorOptions) -> ProcSupervisor {
+fn start(
+    executor: FakeExecutor,
+    host: &Arc<FakeHost>,
+    opts: SupervisorOptions,
+) -> RunnerSupervisor {
     let blocking_io = crate::test_support::blocking_io();
-    ProcSupervisor::new(Arc::new(executor), host.clone(), opts, blocking_io)
+    RunnerSupervisor::new(Arc::new(executor), host.clone(), opts, blocking_io)
 }
 
 fn supervise(
     parent: Channel<ToChild, ToParent>,
     opts: SupervisorOptions,
-) -> (ProcSupervisor, Arc<FakeHost>) {
+) -> (RunnerSupervisor, Arc<FakeHost>) {
     let host = Arc::new(FakeHost::default());
     (start(executor(parent, &host), &host, opts), host)
 }
@@ -187,14 +191,14 @@ fn supervise(
 /// The job process's end of the supervised channel.
 type Child = Channel<ToParent, ToChild>;
 
-fn setup(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, Child) {
+fn setup(opts: SupervisorOptions) -> (RunnerSupervisor, Arc<FakeHost>, Child) {
     let (parent, child) = memory();
     let (sup, host) = supervise(parent, opts);
     (sup, host, child)
 }
 
 /// A child writing raw bytes: its preamble is written, the parent's is read.
-async fn setup_raw(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, DuplexStream) {
+async fn setup_raw(opts: SupervisorOptions) -> (RunnerSupervisor, Arc<FakeHost>, DuplexStream) {
     let (parent, mut child) = tokio::io::duplex(1 << 16);
     let (sup, host) = supervise(Channel::new(parent), opts);
     child.write_all(&MAGIC).await.unwrap();
@@ -228,7 +232,7 @@ async fn recv_skipping_pings(child: &Child) -> ToChild {
 }
 
 async fn waits(
-    sup: &ProcSupervisor,
+    sup: &RunnerSupervisor,
 ) -> tokio::task::JoinHandle<Result<Option<Duration>, InitError>> {
     let sup = sup.clone();
     let init = tokio::spawn(async move { sup.initialize(hello()).await });

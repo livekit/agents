@@ -4,7 +4,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::invoke::CallContext;
-use crate::worker::ipc::ProcessCompletion;
+use crate::worker::ipc::JobCompletion;
 use crate::worker::job::StartJobFields;
 use crate::{HostRef, errors::HostError};
 use serde_json::{Map, Value};
@@ -50,7 +50,7 @@ pub trait JobExecutor: Any + Send + Sync {
     fn completed<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
-        completion: ProcessCompletion,
+        completion: JobCompletion,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// One supervision diagnostic on the host's logger, with the failure that caused it.
     #[host(call, name = "_core_log")]
@@ -67,7 +67,7 @@ pub trait JobExecutor: Any + Send + Sync {
     fn start<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<Arc<dyn SupervisedProcess>, HostError>>;
+    ) -> crate::BoxFuture<'a, Result<Arc<dyn SupervisedJob>, HostError>>;
     #[host(await, name = "initialize")]
     fn initialize<'a>(
         &'a self,
@@ -92,12 +92,12 @@ pub trait JobExecutor: Any + Send + Sync {
     ) -> crate::BoxFuture<'a, Result<bool, HostError>>;
 }
 
-/// A native `ProcSupervisor`, as its executor hands it to the pool.
-#[crate::host(native(refused = "expected a native ProcSupervisor"))]
-pub trait SupervisedProcess: Any + Send + Sync {}
+/// A native `JobSupervisor`, as its executor hands it to the pool.
+#[crate::host(native(refused = "expected a native JobSupervisor"))]
+pub trait SupervisedJob: Any + Send + Sync {}
 
-#[crate::host(class(name = "ProcSupervisor", native = SupervisedProcess))]
-pub trait ProcessSupervisor: Send + Sync + Sized + 'static {
+#[crate::host(class(name = "JobSupervisor", native = SupervisedJob))]
+pub trait JobSupervisor: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;

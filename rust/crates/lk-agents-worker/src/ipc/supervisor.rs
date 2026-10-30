@@ -21,7 +21,7 @@ pub use types::*;
 use types::{Close, round};
 
 /// Where the supervisor's diagnostics go: the executor's logger in the host language.
-pub trait ProcessCallbacks: Send + Sync + 'static {
+pub trait SupervisorCallbacks: Send + Sync + 'static {
     fn log(&self, level: Level, msg: &str, extra: Extra);
     /// The runner ended and its supervision is over: the host's handle can go.
     fn release(&self) {}
@@ -52,7 +52,7 @@ struct Status {
 
 /// Owns one supervisor actor. Control is coalesced independently of bounded work submission.
 #[derive(Clone)]
-pub struct ProcSupervisor {
+pub struct RunnerSupervisor {
     commands: mpsc::Sender<Command>,
     control: watch::Sender<Control>,
     status: watch::Receiver<Status>,
@@ -60,9 +60,9 @@ pub struct ProcSupervisor {
     _driver: Arc<TaskSet>,
 }
 
-impl ProcSupervisor {
+impl RunnerSupervisor {
     /// Launches a runner through `executor` and supervises it. Needs a runtime context.
-    pub fn new<H: ProcessCallbacks>(
+    pub fn new<H: SupervisorCallbacks>(
         executor: Arc<dyn JobExecutor>,
         host: H,
         opts: SupervisorOptions,
@@ -72,7 +72,7 @@ impl ProcSupervisor {
         let (commands, commands_rx) = mpsc::channel(QUEUE);
         let (control, control_rx) = watch::channel(Control::default());
         let (status_tx, status) = watch::channel(Status::default());
-        let host: Arc<dyn ProcessCallbacks> = Arc::new(host);
+        let host: Arc<dyn SupervisorCallbacks> = Arc::new(host);
         // Self-owned: it ends once the runner ended and its channel settled.
         let driving = Arc::new(TaskSet::default());
         let run = async move {
@@ -94,9 +94,9 @@ impl ProcSupervisor {
         self.status.borrow().exit.is_some_and(|exit| exit.killed)
     }
 
-    pub fn completion(&self) -> lk_agents_abi::worker::ipc::ProcessCompletion {
+    pub fn completion(&self) -> lk_agents_abi::worker::ipc::JobCompletion {
         let status = self.status.borrow();
-        lk_agents_abi::worker::ipc::ProcessCompletion {
+        lk_agents_abi::worker::ipc::JobCompletion {
             exit_code: status.exit.and_then(|exit| i32::try_from(exit.code).ok()),
             failure: status.failure.clone(),
         }
@@ -160,7 +160,7 @@ impl ProcSupervisor {
 /// A launch that started nothing: whatever was asked of the runner fails with why.
 async fn refuse(
     cause: String,
-    host: Arc<dyn ProcessCallbacks>,
+    host: Arc<dyn SupervisorCallbacks>,
     mut commands: mpsc::Receiver<Command>,
     status: watch::Sender<Status>,
 ) {
@@ -188,7 +188,7 @@ type Sampling = Option<lk_agents_net::blocking_io::Job<Option<f64>>>;
 struct Driver {
     opts: SupervisorOptions,
     origin: Instant,
-    host: Arc<dyn ProcessCallbacks>,
+    host: Arc<dyn SupervisorCallbacks>,
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
     runner: Arc<dyn Runner>,
     channel: Arc<Connection>,
@@ -229,7 +229,7 @@ struct Driver {
 impl Driver {
     fn new(
         opts: SupervisorOptions,
-        host: Arc<dyn ProcessCallbacks>,
+        host: Arc<dyn SupervisorCallbacks>,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
         runner: Box<dyn Runner>,
         channel: Connection,

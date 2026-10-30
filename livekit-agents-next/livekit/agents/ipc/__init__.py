@@ -1,4 +1,4 @@
-"""The worker's job processes, as the core (``_core.ProcSupervisor``,
+"""The worker's job processes, as the core (``_core.JobSupervisor``,
 ``_core.ProcPool``) supervises and pools them: this module spawns them (``multiprocessing``, the
 forkserver's preloads), samples their memory (psutil) and hands the core the user's callbacks.
 What runs inside a process is ``ipc.child``."""
@@ -21,7 +21,7 @@ from types import FrameType
 from typing import Any, Literal
 
 from .. import _core, utils
-from .._generated.worker_ipc import ProcessCompletion, StartJobFields
+from .._generated.worker_ipc import JobCompletion, StartJobFields
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
@@ -88,12 +88,12 @@ class _JobThread:
 
 class JobExecutor:
     """One job's process, or (``thread``) a thread of this process, as the core supervises it
-    (``_core.ProcSupervisor``): its initialization, pings, memory and close, until it exited. A
+    (``_core.JobSupervisor``): its initialization, pings, memory and close, until it exited. A
     thread cannot be killed (a late initialization, ack or exit is reported and waited for), has no
     pong deadline nor memory limit, and is not in the metrics. The ``_core_*`` methods are the
     core's calls."""
 
-    _pch: _core.ProcSupervisor
+    _pch: _core.JobSupervisor
 
     def __init__(
         self,
@@ -206,7 +206,7 @@ class JobExecutor:
         self._start_atask = asyncio.create_task(self._start())
         await asyncio.shield(self._start_atask)
 
-    async def _core_start(self) -> _core.ProcSupervisor:
+    async def _core_start(self) -> _core.JobSupervisor:
         await self.start()
         return self._pch
 
@@ -214,7 +214,7 @@ class JobExecutor:
         if self._closing:
             raise RuntimeError("process is closed")
         # The core launches through _core_launch; its supervision survives caller loss.
-        self._pch = _core.ProcSupervisor(self, thread=self._thread, **self._opts)
+        self._pch = _core.JobSupervisor(self, thread=self._thread, **self._opts)
         self._supervise_atask = asyncio.ensure_future(self._pch.run())
         launched_or_over: set[asyncio.Future[Any]] = {self._launched, self._supervise_atask}
         await asyncio.wait(launched_or_over, return_when=asyncio.FIRST_COMPLETED)
@@ -255,7 +255,7 @@ class JobExecutor:
         if not self._launched.done():
             self._launched.set_result(None)
 
-    async def _core_completed(self, completion: ProcessCompletion) -> None:
+    async def _core_completed(self, completion: JobCompletion) -> None:
         exitcode = completion.exit_code
         self._exitcode = exitcode
         if not self._thread:

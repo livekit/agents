@@ -52,7 +52,7 @@ IpcFailure: TypeAlias = (
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class ProcessCompletion:
+class JobCompletion:
     exit_code: int | None
     failure: IpcFailure | None
 

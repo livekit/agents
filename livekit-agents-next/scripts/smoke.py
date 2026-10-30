@@ -689,7 +689,7 @@ async def job() -> None:
     # the worker's side is the core's supervisor of a job thread: no pings, nothing killed; the
     # "thread" is this loop serving the job's end
     parent = Parent()
-    sup = _core.ProcSupervisor(
+    sup = _core.JobSupervisor(
         parent,
         thread=True,
         initialize_timeout=30,

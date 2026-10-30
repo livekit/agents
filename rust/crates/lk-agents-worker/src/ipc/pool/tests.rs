@@ -4,8 +4,8 @@ use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc::ProcessCompletion;
-use lk_agents_abi::worker::ipc_host::{JobExecutor, SupervisedProcess};
+use lk_agents_abi::worker::ipc::JobCompletion;
+use lk_agents_abi::worker::ipc_host::{JobExecutor, SupervisedJob};
 use lk_agents_abi::{BoxFuture, RefRegistry};
 use serde_json::{Map, Value};
 
@@ -54,7 +54,7 @@ impl JobExecutor for Numbered {
     fn completed<'a>(
         &'a self,
         _: &'a CallContext,
-        _: ProcessCompletion,
+        _: JobCompletion,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
@@ -70,7 +70,7 @@ impl JobExecutor for Numbered {
     fn start<'a>(
         &'a self,
         _: &'a CallContext,
-    ) -> BoxFuture<'a, Result<Arc<dyn SupervisedProcess>, HostError>> {
+    ) -> BoxFuture<'a, Result<Arc<dyn SupervisedJob>, HostError>> {
         unreachable!()
     }
     fn initialize<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {

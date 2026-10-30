@@ -6619,15 +6619,15 @@ pub mod worker_ipc {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/ipc.rs.
-    static PROCESS_COMPLETION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static JOB_COMPLETION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn process_completion_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::ipc::ProcessCompletion) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::worker::ipc::ProcessCompletion { exit_code, failure } = value;
+    pub fn job_completion_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::ipc::JobCompletion) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::worker::ipc::JobCompletion { exit_code, failure } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("exit_code", match exit_code { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("failure", match failure { None => py.None().into_bound(py), Some(x) => crate::generated::records::worker_ipc::ipc_failure_to_py(py, x)? })?;
-            crate::host::construct(PROCESS_COMPLETION.import(py, "livekit.agents._generated.worker_ipc", "ProcessCompletion")?.as_any(), (), Some(&kwargs))
+            crate::host::construct(JOB_COMPLETION.import(py, "livekit.agents._generated.worker_ipc", "JobCompletion")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.

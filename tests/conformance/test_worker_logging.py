@@ -58,7 +58,7 @@ async def _run_job() -> None:
 
     runner = _JobProc(entrypoint, None, session_end_timeout=1, executor_type=JobExecutorType.THREAD)
     parent = Parent()
-    supervisor = _core.ProcSupervisor(
+    supervisor = _core.JobSupervisor(
         parent,
         thread=True,
         initialize_timeout=3,

@@ -14,7 +14,7 @@ fn short(close_timeout: f64) -> SupervisorOptions {
 }
 
 /// Initialized and ready to take a job.
-async fn ready(sup: &ProcSupervisor, child: &Child) {
+async fn ready(sup: &RunnerSupervisor, child: &Child) {
     let init = waits(sup).await;
     assert_eq!(recv(child).await, ToChild::Hello(hello()));
     write(child, &ToParent::Ready { error: None }).await.unwrap();

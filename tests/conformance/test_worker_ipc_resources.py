@@ -27,7 +27,7 @@ from livekit.agents._generated.worker_ipc import (
     IpcFailureIo,
     IpcFailureMalformed,
     IpcFailureTooLarge,
-    ProcessCompletion,
+    JobCompletion,
     StartJobFields,
 )
 from livekit.agents.ipc import JobExecutor
@@ -130,9 +130,9 @@ class _Executor(JobExecutor):
         self.launch_entered = asyncio.Event()
         self.process_spawned = asyncio.Event()
         self.receipt_gate: asyncio.Event | None = None
-        self.completion: ProcessCompletion | None = None
+        self.completion: JobCompletion | None = None
 
-    async def _core_completed(self, completion: ProcessCompletion) -> None:
+    async def _core_completed(self, completion: JobCompletion) -> None:
         self.completion = completion
         await super()._core_completed(completion)
 

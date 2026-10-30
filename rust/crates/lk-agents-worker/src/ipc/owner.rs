@@ -1,4 +1,4 @@
-//! The worker's side of one job runner as its executor drives it (`_core.ProcSupervisor`): the
+//! The worker's side of one job runner as its executor drives it (`_core.JobSupervisor`): the
 //! launch through the process or thread executor, then initialization, supervision and the
 //! runner's end, which continue whether or not the host still awaits them.
 
@@ -8,17 +8,15 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{
-    JobExecutor, ProcessSupervisor, SupervisedProcess, WorkerError,
-};
+use lk_agents_abi::worker::ipc_host::{self, JobExecutor, SupervisedJob, WorkerError};
 use lk_agents_abi::worker::job::StartJobFields;
 use tokio::sync::watch;
 
 use super::executor::ThreadExecutor;
 use super::process::ProcessExecutor;
 use super::{
-    Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, ProcSupervisor,
-    ProcessCallbacks, SupervisorOptions, extra_fields, secs,
+    Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, RunnerSupervisor,
+    SupervisorCallbacks, SupervisorOptions, extra_fields, secs,
 };
 use lk_agents_net::env::ProcessEnv;
 
@@ -29,8 +27,8 @@ enum Launcher {
     Thread(Arc<ThreadExecutor>),
 }
 
-pub struct ProcessOwner {
-    pub(crate) sup: ProcSupervisor,
+pub struct JobSupervisor {
+    pub(crate) sup: RunnerSupervisor,
     launcher: Arc<Mutex<Option<Launcher>>>,
     spawner: TokioSpawner,
     /// The child's health timeout, from the supervision's ping settings.
@@ -44,9 +42,9 @@ pub struct ProcessOwner {
     _tasks: Arc<TaskSet>,
 }
 
-impl SupervisedProcess for ProcessOwner {}
+impl SupervisedJob for JobSupervisor {}
 
-impl ProcessOwner {
+impl JobSupervisor {
     fn settle(&self, initialized: bool) {
         self.initialized.send_if_modified(|v| v.is_none() && v.replace(initialized).is_none());
     }
@@ -57,7 +55,7 @@ impl ProcessOwner {
     }
 }
 
-impl ProcessSupervisor for ProcessOwner {
+impl ipc_host::JobSupervisor for JobSupervisor {
     type Env = ProcessEnv;
 
     fn new(
@@ -99,8 +97,8 @@ impl ProcessSupervisor for ProcessOwner {
             .then(|| secs(ping_timeout + HEALTH_CHECK_GRACE).as_millis() as u64);
         let sup = {
             let _runtime = spawner.handle().enter();
-            let diagnostics = ProcessDiagnostics { host: Mutex::new(Some(host.clone())) };
-            ProcSupervisor::new(
+            let diagnostics = ExecutorDiagnostics { host: Mutex::new(Some(host.clone())) };
+            RunnerSupervisor::new(
                 executor,
                 diagnostics,
                 opts,
@@ -232,11 +230,11 @@ impl ProcessSupervisor for ProcessOwner {
 }
 
 /// The supervisor's diagnostics, until its supervision is over.
-struct ProcessDiagnostics {
+struct ExecutorDiagnostics {
     host: Mutex<Option<Arc<dyn JobExecutor>>>,
 }
 
-impl ProcessDiagnostics {
+impl ExecutorDiagnostics {
     fn emit(&self, level: Level, message: &str, extra: Extra, error: Option<HostError>) {
         if let Some(host) = self.host.lock().clone() {
             queue_diagnostic(host, level, message, extra, error);
@@ -263,7 +261,7 @@ pub(crate) fn queue_diagnostic(
     });
 }
 
-impl ProcessCallbacks for ProcessDiagnostics {
+impl SupervisorCallbacks for ExecutorDiagnostics {
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.emit(level, msg, extra, None);
     }

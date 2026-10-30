@@ -170,7 +170,7 @@ pub trait Implementations: 'static {
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
     type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
-    type ProcessSupervisor: ::lk_agents_abi::worker::ipc_host::ProcessSupervisor;
+    type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
     type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
     type ProcessPool: ::lk_agents_abi::worker::ipc_host::ProcessPool;
     type JobRun: ::lk_agents_abi::worker::ipc_host::JobRun;
@@ -430,7 +430,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(worker::dev_channel, m)?)?;
     m.add_function(wrap_pyfunction!(worker::ipc_pair, m)?)?;
     m.add_class::<worker::ExitSignals>()?;
-    m.add_class::<worker::ProcSupervisor>()?;
+    m.add_class::<worker::JobSupervisor>()?;
     m.add_class::<worker::IpcClient>()?;
     m.add_class::<worker::ProcPool>()?;
     m.add_class::<worker::JobRun>()?;
