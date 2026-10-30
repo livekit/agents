@@ -151,8 +151,7 @@ pub trait Implementations: 'static {
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
     type InterruptionGateFunctions: ::lk_agents_abi::voice::session_options::InterruptionGateFunctions;
     type WorkflowChecks: ::lk_agents_abi::voice::workflows::WorkflowChecks;
-    type DtmfResult: ::lk_agents_abi::voice::workflows::dtmf::DtmfResult;
-    type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo<Result = Self::DtmfResult>;
+    type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo;
     type WarmTransfer: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer;
     type ConsoleIo: ::lk_agents_abi::voice::console::ConsoleIo;
     type RoomAudioInput: ::lk_agents_abi::voice::room_owner::RoomAudioInput;
@@ -400,7 +399,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::normalize_phone_number, m)?)?;
     m.add_function(wrap_pyfunction!(voice::dtmf_code, m)?)?;
     m.add_function(wrap_pyfunction!(voice::format_dtmf, m)?)?;
-    m.add_class::<voice::GetDtmfResult>()?;
     m.add_function(wrap_pyfunction!(voice::send_dtmf_events, m)?)?;
     m.add_function(wrap_pyfunction!(voice::receive_dtmf, m)?)?;
     m.add_class::<voice::WarmTransfer>()?;

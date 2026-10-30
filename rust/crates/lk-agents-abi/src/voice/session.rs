@@ -400,6 +400,21 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = false)] opens_with_reply: bool,
     ) -> Result<BoxFuture<'static, Result<HostRef, VoiceTaskEnded>>, CommandRefused>;
 
+    /// `GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
+    /// `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was
+    /// pressed. Resolves to the digits, space-separated; raises `VoiceTaskFailed` when the
+    /// timeout fired short, and is cancelled when the session closes or another collection
+    /// starts. With `ask_for_confirmation` the digits are read back instead and the task's
+    /// `confirm_inputs` tool completes it. A cancelled await stops the collection.
+    #[host(await)]
+    fn collect_dtmf(
+        &self,
+        num_digits: usize,
+        ask_for_confirmation: bool,
+        timeout: f64,
+        stop_event: String,
+    ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused>;
+
     /// `session.input.audio = ..` after `start()`; `None` detaches.
     #[host(call)]
     fn set_audio_input(&self, source: Option<Arc<dyn AudioInput>>) -> Result<(), SessionRefused>;

@@ -819,37 +819,6 @@ impl VoiceSession {
         self.tasks.spawn(self.spawner.as_ref(), "say feed", pusher.feed(source, clock));
     }
 
-    /// DTMF collection, run by the driver. Answers once, with the outcome (`kind`: `complete`,
-    /// `incomplete` or `stopped`).
-    pub fn dtmf_start(
-        &self,
-        num_digits: usize,
-        ask_for_confirmation: bool,
-        dtmf_input_timeout: f64,
-        dtmf_stop_event: String,
-    ) -> Result<BoxFuture<'static, lk_agents_abi::voice::workflows::DtmfOutcomeWire>, CommandRefused>
-    {
-        use lk_agents_voice::agent_session::DtmfCommand;
-        use lk_agents_voice::workflows::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
-        let stop = DtmfEvent::parse(&dtmf_stop_event).ok_or_else(|| {
-            CommandRefused::Invalid(format!("{dtmf_stop_event:?} is not a DTMF key"))
-        })?;
-        let timeout = Duration::try_from_secs_f64(dtmf_input_timeout)
-            .map_err(|e| CommandRefused::Invalid(format!("dtmf_input_timeout: {e}")))?;
-        let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)
-            .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
-        let rx = self.ask(Origin::Host, Answer::dtmf, |call| DtmfCommand::Start {
-            collector,
-            call: Some(call),
-        })?;
-        Ok(Box::pin(async move { rx.await.unwrap_or(DtmfOutcome::Stopped).wire() }))
-    }
-
-    /// Whether the last DTMF collection is inside its debounced reply.
-    pub fn dtmf_reply_running(&self) -> bool {
-        self.view.borrow().dtmf_reply_running
-    }
-
     /// A metrics record only a plugin can measure, emitted as `metrics_collected`. Engine-computed
     /// kinds are refused (they would count twice).
     pub fn host_metrics(

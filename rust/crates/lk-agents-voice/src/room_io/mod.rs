@@ -187,9 +187,12 @@ impl Driver {
                 out.trace(RoomStep::Link(RoomLinkStep::Linked));
                 out.machine().append(self.session.states.on_link(now, true, closing));
             }
-            RoomIoEvent::KeyPressed => {
+            RoomIoEvent::KeyPressed(digit) => {
+                let key = crate::workflows::dtmf::DtmfEvent::parse(digit);
+                out.trace(RoomStep::Link(RoomLinkStep::KeyPressed { key }));
                 out.machine().append(self.session.states.reset_away_timer(now, closing));
-                return;
+                let digit = crate::workflows::dtmf::DtmfTaskEvent::Digit(digit.clone());
+                return self.dtmf_step(digit, out);
             }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }

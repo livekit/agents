@@ -393,7 +393,6 @@ pub struct SessionView {
     pub config: DriverConfig,
     pub agent: String,
     pub vad: Option<lk_agents_abi::resources::VadRef>,
-    pub dtmf_reply_running: bool,
 }
 
 /// `session.output`: the outputs by id and their switches, decided by the core alone and published

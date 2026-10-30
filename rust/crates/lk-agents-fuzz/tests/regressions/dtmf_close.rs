@@ -1,6 +1,6 @@
 //! A close ends a DTMF collection as it begins, before its drain.
-use lk_agents_fuzz::drive::{Case, run};
-use lk_agents_fuzz::input::{AgentText, Count, DtmfInput, DtmfKey, Input, Millis, SayInput};
+use lk_agents_fuzz::drive::{Case, RoomSetup, Setup, run};
+use lk_agents_fuzz::input::{AgentText, Count, DtmfInput, DtmfKey, Input, Millis, RoomIn, SayInput};
 
 fn dtmf(input: DtmfInput, key: DtmfKey) -> Input {
     Input::Dtmf { input, key, digits: Count(0), confirm: false, timeout: Millis(120) }
@@ -12,6 +12,8 @@ fn dtmf(input: DtmfInput, key: DtmfKey) -> Input {
 #[test]
 fn a_key_pressed_while_closing_is_not_collected() {
     let inputs = vec![
+        Input::Room { event: RoomIn::Linked },
+        Input::Advance { ms: Millis(20) },
         dtmf(DtmfInput::Start, DtmfKey::Pound),
         // A speech the close's drain waits on, so the session is still up when the key comes.
         Input::Say {
@@ -25,6 +27,8 @@ fn a_key_pressed_while_closing_is_not_collected() {
         dtmf(DtmfInput::Digit, DtmfKey::Two),
         Input::Advance { ms: Millis(1_000) },
     ];
-    let outcome = run(Case { inputs, ..Case::default() });
+    // The caller presses the key in the room.
+    let room = Some(RoomSetup { close_on_disconnect: false, delete_room_on_close: false });
+    let outcome = run(Case { setup: Setup { room, ..Setup::default() }, inputs, ..Case::default() });
     assert!(outcome.ok(), "{:#?}", outcome.failures);
 }

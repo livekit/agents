@@ -787,6 +787,8 @@ pub enum RoomLinkStep {
     Unlinked { reason: lk_agents_abi::voice::rtc::DisconnectReason, closes: bool },
     /// `delete_room_on_close`: the host was asked to delete the room, after `Close`.
     DeleteRoomRequested,
+    /// The linked participant pressed a key: `None` when it is no DTMF key.
+    KeyPressed { key: Option<crate::workflows::dtmf::DtmfEvent> },
 }
 
 /// One [`RoomEvent`](lk_agents_abi::voice::rtc::RoomEvent) variant, payload dropped: what the journal keeps of it.

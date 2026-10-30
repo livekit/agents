@@ -1,6 +1,6 @@
 //! A DTMF read-back on a realtime model is answered on its socket.
-use lk_agents_fuzz::drive::{Case, RealtimeSetup, Setup, run};
-use lk_agents_fuzz::input::{Count, DtmfInput, DtmfKey, Input, Millis};
+use lk_agents_fuzz::drive::{Case, RealtimeSetup, RoomSetup, Setup, run};
+use lk_agents_fuzz::input::{Count, DtmfInput, DtmfKey, Input, Millis, RoomIn};
 
 // Catches: the confirm arm's read-back built a pipeline reply on a realtime session, which has no
 // LLM, so it failed with "the session has no llm" though nothing failed (`speech_error_is_injected`,
@@ -10,6 +10,8 @@ use lk_agents_fuzz::input::{Count, DtmfInput, DtmfKey, Input, Millis};
 fn a_read_back_on_a_realtime_model_is_spoken() {
     let setup = Setup {
         realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+        // The caller presses the key in the room.
+        room: Some(RoomSetup { close_on_disconnect: false, delete_room_on_close: false }),
         ..Setup::default()
     };
     // One digit, read back for confirmation.
@@ -21,6 +23,8 @@ fn a_read_back_on_a_realtime_model_is_spoken() {
         timeout: Millis(120),
     };
     let inputs = vec![
+        Input::Room { event: RoomIn::Linked },
+        Input::Advance { ms: Millis(20) },
         dtmf(DtmfInput::Start, DtmfKey::Pound),
         Input::Advance { ms: Millis(20) },
         dtmf(DtmfInput::Digit, DtmfKey::Two),

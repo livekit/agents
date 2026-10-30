@@ -209,7 +209,6 @@ fn driver() -> Driver {
         config: config.clone(),
         agent: "agent".into(),
         vad: None,
-        dtmf_reply_running: false,
     });
     Driver::new(InitialSession {
         rt_resolved: config.effective.turn.owner(),

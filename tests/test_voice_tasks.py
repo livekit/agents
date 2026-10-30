@@ -10,7 +10,12 @@ from collections.abc import Callable
 import pytest
 
 from livekit.agents import Agent, RunContext, VoiceSession
-from livekit.agents.beta.workflows import GetEmailResult, GetEmailTask
+from livekit.agents.beta.workflows import (
+    GetDtmfResult,
+    GetDtmfTask,
+    GetEmailResult,
+    GetEmailTask,
+)
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -83,3 +88,38 @@ async def test_get_email_task_confirms_the_address_and_returns_it_to_the_waiting
         assert session.current_agent is desk
         outputs = [i for i in session.history.items if i.type == "function_call_output"]
         assert outputs[-1].output == "email is theo@example.com"
+
+
+# Catches: GetDtmfTask's keypad collection outliving the task (its await leaked or left running)
+# when the caller says the digits and the task's own tool completes it.
+async def test_get_dtmf_task_takes_spoken_digits() -> None:
+    digits = {"inputs": ["1", "2", "3", "4"]}
+    llm = FakeLLM(
+        fake_responses=[
+            _reply("my pin", "", ("enter_pin", "d1", {})),
+            _reply("Ask for the digits.", "Please enter your PIN."),
+            _reply("one two three four", "", ("record_inputs", "r1", digits)),
+            _reply("pin is 1 2 3 4", "Thanks."),
+        ]
+    )
+    desk = Agent(instructions="Help with the account.")
+    results: list[GetDtmfResult] = []
+
+    @desk.tool
+    async def enter_pin(ctx: RunContext) -> str:
+        """Collect the caller's PIN."""
+        results.append(await GetDtmfTask(num_digits=4).run())
+        return f"pin is {results[-1].user_input}"
+
+    def said(text: str) -> Callable[[], bool]:
+        return lambda: any(
+            i.type == "message" and i.role == "assistant" and i.text_content == text
+            for i in session.history.items
+        )
+
+    async with VoiceSession(llm=llm) as session:
+        await session.start(desk)
+        await _say(session, "my pin", said("Please enter your PIN."))
+        await _say(session, "one two three four", said("Thanks."))
+        assert [r.user_input for r in results] == ["1 2 3 4"]
+        assert session.current_agent is desk

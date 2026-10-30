@@ -4,6 +4,7 @@ warm transfer to a human agent. The checks, the reception and the transfer are t
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import date
 from enum import Enum
@@ -21,6 +22,7 @@ from .._generated.workflows import (
     GetCardNumberResult,
     GetCreditCardResult,
     GetDOBResult,
+    GetDtmfResult,
     GetEmailResult,
     GetExpirationDateResult,
     GetNameResult,
@@ -56,6 +58,7 @@ __all__ = [
     "GetCreditCardResult",
     "GetDOBResult",
     "GetDtmfResult",
+    "GetDtmfTask",
     "GetEmailResult",
     "GetEmailTask",
     "GetExpirationDateResult",
@@ -76,7 +79,6 @@ __all__ = [
     "validate_card_number",
 ]
 
-GetDtmfResult = _core.GetDtmfResult
 _HOLD_MUSIC = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
 validate_card_number = _core.validate_card_number
 normalize_email_address = _core.normalize_email_address
@@ -120,11 +122,95 @@ async def receive_dtmf(
     num_digits: int,
     timeout: float = 4.0,
     stop_event: DtmfEvent = DtmfEvent.POUND,
-) -> _core.GetDtmfResult:
+) -> GetDtmfResult:
     """Receive keypad digits; stop at the delimiter or after an inter-digit timeout."""
-    return await _core.receive_dtmf(
+    digits = await _core.receive_dtmf(
         _core._core_create_room_session(Room.of(room)), num_digits, timeout, stop_event.value
     )
+    return GetDtmfResult(user_input=digits)
+
+
+_DTMF_INSTRUCTIONS = (
+    "You are a single step in a broader system, responsible solely for gathering digits input "
+    "from the user. You will either receive a sequence of digits through dtmf events tagged by "
+    "<dtmf_inputs>, or user will directly say the digits to you. You should be able to handle "
+    "both cases. "
+)
+
+_dtmf_recorder = Agent(
+    name="get_dtmf",
+    instructions=_DTMF_INSTRUCTIONS
+    + "If user provides the digits through voice and it is valid, call `record_inputs` with the "
+    "inputs.",
+    output_type=GetDtmfResult,
+)
+_dtmf_confirmer = Agent(
+    name="get_dtmf_confirmed",
+    instructions=_DTMF_INSTRUCTIONS
+    + "Once user has confirmed the digits (by verbally spoken or entered manually), call "
+    "`confirm_inputs` with the inputs.",
+    output_type=GetDtmfResult,
+)
+
+
+@_dtmf_recorder.tool(name="record_inputs")
+async def _record_inputs(ctx: RunContext, inputs: list[DtmfEvent]) -> Completed[GetDtmfResult]:
+    """Record the collected digit inputs without additional confirmation.
+
+    Call this tool as soon as a valid sequence of digits has been provided by the user (via
+    DTMF or spoken)."""
+    return Completed(GetDtmfResult(user_input=format_dtmf([e.value for e in inputs])))
+
+
+@_dtmf_confirmer.tool(name="confirm_inputs")
+async def _confirm_inputs(ctx: RunContext, inputs: list[DtmfEvent]) -> Completed[GetDtmfResult]:
+    """Finalize the collected digit inputs after explicit user confirmation.
+
+    Use this ONLY after the confirmation. You should confirm by verbally reading out the digits
+    one by one and, once the user confirms they are correct, call this tool with the inputs. Do
+    not use this tool to capture the initial digits."""
+    return Completed(GetDtmfResult(user_input=format_dtmf([e.value for e in inputs])))
+
+
+@_dtmf_recorder.on_enter
+@_dtmf_confirmer.on_enter
+async def _ask_digits(session: VoiceSession) -> None:
+    session.generate_reply(instructions="Ask for the digits.", tool_choice="none")
+
+
+class GetDtmfTask(VoiceTask[GetDtmfResult]):
+    """Collect digits the caller presses on the keypad, or says (docs/voice-tasks.md)::
+
+        result = await GetDtmfTask(num_digits=4).run()
+
+    The keys are collected until ``num_digits`` arrived and ``dtmf_input_timeout`` seconds passed
+    without another, or ``dtmf_stop_event`` was pressed. Too few keys fail the task
+    (``VoiceTaskFailed``). With ``ask_for_confirmation`` the digits are read back and the caller
+    confirms them first."""
+
+    def __init__(
+        self,
+        *,
+        num_digits: int,
+        ask_for_confirmation: bool = False,
+        dtmf_input_timeout: float = 4.0,
+        dtmf_stop_event: DtmfEvent = DtmfEvent.POUND,
+    ) -> None:
+        super().__init__(agent=_dtmf_confirmer if ask_for_confirmation else _dtmf_recorder)
+        self._keypad = (num_digits, ask_for_confirmation, dtmf_input_timeout, dtmf_stop_event.value)
+
+    async def run(self) -> GetDtmfResult:
+        session = _live_binding("GetDtmfTask.run()").session
+        keypad = asyncio.ensure_future(session._running.collect_dtmf(*self._keypad))
+        task = asyncio.ensure_future(super().run())
+        try:
+            await asyncio.wait((keypad, task), return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            return GetDtmfResult(user_input=keypad.result())
+        finally:
+            keypad.cancel()
+            task.cancel()
 
 
 def _email_address(email: str) -> str:

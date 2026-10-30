@@ -194,7 +194,6 @@ impl DriverBuilder {
             config: config.clone(),
             agent: agent.clone(),
             vad: None,
-            dtmf_reply_running: false,
         };
         DriverBuilder {
             speeches: Default::default(),

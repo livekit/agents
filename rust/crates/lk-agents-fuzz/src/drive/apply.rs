@@ -9,10 +9,10 @@ use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
-use lk_agents_abi::voice::session::VoiceSession as _;
+use lk_agents_abi::voice::session::{VoiceSession as _, VoiceTaskEnded};
 use lk_agents_abi::voice::session_options::UpdateKwargs;
 use lk_agents_voice::agent_session::{
-    Command, CommitSuperseded, DrainRefused, DtmfCommand, IvrCommand,
+    Command, CommitSuperseded, DrainRefused, IvrCommand,
 };
 
 use lk_agents_voice::agent_activity::scheduling::SpeechKind;
@@ -298,6 +298,8 @@ impl Run {
         let mut wait = |pending: Pending| waiting = Some(pending);
         // The tool body a `VoiceTask.run()` is awaited in.
         let mut task_from: Option<String> = None;
+        // A DTMF collection's await, which its task's end drops.
+        let mut collecting = false;
         // The handle `say()` / `generate_reply()` returned: the host holds it, uncreated, at once.
         let mut asked: Option<(Arc<SpeechHandle>, SpeechKind)> = None;
 
@@ -644,17 +646,27 @@ impl Run {
                 api.send(Command::SetStaticKeyterms(terms.clone())).is_ok()
             }
             Input::Dtmf { input, key, digits, confirm, timeout } => match input {
-                DtmfInput::Start => api
-                    .dtmf_start(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
-                    .map(|reply| {
-                        wait(Pending::reply(reply, |wire| Answer::Dtmf(dtmf_outcome(wire))))
-                    })
-                    .is_ok(),
-                DtmfInput::Digit => {
-                    api.send(DtmfCommand::Digit { digit: key.digit().to_owned() }).is_ok()
+                DtmfInput::Start => {
+                    collecting = true;
+                    api.collect_dtmf(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
+                        .map(|reply| wait(Pending::reply(reply, |answer| Answer::Dtmf(dtmf_outcome(answer)))))
+                        .is_ok()
                 }
+                // The caller presses it on their keypad; only a room carries it.
+                DtmfInput::Digit => {
+                    let in_room = self.setup.room.is_some() || self.setup.room_legs.is_some();
+                    if in_room {
+                        self.room.press_dtmf(key.digit());
+                    }
+                    in_room
+                }
+                // `GetDtmfTask` ends: its await of the collection is dropped.
                 DtmfInput::Stop => {
-                    let _ = api.send(DtmfCommand::Stop);
+                    if let Some(nth) = self.dtmf_await.take()
+                        && self.pending.remove(&nth).is_some()
+                    {
+                        self.record_abandoned(nth);
+                    }
                     self.loop_runs()
                 }
             },
@@ -700,6 +712,9 @@ impl Run {
             self.pending.insert(nth, waiting);
             if let Some(call_id) = task_from {
                 self.task_awaits.insert(call_id, nth);
+            }
+            if collecting {
+                self.dtmf_await = Some(nth);
             }
         }
         true
@@ -765,13 +780,12 @@ impl Run {
     }
 }
 
-/// `dtmf_start`'s answer, read back from the record the host gets.
-fn dtmf_outcome(wire: lk_agents_abi::voice::workflows::DtmfOutcomeWire) -> DtmfOutcome {
-    use lk_agents_abi::voice::workflows::DtmfOutcomeWire as W;
-    match wire {
-        W::Complete(c) => DtmfOutcome::Complete(GetDtmfResult { user_input: c.user_input }),
-        W::Incomplete(i) => DtmfOutcome::Incomplete { message: i.message },
-        W::Stopped(_) => DtmfOutcome::Stopped,
+/// `collect_dtmf`'s answer, read back as the host gets it.
+fn dtmf_outcome(answer: Result<String, VoiceTaskEnded>) -> DtmfOutcome {
+    match answer {
+        Ok(user_input) => DtmfOutcome::Complete(GetDtmfResult { user_input }),
+        Err(VoiceTaskEnded::Failed(message)) => DtmfOutcome::Incomplete { message },
+        Err(_) => DtmfOutcome::Stopped,
     }
 }
 

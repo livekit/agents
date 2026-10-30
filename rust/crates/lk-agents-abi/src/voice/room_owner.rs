@@ -16,7 +16,8 @@ pub enum RoomIoEvent {
     ParticipantUnlinked(ParticipantUnlinked),
     TextInput(TextInput),
     DeleteRoomRequested(DeleteRoomRequested),
-    KeyPressed,
+    /// The linked participant pressed a keypad key: its symbol.
+    KeyPressed(String),
 }
 
 pub trait RoomAudioInputPort: AudioInput {

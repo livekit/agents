@@ -384,7 +384,7 @@ impl Driver {
                 self.refuse_handoff(None, update, HandoffRefused::Closing, out);
                 return;
             }
-            // A collection that never starts: answered as stopped, as after a `Stop`.
+            // A collection that never starts: answered as stopped.
             Command::Dtmf(DtmfCommand::Start { call, .. }) => {
                 out.answer(call, Answer::Dtmf(DtmfOutcome::Stopped));
                 return;
@@ -465,7 +465,7 @@ impl Driver {
             | Command::SetStaticKeyterms(_)
             | Command::Recorder(_)
             | Command::Ivr(_)
-            | Command::Dtmf(DtmfCommand::Digit { .. } | DtmfCommand::Stop)
+            | Command::Dtmf(DtmfCommand::Cancel { .. })
             | Command::Speech(
                 SpeechCommand::PauseAuthorization | SpeechCommand::ResumeAuthorization,
             ) => return,

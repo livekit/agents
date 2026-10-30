@@ -216,7 +216,7 @@ impl Command {
                 UpdateTools, UpdateExpressive, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure, SkipReplies),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
-            Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Digit, Stop),
+            Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Cancel),
             Command::VoiceTask(c) => {
                 use crate::agent_activity::voice_task::VoiceTaskCommand;
                 leaf!(c; VoiceTaskCommand: Run, Cancel)
@@ -319,11 +319,10 @@ pub enum DtmfCommand {
         collector: crate::workflows::dtmf::DtmfCollector,
         call: Option<RequestId>,
     },
-    /// Ignored with no collection running.
-    Digit {
-        digit: String,
+    /// The awaiter of `call` went away: its collection stops; a newer one is left running.
+    Cancel {
+        call: RequestId,
     },
-    Stop,
 }
 
 impl From<DtmfCommand> for Command {

@@ -57,7 +57,7 @@ def test_presence_defaults_only_on_omission(case: dict[str, Any]) -> None:
 def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> None:
     value = case["value"]
     if case["kind"] == "string":
-        assert _core.GetDtmfResult(user_input=value).user_input == case["expected"]
+        assert _core.strip_all_markup(value) == case["expected"]
     elif case["kind"] == "float":
         assert _core.ExpFilter(0.5, initial=value).value == case["expected"]
     elif case["kind"] == "bool":
@@ -94,12 +94,12 @@ async def test_duration_reports_validate_before_settling_playout(case: dict[str,
 def test_typed_collections_validate_every_element(case: dict[str, Any]) -> None:
     if "error" in case:
         with pytest.raises(TypeError, match=case["error"]):
-            _core.GetDtmfResult.from_dtmf_inputs(case["value"])
+            _core.format_dtmf(case["value"])
     else:
         values = list(case["value"])
-        result = _core.GetDtmfResult.from_dtmf_inputs(values)
+        joined = _core.format_dtmf(values)
         values.append("9")
-        assert result.user_input == case["expected"]
+        assert joined == case["expected"]
 
 
 @pytest.mark.parametrize("case", _cases("errors"))
@@ -167,7 +167,7 @@ import os
 import traceback
 from livekit.agents import _core
 
-_core.GetDtmfResult(user_input="1")
+_core.format_dtmf(["1"])
 filtered = _core.ExpFilter(0.5, initial=8.0)
 child = os.fork()
 if child == 0:

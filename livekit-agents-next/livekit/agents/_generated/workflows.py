@@ -59,6 +59,13 @@ class GetPhoneNumberResult:
 
 
 @dataclass
+class GetDtmfResult:
+    """GetDtmfResult(user_input: 'str'): the digits, space-separated (`format_dtmf`)."""
+
+    user_input: str
+
+
+@dataclass
 class GetNameResult:
     """GetNameResult(first_name: 'str | None' = None, middle_name: 'str | None' = None, last_name: 'str | None' = None)"""
 
@@ -123,6 +130,7 @@ class WarmTransferResult:
 GetAddressResult.__module__ = "livekit.agents.beta.workflows"
 GetEmailResult.__module__ = "livekit.agents.beta.workflows"
 GetPhoneNumberResult.__module__ = "livekit.agents.beta.workflows"
+GetDtmfResult.__module__ = "livekit.agents.beta.workflows"
 GetNameResult.__module__ = "livekit.agents.beta.workflows"
 GetDOBResult.__module__ = "livekit.agents.beta.workflows"
 GetCardNumberResult.__module__ = "livekit.agents.beta.workflows"

@@ -340,7 +340,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     room.event_bus().participant_disconnected(old, DisconnectReason::ClientInitiated);
     room.press_dtmf("1");
     within_a_second(async {
-        while !matches!(events.recv().await, Some(RoomIoEvent::KeyPressed)) {}
+        while !matches!(events.recv().await, Some(RoomIoEvent::KeyPressed(_))) {}
     })
     .await
     .expect("the current participant must remain linked after the delayed old departure");

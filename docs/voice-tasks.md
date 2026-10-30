@@ -140,6 +140,25 @@ whole call. The email's confirmation authorizes using that address; it does
 not authorize a refund. This task replaces the prebuilt `GetEmailTask` in
 the airline refund example below and requires no expert-triggered collection behavior.
 
+## Keypad input
+
+`GetDtmfTask` collects digits the caller presses on the telephone keypad (DTMF),
+or says, and returns a `GetDtmfResult` whose `user_input` is the digits,
+space-separated:
+
+```python
+from livekit.agents.beta.workflows import GetDtmfTask
+
+result = await GetDtmfTask(num_digits=4, ask_for_confirmation=True).run()
+```
+
+Keys come from the participant the session is linked to. Collection ends
+`dtmf_input_timeout` seconds (4 by default) after the last key, or at
+`dtmf_stop_event` (`#` by default). Fewer than `num_digits` keys fail the task
+with `VoiceTaskFailed`. With `ask_for_confirmation`, the agent reads the digits
+back and the caller confirms them before the task completes. A caller who says
+the digits instead completes the task through the model.
+
 ## Example: airline refund and receipt email
 
 A passenger asks for a refund. The frontend calls the remote airline agent,

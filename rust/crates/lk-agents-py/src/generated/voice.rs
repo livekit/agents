@@ -1180,6 +1180,14 @@ impl SessionOptions {
 // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
 type VoiceSessionImpl = <crate::Selected as super::Implementations>::VoiceSession;
 
+fn _extract_voice_session_collect_dtmf_num_digits(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "num_digits")
+}
+
+fn _extract_voice_session_collect_dtmf_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+}
+
 fn _extract_voice_session_ivr_start_max_silence(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_silence")
 }
@@ -1323,6 +1331,22 @@ impl VoiceSession {
         crate::host::check_pid()?;
         let frame = crate::generated::records::voice_session::update_agent_args_from_py(&frame)?;
         let call = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::run_voice_task(&self.0, frame, origin, opens_with_reply).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        crate::host::future_into_py(py, async move {
+            let out = call.await.map_err(|e: ::lk_agents_abi::voice::session::VoiceTaskEnded| <::lk_agents_abi::voice::session::VoiceTaskEnded as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// `GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
+    /// `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was
+    /// pressed. Resolves to the digits, space-separated; raises `VoiceTaskFailed` when the
+    /// timeout fired short, and is cancelled when the session closes or another collection
+    /// starts. With `ask_for_confirmation` the digits are read back instead and the task's
+    /// `confirm_inputs` tool completes it. A cancelled await stops the collection.
+    #[pyo3(signature = (num_digits, ask_for_confirmation, timeout, stop_event))]
+    fn collect_dtmf<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_voice_session_collect_dtmf_num_digits)] num_digits: usize, ask_for_confirmation: bool, #[pyo3(from_py_with = _extract_voice_session_collect_dtmf_timeout)] timeout: f64, stop_event: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+        crate::host::check_pid()?;
+        let call = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::collect_dtmf(&self.0, num_digits, ask_for_confirmation, timeout, stop_event).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         crate::host::future_into_py(py, async move {
             let out = call.await.map_err(|e: ::lk_agents_abi::voice::session::VoiceTaskEnded| <::lk_agents_abi::voice::session::VoiceTaskEnded as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -1823,48 +1847,6 @@ pub fn format_dtmf(symbols: ::std::vec::Vec<::std::string::String>) -> PyResult<
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
-type GetDtmfResultImpl = <crate::Selected as super::Implementations>::DtmfResult;
-
-/// A collected, space-separated keypad sequence.
-#[pyclass(frozen, name = "GetDtmfResult", module = "livekit.agents._core")]
-pub struct GetDtmfResult(pub(crate) ::std::sync::Arc<GetDtmfResultImpl>);
-
-#[pymethods]
-impl GetDtmfResult {
-    #[new]
-    #[pyo3(signature = (*, user_input))]
-    fn new(user_input: ::std::string::String) -> PyResult<GetDtmfResult> {
-        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::new(user_input);
-        Ok(GetDtmfResult(::std::sync::Arc::new(out)))
-    }
-
-    #[getter]
-    fn user_input(&self) -> PyResult<::std::string::String> {
-        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::user_input(&self.0);
-        Ok(out)
-    }
-
-    #[pyo3(name = "__repr__")]
-    fn host_repr(&self) -> PyResult<::std::string::String> {
-        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::host_repr(&self.0);
-        Ok(out)
-    }
-
-    #[pyo3(name = "__eq__")]
-    fn host_eq(&self, other: PyRef<'_, GetDtmfResult>) -> PyResult<bool> {
-        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::host_eq(&self.0, &*other.0);
-        Ok(out)
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (events))]
-    fn from_dtmf_inputs(events: ::std::vec::Vec<::std::string::String>) -> PyResult<GetDtmfResult> {
-        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::from_dtmf_inputs(events).map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::DtmfInputError| <::lk_agents_abi::voice::workflows::dtmf::DtmfInputError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(GetDtmfResult(::std::sync::Arc::new(out)))
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
 type DtmfIoImpl = <crate::Selected as super::Implementations>::DtmfIo;
 
 fn _extract_dtmf_io_receive_dtmf_num_digits(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
@@ -1893,7 +1875,7 @@ pub fn receive_dtmf<'py>(py: Python<'py>, room: Bound<'_, PyAny>, #[pyo3(from_py
     let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::receive_dtmf(room, num_digits, timeout, stop_event).await.map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError| <::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::voice::GetDtmfResult(::std::sync::Arc::new(out)), py))
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
     })
 }
 

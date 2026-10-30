@@ -1,6 +1,5 @@
 //! Runtime publication and collection of room keypad tones.
 
-pub use lk_agents_voice::workflows::dtmf::DtmfResult;
 use lk_agents_voice::workflows::dtmf::{
     DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_code, dtmf_send_answer,
 };
@@ -43,7 +42,7 @@ pub async fn receive_dtmf(
     timeout: f64,
     stop_event: String,
     clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
-) -> Result<DtmfResult, ReceiveDtmfError> {
+) -> Result<String, ReceiveDtmfError> {
     let mut reception = DtmfReception::new(num_digits, timeout, &stop_event)?;
     let room = room.rtc().ok_or_else(|| ReceiveDtmfError::Room("room is not connected".into()))?;
     let mut events = room.events();
@@ -70,7 +69,6 @@ pub async fn receive_dtmf(
 pub struct DtmfIo;
 
 impl lk_agents_abi::voice::workflows::dtmf::DtmfIo for DtmfIo {
-    type Result = DtmfResult;
     async fn send_dtmf_events(
         room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         events: Vec<String>,
@@ -83,7 +81,7 @@ impl lk_agents_abi::voice::workflows::dtmf::DtmfIo for DtmfIo {
         num_digits: usize,
         timeout: f64,
         stop_event: String,
-    ) -> Result<DtmfResult, ReceiveDtmfError> {
+    ) -> Result<String, ReceiveDtmfError> {
         let clock = room.clock();
         receive_dtmf(room, num_digits, timeout, stop_event, clock).await
     }

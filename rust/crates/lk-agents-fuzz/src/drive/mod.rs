@@ -711,6 +711,8 @@ pub struct Run {
     /// The `VoiceTask.run()` answer each tool body awaits, by call id: answering the tool first
     /// drops the await, as a cancelled body does.
     task_awaits: BTreeMap<String, u32>,
+    /// The DTMF collection's answer the host awaits, if any.
+    dtmf_await: Option<u32>,
     streams: BTreeMap<u32, Feeding>,
     handles: BTreeMap<u64, Arc<SpeechHandle>>,
     /// Which recognition stream each utterance is on: an `SttInterim` names the utterance, and the

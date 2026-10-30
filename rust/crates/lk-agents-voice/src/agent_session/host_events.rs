@@ -125,7 +125,7 @@ impl HostEvent {
                 crate::room_io::RoomIoEvent::DeleteRoomRequested(e) => {
                     HostWire::DeleteRoomRequested(e.clone())
                 }
-                crate::room_io::RoomIoEvent::KeyPressed => return None,
+                crate::room_io::RoomIoEvent::KeyPressed(_) => return None,
             },
             HostEvent::Hook(_) | HostEvent::SpeechRetired(_) => return None,
         })

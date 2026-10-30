@@ -468,6 +468,20 @@ class VoiceSession:
         value the host validated, which this resolves to; the parent comes back without its hooks.
         A cancelled await ends the task, and every task it started, and puts the parent back.
         """
+    async def collect_dtmf(
+        self,
+        num_digits: int,
+        ask_for_confirmation: bool,
+        timeout: float,
+        stop_event: str,
+    ) -> str:
+        """`GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
+        `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was
+        pressed. Resolves to the digits, space-separated; raises `VoiceTaskFailed` when the
+        timeout fired short, and is cancelled when the session closes or another collection
+        starts. With `ask_for_confirmation` the digits are read back instead and the task's
+        `confirm_inputs` tool completes it. A cancelled await stops the collection.
+        """
     def set_audio_input(self, source: AudioInput | None) -> None:
         """`session.input.audio = ..` after `start()`; `None` detaches."""
     def set_video_input(self, source: VideoInput | None) -> None:
@@ -735,16 +749,6 @@ def dtmf_code(symbol: str) -> int:
 def format_dtmf(symbols: Sequence[str]) -> str:
     """The space-joined digits that fill the DTMF read-back's `{digits}` hole."""
 
-class GetDtmfResult:
-    """A collected, space-separated keypad sequence."""
-    def __new__(cls, *, user_input: str) -> Self: ...
-    @property
-    def user_input(self) -> str: ...
-    def __repr__(self) -> str: ...
-    def __eq__(self, other: object) -> bool: ...
-    @staticmethod
-    def from_dtmf_inputs(events: Sequence[str]) -> GetDtmfResult: ...
-
 async def send_dtmf_events(room: _core_RoomSession, events: Sequence[str]) -> str: ...
 
 async def receive_dtmf(
@@ -752,7 +756,7 @@ async def receive_dtmf(
     num_digits: int,
     timeout: float,
     stop_event: str,
-) -> GetDtmfResult: ...
+) -> str: ...
 
 class WarmTransfer:
     """A transfer plan and the runtime ownership of its current dial."""

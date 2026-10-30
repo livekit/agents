@@ -340,6 +340,7 @@ impl Run {
             deadlock: None,
             pending: BTreeMap::new(),
             task_awaits: BTreeMap::new(),
+            dtmf_await: None,
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),
             utterances: BTreeMap::new(),

@@ -64,7 +64,7 @@ pub fn format_dtmf(events: &[DtmfEvent]) -> String {
 
 pub use lk_agents_abi::voice::workflows::GetDtmfResult;
 
-/// `GetDtmfResult.from_dtmf_inputs(events)`: the pressed digits, formatted.
+/// The pressed digits, formatted.
 pub fn dtmf_result(inputs: &[DtmfEvent]) -> GetDtmfResult {
     GetDtmfResult { user_input: format_dtmf(inputs) }
 }
@@ -120,52 +120,6 @@ pub fn dtmf_send_answer(events: &[String], outcome: Result<(), DtmfSendError>) -
     }
 }
 
-/// `GetDtmfResult` as a `_core` value: the record plus its constructor from the keys pressed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DtmfResult(pub GetDtmfResult);
-
-/// GetDtmfResult(user_input: 'str')
-impl DtmfResult {
-    pub fn new(user_input: String) -> Self {
-        DtmfResult(GetDtmfResult { user_input })
-    }
-
-    pub fn user_input(&self) -> String {
-        self.0.user_input.clone()
-    }
-
-    pub fn host_repr(&self) -> String {
-        format!("GetDtmfResult(user_input={})", lk_agents_core::text::py_repr(&self.0.user_input))
-    }
-
-    /// `GetDtmfResult.from_dtmf_inputs(events)`: the digits pressed, formatted. An unknown event
-    /// raises rather than being dropped.
-    pub fn from_dtmf_inputs(events: Vec<String>) -> Result<Self, String> {
-        Ok(DtmfResult(dtmf_result(&parse_all(&events, |e| format!("{e:?} is not a DTMF key"))?)))
-    }
-}
-
-impl lk_agents_abi::voice::workflows::dtmf::DtmfResult for DtmfResult {
-    fn new(user_input: String) -> Self {
-        DtmfResult::new(user_input)
-    }
-    fn user_input(&self) -> String {
-        DtmfResult::user_input(self)
-    }
-    fn host_repr(&self) -> String {
-        DtmfResult::host_repr(self)
-    }
-    fn host_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-    fn from_dtmf_inputs(
-        events: Vec<String>,
-    ) -> Result<Self, lk_agents_abi::voice::workflows::dtmf::DtmfInputError> {
-        DtmfResult::from_dtmf_inputs(events)
-            .map_err(lk_agents_abi::voice::workflows::dtmf::DtmfInputError)
-    }
-}
-
 pub use lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,22 +154,6 @@ pub enum DtmfOutcome {
     Complete(GetDtmfResult),
     Incomplete { message: String },
     Stopped,
-}
-
-impl DtmfOutcome {
-    /// The outcome as its ABI record (`lk_agents_abi::voice::workflows::DtmfOutcomeWire`).
-    pub fn wire(&self) -> lk_agents_abi::voice::workflows::DtmfOutcomeWire {
-        use lk_agents_abi::voice::workflows as w;
-        match self {
-            DtmfOutcome::Complete(r) => {
-                w::DtmfOutcomeWire::Complete(w::DtmfComplete { user_input: r.user_input.clone() })
-            }
-            DtmfOutcome::Incomplete { message } => {
-                w::DtmfOutcomeWire::Incomplete(w::DtmfIncomplete { message: message.clone() })
-            }
-            DtmfOutcome::Stopped => w::DtmfOutcomeWire::Stopped(w::DtmfStopped {}),
-        }
-    }
 }
 
 /// The event/timer half of DTMF collection.
@@ -353,7 +291,9 @@ pub(crate) enum DtmfTaskEvent {
         call: Option<RequestId>,
     },
     Digit(String),
-    /// DTMF collection stopped, or the session closes: an owed answer is `Stopped`.
+    /// The awaiter of `call` went away; a newer collection is left running.
+    Cancel(RequestId),
+    /// The session closes: an owed answer is `Stopped`.
     Stop,
     AgentState(AgentState),
     UserState(UserState),
@@ -367,17 +307,12 @@ impl From<DtmfCommand> for DtmfTaskEvent {
     fn from(cmd: DtmfCommand) -> Self {
         match cmd {
             DtmfCommand::Start { collector, call } => DtmfTaskEvent::Start { collector, call },
-            DtmfCommand::Digit { digit } => DtmfTaskEvent::Digit(digit),
-            DtmfCommand::Stop => DtmfTaskEvent::Stop,
+            DtmfCommand::Cancel { call } => DtmfTaskEvent::Cancel(call),
         }
     }
 }
 
 impl Dtmf {
-    pub(crate) fn reply_running(&self) -> bool {
-        self.running.as_ref().is_some_and(|dtmf| dtmf.collector.reply_running())
-    }
-
     pub(crate) fn handle(&mut self, ev: DtmfTaskEvent, now: Ts, out: &mut Out) {
         let action = match ev {
             DtmfTaskEvent::Start { collector, call } => {
@@ -386,6 +321,12 @@ impl Dtmf {
                 return;
             }
             DtmfTaskEvent::Stop => return self.stop(out),
+            DtmfTaskEvent::Cancel(call) => {
+                if self.running.as_ref().is_some_and(|dtmf| dtmf.call == Some(call)) {
+                    self.stop(out);
+                }
+                return;
+            }
             DtmfTaskEvent::Debounced => {
                 let Some(dtmf) = &mut self.running else { return };
                 dtmf.armed = false;
@@ -427,8 +368,7 @@ impl Dtmf {
         self.running.take().and_then(|d| d.call)
     }
 
-    /// The collection stops: its guard released (the host reading `dtmf_reply_running()` must not
-    /// see a guard nobody will release), its debounce cancelled, an owed answer `Stopped`.
+    /// The collection stops: its guard released, its debounce cancelled, an owed answer `Stopped`.
     fn stop(&mut self, out: &mut Out) {
         let Some(mut dtmf) = self.running.take() else { return };
         dtmf.collector.finish_reply();
@@ -576,11 +516,12 @@ impl DtmfReception {
         Ok(false)
     }
 
-    pub fn finish(self) -> Result<DtmfResult, ReceiveDtmfError> {
+    /// The digits, space-separated.
+    pub fn finish(self) -> Result<String, ReceiveDtmfError> {
         if self.digits.len() != self.num_digits {
             return Err(ReceiveDtmfError::Incomplete(self.num_digits, self.digits.len()));
         }
-        Ok(DtmfResult(dtmf_result(&self.digits)))
+        Ok(format_dtmf(&self.digits))
     }
 }
 

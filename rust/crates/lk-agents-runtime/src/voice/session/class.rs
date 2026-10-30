@@ -335,6 +335,46 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }))
     }
 
+    fn collect_dtmf(
+        &self,
+        num_digits: usize,
+        ask_for_confirmation: bool,
+        timeout: f64,
+        stop_event: String,
+    ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused> {
+        use lk_agents_voice::agent_session::DtmfCommand;
+        use lk_agents_voice::workflows::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
+        let stop = DtmfEvent::parse(&stop_event)
+            .ok_or_else(|| CommandRefused::Invalid(format!("{stop_event:?} is not a DTMF key")))?;
+        let timeout = Duration::try_from_secs_f64(timeout)
+            .map_err(|e| CommandRefused::Invalid(format!("timeout: {e}")))?;
+        let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)
+            .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
+        let (call, rx) = self.call(Answer::dtmf)?;
+        let id = call.id;
+        let tx = self.api()?;
+        self.send_awaited(Origin::Host, DtmfCommand::Start { collector, call: Some(id) }, call)?;
+        // Dropped unanswered (the awaiter was cancelled): the collection stops.
+        struct Collecting(Option<(Tx, RequestId)>);
+        impl Drop for Collecting {
+            fn drop(&mut self) {
+                if let Some((tx, call)) = self.0.take() {
+                    let _ = tx.send_from(Origin::Host, DtmfCommand::Cancel { call }.into());
+                }
+            }
+        }
+        let mut collecting = Collecting(Some((tx, id)));
+        Ok(Box::pin(async move {
+            let outcome = rx.await;
+            collecting.0 = None;
+            match outcome.unwrap_or(DtmfOutcome::Stopped) {
+                DtmfOutcome::Complete(result) => Ok(result.user_input),
+                DtmfOutcome::Incomplete { message } => Err(VoiceTaskEnded::Failed(message)),
+                DtmfOutcome::Stopped => Err(VoiceTaskEnded::Cancelled),
+            }
+        }))
+    }
+
     fn set_audio_input(&self, source: Option<Arc<dyn AudioInput>>) -> Result<(), SessionRefused> {
         self.send(ActivityCommand::SetAudioInput(source.map(HostAudio)))
     }

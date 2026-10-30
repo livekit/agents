@@ -269,7 +269,6 @@ from ._generated._core_voice import (
     ConsoleIo as ConsoleIo,
     DataStreamAudioOutput as DataStreamAudioOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
-    GetDtmfResult as GetDtmfResult,
     NodeAudio as NodeAudio,
     NodeText as NodeText,
     NodeTranscript as NodeTranscript,

@@ -369,9 +369,9 @@ impl RoomIo {
             | RoomEvent::ParticipantActive { .. }
             | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::SipDtmf { participant: None, .. } => {}
-            RoomEvent::SipDtmf { participant: Some(who), .. } => {
+            RoomEvent::SipDtmf { participant: Some(who), digit } => {
                 if self.coordinator.borrow().accepts_key_press(who) {
-                    self.emit(RoomIoEvent::KeyPressed)?;
+                    self.emit(RoomIoEvent::KeyPressed(digit.clone()))?;
                 }
             }
         }
