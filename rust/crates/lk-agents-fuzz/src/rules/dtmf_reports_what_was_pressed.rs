@@ -27,13 +27,19 @@ impl Rule for DtmfReportsWhatWasPressed {
     const CONTRACT: Contract = Contract {
         id: "dtmf_reports_what_was_pressed",
         guarantee: "A DTMF collection answers with the keys pressed: complete at num_digits, incomplete otherwise, stopped only once ended.",
-        examples: &[complete_as_pressed, stopped_after_stop, a_guest_is_not_heard],
+        examples: &[
+            complete_as_pressed,
+            stopped_after_stop,
+            a_guest_is_not_heard,
+            a_press_racing_the_close,
+        ],
         counterexamples: &[
             wrong_digits,
             complete_too_short,
             stopped_while_running,
             a_press_dropped,
             a_guests_press_heard,
+            a_press_dropped_before_the_close,
         ],
         probe: Some(two_collections),
     };
@@ -59,7 +65,17 @@ impl Rule for DtmfReportsWhatWasPressed {
             .iter()
             .filter(|a| a.accepted && matches!(a.input, Input::Dtmf { input: DtmfInput::Digit, .. }))
             .collect();
-        let owed = presses.iter().filter(|a| closing.is_none_or(|c| a.at < c)).count();
+        // The room link forwards a press on its own task: a close the session began in the
+        // driver's first turn after the press may beat it, as the room's events and a failing
+        // provider race in a real call. A press the driver had a whole turn to take is owed.
+        let owed = presses
+            .iter()
+            .filter(|a| {
+                closing.is_none_or(|c| {
+                    inputs.driver_turn_after(a.at).is_some_and(|t| t.ended.is_some_and(|e| e < c))
+                })
+            })
+            .count();
         let heard: Vec<_> = journaled.iter().map(|(_, key)| *key).collect();
         let pressed_keys: Vec<_> = presses
             .iter()
@@ -270,6 +286,32 @@ fn a_guest_is_not_heard() -> Recording {
 /// The person pressed a key the session never heard.
 fn a_press_dropped() -> Recording {
     collecting(0).sent(key(DtmfKey::One)).done()
+}
+
+/// The session's own close began in the driver's turn that would have taken the press.
+fn a_press_racing_the_close() -> Recording {
+    collecting(0)
+        .sent(key(DtmfKey::One))
+        .sent(Input::Advance { ms: Millis(20) })
+        .journal(error_close())
+        .sent(Input::Advance { ms: Millis(20) })
+        .done()
+}
+
+/// The driver had a whole turn to take the press before its close, and never heard it.
+fn a_press_dropped_before_the_close() -> Recording {
+    collecting(0)
+        .sent(key(DtmfKey::One))
+        .sent(Input::Advance { ms: Millis(20) })
+        .sent(Input::Advance { ms: Millis(20) })
+        .journal(error_close())
+        .done()
+}
+
+fn error_close() -> Step {
+    use lk_agents_voice::trace::CloseStep;
+    let reason = lk_agents_abi::voice::events::CloseReason::Error;
+    Step::Close(CloseStep::Requested { reason, drain: false })
 }
 
 /// A guest's press reached the session.
