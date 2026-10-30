@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -116,7 +117,7 @@ class STT(stt.STT):
         use_realtime: NotGivenOr[bool] = NOT_GIVEN,  # Deprecated
         sample_rate: STTRealtimeSampleRates = 16000,
         audio_chunk_duration_ms: int = 50,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
@@ -152,7 +153,9 @@ class STT(stt.STT):
                 milliseconds. Must be a positive integer. Defaults to 50. Larger chunks reduce
                 message frequency but increase buffering latency. Flushes send any shorter
                 remaining chunk before committing. Only used for Scribe v2 realtime.
-            server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
+            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for Scribe v2 realtime model.
+                At construction, omit or set to None to use manual commits. Pass {} to enable server VAD defaults.
+                In update_options(), omission keeps the current setting; None disables server VAD and restores manual commits.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
@@ -230,6 +233,7 @@ class STT(stt.STT):
                 streaming=use_realtime,
                 interim_results=True,
                 aligned_transcript="word" if include_timestamps and use_realtime else False,
+                manual_flush=use_realtime and (not is_given(server_vad) or server_vad is None),
             )
         )
 
@@ -283,16 +287,17 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        if is_given(language):
-            self._opts.language_code = LanguageCode(language)
+        request_language = (
+            LanguageCode(language) if is_given(language) else self._opts.language_code
+        )
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         form = aiohttp.FormData()
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", self._opts.model_id)
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
-        if self._opts.language_code:
-            form.add_field("language_code", self._opts.language_code)
+        if request_language:
+            form.add_field("language_code", request_language)
         if is_given(self._opts.keyterms):
             for keyterm in self._opts.keyterms:
                 form.add_field("keyterms", keyterm)
@@ -346,7 +351,7 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
-        normalized_language = LanguageCode(language_code or self._opts.language_code or "")
+        normalized_language = LanguageCode(language_code or request_language or "")
         return self._transcription_to_speech_event(
             language_code=normalized_language,
             text=extracted_text,
@@ -393,16 +398,24 @@ class STT(stt.STT):
         self,
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        """Update STT options. Omitted options keep their current values.
+
+        Set server_vad to None to disable server VAD and use manual commits.
+        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
+        Changing server_vad reconnects active streams and can discard unfinished transcripts.
+        Wait for the current turn's final transcript before changing the commit strategy.
+        """
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
 
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+            self._capabilities.manual_flush = self._capabilities.streaming and server_vad is None
 
         if is_given(keyterms):
             self._opts.keyterms = keyterms
@@ -474,11 +487,18 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        """Update stream options. Omitted options keep their current values.
+
+        Set server_vad to None to disable server VAD and use manual commits.
+        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
+        Changes reconnect the stream and can discard unfinished transcripts.
+        Wait for the current turn's final transcript before changing these options.
+        """
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
@@ -563,15 +583,22 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_chunk,
             )
 
+            # Scribe closes the session on a commit with less than 0.3s of audio since the
+            # previous commit or the connect
+            min_commit_samples = self._opts.sample_rate * 3 // 10
+            uncommitted_samples = 0
             has_ended = False
             try:
                 async for data in self._input_ch:
                     # Write audio bytes to the buffer and get complete chunks
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
+                        uncommitted_samples += data.samples_per_channel
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif isinstance(data, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
+                        if (missing := min_commit_samples - uncommitted_samples) > 0:
+                            frames.append(rtc.AudioFrame.create(self._opts.sample_rate, 1, missing))
                         has_ended = True
 
                     for frame in frames:
@@ -600,6 +627,7 @@ class SpeechStream(stt.SpeechStream):
                                 }
                             )
                         )
+                        uncommitted_samples = 0
                         has_ended = False
 
                 closing_ws = True
@@ -612,8 +640,11 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -635,6 +666,14 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                    if parsed.get("message_type") in (
+                        "partial_transcript",
+                        "committed_transcript",
+                        "committed_transcript_with_timestamps",
+                    ):
+                        self._mark_provider_progress()
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
@@ -743,6 +782,7 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     ws_url,
                     headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -855,16 +895,15 @@ class SpeechStream(stt.SpeechStream):
             "input_error",
             "error",
         ):
-            error_msg = data.get("message", "Unknown error")
-            error_details = data.get("details", "")
-            details_suffix = " - " + error_details if error_details else ""
             logger.error(
-                "ElevenLabs STT error [%s]: %s%s",
+                "ElevenLabs STT error [%s]",
                 message_type,
-                error_msg,
-                details_suffix,
+                extra={"lk.pii.data": data},
             )
-            raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
+            raise APIConnectionError(
+                f"ElevenLabs STT error [{message_type}]",
+                retryable=message_type not in ("auth_error", "quota_exceeded", "input_error"),
+            ) from None
         else:
             logger.warning(
                 "ElevenLabs STT unknown message type: %s",

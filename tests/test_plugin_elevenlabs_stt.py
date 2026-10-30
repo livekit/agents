@@ -6,6 +6,7 @@ import asyncio
 import base64
 import dataclasses
 import json
+import logging
 import time
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -19,7 +20,13 @@ from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, LanguageCode, stt
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIStatusError,
+    LanguageCode,
+    stt,
+)
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -551,13 +558,15 @@ class _FakeWS:
     def __init__(self) -> None:
         self.sent: list[dict] = []
         self._closed = asyncio.Event()
+        self.received: asyncio.Queue[dict] = asyncio.Queue()
 
     async def send_str(self, data: str) -> None:
         self.sent.append(json.loads(data))
 
     async def receive(self) -> Any:
-        await self._closed.wait()
-        raise AssertionError("the test should never let recv_task resume")
+        return SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT, data=json.dumps(await self.received.get())
+        )
 
     async def close(self) -> None:
         self._closed.set()
@@ -583,6 +592,10 @@ def _live_stream(ws: _FakeWS, **kwargs: Any) -> elevenlabs_stt.SpeechStream:
     return stream
 
 
+# Scribe rejects a commit with less audio than this since the previous one
+_MIN_COMMIT_MS = 300
+
+
 def _frame(ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
     samples = sample_rate * ms // 1000
     return rtc.AudioFrame(
@@ -601,19 +614,19 @@ async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) ->
 
 
 async def test_flush_commits_the_turn_when_no_audio_is_left_to_send() -> None:
-    # 50ms is exactly one repack chunk, so AudioByteStream.flush() returns no frames.
+    # 300ms is a whole number of repack chunks, so AudioByteStream.flush() returns no frames.
     # The commit must still go out: Scribe v2 does not finalize a turn without one, and
     # gating it on the per-frame loop dropped it here (roughly 1 flush in 5).
     ws = _FakeWS()
     stream = _live_stream(ws)
     try:
-        stream.push_frame(_frame(50))
-        await _wait_until(lambda: len(ws.sent) == 1)
+        stream.push_frame(_frame(_MIN_COMMIT_MS))
+        await _wait_until(lambda: len(ws.sent) == 6)
 
         stream.flush()
-        await _wait_until(lambda: len(ws.sent) == 2)
+        await _wait_until(lambda: len(ws.sent) == 7)
 
-        assert [msg["commit"] for msg in ws.sent] == [False, True]
+        assert [msg["commit"] for msg in ws.sent] == [False] * 6 + [True]
         assert ws.sent[-1]["audio_base_64"] == ""
     finally:
         await stream.aclose()
@@ -625,12 +638,53 @@ async def test_flush_commits_after_the_buffered_audio() -> None:
     ws = _FakeWS()
     stream = _live_stream(ws)
     try:
-        stream.push_frame(_frame(30))
+        stream.push_frame(_frame(_MIN_COMMIT_MS + 30))
         stream.flush()
-        await _wait_until(lambda: len(ws.sent) == 2)
+        await _wait_until(lambda: len(ws.sent) == 8)
 
-        assert [msg["commit"] for msg in ws.sent] == [False, True]
-        assert ws.sent[0]["audio_base_64"] != ""
+        assert [msg["commit"] for msg in ws.sent] == [False] * 7 + [True]
+        assert ws.sent[-2]["audio_base_64"] != ""
+    finally:
+        await stream.aclose()
+
+
+def _audio_ms_before_each_commit(sent: list[dict], sample_rate: int = 16000) -> list[float]:
+    audio_ms: list[float] = []
+    samples = 0
+    for msg in sent:
+        if msg["commit"]:
+            audio_ms.append(samples * 1000 / sample_rate)
+            samples = 0
+        else:
+            samples += len(base64.b64decode(msg["audio_base_64"])) // 2
+    return audio_ms
+
+
+async def test_flush_pads_a_short_turn_with_silence() -> None:
+    # Scribe answers a commit with less than 300ms of audio since the previous one with
+    # commit_throttled and closes the session, dropping the uncommitted audio. The commit still
+    # has to go out on the flush: the caller waits on its final transcript, and no more audio
+    # may follow (push-to-talk, session close).
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    speech = bytes(range(1, 201)) * 16  # 100ms without a zero sample
+    try:
+        # the first commit on a connection counts the audio since the connect
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=speech, sample_rate=16000, num_channels=1, samples_per_channel=len(speech) // 2
+            )
+        )
+        stream.flush()
+        await _wait_until(lambda: sum(msg["commit"] for msg in ws.sent) == 1)
+
+        stream.flush()
+        await _wait_until(lambda: sum(msg["commit"] for msg in ws.sent) == 2)
+
+        assert _audio_ms_before_each_commit(ws.sent) == [300, 300]
+        silence_ms = (_MIN_COMMIT_MS - 100) + _MIN_COMMIT_MS
+        audio = b"".join(base64.b64decode(msg["audio_base_64"]) for msg in ws.sent)
+        assert audio == speech + bytes(16000 * 2 * silence_ms // 1000)
     finally:
         await stream.aclose()
 
@@ -682,6 +736,81 @@ def test_committed_transcript_sets_confidence() -> None:
     assert final.alternatives[0].confidence > 0.9
 
 
+@pytest.mark.parametrize(
+    ("model", "server_vad", "manual_flush"),
+    [
+        ("scribe_v2_realtime", NOT_GIVEN, True),
+        ("scribe_v2_realtime", None, True),
+        ("scribe_v2_realtime", {}, False),
+        ("scribe_v2", NOT_GIVEN, False),
+    ],
+)
+def test_manual_flush_capability(model, server_vad, manual_flush) -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model=model, server_vad=server_vad)
+    assert instance.capabilities.manual_flush is manual_flush
+
+
+def test_manual_flush_capability_tracks_server_vad_updates() -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    instance.update_options(server_vad={})
+    assert instance.capabilities.manual_flush is False
+    instance.update_options(server_vad=None)
+    assert instance.capabilities.manual_flush is True
+
+
+@pytest.mark.parametrize(
+    "message_type", ["auth_error", "quota_exceeded", "transcriber_error", "input_error", "error"]
+)
+def test_provider_error_content_stays_in_pii_attributes(
+    message_type: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    payload = {
+        "message_type": message_type,
+        "message": "customer transcript",
+        "details": "provider credential",
+    }
+    stream = _new_stream()
+    with caplog.at_level(logging.ERROR), pytest.raises(APIConnectionError) as exc:
+        stream._process_stream_event(payload)
+
+    assert str(exc.value) == f"ElevenLabs STT error [{message_type}]"
+    assert exc.value.__cause__ is None
+    assert exc.value.__suppress_context__
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.getMessage() == f"ElevenLabs STT error [{message_type}]"
+    assert record.__dict__["lk.pii.data"] == payload
+    assert record.exc_info is None
+
+
+@pytest.mark.parametrize(
+    ("message_type", "retryable"),
+    [
+        ("auth_error", False),
+        ("quota_exceeded", False),
+        ("input_error", False),
+        ("transcriber_error", True),
+        ("error", True),
+    ],
+)
+async def test_provider_error_reaches_stream_consumer(message_type: str, retryable: bool) -> None:
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    if retryable:
+        stream._conn_options = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    try:
+        ws.received.put_nowait({"message_type": message_type, "message": "customer content"})
+        with pytest.raises(
+            APIConnectionError, match=rf"ElevenLabs STT error \[{message_type}\]"
+        ) as exc:
+            await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert exc.value.retryable is retryable
+        assert stream._num_retries == 0
+        assert ws._closed.is_set()
+    finally:
+        await stream.aclose()
+
+
 def test_audio_chunk_duration_defaults_to_50ms() -> None:
     assert _stt()._opts.audio_chunk_duration_ms == 50
 
@@ -701,7 +830,7 @@ async def test_configured_audio_chunks_preserve_audio_and_commit(
     ws = _FakeWS()
     stream = _live_stream(ws, sample_rate=sample_rate, audio_chunk_duration_ms=duration)
     # Distinct PCM bytes reveal drops, duplication and reordering across input frames.
-    total_samples = sample_rate * (duration * 2 + tail_ms) // 1000
+    total_samples = sample_rate * (max(duration * 2, _MIN_COMMIT_MS) + tail_ms) // 1000
     audio = bytes(i % 251 for i in range(total_samples * 2))
     input_frame_bytes = sample_rate * 20 // 1000 * 2
     chunk_bytes = sample_rate * duration // 1000 * 2
@@ -763,3 +892,29 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+async def test_recognize_language_override_applies_to_one_call() -> None:
+    # StreamAdapter passes its stream's language to every recognize() call, so an
+    # override must not leak into the STT's own configuration
+    sent_languages: list[str] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        form = await request.post()
+        sent_languages.append(str(form.get("language_code")))
+        return web.json_response({"text": "hello", "words": []})
+
+    app = web.Application()
+    app.router.add_post("/speech-to-text", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        url = str(server.make_url(""))
+        batch_stt = elevenlabs_stt.STT(
+            api_key="test-key", base_url=url, language_code="en", http_session=session
+        )
+        overridden = await batch_stt.recognize([_frame(100)], language="fr")
+        default = await batch_stt.recognize([_frame(100)])
+
+    assert sent_languages == ["fr", "en"]
+    assert overridden.alternatives[0].language == "fr"
+    assert default.alternatives[0].language == "en"
+    assert batch_stt._opts.language_code == "en"

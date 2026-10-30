@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+from array import array
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,7 +20,8 @@ from openai.types.realtime import (
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import AgentSession, llm
+from livekit import rtc
+from livekit.agents import AgentSession, llm, utils
 from livekit.agents._exceptions import APIError
 from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
@@ -37,9 +40,19 @@ pytestmark = pytest.mark.unit
 
 
 def test_direct_model_preserves_public_label_and_model_types() -> None:
+    from livekit.agents import inference
+    from livekit.agents.llm._realtime import openai as core
+
     model = RealtimeModel(api_key="fake")
+    azure = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
 
     assert model.label == "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+    assert type(azure) is RealtimeModel
+    assert azure.label == model.label
+    assert RealtimeSession is core.RealtimeSession
+    assert not issubclass(inference.RealtimeModel, RealtimeModel)
     assert PluginRealtimeModels is CoreRealtimeModels
 
 
@@ -240,10 +253,23 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
 
 def test_is_fatal_error_matches_known_codes() -> None:
     assert _is_fatal_error(SimpleNamespace(code="insufficient_quota"))
+    assert _is_fatal_error(
+        SimpleNamespace(code="credit_balance_exhausted", type="insufficient_quota")
+    )
     assert _is_fatal_error(SimpleNamespace(code=None, type="invalid_api_key"))
     assert not _is_fatal_error(SimpleNamespace(code="server_error"))
     assert not _is_fatal_error(SimpleNamespace())
     assert not _is_fatal_error(None)
+
+
+def test_is_fatal_error_matches_either_code_or_type() -> None:
+    # a fatal type is fatal even when the code is one we don't list (#7805)
+    assert _is_fatal_error(SimpleNamespace(code="some_new_code", type="insufficient_quota"))
+    assert _is_fatal_error(SimpleNamespace(code="insufficient_quota", type="some_new_type"))
+    assert _is_fatal_error(SimpleNamespace(code="", type="insufficient_quota"))
+    assert not _is_fatal_error(SimpleNamespace(code="server_error", type="server_error"))
+    assert not _is_fatal_error(SimpleNamespace(code="", type=""))
+    assert not _is_fatal_error(SimpleNamespace(code=None, type=None))
 
 
 def _handle_error_session(
@@ -431,7 +457,8 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     chat_ctx.add_message(role="user", content="hello", id="item_1")
     update = asyncio.create_task(session.update_chat_ctx(chat_ctx))
     await asyncio.sleep(0)  # let it send the create and start waiting on it
-    assert (waiter := session._item_create_future.get("item_1")) is not None
+    waiter = session._item_create_future.get("item_1")
+    assert waiter is not None
     waiter.set_result(None)  # what conversation.item.added does
     await update
 
@@ -664,6 +691,7 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
     )
     assert report.to_dict()["usage"] == [
         {
+            "type": "stt_usage",
             "provider": "api.openai.com",
             "model": "whisper-1",
             "input_tokens": 10,
@@ -679,19 +707,24 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
 
 
 async def _start_function_call_server(
-    arguments: str, *, drop_on_output: bool = False
+    arguments: str, *, drop_on_output: bool = False, refuse_first: bool = False
 ) -> tuple[Any, list[tuple[Any, list[dict]]]]:
     """A realtime server whose response calls `weather`, recording each connection's creates.
 
     With `drop_on_output`, the first connection closes on the function call output before it
-    confirms it.
+    confirms it. With `refuse_first`, the first handshake gets a 503.
     """
     from aiohttp import WSMsgType, web
     from aiohttp.test_utils import TestServer
 
     connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
+    handshakes = 0
 
-    async def realtime(request: web.Request) -> web.WebSocketResponse:
+    async def realtime(request: web.Request) -> web.StreamResponse:
+        nonlocal handshakes
+        handshakes += 1
+        if refuse_first and handshakes == 1:
+            return web.Response(status=503)
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         created: list[dict] = []
@@ -847,3 +880,262 @@ async def test_reconnect_creates_an_item_the_lost_connection_never_confirmed() -
         await session.aclose()
         await model.aclose()
         await server.close()
+
+
+async def test_a_refused_first_handshake_retries_as_a_fresh_connection() -> None:
+    # nothing reached the server, so the queued startup events are all it needs; replaying
+    # as a reconnection would discard the reply requested during startup
+    server, connections = await _start_function_call_server("{}", refuse_first=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    reconnected: list[Any] = []
+    session.on("session_reconnected", reconnected.append)
+    try:
+        generation = await asyncio.wait_for(session.generate_reply(), 5)
+        assert [call.name async for call in generation.function_stream] == ["weather"]
+        assert len(connections) == 1
+        assert reconnected == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+def _audio_session() -> tuple[RealtimeSession, list[Any]]:
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._input_resampler = None
+    session._bstream = utils.audio.AudioByteStream(24000, 1, samples_per_channel=2400)
+    session._pushed_duration_s = 0
+    sent: list[Any] = []
+    session.send_event = sent.append  # type: ignore[method-assign,assignment]
+    return session, sent
+
+
+def _push(session: RealtimeSession, value: int, ms: int) -> None:
+    for _ in range(ms // 10):
+        session.push_audio(rtc.AudioFrame(array("h", [value] * 240).tobytes(), 24000, 1, 240))
+
+
+def _appended(events: list[Any]) -> list[int]:
+    data = b"".join(
+        base64.b64decode(e.audio) for e in events if e.type == "input_audio_buffer.append"
+    )
+    return array("h", data).tolist()
+
+
+def test_commit_sends_the_partial_frame_with_its_turn() -> None:
+    session, sent = _audio_session()
+    _push(session, 1, 250)
+    session.commit_audio()
+
+    commit = next(i for i, e in enumerate(sent) if e.type == "input_audio_buffer.commit")
+    assert len(_appended(sent[:commit])) == 6000
+
+
+def test_clear_drops_buffered_audio() -> None:
+    session, sent = _audio_session()
+    _push(session, 1, 250)
+    session.clear_audio()
+    cleared = len(sent)
+    _push(session, 2, 200)
+
+    assert set(_appended(sent[cleared:])) == {2}
+
+
+# --------------------------------------------------------------------------- #
+# item ids over the API's 32-char limit
+# --------------------------------------------------------------------------- #
+
+_LONG_UUID = "09b67175-054b-4b4a-8716-4b59389b8cae"
+_LONG_PREFIXED = "item_6b1619a1-efb7-4790-80c2-acc780dfce50_3"
+
+
+async def _start_item_id_limit_server() -> tuple[Any, list[tuple[Any, list[dict]]], list[dict]]:
+    """A realtime server that, like OpenAI and Azure, rejects item ids over 32 chars and
+    creates anchored to an item it does not hold. Returns the server, each connection's
+    received client events, and the errors it sent."""
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
+    errors: list[dict] = []
+
+    async def realtime(request: web.Request) -> web.StreamResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        received: list[dict] = []
+        connections.append((ws, received))
+        await ws.send_json({"type": "session.created", "event_id": "ev_session", "session": {}})
+        held: list[str] = []
+
+        async def reject(event: dict, code: str) -> None:
+            error = {"type": "invalid_request_error", "code": code, "message": code}
+            errors.append(error)
+            await ws.send_json(
+                {
+                    "type": "error",
+                    "event_id": "ev_error",
+                    "error": {**error, "event_id": event.get("event_id")},
+                }
+            )
+
+        async for msg in ws:
+            if msg.type is not WSMsgType.TEXT:
+                continue
+            event = msg.json()
+            received.append(event)
+            if event["type"] == "conversation.item.create":
+                item, previous = event["item"], event.get("previous_item_id")
+                if len(item.get("id", "")) > 32:
+                    await reject(event, "string_above_max_length")
+                elif previous not in (None, "root") and previous not in held:
+                    await reject(event, "item_create_invalid_previous_item_id")
+                else:
+                    at = (
+                        0
+                        if previous == "root"
+                        else held.index(previous) + 1
+                        if previous
+                        else len(held)
+                    )
+                    held.insert(at, item["id"])
+                    await ws.send_json(
+                        {
+                            "type": "conversation.item.added",
+                            "event_id": f"ev_{item['id']}",
+                            "previous_item_id": held[at - 1] if at else None,
+                            "item": item,
+                        }
+                    )
+            elif event["type"] == "conversation.item.delete":
+                if event["item_id"] not in held:
+                    await reject(event, "item_delete_invalid_item_id")
+                else:
+                    held.remove(event["item_id"])
+                    await ws.send_json(
+                        {
+                            "type": "conversation.item.deleted",
+                            "event_id": "ev_deleted",
+                            "item_id": event["item_id"],
+                        }
+                    )
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/realtime", realtime)
+    server = TestServer(app)
+    await server.start_server()
+    return server, connections, errors
+
+
+def _long_id_chat_ctx() -> llm.ChatContext:
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="first", id=_LONG_UUID)
+    chat_ctx.add_message(role="assistant", content="second", id=_LONG_PREFIXED)
+    chat_ctx.add_message(role="user", content="third", id="item_short")
+    return chat_ctx
+
+
+async def test_history_with_long_item_ids_reaches_the_conversation() -> None:
+    # agents replay history under ids they chose; one over the limit was rejected along with
+    # every item after it, and the update retried them all on every turn
+    server, connections, errors = await _start_item_id_limit_server()
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = _long_id_chat_ctx()
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+        received = connections[0][1]
+
+        assert errors == []
+        assert [item.id for item in session.chat_ctx.items] == [
+            _LONG_UUID,
+            _LONG_PREFIXED,
+            "item_short",
+        ]
+        creates = [e for e in received if e["type"] == "conversation.item.create"]
+        assert all(len(e["item"]["id"]) <= 32 for e in creates)
+        assert creates[-1]["item"]["id"] == "item_short", "conforming ids go out as given"
+
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+        assert len([e for e in received if e["type"] == "conversation.item.create"]) == 3, (
+            "an unchanged context must not be sent again"
+        )
+
+        chat_ctx.items = [item for item in chat_ctx.items if item.id != _LONG_UUID]
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+        assert errors == []
+        assert [item.id for item in session.chat_ctx.items] == [_LONG_PREFIXED, "item_short"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_reconnect_replays_long_item_ids_within_the_limit() -> None:
+    server, connections, errors = await _start_item_id_limit_server()
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = _long_id_chat_ctx()
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        await connections[0][0].close()
+        for _ in range(100):
+            if len(connections) == 2 and len(connections[1][1]) >= 4:
+                break
+            await asyncio.sleep(0.05)
+
+        replayed = [e for e in connections[1][1] if e["type"] == "conversation.item.create"]
+        assert len(replayed) == 3
+        assert errors == []
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.add_message(role="assistant", content="fourth", id=_LONG_UUID[::-1])
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+        assert errors == []
+        assert [item.id for item in session.chat_ctx.items] == [
+            _LONG_UUID,
+            _LONG_PREFIXED,
+            "item_short",
+            _LONG_UUID[::-1],
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+def test_item_id_map_shortens_every_reference_to_a_long_id() -> None:
+    from livekit.agents.llm._realtime.openai_utils import _ItemIdMap
+
+    ids = _ItemIdMap()
+    create = {
+        "type": "conversation.item.create",
+        "previous_item_id": _LONG_UUID,
+        "item": {"id": _LONG_PREFIXED, "type": "message"},
+    }
+    truncate = {"type": "conversation.item.truncate", "item_id": _LONG_UUID, "audio_end_ms": 10}
+    reference = {
+        "type": "response.create",
+        "response": {"input": [{"type": "item_reference", "id": _LONG_UUID}]},
+    }
+    for event in (create, truncate, reference):
+        ids.shorten(event)
+
+    short_uuid = create["previous_item_id"]
+    assert len(short_uuid) == 32 and len(create["item"]["id"]) == 32
+    assert truncate["item_id"] == short_uuid
+    assert reference["response"]["input"][0]["id"] == short_uuid
+
+    truncated = {"type": "conversation.item.truncated", "item_id": short_uuid}
+    ids.restore(truncated)
+    assert truncated["item_id"] == _LONG_UUID
+
+    server_item = {"type": "conversation.item.added", "previous_item_id": None, "item": {"id": "x"}}
+    ids.restore(server_item)
+    assert server_item == {
+        "type": "conversation.item.added",
+        "previous_item_id": None,
+        "item": {"id": "x"},
+    }

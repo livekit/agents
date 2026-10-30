@@ -10,6 +10,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
+from livekit.agents.types import TOPIC_CHAT
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -26,6 +27,7 @@ from livekit.agents.voice.room_io.types import (
     AudioInputOptions,
     NoiseCancellationParams,
     RoomOptions,
+    TextInputEvent,
 )
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
@@ -398,6 +400,89 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     room_io._tr_synchronizer.aclose.assert_awaited_once()
     room_io._user_tr_output.aclose.assert_awaited_once()
     room_io._agent_tr_output.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("participant_identity", "link_state", "sender_identity", "accepted"),
+    [
+        ("Alice", "pre_link", "Bob", False),
+        ("Alice", "pre_link", "Alice", True),
+        ("Alice", "linked", "Bob", False),
+        ("Alice", "linked", "Alice", True),
+        ("Alice", "disconnected", "Bob", False),
+        (None, "pre_link", "Bob", True),
+        (None, "linked", "Bob", False),
+        (None, "linked", "Alice", True),
+        ("Alice", "unset", "Bob", True),
+    ],
+)
+async def test_roomio_chat_participant_filter(
+    participant_identity: str | None, link_state: str, sender_identity: str, accepted: bool
+) -> None:
+    room = _FakeRoom()
+    participants = {
+        identity: MagicMock(
+            spec=rtc.RemoteParticipant,
+            identity=identity,
+            sid=f"PA_{identity}",
+            attributes={},
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            disconnect_reason=rtc.DisconnectReason.CLIENT_INITIATED,
+        )
+        for identity in ("Alice", "Bob")
+    }
+    agent_session = MagicMock(spec=AgentSession)
+    text_input_cb = MagicMock(return_value=None)
+    room_io = RoomIO(
+        agent_session,
+        room,
+        options=RoomOptions(
+            participant_identity=participant_identity
+            if participant_identity is not None
+            else NOT_GIVEN,
+            audio_input=False,
+            audio_output=False,
+            text_output=False,
+            close_on_disconnect=False,
+        ),
+    )
+    await room_io.start()
+    room_io.register_text_input(text_input_cb)
+    try:
+        await asyncio.sleep(0)
+        assert room_io.linked_participant is None
+        room.remote_participants[sender_identity] = participants[sender_identity]
+
+        if link_state != "pre_link":
+            room.remote_participants["Alice"] = participants["Alice"]
+            room.emit("participant_connected", participants["Alice"])
+            await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+            assert room_io.linked_participant is participants["Alice"]
+        if link_state == "disconnected":
+            del room.remote_participants["Alice"]
+            room.emit("participant_disconnected", participants["Alice"])
+            assert room_io.linked_participant is None
+        elif link_state == "unset":
+            room_io.unset_participant()
+            assert room_io.linked_participant is None
+
+        reader = MagicMock(spec=rtc.TextStreamReader, read_all=AsyncMock(return_value="hello"))
+        room.emit(f"text:{TOPIC_CHAT}", reader, sender_identity)
+        await asyncio.gather(*room_io._tasks)
+
+        if accepted:
+            reader.read_all.assert_awaited_once()
+            text_input_cb.assert_called_once_with(
+                agent_session,
+                TextInputEvent(
+                    text="hello", info=reader.info, participant=participants[sender_identity]
+                ),
+            )
+        else:
+            text_input_cb.assert_not_called()
+            reader.read_all.assert_not_awaited()
+    finally:
+        await room_io.aclose()
 
 
 @pytest.mark.parametrize("event_source", ["linked", "other", "unattributed"])
@@ -910,6 +995,39 @@ async def test_pre_connect_audio_does_not_retry_after_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_audio_input_trailing_silence_includes_all_channels() -> None:
+    """Trailing half-second silence must size data by num_channels (#7967)."""
+    room = _FakeRoom()
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=2,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+        rtc_stream.end()
+        assert audio_input._forward_atask is not None
+        await audio_input._forward_atask
+
+    assert audio_input._data_ch.qsize() == 1
+    frame = await audio_input._data_ch.recv()
+    await audio_input.aclose()
+
+    expected_samples = int(24000 * 0.5)
+    assert frame.num_channels == 2
+    assert frame.samples_per_channel == expected_samples
+    assert len(frame.data) == expected_samples * frame.num_channels  # int16 samples
+
+
+@pytest.mark.asyncio
 async def test_audio_input_does_not_flush_silence_when_detached() -> None:
     room = _FakeRoom()
     audio_input = _make_audio_input_stream(room, noise_cancellation=None)
@@ -1073,6 +1191,31 @@ async def test_selector_returns_noise_cancellation_options() -> None:
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is None
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_nc", "agent_nc", "warns"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+async def test_warns_on_double_noise_cancellation(
+    client_nc: bool, agent_nc: bool, warns: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    room = _FakeRoom()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvc", options={})
+    stream = _make_audio_input_stream(room, noise_cancellation=nc_options if agent_nc else None)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+    if client_nc:
+        publication.audio_features = [AudioTrackFeature.TF_ENHANCED_NOISE_CANCELLATION]
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        stream._on_track_available(track, publication, participant)
+
+    assert ("enhanced noise cancellation" in caplog.text) is warns
 
     await stream.aclose()
 
