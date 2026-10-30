@@ -32,6 +32,9 @@ from ...types import (
 from .. import io
 from ..transcription import find_micro_track_id
 
+# TTS audio waits for a subscriber, so warn when none arrives after publishing
+_NO_SUBSCRIBER_WARNING_DELAY = 10.0
+
 
 class _ParticipantAudioOutput(io.AudioOutput):
     def __init__(
@@ -56,6 +59,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
         self._subscribed_fut = asyncio.Future[None]()
+        self._no_subscriber_timer: asyncio.TimerHandle | None = None
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._audio_bstream = utils.audio.AudioByteStream(
@@ -92,9 +96,31 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._publication = await self._room.local_participant.publish_track(
                 track, self._publish_options
             )
-            await self._publication.wait_for_subscription()
+
+            self._no_subscriber_timer = asyncio.get_running_loop().call_later(
+                _NO_SUBSCRIBER_WARNING_DELAY, self._on_no_subscriber, self._publication.sid
+            )
+            try:
+                await self._publication.wait_for_subscription()
+            finally:
+                self._cancel_no_subscriber_timer()
             if not self._subscribed_fut.done():
                 self._subscribed_fut.set_result(None)
+
+    def _on_no_subscriber(self, track_sid: str) -> None:
+        self._no_subscriber_timer = None
+        logger.warning(
+            "agent audio track has no subscriber after 10s",
+            extra={
+                "track_sid": track_sid,
+                "remote_participant_count": len(self._room.remote_participants),
+            },
+        )
+
+    def _cancel_no_subscriber_timer(self) -> None:
+        if self._no_subscriber_timer is not None:
+            self._no_subscriber_timer.cancel()
+            self._no_subscriber_timer = None
 
     @property
     def subscribed(self) -> asyncio.Future[None]:
@@ -109,6 +135,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
 
     async def aclose(self) -> None:
+        self._cancel_no_subscriber_timer()
         if self._bstream_flush_timer:
             self._bstream_flush_timer.cancel()
         if self._flush_task:

@@ -700,6 +700,30 @@ async def test_interruption_options() -> None:
     check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
 
 
+async def test_min_words_skip_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(5.0)
+    actions.add_user_speech(5.0, 6.0, "Stop!")
+
+    session = create_session(actions, turn_handling={"interruption": {"min_words": 3}})
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    records = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "skipping user input, word count below minimum interruption threshold"
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == logging.INFO
+    assert records[0].word_count == 1
+    assert records[0].min_words == 3
+    assert records[0].speech_id
+
+
 async def test_interruption_by_text_input() -> None:
     speed = 1
     actions = FakeActions()
