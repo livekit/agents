@@ -287,8 +287,9 @@ enum Phase {
         path: Path,
         step: RunStep,
     },
+    /// The run ended by the turn's error; `fail_task` when the message's task fails with it.
     Abandon {
-        unavailable: bool,
+        fail_task: bool,
     },
     Resolve,
     Answer {
@@ -840,12 +841,12 @@ impl TaskMachine {
                     ..Answer::row(task_id, task, Some("not-written"))
                 }));
             }
-            (Phase::Abandon { unavailable: true }, Completion::Done) => {
+            (Phase::Abandon { fail_task: true }, Completion::Done) => {
                 self.answer = None;
                 let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
                 self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
             }
-            (Phase::Abandon { unavailable: false }, Completion::Done) => {
+            (Phase::Abandon { fail_task: false }, Completion::Done) => {
                 return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
                     StorageError::Invalid("a run was abandoned without its cause".into())
                 })));
@@ -1024,8 +1025,10 @@ impl TaskMachine {
                 return Ok(self.poll(now));
             }
             (Phase::Turn(_), _) => {
-                let unavailable =
-                    matches!(error, StorageError::Unavailable(_) | StorageError::LeaseLost(_));
+                // the turn's save cannot be written: the database is lost, or the handler's own
+                // save was refused (a stale save, a field that is not JSON, a state too large)
+                let fail_task =
+                    !matches!(error, StorageError::Cancelled(_) | StorageError::NotFound(_));
                 let outcome = match error {
                     StorageError::Cancelled(_) => RunOutcome::Canceled,
                     _ => RunOutcome::Failed,
@@ -1033,7 +1036,7 @@ impl TaskMachine {
                 let reason = python_reason(&error);
                 self.error = Some(error);
                 self.turn = None;
-                self.phase = Phase::Abandon { unavailable };
+                self.phase = Phase::Abandon { fail_task };
                 Operation::Abandon { outcome, reason }
             }
             (Phase::Answer { reason }, _) => {

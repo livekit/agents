@@ -156,6 +156,25 @@ fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
     ));
 }
 
+/// A handler whose `save_context` raised (a stale save, a field that is not JSON, a state too
+/// large) answered the client the raw error as `Invalid`, its task left `working` until a later
+/// holder failed it `worker-lost`. The run writes nothing and the task fails
+/// `storage-unavailable`: the turn's save could not be written (docs/protocol/a2a.md#errors).
+#[test]
+fn a_refused_save_in_the_handler_fails_the_receipt() {
+    for kind in ["VersionConflict", "NotSerializable", "TooLarge"] {
+        let mut m = machine(Policy::Queue);
+        m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
+        m.pending = Some(4);
+        step(&mut m, Completion::Done);
+        let raised = StorageError::Invalid(format!("{kind}: save_context refused"));
+        let abandon = operation(at(&mut m, Duration::ZERO, Err(raised)));
+        assert!(matches!(abandon, Operation::Abandon { outcome: RunOutcome::Failed, .. }));
+        let pickup = step(&mut m, Completion::Done);
+        assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{kind}: {pickup:?}");
+    }
+}
+
 /// A2A_SEED=1164 (received_message_is_drained, Inbox): a turn that lost the database was answered
 /// failed storage-unavailable while the database, still unreachable, never stored the failure:
 /// its receipt stayed `working` and undrained. A failure that could not be stored answers the
