@@ -372,14 +372,6 @@ impl ErrorCounts {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-/// `AS_` and twelve random hex digits, as `utils.shortuuid("AS_")`.
-pub fn mint_session_id() -> String {
-    use std::hash::BuildHasher;
-    let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
-    format!("AS_{:012x}", n & 0xffff_ffff_ffff)
-}
-
 /// The session's id sequence: the runtime owns it (the host's `say()` / `generate_reply()` take
 /// their speech's id from it as they return the handle) and supplies the core its next value.
 pub type NextId = Box<dyn FnMut() -> u64 + Send>;

@@ -234,7 +234,7 @@ impl DriverBuilder {
             video_sampler: None,
             realtime: None,
             toolset: Default::default(),
-            session_id: lk_agents_voice::agent_session::mint_session_id(),
+            session_id: lk_agents_net::strings::shortuuid("AS_"),
             storage: None,
             journal: Default::default(),
         }
