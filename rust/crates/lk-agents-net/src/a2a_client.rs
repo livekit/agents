@@ -7,7 +7,7 @@ pub mod remote;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
@@ -22,6 +22,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 use crate::env::ProcessEnv;
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
+use crate::lock::Mutex;
 use crate::source::{NativeSource, PullError, Pulled};
 use crate::sse::SseDecoder;
 use crate::task::TokioSpawner;
@@ -109,10 +110,10 @@ impl AgentClient {
     pub async fn connect(&self) -> Result<AgentCard, ClientError> {
         let _gate = self.inner.connect.lock().await;
         self.inner.ensure_open()?;
-        if let Some(card) = self.inner.core.lock().map_err(poisoned)?.card() {
+        if let Some(card) = self.inner.core.lock().card() {
             return Ok(card.clone());
         }
-        let request = self.inner.core.lock().map_err(poisoned)?.card_request()?;
+        let request = self.inner.core.lock().card_request()?;
         let closing = self.inner.closing.notified();
         self.inner.ensure_open()?;
         let discovery = self.inner.read_response(&request);
@@ -135,11 +136,11 @@ impl AgentClient {
                 }
             }
         }
-        Ok(self.inner.core.lock().map_err(poisoned)?.accept_card(&body)?.clone())
+        Ok(self.inner.core.lock().accept_card(&body)?.clone())
     }
 
-    pub fn offers_extension(&self) -> Result<bool, ClientError> {
-        Ok(self.inner.core.lock().map_err(poisoned)?.offers_extension())
+    pub fn offers_extension(&self) -> bool {
+        self.inner.core.lock().offers_extension()
     }
 
     /// An explicitly supplied, validated conversation is sent only to a capable peer and
@@ -152,11 +153,11 @@ impl AgentClient {
         history: Option<&lk_agents_core::a2a::caller_history::CallerHistory>,
         traceparent: Option<&str>,
     ) -> Result<Reply, ClientError> {
-        self.inner.core.lock().map_err(poisoned)?.validate_message(&message, thread_id, task_id)?;
+        self.inner.core.lock().validate_message(&message, thread_id, task_id)?;
         self.connect().await?;
         if thread_id.is_none()
             && message.context_id.is_none()
-            && self.offers_extension()?
+            && self.offers_extension()
             && let Some(history) = history
         {
             message
@@ -164,7 +165,7 @@ impl AgentClient {
                 .push(history.to_part().map_err(|e| ClientError::InvalidInput(e.to_string()))?);
         }
         let id = self.inner.next_id();
-        let request = self.inner.core.lock().map_err(poisoned)?.send(
+        let request = self.inner.core.lock().send(
             message,
             thread_id,
             task_id,
@@ -181,11 +182,8 @@ impl AgentClient {
     ) -> Result<Reply, ClientError> {
         self.connect().await?;
         let id = self.inner.next_id();
-        let request = self.inner.core.lock().map_err(poisoned)?.subscribe(
-            &task,
-            offset,
-            JsonRpcId::Number(id as i64),
-        )?;
+        let request =
+            self.inner.core.lock().subscribe(&task, offset, JsonRpcId::Number(id as i64))?;
         self.start(id, request.traced(traceparent)).await
     }
 
@@ -199,10 +197,9 @@ impl AgentClient {
         let (cancel, mut cancelled) = watch::channel(false);
         let (delivered, mut delivery) = watch::channel(false);
         let (known, mut known_task) = watch::channel(expected.clone());
-        let remote = Arc::new(Mutex::new(expected.clone()));
+        let remote = known_task.clone();
         let terminal = Arc::new(AtomicBool::new(false));
         let work_inner = self.inner.clone();
-        let work_remote = remote.clone();
         let work_terminal = terminal.clone();
         let cleanup_inner = self.inner.clone();
         let task_response = request.task_response;
@@ -212,15 +209,8 @@ impl AgentClient {
             }
             let mut ack = Some(ack);
             let result = {
-                let exchange = exchange(
-                    &work_inner,
-                    request,
-                    &mut ack,
-                    &tx,
-                    &work_remote,
-                    &work_terminal,
-                    &known,
-                );
+                let exchange =
+                    exchange(&work_inner, request, &mut ack, &tx, &work_terminal, &known);
                 tokio::pin!(exchange);
                 tokio::select! {
                     biased;
@@ -285,7 +275,7 @@ impl AgentClient {
                     _ = cancelled.changed() => {},
                 }
                 if !*delivery.borrow() {
-                    let task = work_remote.lock().ok().and_then(|task| task.clone());
+                    let task = known_task.borrow().clone();
                     if let Some(task) = task {
                         work_inner.cancel_owned(&task).await;
                     }
@@ -297,7 +287,7 @@ impl AgentClient {
                 }
                 if !*cancelled.borrow() {
                     if !work_terminal.load(Ordering::Acquire) {
-                        let task = work_remote.lock().ok().and_then(|task| task.clone());
+                        let task = known_task.borrow().clone();
                         if let Some(task) = task {
                             if task_response {
                                 work_inner.observe(CleanupObservation::CancelUncertain {
@@ -325,7 +315,7 @@ impl AgentClient {
                 {
                     let inner = cleanup_inner;
                     if outcome != TaskOutcome::Completed && !terminal.load(Ordering::Acquire) {
-                        let task = remote.lock().ok().and_then(|task| task.clone());
+                        let task = remote.borrow().clone();
                         match task {
                             Some(task) => {
                                 inner.cancel_owned(&task).await;
@@ -334,24 +324,20 @@ impl AgentClient {
                                 .observe(CleanupObservation::UnacknowledgedRequest { request: id }),
                         }
                     }
-                    let empty = if let Ok(mut operations) = inner.operations.lock() {
+                    let empty = {
+                        let mut operations = inner.operations.lock();
                         operations.remove(&id);
                         operations.is_empty()
-                    } else {
-                        false
                     };
-                    if empty
-                        && inner.closed.load(Ordering::Acquire)
-                        && let Ok(mut core) = inner.core.lock()
-                    {
-                        core.close();
+                    if empty && inner.closed.load(Ordering::Acquire) {
+                        inner.core.lock().close();
                     }
                 }
                 done.send_replace(true);
             },
         );
         {
-            let mut operations = self.inner.operations.lock().map_err(poisoned)?;
+            let mut operations = self.inner.operations.lock();
             self.inner.ensure_open()?;
             operations.insert(id, Operation { _task: task, cancel, settled: settled.clone() });
         }
@@ -379,11 +365,7 @@ impl AgentClient {
     ) -> Result<TaskUpdate, ClientError> {
         self.connect().await?;
         let id = self.inner.next_id();
-        let request = self.inner.core.lock().map_err(poisoned)?.cancel(
-            &task,
-            reason,
-            JsonRpcId::Number(id as i64),
-        )?;
+        let request = self.inner.core.lock().cancel(&task, reason, JsonRpcId::Number(id as i64))?;
         let reply = self.start(id, request).await?;
         match reply.pull().await {
             Ok(Pulled::Item(update)) => Ok(update),
@@ -410,23 +392,16 @@ impl AgentClient {
             }
         };
         if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, wait).await.is_err() {
-            let requests = self
-                .inner
-                .operations
-                .lock()
-                .map(|ops| ops.keys().copied().collect())
-                .unwrap_or_default();
+            let requests = self.inner.operations.lock().keys().copied().collect();
             self.inner.observe(CleanupObservation::Incomplete { requests });
         }
-        if self.inner.operations.lock().is_ok_and(|ops| ops.is_empty())
-            && let Ok(mut core) = self.inner.core.lock()
-        {
-            core.close();
+        if self.inner.operations.lock().is_empty() {
+            self.inner.core.lock().close();
         }
     }
 
     pub fn cleanup_observations(&self) -> Vec<CleanupObservation> {
-        self.inner.observations.lock().map(|o| o.clone()).unwrap_or_default()
+        self.inner.observations.lock().clone()
     }
 }
 
@@ -448,7 +423,7 @@ impl Inner {
     }
 
     fn observe(&self, observation: CleanupObservation) {
-        let Ok(mut observations) = self.observations.lock() else { return };
+        let mut observations = self.observations.lock();
         let first = !observations.contains(&observation);
         if first {
             observations.push(observation.clone());
@@ -462,16 +437,12 @@ impl Inner {
     fn cancel_all(&self) -> Vec<watch::Receiver<bool>> {
         self.operations
             .lock()
-            .map(|mut operations| {
-                operations
-                    .values_mut()
-                    .map(|op| {
-                        op.cancel.send_replace(true);
-                        op.settled.clone()
-                    })
-                    .collect()
+            .values_mut()
+            .map(|op| {
+                op.cancel.send_replace(true);
+                op.settled.clone()
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     fn exchange(&self, request: &Request) -> Exchange {
@@ -510,7 +481,7 @@ impl Inner {
         reason: Option<&str>,
     ) -> Result<TaskUpdate, ClientError> {
         let id = JsonRpcId::Number(self.next_id() as i64);
-        let request = self.core.lock().map_err(poisoned)?.cancel(task, reason, id.clone())?;
+        let request = self.core.lock().cancel(task, reason, id.clone())?;
         let body = self.read_response(&request).await?;
         ReplyState::new(Some(task.clone())).decode_task(&body, &id)
     }
@@ -560,8 +531,7 @@ struct OperationGuard {
 impl OperationGuard {
     fn cancel(&self) {
         if let Some(inner) = self.inner.upgrade()
-            && let Ok(mut operations) = inner.operations.lock()
-            && let Some(operation) = operations.get_mut(&self.id)
+            && let Some(operation) = inner.operations.lock().get_mut(&self.id)
         {
             operation.cancel.send_replace(true);
         }
@@ -620,7 +590,6 @@ async fn exchange(
     request: Request,
     ack: &mut Option<oneshot::Sender<Result<TaskRef, ClientError>>>,
     tx: &mpsc::Sender<Result<TaskUpdate, ClientError>>,
-    remote: &Mutex<Option<TaskRef>>,
     terminal: &AtomicBool,
     known: &watch::Sender<Option<TaskRef>>,
 ) -> Result<(), ClientError> {
@@ -653,9 +622,7 @@ async fn exchange(
                     if let Some(update) = state.decode(event.data.as_bytes(), &id)? {
                         exchange.delivered();
                         exchange
-                            .wait_for_consumer(deliver(
-                                inner, update, ack, tx, remote, terminal, known,
-                            ))
+                            .wait_for_consumer(deliver(inner, update, ack, tx, terminal, known))
                             .await
                             .map_err(ClientError::Transport)??;
                     }
@@ -678,9 +645,7 @@ async fn exchange(
                     };
                     if let Some(update) = update {
                         exchange
-                            .wait_for_consumer(deliver(
-                                inner, update, ack, tx, remote, terminal, known,
-                            ))
+                            .wait_for_consumer(deliver(inner, update, ack, tx, terminal, known))
                             .await
                             .map_err(ClientError::Transport)??;
                     }
@@ -706,18 +671,16 @@ async fn deliver(
     update: TaskUpdate,
     ack: &mut Option<oneshot::Sender<Result<TaskRef, ClientError>>>,
     tx: &mpsc::Sender<Result<TaskUpdate, ClientError>>,
-    remote: &Mutex<Option<TaskRef>>,
     terminal: &AtomicBool,
     known: &watch::Sender<Option<TaskRef>>,
 ) -> Result<(), ClientError> {
     let task = TaskRef { id: update.task_id.clone(), context_id: update.context_id.clone() };
     if !task.id.is_empty() {
-        *remote.lock().map_err(poisoned)? = Some(task.clone());
         known.send_replace(Some(task.clone()));
     }
     terminal.store(update.state.is_terminal(), Ordering::Release);
     if let Some(ack) = ack.take() {
-        inner.core.lock().map_err(poisoned)?.acknowledge(&update)?;
+        inner.core.lock().acknowledge(&update)?;
         let _ = ack.send(Ok(task));
     }
     tx.send(Ok(update)).await.map_err(|_| ClientError::Closed)
@@ -740,7 +703,4 @@ fn checked_url(url: &str) -> Result<url::Url, ClientError> {
 
 fn transport_error(error: String) -> ClientError {
     ClientError::Transport(ApiError::connection(Some(error)))
-}
-fn poisoned<T>(_: std::sync::PoisonError<T>) -> ClientError {
-    ClientError::InvalidResponse("the A2A client state is poisoned".into())
 }

@@ -1,6 +1,6 @@
 //! The remote interaction binding owns synchronization only; A2A owns every decision.
 
-use std::sync::Mutex;
+use crate::lock::Mutex;
 
 use lk_agents_abi::a2a::client::{AgentClientError, Message, MessagePart, TaskUpdate};
 use lk_agents_abi::a2a::remote::{RemoteEvent, RemoteInteraction as Port};
@@ -69,7 +69,7 @@ impl Port for RemoteInteraction {
         thread_id: Option<String>,
         token: Option<String>,
     ) -> Result<Message, AgentClientError> {
-        let mut state = self.inner.lock().map_err(protocol)?;
+        let mut state = self.inner.lock();
         // sharing the caller's thread needs a grant this project signed for it, verified here
         let authority = match (thread_id.as_deref(), token.as_deref()) {
             (Some(thread), Some(token)) => {
@@ -136,7 +136,7 @@ impl Port for RemoteInteraction {
     }
 
     fn answer(&self, request_id: String, text: String) -> Result<Message, AgentClientError> {
-        let mut state = self.inner.lock().map_err(protocol)?;
+        let mut state = self.inner.lock();
         state.policy.accepts_reply(&request_id).map_err(protocol)?;
         let livekit = state.livekit;
         let message = state
@@ -147,7 +147,7 @@ impl Port for RemoteInteraction {
     }
 
     fn update(&self, update: TaskUpdate) -> Result<RemoteEvent, AgentClientError> {
-        let mut state = self.inner.lock().map_err(protocol)?;
+        let mut state = self.inner.lock();
         let update = retained::update_from_host(update).map_err(protocol)?;
         Ok(match state.policy.update(&update).map_err(protocol)? {
             DelegationUpdate::Pending => RemoteEvent::Pending,
@@ -178,14 +178,14 @@ impl Port for RemoteInteraction {
     }
 
     fn cancelled(&self) -> Result<(), AgentClientError> {
-        let mut state = self.inner.lock().map_err(protocol)?;
+        let mut state = self.inner.lock();
         state.policy.cancel();
         state.policy.cancellation_settled();
         Ok(())
     }
 
     fn extra(&self) -> Result<Map<String, Value>, AgentClientError> {
-        let state = self.inner.lock().map_err(protocol)?;
+        let state = self.inner.lock();
         retained::call_extra(&state.policy, &state.call, state.livekit).map_err(protocol)
     }
 }

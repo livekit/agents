@@ -1,7 +1,7 @@
 //! The process's clocks: Tokio time for scheduling, the OS clock (or a synthetic one) for wall
 //! stamps. The `Clock` contract and the virtual clock the DST moves stay in `lk_agents_abi`.
 
-use std::sync::Mutex;
+use crate::lock::Mutex;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::{Clock, TICK_EPSILON, Ts, simulated_epoch};
@@ -63,7 +63,7 @@ impl Default for RealClock {
 impl RealClock {
     /// The candidate reading is passed in so tests can present a repeat or a backwards step.
     fn nudged(&self, candidate: SystemTime) -> SystemTime {
-        let mut last = self.last_wall.lock().unwrap();
+        let mut last = self.last_wall.lock();
         *last = if candidate > *last { candidate } else { *last + TICK_EPSILON };
         *last
     }

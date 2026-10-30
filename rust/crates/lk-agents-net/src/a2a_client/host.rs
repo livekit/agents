@@ -39,7 +39,7 @@ impl port::AgentClient for AgentClient {
     }
 
     fn offers_extension(&self) -> bool {
-        AgentClient::offers_extension(self).unwrap_or(false)
+        AgentClient::offers_extension(self)
     }
 
     async fn send(
@@ -92,13 +92,7 @@ impl port::AgentClient for AgentClient {
         reason: Option<String>,
     ) -> Result<TaskUpdate, AgentClientError> {
         let thread_id = thread_id
-            .or_else(|| {
-                self.inner
-                    .core
-                    .lock()
-                    .ok()
-                    .and_then(|client| client.last_context().map(str::to_owned))
-            })
+            .or_else(|| self.inner.core.lock().last_context().map(str::to_owned))
             .ok_or_else(|| {
                 AgentClientError::InvalidInput(
                     "cancel needs a thread_id before the first reply".into(),

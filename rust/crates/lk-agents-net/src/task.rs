@@ -6,7 +6,9 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use crate::lock::Mutex;
 use std::task::Poll;
 
 use lk_agents_abi::{
@@ -150,7 +152,7 @@ pub struct Leave {
 
 impl Drop for Leave {
     fn drop(&mut self) {
-        let left = self.table.inner.lock().expect("task table").tasks.remove(&self.id);
+        let left = self.table.inner.lock().tasks.remove(&self.id);
         drop(left);
         self.table.changed.notify_waiters();
     }
@@ -160,7 +162,7 @@ impl TaskSet {
     /// Counts work run elsewhere (another set's task) until the guard drops, so this set's
     /// waits include it; it cannot be cancelled from here.
     pub fn track(self: &Arc<Self>, name: &str) -> Leave {
-        let mut g = self.inner.lock().expect("task table");
+        let mut g = self.inner.lock();
         g.next += 1;
         let id = g.next;
         g.tasks.insert(id, (name.to_owned(), None));
@@ -186,7 +188,7 @@ impl TaskSet {
         fut: impl Future<Output = ()> + Send + 'static,
     ) -> Option<TaskId> {
         let id = {
-            let mut g = self.inner.lock().expect("task table");
+            let mut g = self.inner.lock();
             if g.closed {
                 return None;
             }
@@ -200,7 +202,7 @@ impl TaskSet {
             let _leave = leave;
             fut.await;
         });
-        let mut g = self.inner.lock().expect("task table");
+        let mut g = self.inner.lock();
         if g.closed {
             task.cancel();
         }
@@ -213,22 +215,22 @@ impl TaskSet {
 
     /// Whether the task has not left the set yet.
     pub fn contains(&self, id: TaskId) -> bool {
-        self.inner.lock().expect("task table").tasks.contains_key(&id.0)
+        self.inner.lock().tasks.contains_key(&id.0)
     }
 
     /// Cancels one task; a finished one is ignored.
     pub fn cancel(&self, id: TaskId) {
-        if let Some((_, Some(task))) = self.inner.lock().expect("task table").tasks.get(&id.0) {
+        if let Some((_, Some(task))) = self.inner.lock().tasks.get(&id.0) {
             task.cancel();
         }
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.inner.lock().expect("task table").tasks.values().map(|(n, _)| n.clone()).collect()
+        self.inner.lock().tasks.values().map(|(n, _)| n.clone()).collect()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().expect("task table").tasks.is_empty()
+        self.inner.lock().tasks.is_empty()
     }
 
     /// `true` when the table emptied.
@@ -255,15 +257,13 @@ impl TaskSet {
 
     /// Permanently refuse new work and abort admitted tasks.
     pub fn close(&self) {
-        self.inner.lock().expect("task table").closed = true;
+        self.inner.lock().closed = true;
         self.abort_all();
     }
 
     /// Abort every task without waiting: an owner going away.
     pub fn abort_all(&self) {
-        for task in
-            self.inner.lock().expect("task table").tasks.values().filter_map(|(_, t)| t.as_ref())
-        {
+        for task in self.inner.lock().tasks.values().filter_map(|(_, t)| t.as_ref()) {
             task.cancel();
         }
     }
