@@ -3,7 +3,7 @@
 # dependencies = [
 #     "protobuf>=6.33.5",
 #     "rime-api>=0.0.1",
-#     "rimelabs-sdk==0.1.0a25",
+#     "rimelabs-sdk==0.1.0a26",
 #     "pytest==9.1.1",
 #     "pytest-asyncio==1.4.0",
 #     "pytest-asyncio-concurrent==0.5.2",

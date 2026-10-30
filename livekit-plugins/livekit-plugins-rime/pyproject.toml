@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["livekit-agents[codecs]>=1.8.10", "protobuf>=6.33.5", "rime-api>=0.3.0"]
 
 [project.optional-dependencies]
-realtime = ["rimelabs-sdk>=0.1.0a25; python_version >= '3.11'"]
+realtime = ["rimelabs-sdk>=0.1.0a26; python_version >= '3.11'"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

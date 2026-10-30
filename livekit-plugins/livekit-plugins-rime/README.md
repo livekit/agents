@@ -133,7 +133,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a25`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a26`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -176,7 +176,7 @@ session = AgentSession(llm=model)
 
 The plugin package requires `livekit-agents>=1.8.10`. The Prism adapter also has
 source compatibility checks against LiveKit 1.7.1, 1.8.6, and 1.8.8 with
-`rimelabs-sdk==0.1.0a25`. These checks load the plugin source directly; they do not
+`rimelabs-sdk==0.1.0a26`. These checks load the plugin source directly; they do not
 install this package on older core versions.
 
 LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
@@ -293,9 +293,7 @@ context no longer fits. This setting requires deployment support and does not
 erase the conversation record. Omit it for older deployments.
 
 The adapter retries initial HTTP refusals with status 408, 429, 500, 502, 503, or
-504 when the SDK supplies a structured `status_code`. This requires an SDK
-release with structured connection diagnostics; `0.1.0a25` remains supported but
-has no such field and keeps the existing fail-fast behavior. Other HTTP errors,
+504 using the structured `status_code` supplied by SDK `0.1.0a26` or later. Other HTTP errors,
 unknown connection failures, and initialization timeouts fail without retry.
 A server that mislabels a billing refusal as 503 will receive bounded retries;
 the adapter cannot infer billing state from that status alone.
