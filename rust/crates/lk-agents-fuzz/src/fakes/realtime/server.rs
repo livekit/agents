@@ -577,10 +577,11 @@ impl Server {
             self.breaches.push(Breach::CancelledUnprompted { response, generation });
         }
         // The conversation is free at once: a reply asked right after the cancel is taken, and
-        // created before the cancelled one's end (probe-cancel_then_create).
+        // created before the cancelled one's end (probe-cancel_then_create). The cancel is taken
+        // in order, but its wind-down holds back no later answer.
         self.active = None;
-        let lag = self.answer_after(now, &DONE_AFTER_CANCEL);
-        self.stop(later(now, lag), r, GenerationStatus::Cancelled);
+        let lag = self.delay(&DONE_AFTER_CANCEL);
+        self.stop(later(now, lag).max(self.answered), r, GenerationStatus::Cancelled);
     }
 
     /// A truncation of a message the session played part of.
