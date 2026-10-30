@@ -194,9 +194,10 @@ pub fn tts_fallback_capabilities<'py>(py: Python<'py>, entries: Bound<'_, PyAny>
 /// `ValueError` naming the capability and both values), the rest are ANDed.
 #[pyfunction]
 #[pyo3(signature = (caps))]
-pub fn merge_realtime_capabilities(caps: ::std::vec::Vec<::lk_agents_abi::llm::realtime::RealtimeCapabilities>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+pub fn merge_realtime_capabilities<'py>(py: Python<'py>, caps: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let caps = caps.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::realtime::realtime_capabilities_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
+    Ok(crate::generated::records::realtime::realtime_capabilities_to_py(py, out)?)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/inference/avatar_session.rs.

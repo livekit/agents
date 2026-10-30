@@ -163,7 +163,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
 
     @property
     def capabilities(self) -> llm_realtime.RealtimeCapabilities:
-        return llm_realtime.RealtimeCapabilities(**self._native.capabilities())
+        return self._native.capabilities()
 
     @classmethod
     def with_azure(

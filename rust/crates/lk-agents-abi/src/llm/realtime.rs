@@ -4,24 +4,22 @@
 use crate::errors::{ApiError, HostError};
 use crate::{ApiConnectOptions, AudioFrame, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
-use lk_agents_host_derive::Host;
 
-// The reader is strict (no `#[binding(default)]`): a missing key is a rename, and should be loud.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
+#[crate::host(record(
     module = "realtime",
     path = "livekit.agents.llm.realtime",
     name = "RealtimeCapabilities",
+    dataclass,
     // The host's alone: the core neither holds the model's speech back nor cuts it by itself.
-    host_field(
-        name = "supports_overlapping_speech",
+    host_fields(supports_overlapping_speech(
         ty = "bool",
         default = "False",
         doc = "Whether the model and the caller may speak at once, the model deciding when to yield"
-    )
-)]
-#[binding(extract, emit, from_items)]
+    )),
+    extract,
+    emit,
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RealtimeCapabilities {
     /// Whether generated assistant messages can be truncated after interruption
     pub message_truncation: bool,
@@ -36,29 +34,29 @@ pub struct RealtimeCapabilities {
     /// Whether function call items already in the chat context can be resumed
     pub manual_function_calls: bool,
     /// Whether server-side turn detection can be disabled so the client drives turn-taking.
-    #[python(default = "False")]
+    #[host(default = false)]
     pub can_disable_turn_detection: bool,
     /// Whether the chat context can be updated mid-session
-    #[python(default = "False")]
+    #[host(default = false)]
     pub mutable_chat_context: bool,
     /// Whether the instructions can be updated mid-session
-    #[python(default = "False")]
+    #[host(default = false)]
     pub mutable_instructions: bool,
     /// Whether the tools can be updated mid-session
-    #[python(default = "False")]
+    #[host(default = false)]
     pub mutable_tools: bool,
     /// Whether the tool and tool choice can be specified per response
-    #[python(default = "False")]
+    #[host(default = false)]
     pub per_response_tool_choice: bool,
     /// Whether session.say() can use the realtime session directly, without TTS.
     ///
     /// When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
     /// message is still added to the chat context.
-    #[python(default = "False")]
+    #[host(default = false)]
     pub supports_say: bool,
     /// Whether the server generates the reply by itself when its turn detection ends a user turn.
     // Last: the reference has no such field, and positional arguments must keep its order.
-    #[python(default = "False")]
+    #[host(default = false)]
     pub auto_turn_reply_generation: bool,
 }
 

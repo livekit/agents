@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from livekit import rtc
@@ -19,8 +19,7 @@ class RealtimeAvailabilityChangedEvent:
 
 def _merge_capabilities(models: list[RealtimeModel]) -> RealtimeCapabilities:
     """The pipeline-shaping capabilities must agree; the others are the conservative AND."""
-    merged = _core.merge_realtime_capabilities([asdict(m.capabilities) for m in models])
-    return RealtimeCapabilities(**merged)
+    return _core.merge_realtime_capabilities([m.capabilities for m in models])
 
 
 class RealtimeModelFallbackAdapter(

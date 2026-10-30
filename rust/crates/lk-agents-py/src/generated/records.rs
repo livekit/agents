@@ -2705,6 +2705,55 @@ pub mod metrics {
     }
 }
 
+pub mod realtime {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
+    static REALTIME_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn realtime_capabilities_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+        let py = obj.py();
+            if !obj.is_instance(REALTIME_CAPABILITIES.import(py, "livekit.agents._generated.realtime", "RealtimeCapabilities")?)? {
+                return Err(super::not_a(obj, "RealtimeCapabilities"));
+            }
+            Ok(::lk_agents_abi::llm::realtime::RealtimeCapabilities {
+                message_truncation: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "message_truncation", |v| v.extract::<bool>())?,
+                turn_detection: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "turn_detection", |v| v.extract::<bool>())?,
+                user_transcription: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "user_transcription", |v| v.extract::<bool>())?,
+                auto_tool_reply_generation: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "auto_tool_reply_generation", |v| v.extract::<bool>())?,
+                audio_output: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "audio_output", |v| v.extract::<bool>())?,
+                manual_function_calls: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "manual_function_calls", |v| v.extract::<bool>())?,
+                can_disable_turn_detection: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "can_disable_turn_detection", |v| v.extract::<bool>())?,
+                mutable_chat_context: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "mutable_chat_context", |v| v.extract::<bool>())?,
+                mutable_instructions: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "mutable_instructions", |v| v.extract::<bool>())?,
+                mutable_tools: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "mutable_tools", |v| v.extract::<bool>())?,
+                per_response_tool_choice: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "per_response_tool_choice", |v| v.extract::<bool>())?,
+                supports_say: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "supports_say", |v| v.extract::<bool>())?,
+                auto_turn_reply_generation: ::lk_agents_abi::python::attr_with(obj, "RealtimeCapabilities", "auto_turn_reply_generation", |v| v.extract::<bool>())?,
+            })
+    }
+
+    pub fn realtime_capabilities_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeCapabilities) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::RealtimeCapabilities { message_truncation, turn_detection, user_transcription, auto_tool_reply_generation, audio_output, manual_function_calls, can_disable_turn_detection, mutable_chat_context, mutable_instructions, mutable_tools, per_response_tool_choice, supports_say, auto_turn_reply_generation } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("message_truncation", ::pyo3::IntoPyObjectExt::into_bound_py_any(message_truncation, py)?)?;
+            kwargs.set_item("turn_detection", ::pyo3::IntoPyObjectExt::into_bound_py_any(turn_detection, py)?)?;
+            kwargs.set_item("user_transcription", ::pyo3::IntoPyObjectExt::into_bound_py_any(user_transcription, py)?)?;
+            kwargs.set_item("auto_tool_reply_generation", ::pyo3::IntoPyObjectExt::into_bound_py_any(auto_tool_reply_generation, py)?)?;
+            kwargs.set_item("audio_output", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio_output, py)?)?;
+            kwargs.set_item("manual_function_calls", ::pyo3::IntoPyObjectExt::into_bound_py_any(manual_function_calls, py)?)?;
+            kwargs.set_item("can_disable_turn_detection", ::pyo3::IntoPyObjectExt::into_bound_py_any(can_disable_turn_detection, py)?)?;
+            kwargs.set_item("mutable_chat_context", ::pyo3::IntoPyObjectExt::into_bound_py_any(mutable_chat_context, py)?)?;
+            kwargs.set_item("mutable_instructions", ::pyo3::IntoPyObjectExt::into_bound_py_any(mutable_instructions, py)?)?;
+            kwargs.set_item("mutable_tools", ::pyo3::IntoPyObjectExt::into_bound_py_any(mutable_tools, py)?)?;
+            kwargs.set_item("per_response_tool_choice", ::pyo3::IntoPyObjectExt::into_bound_py_any(per_response_tool_choice, py)?)?;
+            kwargs.set_item("supports_say", ::pyo3::IntoPyObjectExt::into_bound_py_any(supports_say, py)?)?;
+            kwargs.set_item("auto_turn_reply_generation", ::pyo3::IntoPyObjectExt::into_bound_py_any(auto_turn_reply_generation, py)?)?;
+            crate::host::construct(REALTIME_CAPABILITIES.import(py, "livekit.agents._generated.realtime", "RealtimeCapabilities")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod realtime_options {
     use pyo3::prelude::*;
 

@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
+# `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/llm/realtime.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -9,7 +10,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Callable, Sequence
@@ -32,6 +32,9 @@ from .chat_items import MetricsMetadata
 if TYPE_CHECKING:
     from ..llm.realtime import GenerationCreatedEvent
     from ..llm.tool_context import Tool, ToolChoice, ToolContext, Toolset
+
+
+# The declared records.
 
 
 @dataclass
@@ -68,6 +71,9 @@ class RealtimeCapabilities:
     """Whether the server generates the reply by itself when its turn detection ends a user turn."""
     supports_overlapping_speech: bool = False
     """Whether the model and the caller may speak at once, the model deciding when to yield"""
+
+
+RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
 
 
 class RealtimeModelError(BaseModel):
@@ -145,8 +151,8 @@ class RealtimeModel(ABC):
     def _core_label(self) -> str:
         return self.label
 
-    def _core_capabilities(self) -> dict[str, Any]:
-        return dataclasses.asdict(self.capabilities)
+    def _core_capabilities(self) -> RealtimeCapabilities:
+        return self.capabilities
 
     def _core_id(self) -> dict[str, str]:
         return {"label": self.label, "model": self.model, "provider": self.provider}
@@ -480,7 +486,6 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
 RealtimeModelError.__module__ = "livekit.agents.llm.realtime"
 RealtimeModel.__module__ = "livekit.agents.llm.realtime"
 RealtimeSession.__module__ = "livekit.agents.llm.realtime"

@@ -229,10 +229,10 @@ impl DuplexRealtimeModel {
     }
 
     /// The realtime capabilities the model runs under.
-    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::capabilities(&self.0);
-        Ok(out)
+        Ok(crate::generated::records::realtime::realtime_capabilities_to_py(py, out)?)
     }
 }
 
@@ -479,10 +479,10 @@ impl RealtimeFallbackModel {
         Ok(out)
     }
 
-    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::capabilities(&self.0);
-        Ok(out)
+        Ok(crate::generated::records::realtime::realtime_capabilities_to_py(py, out)?)
     }
 
     #[pyo3(signature = (*, switch_model = false))]
@@ -1033,10 +1033,10 @@ impl OpenAIRealtimeModel {
         Ok(out)
     }
 
-    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::capabilities(&self.0);
-        Ok(out)
+        Ok(crate::generated::records::realtime::realtime_capabilities_to_py(py, out)?)
     }
 
     #[pyo3(signature = (options))]
@@ -1976,7 +1976,7 @@ impl HostRealtimeProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            v.extract::<::lk_agents_abi::llm::realtime::RealtimeCapabilities>()?
+            crate::generated::records::realtime::realtime_capabilities_from_py(&v)?
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;

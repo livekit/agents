@@ -14,6 +14,7 @@ from livekit.agents.types import APIConnectOptions
 from .._core import TtsStream
 from .inference_stt import FallbackModel
 from .inference_tts import FallbackModel as HostFallbackModel
+from .realtime import RealtimeCapabilities
 from .stt import STTCapabilities
 from .tts import TTSCapabilities
 from .turn_events import TurnDetectorModel
@@ -118,7 +119,7 @@ def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> STTCapabili
 def tts_fallback_capabilities(entries: Sequence[TTSCapabilities]) -> TTSCapabilities:
     """`tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
 
-def merge_realtime_capabilities(caps: Sequence[dict[str, object]]) -> dict[str, object]:
+def merge_realtime_capabilities(caps: Sequence[RealtimeCapabilities]) -> RealtimeCapabilities:
     """The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
     `ValueError` naming the capability and both values), the rest are ANDed.
     """

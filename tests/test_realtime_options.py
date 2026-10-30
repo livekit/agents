@@ -55,7 +55,7 @@ async def test_fallback_accepts_native_and_host_models_and_rejects_capability_mi
     native = RealtimeModel(api_key="test")
     host = HostModel(capabilities=native.capabilities)
     fallback = _core.RealtimeFallbackModel([native._core_native(), host])
-    assert fallback.capabilities()["audio_output"]
+    assert fallback.capabilities().audio_output
     await fallback.restart(switch_model=True)
 
     incompatible = HostModel(capabilities=replace(native.capabilities, audio_output=False))
