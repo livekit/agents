@@ -281,6 +281,7 @@ enum Pushed {
     Flush,
 }
 
+/// The attempt's sink is called with no lock held: a host STT's sink takes the GIL.
 #[derive(Default)]
 struct Input {
     state: Mutex<InputState>,
@@ -289,32 +290,46 @@ struct Input {
 
 #[derive(Default)]
 struct InputState {
-    sink: Option<SttSink>,
+    sink: Option<Arc<dyn StreamSink<AudioFrame>>>,
     held: VecDeque<Pushed>,
     ended: bool,
     failure: Option<ProviderError>,
 }
 
+fn deliver(sink: &dyn StreamSink<AudioFrame>, item: Pushed) -> Result<(), ProviderError> {
+    match item {
+        Pushed::Audio(frame) => sink.push(frame),
+        Pushed::Flush => sink.flush(),
+    }
+}
+
 impl Input {
-    /// The next attempt's sink: what arrived meanwhile first, then the end if it came.
+    /// The next attempt's sink: what arrived meanwhile first, then the end if it came. Installed
+    /// once nothing is held, so a concurrent `send` neither overtakes nor strands a held item.
     fn install(&self, sink: SttSink) {
-        let mut st = self.state.lock();
-        while let Some(item) = st.held.pop_front() {
-            let sent = match item.clone() {
-                Pushed::Audio(frame) => sink.push(frame),
-                Pushed::Flush => sink.flush(),
+        let sink: Arc<dyn StreamSink<AudioFrame>> = Arc::from(sink);
+        let ended = loop {
+            let item = {
+                let mut st = self.state.lock();
+                match st.held.pop_front() {
+                    Some(item) => item,
+                    None => {
+                        st.sink = Some(Arc::clone(&sink));
+                        break st.ended;
+                    }
+                }
             };
-            if let Err(error) = sent {
+            if let Err(error) = deliver(sink.as_ref(), item.clone()) {
+                let mut st = self.state.lock();
                 st.held.push_front(item);
                 st.failure = Some(error);
                 self.failed.notify_one();
                 return;
             }
-        }
-        if st.ended {
+        };
+        if ended {
             sink.end_input();
         }
-        st.sink = Some(sink);
     }
 
     fn clear(&self) {
@@ -335,24 +350,31 @@ impl Input {
 
     /// Held while no attempt takes it, a failed attempt's refusal included: the next one hears it.
     fn send(&self, item: Pushed) -> Result<(), ProviderError> {
-        let mut st = self.state.lock();
-        if let Some(sink) = &st.sink {
-            let sent = match item.clone() {
-                Pushed::Audio(frame) => sink.push(frame),
-                Pushed::Flush => sink.flush(),
+        let sink = {
+            let mut st = self.state.lock();
+            let Some(sink) = st.sink.clone() else {
+                Self::hold(&mut st, item);
+                return Ok(());
             };
-            match sent {
-                Ok(()) => return Ok(()),
-                Err(error) => st.failure = Some(error),
-            }
+            sink
+        };
+        let Err(error) = deliver(sink.as_ref(), item.clone()) else { return Ok(()) };
+        let mut st = self.state.lock();
+        // A later attempt may already serve: only the refusing one is dropped.
+        if st.sink.as_ref().is_some_and(|current| Arc::ptr_eq(current, &sink)) {
             st.sink = None;
+            st.failure = Some(error);
             self.failed.notify_one();
         }
+        Self::hold(&mut st, item);
+        Ok(())
+    }
+
+    fn hold(st: &mut InputState, item: Pushed) {
         if st.held.len() == HELD_FRAMES {
             st.held.pop_front();
         }
         st.held.push_back(item);
-        Ok(())
     }
 }
 
@@ -368,9 +390,12 @@ impl StreamSink<AudioFrame> for InputSink {
     }
 
     fn end_input(&self) {
-        let mut st = self.0.state.lock();
-        st.ended = true;
-        if let Some(sink) = &st.sink {
+        let sink = {
+            let mut st = self.0.state.lock();
+            st.ended = true;
+            st.sink.clone()
+        };
+        if let Some(sink) = sink {
             sink.end_input();
         }
     }

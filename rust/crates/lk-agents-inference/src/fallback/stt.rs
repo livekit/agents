@@ -4,7 +4,7 @@
 //! recovery slots, hence one [`FallbackChain`] with a [`RecoveryMode`] argument. Each attempt binds the resolved policy immediately before opening its provider.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -34,12 +34,12 @@ use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next};
 
 /// Fans the audio-in leg out to the serving stream and every probe. `end` is recorded so a stream
 /// installed by a later failover still gets it (the reference's hole at `stt:363-365`).
+/// Sinks are called with no lock held: a host STT's sink takes the GIL.
 pub struct InputTee {
-    main: Mutex<Option<SttSink>>,
-    probes: Mutex<Vec<(u64, SttSink)>>,
+    main: Mutex<Option<Arc<dyn StreamSink<AudioFrame>>>>,
+    probes: Mutex<Vec<(u64, Arc<dyn StreamSink<AudioFrame>>)>>,
     next_id: AtomicU64,
-    ended: AtomicBool,
-    /// Replayed into the next serving stream.
+    /// Replayed into the next serving stream; taken before `main`.
     preroll: Mutex<Preroll>,
 }
 
@@ -54,6 +54,7 @@ enum PreFrame {
 struct Preroll {
     pending: std::collections::VecDeque<PreFrame>,
     dropped_frames: u64,
+    ended: bool,
 }
 
 impl Default for InputTee {
@@ -62,7 +63,6 @@ impl Default for InputTee {
             main: Mutex::new(None),
             probes: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(0),
-            ended: AtomicBool::new(false),
             preroll: Mutex::new(Preroll::default()),
         }
     }
@@ -77,28 +77,50 @@ impl InputTee {
     pub const PREROLL_FRAMES: usize = lk_agents_abi::stt::HELD_FRAMES;
 
     /// Replays what arrived while no stream served (as the reference's `_input_ch` buffers), then
-    /// ends it if the caller already finished.
+    /// ends it if the caller already finished. Installed once nothing is buffered, so a
+    /// concurrent `push` can neither overtake a buffered frame nor be left behind in the preroll.
     fn set_main(&self, sink: SttSink) {
-        // Drained before install, so a concurrent `push` cannot overtake a buffered frame.
-        let pending: Vec<PreFrame> = self.preroll.lock().pending.drain(..).collect();
-        for item in pending {
-            let _ = match item {
-                PreFrame::Audio(f) => sink.push(f),
-                PreFrame::Flush => sink.flush(),
+        let sink: Arc<dyn StreamSink<AudioFrame>> = Arc::from(sink);
+        let ended = loop {
+            let pending: Vec<PreFrame> = {
+                let mut preroll = self.preroll.lock();
+                if preroll.pending.is_empty() {
+                    if !preroll.ended {
+                        *self.main.lock() = Some(Arc::clone(&sink));
+                    }
+                    break preroll.ended;
+                }
+                preroll.pending.drain(..).collect()
             };
-        }
+            for item in pending {
+                let _ = match item {
+                    PreFrame::Audio(f) => sink.push(f),
+                    PreFrame::Flush => sink.flush(),
+                };
+            }
+        };
         // Replay first, then end: a short utterance ended before the socket opened is still transcribed.
-        if self.ended.load(Ordering::SeqCst) {
+        if ended {
             sink.end_input();
-            return;
         }
-        *self.main.lock() = Some(sink);
+    }
+
+    /// The serving stream, or `item` buffered for the next one when none serves.
+    fn serving(
+        &self,
+        item: PreFrame,
+    ) -> Result<Option<Arc<dyn StreamSink<AudioFrame>>>, ProviderError> {
+        let mut preroll = self.preroll.lock();
+        let main = self.main.lock().clone();
+        if main.is_none() {
+            Self::buffer(&mut preroll, item)?;
+        }
+        Ok(main)
     }
 
     /// Preserve utterance boundaries, accounting for each evicted audio frame. A full queue
     /// of boundaries refuses more input rather than growing or merging distinct utterances.
-    fn buffer(&self, item: PreFrame) -> Result<(), ProviderError> {
-        let mut preroll = self.preroll.lock();
+    fn buffer(preroll: &mut Preroll, item: PreFrame) -> Result<(), ProviderError> {
         if preroll.pending.len() >= Self::PREROLL_FRAMES {
             let Some(index) =
                 preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
@@ -124,7 +146,7 @@ impl InputTee {
 
     fn add_probe(&self, sink: SttSink) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.probes.lock().push((id, sink));
+        self.probes.lock().push((id, Arc::from(sink)));
         id
     }
 
@@ -133,13 +155,13 @@ impl InputTee {
     }
 
     /// Errors are swallowed (`stt:349-350`): a dead probe must not take down the serving path.
-    fn fanout(&self, f: impl Fn(&dyn StreamSink<AudioFrame>)) {
-        for (_, sink) in self.probes.lock().iter() {
-            f(sink.as_ref());
-        }
-        if let Some(sink) = self.main.lock().as_ref() {
-            f(sink.as_ref());
-        }
+    fn fanout(
+        &self,
+        main: Option<Arc<dyn StreamSink<AudioFrame>>>,
+        f: impl Fn(&dyn StreamSink<AudioFrame>),
+    ) {
+        let probes: Vec<_> = self.probes.lock().iter().map(|(_, sink)| Arc::clone(sink)).collect();
+        probes.iter().chain(&main).for_each(|sink| f(sink.as_ref()));
     }
 }
 
@@ -148,20 +170,16 @@ struct TeeSink(Arc<InputTee>);
 impl StreamSink<AudioFrame> for TeeSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         // Buffered when no stream is serving; probes still get it.
-        if self.0.main.lock().is_none() {
-            self.0.buffer(PreFrame::Audio(item.clone()))?;
-        }
-        self.0.fanout(|s| {
+        let main = self.0.serving(PreFrame::Audio(item.clone()))?;
+        self.0.fanout(main, |s| {
             let _ = s.push(item.clone());
         });
         Ok(())
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        if self.0.main.lock().is_none() {
-            self.0.buffer(PreFrame::Flush)?;
-        }
-        self.0.fanout(|s| {
+        let main = self.0.serving(PreFrame::Flush)?;
+        self.0.fanout(main, |s| {
             let _ = s.flush();
         });
         Ok(())
@@ -169,8 +187,12 @@ impl StreamSink<AudioFrame> for TeeSink {
 
     fn end_input(&self) {
         // Only the serving stream is ended; a probe closes when its drain finishes (`stt:432`).
-        self.0.ended.store(true, Ordering::SeqCst);
-        if let Some(sink) = self.0.main.lock().as_ref() {
+        let main = {
+            let mut preroll = self.0.preroll.lock();
+            preroll.ended = true;
+            self.0.main.lock().clone()
+        };
+        if let Some(sink) = main {
             sink.end_input();
         }
     }
@@ -629,6 +651,7 @@ impl Stt for FallbackStt {
 #[cfg(test)]
 mod preroll_tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
 
     /// A sink that records what it was handed, in order.
     #[derive(Default)]

@@ -26,7 +26,7 @@ use crate::fallback::chain::{
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
 use crate::fallback::{ChainPolicy, resampling_plan};
 
-fn send(sink: &TtsSink, token: &Token) {
+fn send(sink: &dyn StreamSink<String>, token: &Token) {
     let _ = match token {
         Token::Text(text) => sink.push(text.clone()),
         Token::Flush => sink.flush(),
@@ -65,7 +65,7 @@ impl Default for TokenLog {
 struct TokenLogState {
     tokens: Vec<Token>,
     ended: bool,
-    main: Option<TtsSink>,
+    main: Option<Arc<dyn StreamSink<String>>>,
 }
 
 impl TokenLog {
@@ -89,17 +89,27 @@ impl TokenLog {
         self.settled.send_replace(true);
     }
 
-    /// Catch up a fresh child sink (`tts:428-434`) under one lock, so a token pushed during the
-    /// failover is neither replayed twice nor lost.
+    /// Catch up a fresh child sink (`tts:428-434`): it is installed once it has every token, so
+    /// a token pushed during the failover is neither replayed twice nor lost. The sink is called
+    /// with no lock held: a host TTS's sink takes the GIL.
     fn set_main(&self, sink: TtsSink) {
-        let mut s = self.inner.lock();
-        for t in &s.tokens {
-            send(&sink, t);
-        }
-        if s.ended {
+        let sink: Arc<dyn StreamSink<String>> = Arc::from(sink);
+        let mut sent = 0;
+        let ended = loop {
+            let missing = {
+                let mut s = self.inner.lock();
+                if s.tokens.len() == sent {
+                    s.main = Some(Arc::clone(&sink));
+                    break s.ended;
+                }
+                s.tokens[sent..].to_vec()
+            };
+            missing.iter().for_each(|t| send(sink.as_ref(), t));
+            sent += missing.len();
+        };
+        if ended {
             sink.end_input();
         }
-        s.main = Some(sink);
     }
 
     fn clear_main(&self) {
@@ -107,17 +117,23 @@ impl TokenLog {
     }
 
     pub fn push(&self, token: Token) {
-        let mut s = self.inner.lock();
-        if let Some(sink) = s.main.as_ref() {
-            send(sink, &token);
+        let main = {
+            let mut s = self.inner.lock();
+            s.tokens.push(token.clone());
+            s.main.clone()
+        };
+        if let Some(sink) = main {
+            send(sink.as_ref(), &token);
         }
-        s.tokens.push(token);
     }
 
     pub fn end(&self) {
-        let mut s = self.inner.lock();
-        s.ended = true;
-        if let Some(sink) = s.main.as_ref() {
+        let main = {
+            let mut s = self.inner.lock();
+            s.ended = true;
+            s.main.clone()
+        };
+        if let Some(sink) = main {
             sink.end_input();
         }
         self.settled.send_replace(true);
@@ -252,7 +268,7 @@ impl Backend for TtsBackend {
                 let (sink, source) = tts.stream(*expressive).await?;
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
-                    send(&sink, t);
+                    send(sink.as_ref(), t);
                 }
                 sink.end_input();
                 source
