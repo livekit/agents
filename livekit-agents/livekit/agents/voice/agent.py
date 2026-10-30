@@ -1121,15 +1121,38 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                             logger.exception("error in on_enter task of agent %s", self.id)
 
                     if session._closing and self._activity is None:
-                        # the activity never started (session closing), skip the handoff;
-                        # the close path owns the previous activity
-                        pass
+                        # the task's own activity never started or was already closed
+                        # (e.g. by update_agent); skip the handoff
+                        if session._will_close_activity(old_activity):
+                            # the close path owns the previous activity
+                            pass
+                        else:
+                            # the close path is already past this chain (the session
+                            # closed before the task unwound): close it from a detached
+                            # task, the late unwind must not leave it open
+                            session._close_detached_activity(old_activity)
                     elif session.current_agent != self:
                         logger.warning(
                             f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                             "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
                         )
-                        await old_activity.aclose()
+                        if session._closing and session._will_close_activity(old_activity):
+                            # the close path walks back to `old_activity` once this task
+                            # is inactive and drains/closes it there
+                            pass
+                        else:
+                            # this coroutine can be running inside a non-cancellable tool
+                            # task owned by `old_activity`: awaiting its close here would
+                            # drain the tool executor, which waits for this very task
+                            session._close_detached_activity(old_activity)
+                    elif old_activity._closed or old_activity._detached_close_started:
+                        # an earlier AgentTask in this tool handed `old_activity` to a
+                        # detached close; resuming it would wait on that close's lock
+                        # while it drains this very tool task
+                        logger.warning(
+                            f"{self.__class__.__name__} completed after its previous agent's "
+                            "activity was closed. Ignoring handoff to the previous agent."
+                        )
                     else:
                         merged_chat_ctx = old_agent.chat_ctx.copy().merge(
                             self.chat_ctx,
