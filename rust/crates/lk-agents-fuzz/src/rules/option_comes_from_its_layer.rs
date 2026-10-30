@@ -1,27 +1,27 @@
 //! Each live option takes its value from the topmost `override_options` layer that sets it, else
-//! from the active agent's `turn_handling`, else from the session's `update_options`.
+//! from the active agent's `turn_handling`, else from the session's `update_options`, else from
+//! what the session started with.
 //!
-//! voice-session.md "Temporary overrides". The layers are rebuilt from the host's own calls: each
-//! accepted `Configure`, `Override` and `ReleaseOverride` is applied when its command enters the
-//! loop. The agent layer is the `turn_handling` of each handoff the loop installs, in order; a
-//! `VoiceTask`'s agent and the opening agent set none, and a task's end brings its parent's back.
-//! Every `ConfigApplied` after the first is
-//! judged on the endpointing delays and the turn detection, the options a host layers; an option no
-//! layer set is the session's construction or a default, and is not judged.
+//! voice-session.md "Temporary overrides". The oracle rebuilds the layers from the host's own
+//! calls, read off the inputs and never off the core's layers: each accepted `Configure`,
+//! `Override` and `ReleaseOverride` applies when its command enters the loop, and each install of
+//! an agent (`AgentUpdated`) brings the `turn_handling` its handoff asked for, in order; a
+//! `VoiceTask`'s agent sets none, and a task's end brings its parent's back. The bottom layer is
+//! the first `ConfigApplied`, the session as it started. Every later `ConfigApplied` is judged on
+//! the endpointing delays and the turn detection, the options a host layers; one an agent install
+//! brings is judged at that install.
 use std::time::Duration;
 
-use lk_agents_voice::agent_activity::options::{
-    AgentSessionOptions, ConfigLayer, TurnDetection, update_layer,
-};
+use lk_agents_voice::agent_activity::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
 use lk_agents_voice::agent_session::Origin;
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
 
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
-    drive::{Case, Setup, agent_turn_handling, turn_update},
+    drive::{Case, Setup},
     input::{AgentText, AgentTurn, Input, Knob, Millis, TurnMode},
-    record::{Answer, Recording},
+    record::{Answer, Observed, Recording},
 };
 
 pub struct OptionComesFromItsLayer;
@@ -31,7 +31,7 @@ impl Rule for OptionComesFromItsLayer {
         id: "option_comes_from_its_layer",
         guarantee: "A live option is the topmost override's that sets it, else the active agent's, else the session's.",
         examples: &[override_over_agent_over_session],
-        counterexamples: &[agent_over_override],
+        counterexamples: &[agent_over_override, released_override_still_set],
         probe: Some(layered_endpointing),
     };
 
@@ -39,11 +39,9 @@ impl Rule for OptionComesFromItsLayer {
         let inputs = r.inputs_view();
         let mut taken = inputs.accepted().filter_map(|sent| match &sent.input {
             Input::Configure { knob, mode, ms, .. } => {
-                Some(Taken::Configure(turn_update(*knob, *mode, *ms).map(|u| update_layer(&u))))
+                Some(Taken::Configure(said(*knob, *mode, *ms)))
             }
-            Input::Override { knob, mode, ms } => {
-                turn_update(*knob, *mode, *ms).map(|u| Taken::Override(update_layer(&u)))
-            }
+            Input::Override { knob, mode, ms } => Some(Taken::Override(said(*knob, *mode, *ms))),
             Input::ReleaseOverride { nth } => Some(Taken::Release(nth.0 as usize)),
             _ => None,
         });
@@ -52,16 +50,32 @@ impl Rule for OptionComesFromItsLayer {
         let mut handoffs = (r.host_view().api_calls().into_iter()).filter_map(|call| {
             match (call.input(), call.returned()) {
                 (_, Some((_, Answer::HandoffRefused))) => None,
-                (Input::Handoff { turn, .. }, _) => Some(layer_of(*turn)),
+                (Input::Handoff { turn, .. }, _) => {
+                    Some(turn.map_or_else(Leaves::default, |t| said(t.knob, t.mode, t.ms)))
+                }
                 _ => None,
             }
         });
-        let (mut session, mut agent) = (Leaves::default(), Leaves::default());
+        let (mut started, mut session, mut agent) = (None, Leaves::default(), Leaves::default());
         let mut overrides: Vec<Leaves> = Vec::new();
         // The agents a `VoiceTask` suspended, innermost last, and the layer a task's own install
         // brings: its agent's (none), or on its end its parent's again.
         let (mut parents, mut task_install) = (Vec::new(), None);
-        let mut first = true;
+        // A configuration an agent install brings, judged once the install says which agent.
+        let mut installing: Option<(Observed, Leaves)> = None;
+        let mut judge = |at: Observed,
+                         actual: Leaves,
+                         layers: [&Leaves; 3],
+                         overrides: &[Leaves]| {
+            let expected = (overrides.iter().rev())
+                .chain(layers)
+                .fold(Leaves::default(), |acc, below| acc.over(*below));
+            check.expect(
+                Subject::Session,
+                expected == actual,
+                format!("at {at:?} the layers set {expected:?}, the session resolved {actual:?}"),
+            );
+        };
         for (at, step) in r.journal() {
             match step {
                 Step::Handoff(HandoffStep::TaskEntered { .. }) => {
@@ -69,6 +83,12 @@ impl Rule for OptionComesFromItsLayer {
                     task_install = Some(Leaves::default());
                 }
                 Step::Handoff(HandoffStep::TaskEnded { .. }) => task_install = parents.pop(),
+                Step::Handoff(HandoffStep::AgentUpdated { .. }) => {
+                    agent = task_install.take().or_else(|| handoffs.next()).unwrap_or_default();
+                    if let (Some((at, actual)), Some(started)) = (installing.take(), &started) {
+                        judge(at, actual, [&agent, &session, started], &overrides);
+                    }
+                }
                 Step::Core(CoreStep::CommandReceived {
                     origin: Origin::Host,
                     kind:
@@ -76,33 +96,22 @@ impl Rule for OptionComesFromItsLayer {
                         | "TurnCommand::Override"
                         | "TurnCommand::ReleaseOverride",
                 }) => match taken.next() {
-                    Some(Taken::Configure(Some(layer))) => {
-                        session = Leaves::of(&layer).over(session);
-                    }
-                    Some(Taken::Override(layer)) => overrides.push(Leaves::of(&layer)),
+                    Some(Taken::Configure(layer)) => session = layer.over(session),
+                    Some(Taken::Override(layer)) => overrides.push(layer),
                     Some(Taken::Release(nth)) if !overrides.is_empty() => {
                         overrides.remove(nth % overrides.len());
                     }
                     _ => {}
                 },
                 Step::Core(CoreStep::ConfigApplied { layer, effective }) => {
-                    if *layer == ConfigLayer::Agent {
-                        agent = task_install.take().or_else(|| handoffs.next()).unwrap_or_default();
-                    }
-                    if std::mem::take(&mut first) {
-                        continue;
-                    }
-                    let expected = (overrides.iter().rev())
-                        .chain([&agent, &session])
-                        .fold(Leaves::default(), |acc, below| acc.over(*below));
                     let actual = Leaves::of(effective);
-                    check.expect(
-                        Subject::Session,
-                        expected.agrees(&actual),
-                        format!(
-                            "at {at:?} the layers set {expected:?}, the session resolved {actual:?}"
-                        ),
-                    );
+                    match &started {
+                        None => started = Some(actual),
+                        Some(_) if *layer == ConfigLayer::Agent => installing = Some((*at, actual)),
+                        Some(started) => {
+                            judge(*at, actual, [&agent, &session, started], &overrides)
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -110,11 +119,30 @@ impl Rule for OptionComesFromItsLayer {
     }
 }
 
+/// What a host call says for `knob`, as voice-session.md and the reference define it: a turn
+/// detection mode (`None` reverting to automatic selection) or an endpointing delay. The other
+/// options are not judged.
+fn said(knob: Knob, mode: TurnMode, ms: Millis) -> Leaves {
+    let delay = Some(Duration::from_millis(ms.0));
+    match knob {
+        Knob::Detection => Leaves {
+            detection: Some(match mode {
+                TurnMode::Default => TurnDetection::Auto,
+                TurnMode::Stt => TurnDetection::Stt,
+                TurnMode::Manual => TurnDetection::Manual,
+            }),
+            ..Leaves::default()
+        },
+        Knob::MinEndpointing => Leaves { min_delay: delay, ..Leaves::default() },
+        Knob::MaxEndpointing => Leaves { max_delay: delay, ..Leaves::default() },
+        _ => Leaves::default(),
+    }
+}
+
 /// A host call that moves a layer, in the order the loop takes them.
 enum Taken {
-    /// `None`: an option the oracle does not judge.
-    Configure(Option<AgentSessionOptions>),
-    Override(AgentSessionOptions),
+    Configure(Leaves),
+    Override(Leaves),
     Release(usize),
 }
 
@@ -144,21 +172,6 @@ impl Leaves {
             max_delay: self.max_delay.or(below.max_delay),
         }
     }
-
-    /// Every option `self` says, `resolved` says too.
-    fn agrees(&self, resolved: &Leaves) -> bool {
-        fn leaf<T: PartialEq>(said: Option<T>, resolved: Option<T>) -> bool {
-            said.is_none() || said == resolved
-        }
-        leaf(self.detection, resolved.detection)
-            && leaf(self.min_delay, resolved.min_delay)
-            && leaf(self.max_delay, resolved.max_delay)
-    }
-}
-
-fn layer_of(turn: Option<AgentTurn>) -> Leaves {
-    let kwargs = turn.and_then(agent_turn_handling);
-    Leaves::of(&lk_agents_voice::turn::agent_layer(kwargs.as_ref(), None, None))
 }
 
 fn min_delay(ms: u64) -> Input {
@@ -237,6 +250,20 @@ fn override_over_agent_over_session() -> Recording {
 /// The agent's layer resolved above the override.
 fn agent_over_override() -> Recording {
     layered(700, 700)
+}
+
+/// An override released with no other layer setting its option: the option stayed the override's
+/// instead of going back to what the session started with.
+fn released_override_still_set() -> Recording {
+    Authored::new()
+        .journal(applied(ConfigLayer::Session, 500))
+        .sent(override_min_delay(300))
+        .journal(received("TurnCommand::Override"))
+        .journal(applied(ConfigLayer::Override, 300))
+        .sent(Input::ReleaseOverride { nth: crate::input::Count(0) })
+        .journal(received("TurnCommand::ReleaseOverride"))
+        .journal(applied(ConfigLayer::Override, 300))
+        .done()
 }
 
 fn layered_endpointing() -> Case {

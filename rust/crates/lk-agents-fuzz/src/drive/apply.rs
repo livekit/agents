@@ -149,7 +149,7 @@ fn io_leg(leg: IoKind) -> &'static str {
 
 /// What `update_options` / `override_options` say for `knob`; `None` for the options they do not
 /// take (endpointing and detection only).
-pub fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
+fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
     let endpointing = |patch: fn(&mut EndpointingKwargs, f64)| {
         let mut kwargs = EndpointingKwargs::default();
         patch(&mut kwargs, secs(ms));
@@ -172,16 +172,6 @@ pub fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwarg
         }),
         _ => None,
     }
-}
-
-/// `Agent(turn_handling=)` saying `turn`'s one option.
-pub fn agent_turn_handling(turn: AgentTurn) -> Option<TurnHandlingKwargs> {
-    let update = turn_update(turn.knob, turn.mode, turn.ms)?;
-    Some(TurnHandlingKwargs {
-        turn_detection: update.turn_detection,
-        endpointing: update.endpointing_opts,
-        ..TurnHandlingKwargs::default()
-    })
 }
 
 fn secs(ms: Millis) -> f64 {
@@ -513,7 +503,15 @@ impl Run {
             Input::Handoff { agent, instructions, tools, turn } => {
                 let mut args =
                     frame(&self.setup, &self.legs, &registry, agent, &instructions.0, tools);
-                args.turn_handling = turn.and_then(agent_turn_handling);
+                // `Agent(turn_handling=)` saying the one option.
+                args.turn_handling =
+                    turn.and_then(|t| turn_update(t.knob, t.mode, t.ms)).map(|update| {
+                        TurnHandlingKwargs {
+                            turn_detection: update.turn_detection,
+                            endpointing: update.endpointing_opts,
+                            ..TurnHandlingKwargs::default()
+                        }
+                    });
                 api.update_agent(args)
                     .map(|reply| {
                         wait(Pending::reply(reply, |ok| {
