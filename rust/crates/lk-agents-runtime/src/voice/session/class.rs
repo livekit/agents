@@ -362,8 +362,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 }
             }
         }
-        let mut collecting = Collecting(Some((tx, id)));
+        let collecting = Collecting(Some((tx, id)));
         Ok(Box::pin(async move {
+            let mut collecting = collecting;
             let outcome = rx.await;
             collecting.0 = None;
             match outcome.unwrap_or(DtmfOutcome::Stopped) {
