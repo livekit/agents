@@ -122,6 +122,7 @@ from .events import (
 from .remote_session import ConsoleCall, RemoteSessionAccess
 from .room_io import (
     AudioInputOptions,
+    AudioProcessingError,
     Room as _RtcRoom,
     RoomOptions,
     TextInputCallback,
@@ -656,10 +657,11 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 # the core connects the job's room beside its opening
                 job=job_ctx if in_job and console is None else None,
             )
-            room_session = _core._core_create_room_session(
-                _RtcRoom.of(room) if room is not None else None
-            )
+            rtc_room = _RtcRoom.of(room) if room is not None else None
+            room_session = _core._core_create_room_session(rtc_room)
             self._core = _core.VoiceSession(room_session, args, self._options)
+            if rtc_room is not None:
+                rtc_room.on("audio_processing_error", self._on_audio_processing_error)
         except BaseException:
             # a core that never started never closes the toolsets
             await hooks._core_close_toolsets(None)
@@ -735,6 +737,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
     async def _aclose(self, reason: CloseReason) -> None:
         if self._core is not None:
             await self._core.aclose(reason=reason.value, drain=False)
+        if self._room is not None:
+            _RtcRoom.of(self._room).off("audio_processing_error", self._on_audio_processing_error)
         if self._voice_store is not None:
             from ..storage.errors import StorageError
 
@@ -1241,6 +1245,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         logger.error("session error", extra={"source": wire.source, "error": str(wire.error)})
         error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
+
+    def _on_audio_processing_error(self, error: AudioProcessingError, processor: Any) -> None:
+        self.emit("error", ErrorEvent(error=error, source=processor))
 
     def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
         ev = dict(wire.event)

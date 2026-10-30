@@ -68,7 +68,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `"speech_created"` | `SpeechCreatedEvent`: `speech_handle`, `source`, `user_initiated` | the agent scheduled a speech |
 | `"agent_state_changed"` | `AgentStateChangedEvent`: `old_state`, `new_state` | the agent moved between `initializing`, `idle`, `listening`, `thinking` and `speaking` |
 | `"user_state_changed"` | `UserStateChangedEvent`: `old_state`, `new_state` | the person moved between `speaking`, `listening` and `away` |
-| `"error"` | `ErrorEvent`: `error`, `source` | a provider failed; `error.recoverable` says whether the call goes on |
+| `"error"` | `ErrorEvent`: `error`, `source` | a provider or an input audio processor failed; `error.recoverable` says whether the call goes on |
 | `"user_transcription_timeout"` | `UserTranscriptionTimeoutEvent`: `speech_duration` | the person spoke but recognition produced no transcript |
 | `"agent_false_interruption"` | `AgentFalseInterruptionEvent`: `resumed` | an interruption turned out not to be one |
 | `"overlapping_speech"` | `OverlappingSpeechEvent` | adaptive interruption detection classified overlapping speech |
@@ -182,8 +182,9 @@ Pre-connect audio is normalized to the session's format before entering the
 same processing chain as live input. A processor that needs the source format
 must declare that capability.
 
-If an input processor such as noise cancellation fails, the session reports a
-typed processing error, logs it and continues with unprocessed frames for that
+If an input processor such as noise cancellation fails, the session emits an
+`"error"` event whose `error` is a recoverable `room_io.AudioProcessingError` and whose
+`source` is the processor, logs it and continues with unprocessed frames for that
 span. The input stream does not end and the agent keeps hearing the user.
 
 Playback completion waits are bounded by the delivered audio duration and a

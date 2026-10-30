@@ -5,9 +5,12 @@ call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
@@ -30,6 +33,7 @@ __all__ = [
     "AudioOutputOptions",
     "TextOutputOptions",
     "VideoInputOptions",
+    "AudioProcessingError",
 ]
 
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
@@ -234,9 +238,10 @@ def _name(names: list[str], value: int, unknown: str) -> str:
     return names[value] if 0 <= value < len(names) else unknown
 
 
-class Room:
+class Room(rtc.EventEmitter[Literal["audio_processing_error"]]):
     """An ``rtc.Room`` as the core sees it. Its SDK events are re-emitted into the core's event
-    bus; one per room (``of``), so the handlers are registered once."""
+    bus; one per room (``of``), so the handlers are registered once. Its input streams emit
+    ``audio_processing_error`` for the sessions in the room."""
 
     @classmethod
     def of(cls, room: rtc.Room) -> Room:
@@ -247,6 +252,7 @@ class Room:
         return adapter
 
     def __init__(self, room: rtc.Room) -> None:
+        super().__init__()
         self._room = room
         self._bus = _core.RoomEventBus()
         self._local = LocalParticipant(self)
@@ -613,7 +619,7 @@ class TrackPublication:
                 except BaseException as cleanup_error:
                     error.add_note(f"Audio input processor cleanup failed: {cleanup_error!r}")
             raise
-        return _AudioStream(stream, noise_cancellation, apm, owns_processor=owned)
+        return _AudioStream(self._room, stream, noise_cancellation, apm, owns_processor=owned)
 
     def _core_open_video_stream(self) -> _VideoStream:
         track = self._publication.track
@@ -624,13 +630,22 @@ class TrackPublication:
         )
 
 
-class AudioProcessingError(RuntimeError):
-    """An input processing span failed and was forwarded without processing."""
+class AudioProcessingError(BaseModel):
+    """An input audio processor failed on a span; the session forwarded that span unprocessed
+    and kept listening."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["audio_processing_error"] = "audio_processing_error"
+    timestamp: float = Field(default_factory=time.time)
+    label: str
+    error: Exception = Field(..., exclude=True)
+    recoverable: bool = True
 
 
 class _AudioStream(AsyncIterator[rtc.AudioFrame]):
     def __init__(
         self,
+        room: rtc.EventEmitter[Literal["audio_processing_error"]],
         stream: rtc.AudioStream,
         noise_cancellation: rtc.NoiseCancellationOptions
         | rtc.FrameProcessor[rtc.AudioFrame]
@@ -639,6 +654,7 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
         *,
         owns_processor: bool = False,
     ) -> None:
+        self._room = room
         self._stream = stream
         self._noise_cancellation = noise_cancellation
         self._apm = apm
@@ -654,7 +670,8 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
     async def _core_process_audio(self, frames: list[rtc.AudioFrame]) -> list[rtc.AudioFrame]:
         if isinstance(self._noise_cancellation, rtc.NoiseCancellationOptions):
             self._report_processing_error(
-                RuntimeError("the SDK native audio filter does not support pre-connect replay")
+                self._noise_cancellation,
+                RuntimeError("the SDK native audio filter does not support pre-connect replay"),
             )
             return frames
         return [self._process_frame(frame) for frame in frames]
@@ -665,6 +682,7 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
         # Processors may mutate their input before raising; preserve the original PCM span.
         original_frame = frame
         original = bytes(frame.data)
+        processor: object = self._noise_cancellation
         try:
             if (
                 isinstance(self._noise_cancellation, rtc.FrameProcessor)
@@ -672,10 +690,11 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
             ):
                 frame = self._noise_cancellation._process(frame)
             if self._apm is not None:
+                processor = self._apm
                 self._apm.process_stream(frame)
             return frame
         except Exception as cause:
-            self._report_processing_error(cause)
+            self._report_processing_error(processor, cause)
             return rtc.AudioFrame(
                 original,
                 original_frame.sample_rate,
@@ -684,11 +703,15 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
                 userdata=original_frame.userdata,
             )
 
-    @staticmethod
-    def _report_processing_error(cause: Exception) -> None:
-        error = AudioProcessingError("input audio processing failed; forwarding the original span")
-        error.__cause__ = cause
-        logger.warning(str(error), exc_info=(type(error), error, None))
+    def _report_processing_error(self, processor: object, cause: Exception) -> None:
+        kind = type(processor)
+        error = AudioProcessingError(label=f"{kind.__module__}.{kind.__qualname__}", error=cause)
+        logger.warning(
+            "input audio processing failed; forwarding the original span",
+            exc_info=cause,
+            extra={"label": error.label},
+        )
+        self._room.emit("audio_processing_error", error, processor)
 
     def __aiter__(self) -> _AudioStream:
         return self

@@ -6,7 +6,13 @@ from typing import cast
 import pytest
 
 from livekit import rtc
-from livekit.agents.voice.room_io import LocalParticipant, Room, TrackPublication, _AudioStream
+from livekit.agents.voice.room_io import (
+    AudioProcessingError,
+    LocalParticipant,
+    Room,
+    TrackPublication,
+    _AudioStream,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -30,8 +36,8 @@ class FailingProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replay", [False, True])
 @pytest.mark.parametrize("stage", ["processor", "agc"])
-async def test_processing_failure_keeps_original_audio_and_next_frame(
-    caplog: pytest.LogCaptureFixture, replay: bool, stage: str
+async def test_processing_failure_reports_typed_error_and_keeps_original_audio(
+    replay: bool, stage: str
 ) -> None:
     original = bytes([1, 0]) * 480
     frame = rtc.AudioFrame(bytearray(original), 24000, 1, 480)
@@ -65,10 +71,13 @@ async def test_processing_failure_keeps_original_audio_and_next_frame(
         async def __anext__(self) -> rtc.AudioFrameEvent:
             return rtc.AudioFrameEvent(next(self.frames))
 
+    processor = FailsOnce() if stage == "processor" else None
+    agc = Agc() if stage == "agc" else None
+    room = rtc.EventEmitter[str]()
+    reported: list[tuple[AudioProcessingError, object]] = []
+    room.on("audio_processing_error", lambda error, source: reported.append((error, source)))
     source = _AudioStream(
-        cast(rtc.AudioStream, Stream()),
-        FailsOnce() if stage == "processor" else None,
-        cast(rtc.AudioProcessingModule, Agc()) if stage == "agc" else None,
+        room, cast(rtc.AudioStream, Stream()), processor, cast(rtc.AudioProcessingModule, agc)
     )
     if replay:
         recovered, following = await source._core_process_audio([frame, next_frame])
@@ -76,10 +85,9 @@ async def test_processing_failure_keeps_original_audio_and_next_frame(
         recovered, following = await anext(source), await anext(source)
     assert bytes(recovered.data) == original
     assert bytes(following.data) == bytes([2, 0]) * 480
-    assert len(caplog.records) == 1
-    error = caplog.records[0].exc_info
-    assert error is not None and type(error[1]).__name__ == "AudioProcessingError"
-    assert isinstance(error[1].__cause__, RuntimeError)
+    [(error, failed)] = reported
+    assert failed is (processor if stage == "processor" else agc)
+    assert error.recoverable and isinstance(error.error, RuntimeError)
 
 
 @pytest.mark.asyncio

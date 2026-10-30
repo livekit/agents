@@ -51,6 +51,7 @@ from ..llm import (
 )
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
+from .room_io import AudioProcessingError
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -181,7 +182,15 @@ class ConversationItemAddedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    error: (
+        LLMError
+        | STTError
+        | TTSError
+        | RealtimeModelError
+        | InterruptionDetectionError
+        | AudioProcessingError
+        | Any
+    )
     source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 
