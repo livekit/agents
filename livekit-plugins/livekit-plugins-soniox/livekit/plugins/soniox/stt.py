@@ -247,6 +247,8 @@ class SpeechStream(stt.SpeechStream):
         self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
         self._reported_duration_ms = 0
+        self._num_output_tokens = 0
+        self._reported_output_tokens = 0
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession for WebSocket connections."""
@@ -300,12 +302,7 @@ class SpeechStream(stt.SpeechStream):
             self._ensure_session().ws_connect(
                 self._stt._base_url,
                 headers={"Authorization": f"Bearer {self._stt._api_key}"},
-                # Without a heartbeat a silently dropped socket (half-open TCP, no
-                # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
-                # forever and the reconnect in `_run` is only ever triggered by that
-                # task ending. aiohttp closes the socket itself when a ping goes
-                # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
-                heartbeat=30.0,
+                autoping=False,
             ),
             timeout=self._conn_options.timeout,
         )
@@ -314,24 +311,29 @@ class SpeechStream(stt.SpeechStream):
         logger.debug("Soniox Speech-to-Text API connection established!")
 
         self._reported_duration_ms = 0
+        self._num_output_tokens = 0
+        self._reported_output_tokens = 0
         self.audio_queue = asyncio.Queue()
         return ws
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
-        """Report the total audio duration processed by the STT engine."""
+        """Report the audio duration and output tokens processed by the STT engine."""
         to_report_ms = total_audio_proc_ms - self._reported_duration_ms
-        if to_report_ms <= 0:
+        to_report_output_tokens = self._num_output_tokens - self._reported_output_tokens
+        if to_report_ms <= 0 and to_report_output_tokens <= 0:
             return
 
         usage_event = stt.SpeechEvent(
             type=stt.SpeechEventType.RECOGNITION_USAGE,
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(
-                audio_duration=to_report_ms / 1000,
+                audio_duration=max(to_report_ms, 0) / 1000,
+                output_tokens=max(to_report_output_tokens, 0),
             ),
         )
         self._event_ch.send_nowait(usage_event)
-        self._reported_duration_ms = int(total_audio_proc_ms)
+        self._reported_duration_ms = max(int(total_audio_proc_ms), self._reported_duration_ms)
+        self._reported_output_tokens = self._num_output_tokens
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
@@ -363,6 +365,12 @@ class SpeechStream(stt.SpeechStream):
                         break
 
                     self._reconnect_event.clear()
+                    if ws.closed:
+                        if self._input_ch.closed:
+                            return
+                        raise APIConnectionError(
+                            "Soniox STT connection closed unexpectedly"
+                        ) from ws.exception()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
@@ -400,17 +408,6 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.close()
                     self._ws = None
 
-    def _request_reconnect(self, reason: str) -> None:
-        """Ask `_run` to tear down the current socket and open a new one.
-
-        No-op when there is no socket or a reconnect is already in flight; otherwise the
-        `_run` loop would never learn that the connection is gone.
-        """
-        if self._ws is None or self._reconnect_event.is_set():
-            return
-        logger.warning("Soniox STT WebSocket %s; requesting reconnect", reason)
-        self._reconnect_event.set()
-
     async def _keepalive_task(self) -> None:
         """Periodically send keepalive messages (while no audio is being sent)
         to maintain the WebSocket connection."""
@@ -419,10 +416,9 @@ class SpeechStream(stt.SpeechStream):
                 await self._ws.send_str(KEEPALIVE_MESSAGE)
                 await asyncio.sleep(5)
         except (aiohttp.ClientError, ConnectionError) as e:
-            # When no audio is flowing this write is the only thing touching the socket,
-            # so a dropped connection surfaces here first. Swallowing it left the stream
-            # parked on a dead socket with nothing ever logged.
-            self._request_reconnect(f"keepalive write failed ({e!r})")
+            if self._input_ch.closed:
+                return
+            raise APIConnectionError("Soniox STT keepalive write failed") from e
         except Exception as e:
             logger.error(f"Error while sending keep alive message: {e}")
 
@@ -455,8 +451,9 @@ class SpeechStream(stt.SpeechStream):
             except asyncio.CancelledError:
                 raise
             except (aiohttp.ClientError, ConnectionError) as e:
-                self._request_reconnect(f"audio write failed ({e!r})")
-                break
+                if self._input_ch.closed:
+                    return
+                raise APIConnectionError("Soniox STT audio write failed") from e
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
@@ -519,12 +516,26 @@ class SpeechStream(stt.SpeechStream):
                 is_speaking = False
             else:
                 final_original.reset()
+                if is_speaking:
+                    # All tokens of the segment were retracted (non-final
+                    # tokens are not retained across messages): the endpoint
+                    # must still close the utterance, otherwise the session
+                    # stays stuck in speaking and the next utterance never
+                    # gets its own START_OF_SPEECH.
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=SpeechEventType.END_OF_SPEECH,
+                        )
+                    )
+                    is_speaking = False
 
         if not self._ws:
             return
 
         try:
-            async for msg in self._ws:
+            async for msg in utils.aio.WebSocketMonitor(
+                self._ws, liveness_timeout=self._conn_options.liveness_timeout
+            ):
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -533,10 +544,7 @@ class SpeechStream(stt.SpeechStream):
                     break
 
                 if msg.type == aiohttp.WSMsgType.ERROR:
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Treating it as an
-                    # unexpected message type stepped over it and discarded the reason,
-                    # which only survives on `ws.exception()`.
+                    # Preserve the underlying transport error.
                     logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
                     break
 
@@ -558,6 +566,11 @@ class SpeechStream(stt.SpeechStream):
                     # 1) process tokens: accumulate final/non-final,
                     #    flush immediately on endpoint tokens.
                     for token in tokens:
+                        # Non-final tokens are re-sent as final later, so only
+                        # final tokens count toward output usage. <end>/<fin>
+                        # markers are control tokens, not transcription output.
+                        if token["is_final"] and not is_end_token(token):
+                            self._num_output_tokens += 1
                         is_translated = token.get("translation_status") == "translation"
                         if is_translation_mode and not is_end_token(token) and not is_translated:
                             # Original-language token: capture text for source_text only.
@@ -638,6 +651,8 @@ class SpeechStream(stt.SpeechStream):
                     # 4) report processed audio for every frame; gating on
                     #    endpoint/finish frames dropped whatever never reached one.
                     self._report_processed_audio_duration(total_audio_proc_ms)
+                    if not has_error and not content.get("finished"):
+                        self._mark_provider_progress()
 
                     if has_error:
                         err_code = content.get("error_code")

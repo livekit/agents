@@ -118,6 +118,10 @@ class PlaybackFinishedEvent:
     When None, the transcript is not synchronized with the playback"""
 
 
+class _CaptureCancelledEvent(PlaybackFinishedEvent):
+    """A capture canceled before the sink accepted any audio."""
+
+
 @dataclass
 class PlaybackStartedEvent:
     created_at: float
@@ -183,9 +187,18 @@ class AudioOutput(
 
         self._next_in_chain: AudioOutput | None = next_in_chain
         if next_in_chain is not None:
-            next_in_chain.on("playback_finished", self._forward_next_playback_finished)
+            next_in_chain.on("playback_finished", self._dispatch_playback_finished)
             next_in_chain.on("playback_started", self._forward_next_playback_started)
             next_in_chain.on("playback_progressed", self._forward_next_playback_progressed)
+
+    def _dispatch_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
+        if isinstance(ev, _CaptureCancelledEvent):
+            # Wrappers can count a capture before or after handing it to the sink.
+            # Carry the cancellation through wrappers that never counted it.
+            self.__record_playback_finished(ev)
+            self.emit("playback_finished", ev)
+            return
+        self._forward_next_playback_finished(ev)
 
     def _forward_next_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
         self.on_playback_finished(
@@ -236,22 +249,26 @@ class AudioOutput(
         Segments are segmented by calls to flush() or clear_buffer()
         """
 
-        if self.__playback_finished_count >= self.__playback_segments_count:
-            logger.warning(
-                "playback_finished called more times than playback segments were captured"
-            )
-            return
-
-        self.__playback_finished_count += 1
-        self.__playback_finished_event.set()
-
         ev = PlaybackFinishedEvent(
             playback_position=playback_position,
             interrupted=interrupted,
             synchronized_transcript=synchronized_transcript,
         )
-        self.__last_playback_ev = ev
+        if not self.__record_playback_finished(ev):
+            logger.warning(
+                "playback_finished called more times than playback segments were captured"
+            )
+            return
+
         self.emit("playback_finished", ev)
+
+    def __record_playback_finished(self, ev: PlaybackFinishedEvent) -> bool:
+        if self.__playback_finished_count >= self.__playback_segments_count:
+            return False
+        self.__playback_finished_count += 1
+        self.__playback_finished_event.set()
+        self.__last_playback_ev = ev
+        return True
 
     def _mark_input_truncated(self) -> None:
         """Mark the segment about to be flushed as cut short by its source, not by the user."""
@@ -386,7 +403,7 @@ class _AudioSinkProxy(AudioOutput):
         played = 0.0
         if old is not None:
             # a clear can finish a segment that is not over, and that call is the proxy's
-            old.off("playback_finished", self._forward_next_playback_finished)
+            old.off("playback_finished", self._dispatch_playback_finished)
             old.off("playback_started", self._forward_next_playback_started)
             if self._pending_playback_count > 0:
                 # a sink ends a segment when it is flushed, and nothing flushes this one
@@ -425,7 +442,7 @@ class _AudioSinkProxy(AudioOutput):
 
         self._next_in_chain = new
 
-        new.on("playback_finished", self._forward_next_playback_finished)
+        new.on("playback_finished", self._dispatch_playback_finished)
         new.on("playback_started", self._forward_next_playback_started)
         new.on("playback_progressed", self._forward_next_playback_progressed)
         if self._attached:

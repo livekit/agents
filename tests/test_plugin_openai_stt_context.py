@@ -811,3 +811,22 @@ async def test_file_transcription_earlier_model_keeps_singular_language() -> Non
 
     assert 'name="language"\r\n\r\nen' in body
     assert 'name="languages[]"' not in body
+
+
+async def test_file_transcription_language_override_applies_to_one_call() -> None:
+    # StreamAdapter passes its stream's language to every recognize() call, so an
+    # override must not leak into the STT's own configuration
+    captured: list[httpx.Request] = []
+    instance = stt.STT(model="whisper-1", client=_mock_client(captured), language="en")
+
+    overridden = await instance._recognize_impl(
+        _silence(), language="fr", conn_options=DEFAULT_API_CONNECT_OPTIONS
+    )
+    default = await instance._recognize_impl(_silence(), conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    first, second = (request.read().decode("utf-8", errors="replace") for request in captured)
+    assert 'name="language"\r\n\r\nfr' in first
+    assert overridden.alternatives[0].language == "fr"
+    assert 'name="language"\r\n\r\nen' in second
+    assert default.alternatives[0].language == "en"
+    assert instance._opts.languages == ["en"]

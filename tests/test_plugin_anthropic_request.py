@@ -80,3 +80,63 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
     warnings = [r for r in caplog.records if "forced tool_choice" in r.getMessage()]
     assert len(warnings) == 1
     assert [r["tool_choice"] for r in requests] == [{"type": "auto"}] * 3
+
+
+async def _request(**kwargs: Any) -> dict[str, Any]:
+    requests: list[dict[str, Any]] = []
+    llm_kwargs = kwargs.pop("llm_kwargs", {})
+    instance = _make_llm("claude-sonnet-5", requests, **llm_kwargs)
+    await instance.chat(chat_ctx=ChatContext(), **kwargs).collect()
+    return requests[0]
+
+
+async def test_parallel_tool_calls_sent_without_tool_choice() -> None:
+    # Passed to chat()
+    request = await _request(tools=[get_weather], parallel_tool_calls=False)
+    assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+    request = await _request(tools=[get_weather], parallel_tool_calls=True)
+    assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": False}
+
+    # Set on the LLM
+    request = await _request(tools=[get_weather], llm_kwargs={"parallel_tool_calls": False})
+    assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+    # chat() overrides the LLM option
+    request = await _request(
+        tools=[get_weather],
+        parallel_tool_calls=True,
+        llm_kwargs={"parallel_tool_calls": False},
+    )
+    assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": False}
+
+
+async def test_tool_choice_unchanged_without_parallel_tool_calls() -> None:
+    assert "tool_choice" not in await _request(tools=[get_weather])
+    # No tools: nothing to send, even with parallel_tool_calls set.
+    request = await _request(parallel_tool_calls=False)
+    assert "tool_choice" not in request and "tools" not in request
+    # An explicit "none" still drops the tools and sends no tool_choice.
+    request = await _request(tools=[get_weather], tool_choice="none", parallel_tool_calls=False)
+    assert "tool_choice" not in request
+    assert request.get("tools", []) == []
+    # Explicit choices keep their type and still carry the flag.
+    request = await _request(tools=[get_weather], tool_choice="required", parallel_tool_calls=False)
+    assert request["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+    request = await _request(tools=[get_weather], tool_choice=_NAMED, parallel_tool_calls=False)
+    assert request["tool_choice"] == {
+        "type": "tool",
+        "name": "get_weather",
+        "disable_parallel_tool_use": True,
+    }
+
+
+async def test_user_sent_as_metadata_user_id() -> None:
+    for extra_kwargs in ({}, {"metadata": anthropic.omit}):
+        request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs=extra_kwargs)
+        assert request["metadata"] == {"user_id": "user-123"}
+
+    metadata = {"user_id": "caller", "trace_id": "abc"}
+    request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs={"metadata": metadata})
+    assert request["metadata"] == {"user_id": "user-123", "trace_id": "abc"}
+    assert metadata == {"user_id": "caller", "trace_id": "abc"}
