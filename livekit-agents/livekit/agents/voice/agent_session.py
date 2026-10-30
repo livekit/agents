@@ -880,8 +880,42 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session=self,
         )
         self._global_run_state = run_state
-        self.generate_reply(user_input=user_input, input_modality=input_modality)
+        if self._text_only:
+            # a text simulation stands in for a live call, where every user turn
+            # runs on_user_turn_completed
+            run_state._watch_handle(
+                self._reply_to_completed_user_turn(user_input, input_modality=input_modality)
+            )
+        else:
+            self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
+
+    def _reply_to_completed_user_turn(
+        self, user_input: str, *, input_modality: Literal["text", "audio"]
+    ) -> asyncio.Future[None]:
+        """Run ``on_user_turn_completed`` for ``user_input``, then reply unless the hook dropped
+        the turn."""
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+
+        async def _reply() -> None:
+            user_message = llm.ChatMessage(role="user", content=[user_input])
+            hook_result = await activity._run_user_turn_hook(
+                user_message, context=self._root_span_context
+            )
+            if hook_result is None:
+                return
+
+            chat_ctx, _ = hook_result
+            self.generate_reply(
+                user_input=user_message, chat_ctx=chat_ctx, input_modality=input_modality
+            )
+
+        return asyncio.ensure_future(_reply())
 
     @overload
     async def start(

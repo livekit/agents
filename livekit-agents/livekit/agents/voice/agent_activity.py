@@ -2786,6 +2786,44 @@ class AgentActivity(RecognitionHooks):
         )
         return True
 
+    async def _run_user_turn_hook(
+        self, user_message: llm.ChatMessage, *, context: otel_context.Context | None
+    ) -> tuple[llm.ChatContext, float] | None:
+        """Run ``on_user_turn_completed`` for a completed user turn.
+
+        Returns the chat context the hook may have edited and the hook's duration, or None
+        when the turn is dropped (the hook raised StopResponse or failed).
+        """
+        # create a temporary mutable chat context to pass to on_user_turn_completed
+        # the user can edit it for the current generation, but changes will not be kept inside the
+        # Agent.chat_ctx
+        temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
+        start_time = time.perf_counter()
+        # user code that gates the reply; without a span a slow hook is an unexplained gap
+        with tracer.start_as_current_span(
+            "on_user_turn_completed",
+            context=context,
+            attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+        ) as hook_span:
+            try:
+                await self._agent.on_user_turn_completed(
+                    temp_mutable_chat_ctx, new_message=user_message
+                )
+            except StopResponse:
+                hook_span.add_event("stop_response")
+                return None
+            except Exception as e:
+                # the message may quote the transcript: honour the session's redaction too
+                trace_utils.record_exception(
+                    hook_span,
+                    e,
+                    redacted=self._session._redaction_enabled or trace_utils.redaction_enabled(),
+                )
+                logger.exception("error occurred during on_user_turn_completed")
+                return None
+
+        return temp_mutable_chat_ctx, time.perf_counter() - start_time
+
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
@@ -2873,39 +2911,18 @@ class AgentActivity(RecognitionHooks):
                 self._session._conversation_item_added(user_message)
             return
 
-        # create a temporary mutable chat context to pass to on_user_turn_completed
-        # the user can edit it for the current generation, but changes will not be kept inside the
-        # Agent.chat_ctx
-        temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
-        start_time = time.perf_counter()
-        # user code that gates the reply; without a span a slow hook is an unexplained gap
-        with tracer.start_as_current_span(
-            "on_user_turn_completed",
+        hook_result = await self._run_user_turn_hook(
+            user_message,
             context=(
                 trace.set_span_in_context(info.user_turn_span)
                 if info.user_turn_span_adopted and info.user_turn_span is not None
                 else self._session._root_span_context
             ),
-            attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
-        ) as hook_span:
-            try:
-                await self._agent.on_user_turn_completed(
-                    temp_mutable_chat_ctx, new_message=user_message
-                )
-            except StopResponse:
-                hook_span.add_event("stop_response")
-                return  # ignore this turn
-            except Exception as e:
-                # the message may quote the transcript: honour the session's redaction too
-                trace_utils.record_exception(
-                    hook_span,
-                    e,
-                    redacted=self._session._redaction_enabled or trace_utils.redaction_enabled(),
-                )
-                logger.exception("error occurred during on_user_turn_completed")
-                return
+        )
+        if hook_result is None:
+            return  # ignore this turn
 
-        on_user_turn_completed_delay = time.perf_counter() - start_time
+        temp_mutable_chat_ctx, on_user_turn_completed_delay = hook_result
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
         if isinstance(self.llm, llm.RealtimeModel):
