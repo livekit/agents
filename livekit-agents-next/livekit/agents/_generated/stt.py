@@ -550,9 +550,6 @@ class RecognizeStream(ABC):
             self.end_input()
 
 
-SpeechStream = RecognizeStream
-
-
 # --- the frozen public paths -----------------------------------------------------------------
 #
 # Assigned here rather than in each class body: pydantic resolves annotations against

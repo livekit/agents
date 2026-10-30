@@ -416,6 +416,3 @@ class RecognizeStream(ABC):
     def _core_end_input(self) -> None:
         if not self.input.closed:
             self.end_input()
-
-
-SpeechStream = RecognizeStream
