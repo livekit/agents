@@ -88,7 +88,9 @@ pub trait PlaybackObserver: Send + Sync {
 #[crate::host(native(refused = "expected a `_core.PlaybackTracker`"))]
 pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
     /// Stamp a host sink's reports on the session's clock. The first anchor wins: one host sink
-    /// reports to one session. Unanchored, reports are stamped on a fresh wall clock.
+    /// reports to one session. A host sink reporting before `set_audio_output` anchors it is
+    /// stamped on the real wall clock. Runtime-built outputs report session-clock stamps and need
+    /// no anchor.
     fn anchor_to(&self, anchor: WallAnchor);
 
     /// The anchor a host sink's `time.time()` stamps are read against.
@@ -153,11 +155,6 @@ pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
 
     /// Wait for every segment captured so far; returns the last event. Cancellation releases it.
     fn wait_for_playout(&self) -> crate::BoxFuture<'_, PlaybackFinished>;
-
-    /// `on_playback_started(created_at=)`, in the host sink's `time.time()`.
-    fn report_started(&self, segment: PlaybackSegment, created_at: f64) -> bool {
-        self.playback_started(segment, self.anchor().ts(created_at))
-    }
 }
 
 /// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
@@ -204,7 +201,7 @@ pub trait PlaybackReports {
         segment: PlaybackSegment,
         created_at: f64,
     ) -> bool {
-        tracker.report_started(segment, created_at)
+        tracker.playback_started(segment, tracker.anchor().ts(created_at))
     }
     /// Invalid durations are refused before updating playback or notifying observers.
     #[host(function, name = "_core_playback_progressed")]

@@ -237,12 +237,12 @@ impl AudioOutput for ConsoleIo {
         f: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
-            let now = lk_agents_abi::unix_secs(self.clock.wall());
+            let now = self.clock.now();
             let segment =
                 self.tracker.current_segment().ok_or(IoError::PlaybackSegmentUnavailable)?;
             let (message, opened) = self.playback.lock().capture(f, segment)?;
             if opened {
-                self.tracker.report_started(segment, now);
+                self.tracker.playback_started(segment, now);
             }
             self.send(message);
             Ok(())

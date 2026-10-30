@@ -13,7 +13,7 @@ use lk_agents_abi::voice::io::{
 use lk_agents_abi::voice::rtc::{
     AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RtcRoom, StreamBytesOptions,
 };
-use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts, unix_secs};
+use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::avatar::output::{
     AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
@@ -154,7 +154,7 @@ impl Inner {
             let continued = self.register_segment(segment, token)?;
             if !self.wait_playback_start && !continued {
                 // approximated: the avatar does not report lk.playback_started
-                self.tracker.report_started(segment.key, unix_secs(self.clock.wall()));
+                self.tracker.playback_started(segment.key, self.clock.now());
             }
         }
         if let SegmentWriter::Open(writer) = &*writer {
@@ -187,9 +187,7 @@ impl Inner {
                 }
                 let reply = if base == RPC_PLAYBACK_FINISHED {
                     inner.on_playback_finished(key, payload)
-                } else if continued
-                    || inner.tracker.report_started(key, unix_secs(inner.clock.wall()))
-                {
+                } else if continued || inner.tracker.playback_started(key, inner.clock.now()) {
                     Reply::Ok
                 } else {
                     Reply::Stale
