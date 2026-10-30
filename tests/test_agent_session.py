@@ -148,6 +148,15 @@ async def test_an_override_on_a_session_closed_inside_it_raises_the_block_error(
                 raise RuntimeError("interaction failed")
 
 
+async def test_an_override_ending_on_a_session_closed_inside_it_ends_quietly() -> None:
+    base, specialist = FakeTTS(fake_audio_duration=0.1), FakeTTS(fake_audio_duration=0.1)
+    async with _voiced_session(base) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        async with session.override_options(tts=specialist):
+            await session.aclose()
+        assert session.tts is base
+
+
 def _voiced_session(tts: FakeTTS) -> VoiceSession:
     session = VoiceSession(vad=None, tts=tts, turn_handling={"turn_detection": None})
     session.output.audio = FakeAudioOutput()

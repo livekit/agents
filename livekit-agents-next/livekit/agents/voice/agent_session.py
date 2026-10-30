@@ -985,11 +985,11 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 del self._model_layers[held]
                 try:
                     self._install_models({leg: self._effective_model(leg) for leg in models})
-                except RuntimeError:
-                    # a session closed inside the block refuses the restore; the block's own
-                    # error is the one to raise
-                    if failure is None:
-                        raise
+                except RuntimeError as refused:
+                    # the core refuses an update only once it is closed (or never started), with
+                    # nothing left to restore; the block's own error is the one to raise
+                    if failure is not None:
+                        failure.add_note(f"restoring the overridden providers: {refused}")
 
     @staticmethod
     def _split(options: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
