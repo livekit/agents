@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
+import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -148,16 +150,26 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
         async def _forward_input(stream: RecognizeStream) -> None:
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
-                    stream.push_frame(frame)
+                    # the leg can close while frames are still in flight. the input was
+                    # taken, so the detector must count it, but raising here would turn a
+                    # retryable provider failure into a fatal RuntimeError and skip the
+                    # wrapper's retry
+                    with contextlib.suppress(RuntimeError):
+                        stream.push_frame(frame)
                     self._detector.push_audio(frame)
                 elif isinstance(frame, self._FlushSentinel):
-                    stream.flush()
+                    with contextlib.suppress(RuntimeError):
+                        stream.flush()
 
             with contextlib.suppress(RuntimeError):
                 stream.end_input()
 
-        async def _forward_output(stream: RecognizeStream) -> None:
+        async def _forward_output(stream: RecognizeStream, input_offset: float) -> None:
             async for ev in stream:
+                # the wrapped leg reports on its own clock; place its timestamps on the
+                # wrapper's input timeline before the detector maps them onto the audio
+                # it has actually forwarded
+                _shift_event_times(ev, input_offset)
                 updated_ev = self._detector.on_stt_event(ev)
                 if updated_ev is not None:
                     self._event_ch.send_nowait(updated_ev)
@@ -170,14 +182,39 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
                         )
                     )
 
-        stream = self._wrapped_stt.stream(language=self._language, conn_options=self._conn_options)
+        # the wrapper owns retries, so the leg gets no retry budget of its own. a provider
+        # stream retrying internally advances its own `start_time_offset` behind the
+        # adapter's back, and plugins disagree about whether that offset is already folded
+        # into the SpeechData they emit (deepgram/assemblyai/aws add it, xAI builds its
+        # timestamps straight from the provider's word clocks and ignores it), so the
+        # adapter cannot correct for the shift after the fact. with max_retry=0 the failure
+        # propagates here instead and the wrapper rebuilds the leg on its next attempt,
+        # recomputing the offsets below for the new leg.
+        leg_conn_options = dataclasses.replace(self._conn_options, max_retry=0)
+        stream = self._wrapped_stt.stream(language=self._language, conn_options=leg_conn_options)
         stream._on_provider_progress = self._mark_provider_progress
+        # do not seed `stream.start_time_offset`: diarization plugins are not consistent
+        # about applying it to the SpeechData they emit (deepgram/assemblyai/aws add it,
+        # xAI builds timestamps straight from its word clocks), so seeding it would put
+        # different providers on different timelines. keep every leg on its own clock and
+        # translate the events here instead.
+        #
+        # where this leg starts on the wrapper's input timeline; its provider clock starts
+        # at zero there, and the leg never retries on its own, so it stays there
+        input_offset = self.start_time_offset + (time.time() - self._start_time)
+        # the leg's clock starts where the detector's forwarded audio currently ends, not
+        # where the input timeline is: the difference is the reconnect gap (wall-clock time
+        # not covered by forwarded frames). the detector subtracts it so its RMS buffer
+        # keeps indexing the audio it actually saw.
+        self._detector.input_time_offset = input_offset - self._detector.pushed_duration
+
         tasks = [
             asyncio.create_task(
                 _forward_input(stream), name="DiarizationAdapterWrapper.forward_input"
             ),
             asyncio.create_task(
-                _forward_output(stream), name="DiarizationAdapterWrapper.forward_output"
+                _forward_output(stream, input_offset),
+                name="DiarizationAdapterWrapper.forward_output",
             ),
         ]
 
@@ -186,6 +223,32 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             await stream.aclose()
+
+
+def _shift_event_times(ev: SpeechEvent, offset: float) -> None:
+    """Move a provider event's timestamps onto the wrapper's input timeline.
+
+    A wrapped leg counts from zero when it is created, no matter how much audio the
+    wrapper has already consumed, so its timestamps are relative to the start of that
+    leg. ``offset`` is where the leg starts on the wrapper's input timeline.
+    """
+    if offset == 0:
+        return
+
+    for sd in ev.alternatives:
+        # plugins leave both bounds at zero when they have no timing for a segment;
+        # shifting those would invent a position on the input timeline
+        if sd.start_time != 0.0 or sd.end_time != 0.0:
+            sd.start_time += offset
+            sd.end_time += offset
+
+        for word in sd.words or []:
+            if utils.is_given(word.start_time):
+                word.start_time += offset
+            if utils.is_given(word.end_time):
+                word.end_time += offset
+            if utils.is_given(word.start_time_offset):
+                word.start_time_offset += offset
 
 
 @dataclass
@@ -251,6 +314,7 @@ class _PrimarySpeakerDetector:
             self._suppress_background = False
 
         self._pushed_duration: float = 0.0
+        self._input_time_offset: float = 0.0
         self._primary_speaker: str | None = None
         self._speaker_data: dict[str, _PrimarySpeakerDetector.SpeakerData] = {}
         self._bstream: AudioByteStream | None = None
@@ -258,6 +322,20 @@ class _PrimarySpeakerDetector:
         self._rms_buffer: list[float] = []
         self._frame_size = self._opt.frame_size_ms / 1000
         self._max_rms_size = int(self._opt.rms_buffer_duration / self._frame_size)
+
+    @property
+    def pushed_duration(self) -> float:
+        """Duration of the audio forwarded to this detector so far."""
+        return self._pushed_duration
+
+    @property
+    def input_time_offset(self) -> float:
+        """Shift from the wrapper's input timeline to the detector's forwarded-audio clock."""
+        return self._input_time_offset
+
+    @input_time_offset.setter
+    def input_time_offset(self, value: float) -> None:
+        self._input_time_offset = value
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._detect_primary:
@@ -340,21 +418,27 @@ class _PrimarySpeakerDetector:
             # so leave the current primary in place rather than clearing it
             return
 
-        rms = self._get_rms_for_timerange(sd.start_time, sd.end_time)
+        # timestamps arrive on the wrapper's input timeline, but the RMS buffer is indexed
+        # by the duration of audio this detector has forwarded, so translate them back
+        # (the difference is the reconnect gap the input timeline ran through)
+        start_time = sd.start_time - self._input_time_offset
+        end_time = sd.end_time - self._input_time_offset
+
+        rms = self._get_rms_for_timerange(start_time, end_time)
         if rms is None:
             return
 
         # update speaker data
         speaker_id = sd.speaker_id
         if data := self._speaker_data.get(speaker_id):
-            data.last_activity_time = sd.end_time
+            data.last_activity_time = end_time
             data.rms = data.rms * self._opt.rms_smoothing_factor + rms * (
                 1 - self._opt.rms_smoothing_factor
             )
         else:
             self._speaker_data[speaker_id] = _PrimarySpeakerDetector.SpeakerData(
                 speaker_id=speaker_id,
-                last_activity_time=sd.end_time,
+                last_activity_time=end_time,
                 rms=rms,
             )
 
