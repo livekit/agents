@@ -471,7 +471,8 @@ async fn the_usage_record_reports_the_real_audio_duration() {
         .find(|e| e.kind == SpeechEventType::RecognitionUsage)
         .and_then(|e| e.recognition_usage.clone())
         .expect("a usage record");
-    assert!((usage.audio_duration - 0.2).abs() < 1e-9, "got {}", usage.audio_duration);
+    let seconds = usage.audio_duration.expect("a measured duration");
+    assert!((seconds - 0.2).abs() < 1e-9, "got {seconds}");
 }
 
 // Catches: reporting the default `offline_recognize`, which routes the session to a batch

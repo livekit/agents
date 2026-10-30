@@ -106,8 +106,8 @@ class SpeechData:
 
 @dataclass
 class RecognitionUsage:
-    audio_duration: float
-    """Incremental audio duration/usage in seconds"""
+    audio_duration: float | None = None
+    """Incremental processed audio in seconds, when the provider measures it."""
     tokens: TokenUsage = field(default_factory=TokenUsage)
     """Token-based billing; zero when the provider reports no tokens."""
 

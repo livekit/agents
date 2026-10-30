@@ -132,7 +132,7 @@ impl TranscriptMachine {
                 request_id: request_id.clone(),
                 alternatives: Vec::new(),
                 recognition_usage: Some(RecognitionUsage {
-                    audio_duration: self.speech_duration,
+                    audio_duration: Some(self.speech_duration),
                     ..Default::default()
                 }),
                 speech_start_time: None,
@@ -317,7 +317,7 @@ mod tests {
         let out = m.process(msg(json!({"type": "final_transcript", "transcript": "hi"})));
         let usage =
             out.events.iter().find(|e| e.kind == SpeechEventType::RecognitionUsage).unwrap();
-        assert!((usage.recognition_usage.as_ref().unwrap().audio_duration - 0.1).abs() < 1e-9);
+        assert!((usage.recognition_usage.as_ref().unwrap().audio_duration.unwrap() - 0.1).abs() < 1e-9);
 
         let out = m.process(msg(json!({"type": "final_transcript", "transcript": "again"})));
         assert!(

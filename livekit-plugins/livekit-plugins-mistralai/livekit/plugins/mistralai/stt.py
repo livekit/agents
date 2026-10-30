@@ -298,7 +298,6 @@ class SpeechStream(stt.RecognizeStream):
         self._vad = vad_instance
         self._reconnect_event = reconnect_event
         self._request_id = ""
-        self._audio_duration = 0.0
         self._speaking = False
         self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
 
@@ -323,9 +322,6 @@ class SpeechStream(stt.RecognizeStream):
                 if vad_stream is not None:
                     vad_stream.push_frame(data)
 
-                data_bytes = data.data.tobytes()
-                bytes_per_second = SAMPLE_RATE * NUM_CHANNELS * 2
-                self._audio_duration += len(data_bytes) / bytes_per_second
                 for frame in audio_bstream.write(data.data.tobytes()):
                     await connection.send_audio(frame.data.tobytes())
 
@@ -416,12 +412,15 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
 
+                audio_seconds = event.usage.prompt_audio_seconds  # unset when not measured
                 self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.RECOGNITION_USAGE,
                         request_id=self._request_id,
                         recognition_usage=stt.RecognitionUsage(
-                            audio_duration=event.usage.prompt_audio_seconds or 0,
+                            audio_duration=audio_seconds
+                            if isinstance(audio_seconds, int)
+                            else None,
                             tokens=TokenUsage(
                                 input_tokens=event.usage.prompt_tokens or 0,
                                 output_tokens=event.usage.completion_tokens or 0,

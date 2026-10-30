@@ -175,7 +175,7 @@ pub(super) fn deliver(
     if kind == T::RecognitionUsage {
         // The audio the stream has heard so far, as the providers bill it.
         ev.recognition_usage = Some(lk_agents_abi::RecognitionUsage {
-            audio_duration: clock.seconds(clock.now),
+            audio_duration: Some(clock.seconds(clock.now)),
             ..Default::default()
         });
     }

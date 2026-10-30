@@ -119,8 +119,9 @@ impl SpeechData {
 #[crate::host(record(module = "stt", path = "livekit.agents.stt", dataclass, extract, emit))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecognitionUsage {
-    /// Incremental audio duration/usage in seconds
-    pub audio_duration: f64,
+    /// Incremental processed audio in seconds, when the provider measures it.
+    #[host(default = None)]
+    pub audio_duration: Option<f64>,
     /// Token-based billing; zero when the provider reports no tokens.
     #[host(default_factory = ".usage.TokenUsage")]
     pub tokens: crate::usage::TokenUsage,

@@ -62,7 +62,7 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
                 request_id: event.request_id.clone(),
                 timestamp: context.timestamp,
                 duration: 0.0,
-                audio_duration: Some(usage.audio_duration),
+                audio_duration: usage.audio_duration,
                 streamed: true,
                 tokens: usage.tokens.clone(),
                 acquire_time: 0.0,

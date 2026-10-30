@@ -61,7 +61,7 @@ impl Driver {
                 request_id: ev.request_id.clone(),
                 timestamp: self.step.wall_secs(),
                 duration: 0.0,
-                audio_duration: Some(usage.audio_duration),
+                audio_duration: usage.audio_duration,
                 streamed: true,
                 tokens: usage.tokens,
                 acquire_time: 0.0,
