@@ -138,8 +138,9 @@ impl CoreProviderAttempts {
     }
 
     #[pyo3(signature = (error, produced_output, now_ns))]
-    fn failure<'py>(&mut self, py: Python<'py>, error: ::lk_agents_abi::errors::ProviderError, produced_output: bool, #[pyo3(from_py_with = _extract_provider_attempts_failure_now_ns)] now_ns: u64) -> PyResult<Bound<'py, PyAny>> {
+    fn failure<'py>(&mut self, py: Python<'py>, error: Bound<'_, PyAny>, produced_output: bool, #[pyo3(from_py_with = _extract_provider_attempts_failure_now_ns)] now_ns: u64) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let error = PyResult::Ok(::lk_agents_abi::python::capture_value(&error))?;
         let out = <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::failure(&mut self.0, error, produced_output, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::_retry::_core_retry_decision_to_py(py, out)?)
     }

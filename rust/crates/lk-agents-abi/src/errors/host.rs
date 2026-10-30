@@ -3,7 +3,7 @@
 use super::side_table::side_table_ref;
 
 /// A key into the binding's side table for a captured host exception.
-#[crate::host(handwritten(emit, host = "BaseException"))]
+#[crate::host(handwritten(emit, host = "BaseException", py))]
 #[derive(Clone)]
 pub struct CapturedError(std::sync::Arc<super::side_table::Entry>);
 side_table_ref!(CapturedError);
@@ -15,20 +15,6 @@ impl CapturedError {
     }
 }
 
-/// `None` when another clone already took it.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for CapturedError {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        Ok(match crate::python::release(self) {
-            Some(obj) => obj.into_bound(py),
-            None => py.None().into_bound(py),
-        })
-    }
-}
 
 /// An error crossing a host boundary. Recovery policy belongs to the operation receiving it.
 /// Clones share ownership of the original exception; the last drop releases its adapter entry.
@@ -72,24 +58,6 @@ impl std::fmt::Display for HostError {
 }
 impl std::error::Error for HostError {}
 
-/// The host's own exception while it is retained (resolved, not released), else a `RuntimeError`
-/// carrying the diagnostic: what an observer records or logs.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for HostError {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        Ok(match self.host_ref.clone().and_then(|r| crate::python::resolve_captured(py, r)) {
-            Some(original) => original.into_bound(py),
-            None => pyo3::exceptions::PyRuntimeError::new_err(self.to_string())
-                .into_value(py)
-                .into_bound(py)
-                .into_any(),
-        })
-    }
-}
 impl From<String> for HostError {
     fn from(message: String) -> Self {
         Self::new(message)

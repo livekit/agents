@@ -802,10 +802,10 @@ impl SpeechHandle {
     }
 
     /// The exception the speech failed with: the host's own object when a provider raised one.
-    fn exception(&self, py: Python<'_>) -> PyResult<::std::option::Option<::lk_agents_abi::errors::ProviderError>> {
+    fn exception<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = py.detach(|| <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::exception(&self.0)).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::ExceptionValue::to_exception(value, py)?)).transpose()?)
     }
 
     /// `interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
@@ -5188,7 +5188,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let hook_arg = hook.to_owned();
         let error_arg = error;
         ::lk_agents_runtime::host::notify(&self.notifier, "SessionHooks._core_hook_failed", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?, match error_arg { None => py.None().into_bound(py), Some(x) => crate::conversions::captured_error_to_py(py, x)? }];
                 Ok((host.bind(py).getattr("_core_hook_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

@@ -11,6 +11,7 @@ use lk_agents_abi::voice::session_options::{
 };
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
+use lk_agents_abi::errors::CapturedError;
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::utils::host_ref::StaleHostRef;
 use lk_agents_abi::utils::video::VideoFrame;
@@ -765,6 +766,11 @@ pub fn media_ref_to_py<'py>(py: Python<'py>, value: MediaRef) -> PyResult<Bound<
 
 fn optional_host_ref(obj: &Bound<'_, PyAny>) -> PyResult<Option<HostRef>> {
     if obj.is_none() { Ok(None) } else { host_ref_from_py(obj).map(Some) }
+}
+
+/// The host's own exception, released: `None` when another clone already took it.
+pub fn captured_error_to_py<'py>(py: Python<'py>, value: CapturedError) -> PyResult<Bound<'py, PyAny>> {
+    Ok(lk_agents_abi::python::release(value).map_or_else(|| py.None().into_bound(py), |obj| obj.into_bound(py)))
 }
 
 /// The host object `id` names, provided its key was issued by this runtime's table.

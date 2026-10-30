@@ -671,7 +671,7 @@ fn native(ty: &Ty) -> bool {
         Ty::Record(r) => {
             !matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs | HostForm::Converted(_))
         }
-        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Error(_) => true,
+        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str => true,
         Ty::Optional(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
         Ty::Tuple(ts) => ts.iter().all(native),
@@ -857,6 +857,10 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             format!("{v}.extract::<{}>().map_err(::pyo3::PyErr::from)", other.rust())
         }
         other if native(other) => format!("{v}.extract::<{}>()", other.rust()),
+        // A host exception handed over as an argument, classified as a raised one is.
+        Ty::Error(e) if e.rust.ends_with("::ProviderError") => {
+            format!("PyResult::Ok(::lk_agents_abi::python::capture_value(&{v}))")
+        }
         other => return Err(format!("{at}: `{}` has no input conversion", other.rust())),
     })
 }
@@ -887,6 +891,10 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
             )
         }
         Ty::Unit => ("()".into(), "{}".into()),
+        Ty::Error(_) => (
+            "Bound<'py, PyAny>".into(),
+            "::lk_agents_abi::python::ExceptionValue::to_exception({}, {py})?".into(),
+        ),
         Ty::This if c.form == Form::MutableClass => (c.name.clone(), format!("{}({{}})", c.name)),
         Ty::This => (c.name.clone(), format!("{}(::std::sync::Arc::new({{}}))", c.name)),
         Ty::Json => {

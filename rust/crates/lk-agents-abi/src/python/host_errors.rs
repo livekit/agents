@@ -119,6 +119,29 @@ pub fn to_py_exception(py: Python<'_>, err: &ProviderError) -> PyResult<Py<PyAny
     Ok(super::HostException::to_py_err(err).into_value(py).into_any())
 }
 
+/// The exception object an observer or event receives for a failure.
+pub trait ExceptionValue {
+    fn to_exception<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
+}
+
+/// The host's own exception (resolved, not released), else an `APIError` from the engine's message.
+impl ExceptionValue for ProviderError {
+    fn to_exception<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(to_py_exception(py, &self)?.into_bound(py))
+    }
+}
+
+/// The host's own exception while it is retained (resolved, not released), else a `RuntimeError`
+/// carrying the diagnostic: what an observer records or logs.
+impl ExceptionValue for crate::errors::HostError {
+    fn to_exception<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match self.host_ref.clone().and_then(|r| resolve_captured(py, r)) {
+            Some(original) => original.into_bound(py),
+            None => PyRuntimeError::new_err(self.to_string()).into_value(py).into_bound(py).into_any(),
+        })
+    }
+}
+
 /// For a `#[host(kind = "..", kwargs)]` variant: the class called with the message and the
 /// keyword arguments `kwargs` sets. A failed import or call is the error instead.
 pub fn host_exception_with(

@@ -49,9 +49,10 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             "::pyo3::types::PyFrozenSet::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
             emit(t, "x")?
         ),
-        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) | Ty::Error(_) => {
+        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?")
         }
+        Ty::Error(_) => format!("::lk_agents_abi::python::ExceptionValue::to_exception({x}, py)?"),
         Ty::Timestamp => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::unix_secs({x}), py)?")
         }

@@ -370,8 +370,9 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         ),
         // The failure an observer records: the host's own exception while it is retained.
         Ty::Optional(t) if matches!(**t, Ty::Error(_)) => format!(
-            "match {v} {{ None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }}"
+            "match {v} {{ None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)? }}"
         ),
+        Ty::Error(_) => format!("::lk_agents_abi::python::ExceptionValue::to_exception({v}, py)?"),
         // A native implementation, handed over as the declared class it is registered as.
         Ty::Native { rust, .. } => {
             format!("<dyn {rust} as super::NativeToHost>::to_host(py, {v})?")

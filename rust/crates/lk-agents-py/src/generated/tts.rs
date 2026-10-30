@@ -453,7 +453,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
-        let error_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> { Ok((::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?).unbind()) }) {
+        let error_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> { Ok((::lk_agents_abi::python::ExceptionValue::to_exception(error_arg, py)?).unbind()) }) {
             Ok(value) => value,
             Err(error) => {
                 ::lk_agents_abi::python::log::warn!("Tts._core_failed failed: {error}");

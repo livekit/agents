@@ -1816,7 +1816,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
         let extra_arg = extra;
         let error_arg = error;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &extra_arg)?.into_any(), match error_arg { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &extra_arg)?.into_any(), match error_arg { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)? }];
                 Ok((host.bind(py).getattr("_core_log")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
@@ -2325,7 +2325,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let error_arg = error;
         let timed_out_arg = timed_out;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [crate::conversions::host_ref_to_py(py, span_arg)?, match error_arg { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [crate::conversions::host_ref_to_py(py, span_arg)?, match error_arg { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?];
                 Ok((host.bind(py).getattr("_core_span_end")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
@@ -2348,7 +2348,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let extra_arg = extra;
         let error_arg = error;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &extra_arg)?.into_any(), match error_arg { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &extra_arg)?.into_any(), match error_arg { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)? }];
                 Ok((host.bind(py).getattr("_core_log")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {

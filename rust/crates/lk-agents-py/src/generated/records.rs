@@ -4155,7 +4155,7 @@ pub mod session_wire {
             kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
             kwargs.set_item("recoverable", ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable, py)?)?;
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
-            kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
+            kwargs.set_item("error", ::lk_agents_abi::python::ExceptionValue::to_exception(error, py)?)?;
             kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("processor_failure", match processor_failure { None => py.None().into_bound(py), Some(x) => crate::generated::records::rtc_wire::processor_failure_to_py(py, x)? })?;
             crate::host::construct(SESSION_ERROR_WIRE.import(py, "livekit.agents._generated.session_wire", "SessionErrorWire")?.as_any(), (), Some(&kwargs))

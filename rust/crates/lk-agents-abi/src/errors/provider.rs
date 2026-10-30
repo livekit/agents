@@ -24,17 +24,6 @@ pub enum ProviderError {
     Local(#[from] ApiError),
 }
 
-/// The host's own exception (resolved, not released), else an `APIError` from the engine's message.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for ProviderError {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        Ok(crate::python::to_py_exception(py, &self)?.into_bound(py))
-    }
-}
 
 impl ProviderError {
     /// The same failure, no longer to be retried: whoever spent the budget already gave up.
@@ -110,15 +99,6 @@ impl ProviderError {
     }
 }
 
-/// A host exception handed over as an argument, classified as a raised one is.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ProviderError {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Ok(crate::python::capture_value(&obj.to_owned()))
-    }
-}
 
 /// `raise APIConnectionError(message) from cause`: the host's own exception with the chain the
 /// reference's `__str__` reads its root failure from; without a host, the bare connection error.
