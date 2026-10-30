@@ -4,7 +4,17 @@
 use parking_lot::Mutex;
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::{Clock, TICK_EPSILON, Ts, simulated_epoch};
+use lk_agents_abi::{Clock, TICK_EPSILON, Ts, simulated_epoch, unix_secs};
+
+/// `time.time()`, for code with no clock of its own.
+pub fn unix_now() -> f64 {
+    unix_secs(SystemTime::now())
+}
+
+/// `int(time.time() * 1000)`: whole Unix milliseconds, for code with no clock of its own.
+pub fn unix_now_ms() -> i64 {
+    (unix_now() * 1000.0) as i64
+}
 
 /// Tokio's clock for scheduling, a synthetic one for wall stamps, so a recorded case replays
 /// byte-exactly.

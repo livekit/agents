@@ -461,7 +461,7 @@ async fn a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost
     lease.stop();
     tokio::time::sleep(Duration::from_millis(2100)).await;
     let expired = lane.info().await.unwrap().unwrap();
-    assert!(expired.lease_until <= lk_agents_abi::unix_now() as i64, "the lease lapsed");
+    assert!(expired.lease_until <= lk_agents_net::clock::unix_now() as i64, "the lease lapsed");
     lease.keep_alive();
     let renewed = tokio::time::timeout(Duration::from_secs(2), async {
         loop {

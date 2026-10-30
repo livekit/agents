@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
-use lk_agents_abi::unix_now;
+use lk_agents_net::clock::unix_now;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::StorageError;

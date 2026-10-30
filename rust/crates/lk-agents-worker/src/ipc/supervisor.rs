@@ -2,7 +2,7 @@
 //! channel, the initialization, pings, memory samples, the shutdown and stop deadlines and the
 //! runner's cleanup. It never asks whether the runner is a process or a thread.
 
-use lk_agents_abi::unix_now_ms;
+use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
 use std::time::Duration;
@@ -820,8 +820,11 @@ impl Driver {
         let forced = self.runner.stop();
         if !std::mem::replace(&mut self.stopped, true) {
             let runner = &self.opts.runner;
-            let message =
-                if forced { format!("stopping {runner}") } else { format!("waiting for {runner} to end") };
+            let message = if forced {
+                format!("stopping {runner}")
+            } else {
+                format!("waiting for {runner} to end")
+            };
             self.log(Level::Info, &message);
         }
         self.cleanup_at.get_or_insert(self.now() + secs(self.opts.close_timeout));

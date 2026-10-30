@@ -29,7 +29,7 @@ use serde_json::{Map, Value};
 
 use crate::lease::Lease;
 use crate::{SqliteConnection, shortuuid};
-use lk_agents_abi::unix_now_ms;
+use lk_agents_net::clock::unix_now_ms;
 
 /// How long a lease lasts and how often its holder renews it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

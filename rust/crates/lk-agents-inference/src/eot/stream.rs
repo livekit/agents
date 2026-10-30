@@ -27,7 +27,7 @@ pub type MetricsCallback = Arc<dyn Fn(EotInferenceMetrics) + Send + Sync>;
 
 const LOG: &str = "livekit.agents";
 
-use lk_agents_abi::unix_now as now;
+use lk_agents_net::clock::unix_now as now;
 
 fn pcm_frame(pcm: Vec<i16>, rate: u32, channels: u16) -> AudioFrame {
     let per_channel = (pcm.len() / usize::from(channels.max(1))) as u32;

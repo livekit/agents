@@ -236,7 +236,7 @@ impl HostSession {
                 label: label.clone(),
                 message: e.message,
                 recoverable: false,
-                timestamp: lk_agents_abi::unix_now(),
+                timestamp: lk_agents_net::clock::unix_now(),
                 req_id: None,
                 code: None,
             }))));

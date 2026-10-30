@@ -64,7 +64,9 @@ impl PlaybackTracker for Tracker {
     }
 
     fn anchor(&self) -> WallAnchor {
-        *self.anchor.get_or_init(|| WallAnchor { wall: lk_agents_abi::unix_now(), at: Ts::ZERO })
+        *self
+            .anchor
+            .get_or_init(|| WallAnchor { wall: lk_agents_net::clock::unix_now(), at: Ts::ZERO })
     }
 
     fn begin_segment(&self, segment: PlaybackSegment) -> bool {

@@ -24,17 +24,6 @@ pub fn wall_from_secs(secs: f64) -> Option<SystemTime> {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-/// `time.time()`, for code with no clock of its own.
-pub fn unix_now() -> f64 {
-    unix_secs(SystemTime::now())
-}
-
-/// `int(time.time() * 1000)`: whole Unix milliseconds, for code with no clock of its own.
-pub fn unix_now_ms() -> i64 {
-    (unix_now() * 1000.0) as i64
-}
-
 /// Seconds from a host value as a `Duration`: zero for NaN or a non-positive value, at most 1e9 s
 /// (+inf included), so a deadline built from it never overflows.
 pub fn secs(s: f64) -> Duration {

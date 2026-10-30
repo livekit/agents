@@ -128,14 +128,14 @@ pub use tts::timed::TimedString;
 
 pub use utils::clock::{
     Clock, Elapsed, TICK_EPSILON, Ts, VirtualClock, WallAnchor, before, secs, simulated_epoch,
-    timeout, unix_now, unix_now_ms, unix_secs, wall_from_secs,
+    timeout, unix_secs, wall_from_secs,
 };
 pub use utils::filters::FilterError;
 pub use utils::maybe::Maybe;
 pub use utils::timer::{TimerId, TimerSet};
 
-pub use voice::rtc::AUDIO_QUEUE_FRAMES;
 pub use utils::spawner::{
     BoxFuture, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError, TaskOutcome,
     TaskOutput,
 };
+pub use voice::rtc::AUDIO_QUEUE_FRAMES;

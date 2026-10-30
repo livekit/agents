@@ -19,7 +19,7 @@ use crate::StorageError;
 use crate::sql::{SqlValue, Statement, StatementResult};
 use crate::sqlite::FileConnection;
 use crate::{SqliteConnection, shortuuid};
-use lk_agents_abi::unix_now_ms;
+use lk_agents_net::clock::unix_now_ms;
 
 pub use lk_agents_abi::storage::StreamInfo;
 

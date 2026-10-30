@@ -63,7 +63,7 @@ impl Executors for HostExecutors {
 
     /// The dispatch timeline: a warm process is now handling the job (`launched_at`).
     async fn launch(&self, proc: &Executor, job: &HostRef) -> Result<(), HostError> {
-        proc.host.launch_job(&self.context, job.clone(), lk_agents_abi::unix_now()).await
+        proc.host.launch_job(&self.context, job.clone(), lk_agents_net::clock::unix_now()).await
     }
 
     async fn close(&self, proc: &Executor) -> Result<(), HostError> {

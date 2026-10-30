@@ -16,7 +16,6 @@ use lk_agents_core::a2a::{
     TurnResult, Verdict,
 };
 use lk_agents_net::clock::RealClock;
-use parking_lot::Mutex;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::db::Receive;
@@ -27,6 +26,7 @@ use lk_agents_storage::schema::{Ask, TaskData};
 use lk_agents_storage::testing::Backend;
 use lk_agents_storage::timestamp;
 use lk_agents_storage::{RunOptions, Thread, shortuuid};
+use parking_lot::Mutex;
 
 use lk_agents_storage::StorageError;
 use serde_json::{Value, json};
@@ -361,7 +361,7 @@ impl Fake {
                 Ok(text(output))
             }
             Behavior::Tool { entered, gate } => {
-                let t = lk_agents_abi::unix_now();
+                let t = lk_agents_net::clock::unix_now();
                 let mut items =
                     vec![user_item(&message_text, t), call_item("lookup", "c1", t + 1e-6)];
                 entered.set();
@@ -382,7 +382,7 @@ impl Fake {
                 })
             }
             Behavior::Ask => {
-                let t = lk_agents_abi::unix_now();
+                let t = lk_agents_net::clock::unix_now();
                 Ok(HandlerOutput {
                     new_items: vec![
                         user_item(&message_text, t),

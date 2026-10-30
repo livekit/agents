@@ -9,10 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
-use parking_lot::Mutex;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
+use parking_lot::Mutex;
 use prost::Message as _;
 use tokio::sync::mpsc;
 
@@ -123,7 +123,7 @@ impl CloudTransport {
 
         let client_e2e_ms = duration_millis(stats.and_then(|s| s.client_e2e_latency.as_ref()));
         self.sink.metrics(EotInferenceMetrics {
-            timestamp: lk_agents_abi::unix_now(),
+            timestamp: lk_agents_net::clock::unix_now(),
             total_duration: client_e2e_ms as f64 / 1000.0,
             prediction_duration: inference_duration_ms as f64 / 1000.0,
             detection_delay: detection_delay_ms as f64 / 1000.0,
