@@ -334,15 +334,6 @@ impl VoiceStorage for VoiceStore {
     fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>> {
         Box::pin(self.begin(speech, local))
     }
-    fn settle(&self, speech: u64, history: Vec<ChatItem>) -> StorageWork<'_, ()> {
-        Box::pin(self.finish(speech, history))
-    }
-    fn abort(&self, speech: u64) -> StorageWork<'_, ()> {
-        Box::pin(self.abandon(speech))
-    }
-    fn wait_lost(&self) -> StorageWork<'_, bool> {
-        Box::pin(self.observe_loss())
-    }
     fn lease_lost(&self) -> bool {
         if self.lease.lock().expect("voice lease").as_ref().is_some_and(Lease::is_lost) {
             self.lost.store(true, Ordering::Release);

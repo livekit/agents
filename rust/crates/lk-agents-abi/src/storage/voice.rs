@@ -30,9 +30,6 @@ pub trait VoiceStorage: Send + Sync {
         events: Arc<dyn StreamSink<VoiceStorageEvent>>,
     ) -> Result<(), StorageError>;
     fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>>;
-    fn settle(&self, speech: u64, history: Vec<ChatItem>) -> StorageWork<'_, ()>;
-    fn abort(&self, speech: u64) -> StorageWork<'_, ()>;
-    fn wait_lost(&self) -> StorageWork<'_, bool>;
     fn lease_lost(&self) -> bool;
 }
 

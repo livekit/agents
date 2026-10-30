@@ -81,18 +81,6 @@ impl VoiceStorage for FakeVoiceStorage {
         })
     }
 
-    fn settle(&self, _speech: u64, _history: Vec<ChatItem>) -> StorageWork<'_, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn abort(&self, _speech: u64) -> StorageWork<'_, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn wait_lost(&self) -> StorageWork<'_, bool> {
-        Box::pin(std::future::pending())
-    }
-
     fn lease_lost(&self) -> bool {
         self.state.lock().unwrap().lost
     }
