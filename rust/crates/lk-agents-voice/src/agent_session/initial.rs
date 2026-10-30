@@ -93,6 +93,9 @@ impl Driver {
             opened: false,
         };
         driver.session.trace.built = initial.built_at;
+        if let Some(stream) = driver.input.live_stt {
+            driver.stt_stream_opened(stream);
+        }
         driver.session.providers = driver.providers_held();
         driver.step.set(initial.now);
         driver.publish_activity();

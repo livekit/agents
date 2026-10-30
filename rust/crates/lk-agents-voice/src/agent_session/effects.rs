@@ -836,9 +836,16 @@ impl Driver {
                 AgentMetrics::RealtimeModel(m) => s.realtime_requests.remove(&m.request_id),
                 _ => None,
             });
-            match started {
-                Some(request) => self.session.usage.finish_measured(request, metrics),
-                None => self.session.usage.observe(metrics),
+            let stream_report = match &**metrics {
+                AgentMetrics::Stt(m) if s.stt_reports.front().is_some_and(|(_, r)| r == m) => {
+                    s.stt_reports.pop_front().map(|(request, _)| request)
+                }
+                _ => None,
+            };
+            match (started, stream_report) {
+                (Some(request), _) => self.session.usage.finish_measured(request, metrics),
+                (None, Some(request)) => self.session.usage.report_delta(request, metrics),
+                (None, None) => self.session.usage.observe(metrics),
             }
         }
         // The user state and away deadline are decided on the way to the host.

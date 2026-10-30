@@ -117,3 +117,25 @@ fn a_realtime_connection_record_is_no_request() {
     l.observe(&record("resp_1", None));
     assert_eq!(l.snapshot().requests, 1);
 }
+
+// usage.md "Counting": a recognition stream is one request from its open; each usage report adds
+// its period's audio, and creates no request of its own.
+#[test]
+fn a_streams_usage_reports_add_to_its_one_request() {
+    let report = |secs| {
+        let mut stt = lk_agents_abi::metrics::testkit::stt();
+        stt.audio_duration = Some(secs);
+        AgentMetrics::Stt(stt)
+    };
+    let mut l = Ledger::default();
+    l.start(1, ModelKind::Stt, "deepgram", "nova-3");
+    assert_eq!((l.snapshot().requests, l.snapshot().unmeasured_requests), (1, 1));
+    l.report_delta(1, &report(2.0));
+    l.report_delta(1, &report(3.0));
+    l.finish(1, true);
+    l.settle();
+    let u = l.snapshot();
+    let [ModelUsage::Stt(stt)] = u.models.as_slice() else { panic!("{:?}", u.models) };
+    assert_eq!((stt.requests, stt.audio_duration), (1, Some(5.0)));
+    assert!(u.complete);
+}

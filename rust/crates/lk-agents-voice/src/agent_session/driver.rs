@@ -293,7 +293,11 @@ impl Driver {
         {
             out.machine().emit(SessionEvent::Close { reason, error });
         }
-        // The final local accounting boundary (usage.md "Voice sessions").
+        // The final local accounting boundary (usage.md "Voice sessions"): a recognition stream
+        // still open ends with the session.
+        for stream in self.session.stt_requests.keys().copied().collect::<Vec<_>>() {
+            self.stt_stream_ended(stream);
+        }
         self.session.usage.settle();
         let mut effects = self.settle_step(out);
         self.settle_waiters_at_end();

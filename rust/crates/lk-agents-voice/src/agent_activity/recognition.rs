@@ -49,6 +49,24 @@ impl Driver {
         Some(self.input.stt_provider.clone().unwrap_or_else(|| stt.provider.clone()))
     }
 
+    /// A recognition stream opened: one request, measured by its usage reports.
+    pub(crate) fn stt_stream_opened(&mut self, stream: lk_agents_abi::resources::ResourceId) {
+        let Some(id) = self.stt_identity() else { return };
+        let request = self.session.start_request(
+            lk_agents_core::usage::ModelKind::Stt,
+            &id.provider,
+            &id.model,
+        );
+        self.session.stt_requests.insert(stream, request);
+    }
+
+    /// The stream ended: its request is measured when it reported usage.
+    pub(crate) fn stt_stream_ended(&mut self, stream: lk_agents_abi::resources::ResourceId) {
+        if let Some(request) = self.session.stt_requests.remove(&stream) {
+            self.session.usage.finish(request, true);
+        }
+    }
+
     pub(crate) fn on_stt(&mut self, now: Ts, ev: Tagged<SpeechEvent>, out: &mut Out) {
         let Tagged { stream, item: ev } = ev;
         self.anchor_stt_stream(now);
@@ -68,6 +86,9 @@ impl Driver {
                 connection_reused: false,
                 metadata: Some(id.metadata()),
             };
+            if let Some(&request) = self.session.stt_requests.get(&stream) {
+                self.session.stt_reports.push_back((request, record.clone()));
+            }
             out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                 metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record)),
                 speech: None,

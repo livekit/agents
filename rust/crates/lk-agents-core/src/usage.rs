@@ -83,6 +83,16 @@ impl Ledger {
         }
     }
 
+    /// A streaming request's usage report for its latest period: it adds to the earlier ones
+    /// (usage.md "Counting": a stream's reports create no new requests).
+    pub fn report_delta(&mut self, request: u64, metrics: &AgentMetrics) {
+        let Some((_, _, delta)) = measure(metrics) else { return };
+        if let Some(pending) = self.pending.get_mut(&request) {
+            fold(&mut pending.partial, &delta);
+            self.revision += 1;
+        }
+    }
+
     /// `request` ended. Its last report counts as consumption either way; the request stays
     /// unmeasured unless it `completed` with a report.
     pub fn finish(&mut self, request: u64, completed: bool) {

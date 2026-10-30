@@ -86,6 +86,7 @@ impl Driver {
         self.input.sinks.insert(channel, sink);
         if channel == AudioChannel::Stt {
             self.input.live_stt = Some(sink);
+            self.stt_stream_opened(sink);
         }
         out.machine().push(Effect::Forwarder(ForwarderCommand::Install { channel, sink }));
         out.machine().push(Effect::ActivateLeg { channel, sink });
@@ -241,6 +242,9 @@ impl Driver {
     pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd, out: &mut Out) {
         let error = end.error.take();
         let leg = end.leg;
+        if let Some(stream) = end.sink {
+            self.stt_stream_ended(stream);
+        }
         // Not `remove_sink`: the items the stream sent before its end are still consumed.
         let installed = self.input.sinks.iter().find(|(_, sink)| Some(**sink) == end.sink);
         let installed = installed.map(|(&channel, &sink)| (channel, sink));

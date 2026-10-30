@@ -49,6 +49,12 @@ pub(crate) struct VoiceSession {
     >,
     /// The realtime responses created and not yet measured, by response id.
     pub(crate) realtime_requests: std::collections::BTreeMap<String, u64>,
+    /// The request of each recognition stream opened and not yet ended, by stream.
+    pub(crate) stt_requests: std::collections::BTreeMap<lk_agents_abi::resources::ResourceId, u64>,
+    /// The streams' usage records on their way to the ledger, in order, with the request each
+    /// adds to.
+    pub(crate) stt_reports:
+        std::collections::VecDeque<(u64, lk_agents_abi::metrics::base::SttMetrics)>,
     pub(crate) next_request: u64,
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
@@ -141,6 +147,8 @@ impl VoiceSession {
             usage: Default::default(),
             requests: Default::default(),
             realtime_requests: Default::default(),
+            stt_requests: Default::default(),
+            stt_reports: Default::default(),
             next_request: 0,
             states: AgentUserState::new(cfg.timers.user_away()),
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
