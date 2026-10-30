@@ -90,13 +90,13 @@ fn invalid_server_update_cannot_partially_change_launch_configuration() {
         .apply(ServerOptions {
             ws_url: Given("wss://new.example".into()),
             initialize_process_timeout: Given(4.0),
-            drain_timeout: Given(None),
+            drain_timeout: Given(0.0),
             ..Default::default()
         })
         .unwrap();
     assert_eq!(server.ws_url, "wss://new.example");
     assert_eq!(server.initialize_process_timeout, 4.0);
-    assert_eq!(server.drain_timeout, 0.0, "explicit null disables the deadline");
+    assert_eq!(server.drain_timeout, 0.0, "zero skips waiting for natural completion");
     assert_eq!(server.shutdown_process_timeout, 10.0, "omission preserves other fields");
 }
 

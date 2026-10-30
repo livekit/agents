@@ -1,0 +1,23 @@
+[package]
+name = "lk-agents-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ctrlc = { version = "3.5", features = ["termination"] }
+clap = { version = "4.6", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions"] }
+lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-worker = { path = "../lk-agents-worker" }
+lk-agents-net = { path = "../lk-agents-net" }
+livekit-protocol.workspace = true
+prost.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+log.workspace = true
+parking_lot.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

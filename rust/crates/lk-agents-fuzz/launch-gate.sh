@@ -52,6 +52,7 @@ if [[ ${1:-} == --skip-architecture ]]; then
 else
     step "Rust architecture"
     bash architecture/check.sh
+    bash architecture/check.sh --tests
 fi
 [[ $# == 0 ]] || fail "unexpected argument: $1"
 

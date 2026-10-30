@@ -7,8 +7,6 @@ pub mod job;
 pub mod remote_session;
 pub mod worker;
 
-pub mod cli;
-
 pub mod ipc_host;
 
 pub mod server_host;

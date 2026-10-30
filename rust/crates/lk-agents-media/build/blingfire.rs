@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::{cache, settings};
+
 fn cpp_sources(dir: &Path, exts: &[&str]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
@@ -36,14 +38,52 @@ pub fn build() {
     println!("cargo:rerun-if-changed=vendor/blingfire.pin");
     println!("cargo:rerun-if-changed={}", vendor.display());
 
-    let mut build = cc::Build::new();
+    let mut key = settings::key(true);
+    key.input("recipe", include_bytes!("blingfire.rs"));
+    key.tree(&vendor).expect("hash BlingFire source tree");
+    let archive = if std::env::var("TARGET").expect("TARGET").ends_with("-msvc") {
+        "lk_agents_blingfire_vendor.lib"
+    } else {
+        "liblk_agents_blingfire_vendor.a"
+    };
+    let cached = cache::get_or_build(
+        &settings::root(),
+        "blingfire",
+        &key.finish(),
+        |entry| entry.join(archive).is_file(),
+        |entry, _| {
+            let mut build = compiler(&manifest, &client, &compile_inc, &vendor);
+            build.out_dir(entry).cargo_metadata(false);
+            for source in cpp_sources(&client.join("src"), &["cpp", "cxx"])
+                .into_iter()
+                .chain(cpp_sources(&tokdll, &["cpp", "cxx"]))
+            {
+                build.file(source);
+            }
+            build.compile("lk_agents_blingfire_vendor");
+            remove_objects(entry);
+            Ok(())
+        },
+    )
+    .expect("build or reuse cached BlingFire");
+    // Keep our small adapter in Cargo's output directory. cc emits the correct C++
+    // runtime linkage on every run, including cache hits and cross compilation.
+    compiler(&manifest, &client, &compile_inc, &vendor)
+        .file(manifest.join("csrc/blingfire/blingfire_wrap.cpp"))
+        .file(manifest.join("csrc/blingfire/shim.cpp"))
+        .compile("lk_agents_blingfire");
+    println!("cargo:rustc-link-search=native={}", cached.display());
+    println!("cargo:rustc-link-lib=static=lk_agents_blingfire_vendor");
+}
+
+fn compiler(manifest: &Path, client: &Path, compile_inc: &Path, vendor: &Path) -> cc::Build {
+    let mut build = settings::compiler(true);
     build
-        .cpp(true)
         .warnings(false)
         .include(client.join("inc"))
         .include(client.join("src"))
-        .include(&compile_inc)
-        .include(&vendor)
+        .include(compile_inc)
+        .include(vendor)
         .include(manifest.join("csrc/blingfire"))
         // Upstream's defines, verbatim: Windows is the UNIX set without BLING_FIRE_NOWINDOWS.
         .define("NDEBUG", None)
@@ -64,14 +104,14 @@ pub fn build() {
     // Upstream compiles as C++11, a strict subset, so one standard covers both.
     build.std("c++17");
 
-    for f in cpp_sources(&client.join("src"), &["cpp", "cxx"]) {
-        build.file(f);
-    }
-    for f in cpp_sources(&tokdll, &["cpp", "cxx"]) {
-        build.file(f);
-    }
-    build.file(manifest.join("csrc/blingfire/blingfire_wrap.cpp"));
-    build.file(manifest.join("csrc/blingfire/shim.cpp"));
+    build
+}
 
-    build.compile("lk_agents_blingfire");
+fn remove_objects(out: &Path) {
+    for entry in std::fs::read_dir(out).expect("read BlingFire build output") {
+        let path = entry.expect("read BlingFire artifact").path();
+        if matches!(path.extension().and_then(|ext| ext.to_str()), Some("o" | "obj")) {
+            std::fs::remove_file(path).expect("remove BlingFire object");
+        }
+    }
 }

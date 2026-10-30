@@ -39,7 +39,8 @@ class ServerOptions:
     port: NotGivenOr[int] = NOT_GIVEN
     load_threshold: NotGivenOr[float] = NOT_GIVEN
     num_idle_processes: NotGivenOr[int] = NOT_GIVEN
-    drain_timeout: NotGivenOr[float | None] = NOT_GIVEN
+    drain_timeout: NotGivenOr[float] = NOT_GIVEN
+    shutdown_timeout: NotGivenOr[float] = NOT_GIVEN
     max_retry: NotGivenOr[int] = NOT_GIVEN
     permissions: NotGivenOr[WorkerPermissions] = NOT_GIVEN
     http_proxy: NotGivenOr[str | None] = NOT_GIVEN

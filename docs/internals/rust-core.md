@@ -47,7 +47,8 @@ tools and host RTC objects.
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
 | `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
-| `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, CLI and endpoint serving |
+| `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint serving |
+| `lk-agents-cli` | Shared launcher: clap parsing, normalized JSON logs, remote CLI connection, and process shutdown deadline |
 | `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
@@ -1056,6 +1057,123 @@ lock, so no lock and the GIL wait on each other:
 - Locks are plain `parking_lot` locks; std's poisoning `Mutex`/`RwLock` stay
   banned in the I/O crates.
 
+### Local builds
+
+Run `make install` once, then `make build` to rebuild the Python extension in
+place without installing dependencies again. Python-only changes use the editable
+sources immediately and do not need this rebuild. `make -C rust python` is the same
+command. `make -C rust build` builds every workspace package and FFmpeg.
+`make rust-check` (or `make -C rust check`) compiles and lints every
+workspace crate and test target with FFmpeg enabled, and enforces boundaries,
+violation baselines and generated output. `make -C rust test-checks` runs the
+checker counterexamples and codegen tests; CI and the launch gate run both.
+`MATURIN` and `VIRTUAL_ENV` can select an existing tool and virtual environment.
+Cargo and Maturin use that environment's Python; `PYO3_PYTHON` can override Cargo's
+interpreter explicitly. Unix environments use `bin/python`; Windows uses
+`Scripts/python.exe`. The Make targets require GNU Make; alternatively activate
+the environment and run `maturin develop --skip-install --locked` directly.
+
+Native builds require a C/C++ toolchain (Xcode command-line tools, a Linux
+compiler toolchain, or MSVC build tools). Building FFmpeg from source on macOS
+or Linux also requires Bash, Make, pkg-config, and the Opus development library.
+For Windows and cross compilation, provide a target-compatible static FFmpeg
+installation through `LK_CODECS_FFMPEG_PREFIX`; Windows archives must be built
+with FFmpeg's MSVC toolchain. The compatible `rust-sdks` sources live beside
+this checkout, as declared by the workspace's relative Cargo paths.
+
+The repository-root `.cargo/config.toml` supplies the same compiler flags when
+Cargo runs from the root, `rust/`, or the Python package. It explicitly selects
+`split-debuginfo=off` on macOS so Maturin does not force `.dSYM` generation.
+Other targets retain their native format: Linux uses embedded debug info and
+MSVC uses supported packed `.pdb` symbols. Our
+runtime and decision crates retain the dev profile's line tables; dependency and
+binding-glue debug info stays off on the fast path.
+Our C/C++ adapters and vendored native libraries omit debug information on the
+fast path. This keeps their archives independent of the checkout's debug paths;
+Rust runtime and decision code retains its debug information. Set
+`LK_AGENTS_NATIVE_DEBUG=1` to restore native symbols (`0` or unset selects the
+fast path). Cargo tracks this setting and the native cache key includes its
+effective compiler flags.
+Debug native cache entries also include the source checkout, so their symbols
+refer to that checkout; fast entries remain reusable across worktrees.
+`make build-debug` (or `make -C rust python-debug`) sets that flag, restores
+binding-glue line tables, and uses the platform's native debug format
+(macOS `.dSYM`, Windows `.pdb`, or embedded debug info on Linux). Switching
+that mode changes compiler flags and
+therefore rebuilds its Rust artifacts.
+
+FFmpeg and the vendored BlingFire library use a persistent native artifact cache,
+independent of Cargo's target directory and Rust-only compiler flags. Cache keys
+include source contents, native build recipes, target, compiler version and
+flags, and relevant toolchain configuration. FFmpeg also keys on the Opus
+configuration. Our small native adapters still compile in Cargo's output tree.
+An OS file lock serializes each cache entry. Builds use unique staging directories
+and publish by atomic rename after validating their outputs; failed or interrupted
+builds cannot overwrite a published entry. FFmpeg uses `DESTDIR` so cached
+pkg-config files contain the final installation prefix.
+
+The default cache is `~/Library/Caches/livekit-agents/native` on macOS,
+`$XDG_CACHE_HOME/livekit-agents/native` (or `~/.cache/livekit-agents/native`) on
+Linux, and `%LOCALAPPDATA%/livekit-agents/native` on Windows. Set
+`LK_AGENTS_NATIVE_CACHE_DIR` to an absolute directory to relocate it. Removing
+that directory forces a native rebuild. Missing or unusable default cache
+locations fall back to Cargo's output directory; an invalid explicit override
+reports an error. `LK_CODECS_FFMPEG_PREFIX` continues to
+select an externally built FFmpeg, including for cross compilation. That
+installation supplies its own debug configuration.
+
+#### Parallel worktrees
+
+Keep Cargo's default private `rust/target` in each worktree. A globally shared
+`CARGO_TARGET_DIR` makes concurrent commands wait on Cargo's build-directory
+lock; unset that override when running independent worktrees. Shared compiled
+artifacts belong in a compiler cache, separate from each worktree's mutable
+Cargo state. The native artifact cache above is already shared.
+
+Make uses [mr-boxington](https://github.com/jdx/mr-boxington) by default for
+Rust build and check commands. Install it once:
+
+```bash
+cargo install --locked mbx
+make rust-check
+make -C rust build
+```
+
+If mbx is missing, Make stops with installation instructions.
+Use ordinary Cargo explicitly with `CARGO_RUNNER=cargo`. `CARGO_RUNNER` selects
+one executable, including an absolute path containing spaces. Direct invocations
+of the architecture script still default to Cargo. The first invocation fills
+the cache. Equivalent work in another checkout can then reuse it; changed inputs
+still compile.
+
+Keep the toolchain, features, compiler flags, and native dependencies consistent
+to maximize reuse. A warm `check` cache does not replace warming a `build` cache.
+mr-boxington manages its own platform cache location and CPU/memory budget; no
+repository path or machine size is hardcoded here. Its `explain --last` command
+reports cache misses.
+
+Maturin invokes Cargo internally. To cache Python extension builds as
+well, use the tool's documented Cargo-shim setup, then keep using `make build`
+and `make build-debug`. This is a developer choice; the repository does not
+install a global shim during a build. Full Python extension builds may still
+perform native linking.
+Restored Rust debug information can name the producing checkout, as documented
+by the cache tool; an uncached debug build is preferable when stepping through
+code in a different checkout.
+
+Other options include [Kache](https://github.com/kunobi-ninja/kache), which also
+supports private worktrees with a shared artifact store, and
+[cargo-reapi](https://github.com/TamedTornado/cargo-reapi), which caches library
+and metadata compilations while leaving native link steps local. Read the
+documentation for the release you install: Kache's current main-branch docs
+include v2 preview behavior. Only mr-boxington has been benchmarked here.
+[Worktrunk](https://worktrunk.dev/) manages worktrees and can seed their ignored
+build directories; it is a separate layer from compiler-action caching.
+[Epicenter](https://github.com/TheAnalist/epicenter) is another approach: it
+seeds private job directories from stored Cargo build state instead of wrapping
+individual compiler actions. These alternatives have not been benchmarked on
+this workspace.
+
 ### Enforcement
 
 Enforcement must cover:
@@ -1084,7 +1202,7 @@ features; a dependent's closure carries only the features that dependent enables
 closures must contain no runtime, executor, async transport or host SDK: no
 tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
-is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
+is `py -> runtime -> sans-I/O and async I/O crates -> abi` (including the launcher: `runtime -> cli -> worker/net/abi`), with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
 `net -> core`, `py -> abi`, async I/O crates `-> net`,
 `fuzz` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`, and
@@ -1116,7 +1234,8 @@ a different one, and neither baseline identities nor exemptions may grow or
 broaden. Each check has deliberately failing inputs, including replacement of
 an old violation with a new identity. The shared enforcement step is
 [`rust/architecture/check.sh`](../../rust/architecture/check.sh), invoked by CI
-and the launch gate. Run it from any directory in a full Git checkout.
+and the launch gate. They also invoke it with `--tests` to test the checkers.
+Run it from any directory in a full Git checkout.
 
 ## Common runtime primitives
 

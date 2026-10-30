@@ -882,5 +882,11 @@ impl Runner for JobProcess {
     }
 }
 
-/// `cli.rs` still reaches the pair here; it is owner-owned (`channel::pair` is the home).
-pub use super::channel::pair as ipc_pair;
+/// Process bootstrap exports; IPC ownership stays with the worker.
+pub struct Bootstrap;
+
+impl lk_agents_abi::worker::ipc_host::ProcessBootstrap for Bootstrap {
+    fn ipc_pair() -> Result<(i64, i64), lk_agents_abi::errors::HostError> {
+        super::channel::pair().map_err(|error| lk_agents_abi::errors::HostError::new(error.to_string()))
+    }
+}

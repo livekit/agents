@@ -1682,6 +1682,95 @@ pub mod chat_items {
     }
 }
 
+pub mod cli {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/cli.rs.
+    static CLI_ARGS_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static CLI_ARGS_CONSOLE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn cli_args_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::cli::CliArgs> {
+        let py = obj.py();
+            if obj.is_instance(CLI_ARGS_START.import(py, "livekit.agents._generated.cli", "CliArgsStart")?)? {
+                return Ok(::lk_agents_abi::cli::CliArgs::Start { log_level: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "log_level", |v| v.extract::<::std::string::String>())?, dev: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "dev", |v| v.extract::<bool>())?, cli_addr: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "cli_addr", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, simulation: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "simulation", |v| v.extract::<bool>())?, ws_url: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "ws_url", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, api_key: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "api_key", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, api_secret: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "api_secret", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, shutdown_timeout: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "shutdown_timeout", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "CliArgsStart.shutdown_timeout")).map(Some) })?, drain_timeout: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "drain_timeout", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "CliArgsStart.drain_timeout")).map(Some) })? });
+            }
+            if obj.is_instance(CLI_ARGS_CONSOLE.import(py, "livekit.agents._generated.cli", "CliArgsConsole")?)? {
+                return Ok(::lk_agents_abi::cli::CliArgs::Console { connect_addr: ::lk_agents_abi::python::attr_with(obj, "CliArgsConsole", "connect_addr", |v| v.extract::<::std::string::String>())?, record: ::lk_agents_abi::python::attr_with(obj, "CliArgsConsole", "record", |v| v.extract::<bool>())? });
+            }
+            Err(super::not_a(obj, "CliArgsStart | CliArgsConsole"))
+    }
+
+    pub fn cli_args_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::cli::CliArgs) -> PyResult<Bound<'py, PyAny>> {
+            match value {
+                ::lk_agents_abi::cli::CliArgs::Start { log_level, dev, cli_addr, simulation, ws_url, api_key, api_secret, shutdown_timeout, drain_timeout } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("log_level", ::pyo3::IntoPyObjectExt::into_bound_py_any(log_level, py)?)?;
+                    kwargs.set_item("dev", ::pyo3::IntoPyObjectExt::into_bound_py_any(dev, py)?)?;
+                    kwargs.set_item("cli_addr", match cli_addr { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("simulation", ::pyo3::IntoPyObjectExt::into_bound_py_any(simulation, py)?)?;
+                    kwargs.set_item("ws_url", match ws_url { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("api_key", match api_key { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("api_secret", match api_secret { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("shutdown_timeout", match shutdown_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("drain_timeout", match drain_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    crate::host::construct(CLI_ARGS_START.import(py, "livekit.agents._generated.cli", "CliArgsStart")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::cli::CliArgs::Console { connect_addr, record } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("connect_addr", ::pyo3::IntoPyObjectExt::into_bound_py_any(connect_addr, py)?)?;
+                    kwargs.set_item("record", ::pyo3::IntoPyObjectExt::into_bound_py_any(record, py)?)?;
+                    crate::host::construct(CLI_ARGS_CONSOLE.import(py, "livekit.agents._generated.cli", "CliArgsConsole")?.as_any(), (), Some(&kwargs))
+                },
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/cli.rs.
+    static CLI_PARSE_RESULT_PARSED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static CLI_PARSE_RESULT_DISPLAY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn cli_parse_result_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::cli::CliParseResult) -> PyResult<Bound<'py, PyAny>> {
+            match value {
+                ::lk_agents_abi::cli::CliParseResult::Parsed { args } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("args", crate::generated::records::cli::cli_args_to_py(py, args)?)?;
+                    crate::host::construct(CLI_PARSE_RESULT_PARSED.import(py, "livekit.agents._generated.cli", "CliParseResultParsed")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::cli::CliParseResult::Display { message, exit_code, stderr } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    kwargs.set_item("exit_code", ::pyo3::IntoPyObjectExt::into_bound_py_any(exit_code, py)?)?;
+                    kwargs.set_item("stderr", ::pyo3::IntoPyObjectExt::into_bound_py_any(stderr, py)?)?;
+                    crate::host::construct(CLI_PARSE_RESULT_DISPLAY.import(py, "livekit.agents._generated.cli", "CliParseResultDisplay")?.as_any(), (), Some(&kwargs))
+                },
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/cli.rs.
+    static LOG_RECORD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn log_record_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::cli::LogRecord> {
+        let py = obj.py();
+            if !obj.is_instance(LOG_RECORD.import(py, "livekit.agents._generated.cli", "LogRecord")?)? {
+                return Err(super::not_a(obj, "LogRecord"));
+            }
+            Ok(::lk_agents_abi::cli::LogRecord {
+                level: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "level", |v| v.extract::<::std::string::String>())?,
+                logger: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "logger", |v| v.extract::<::std::string::String>())?,
+                process_id: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "process_id", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "LogRecord.process_id")).map(Some) })?,
+                timestamp: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LogRecord.timestamp"))?,
+                message: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "message", |v| v.extract::<::std::string::String>())?,
+                fields: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "fields", |v| match ::lk_agents_abi::python::value_from_py(v, "LogRecord.fields")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("LogRecord.fields: expected a dict")) })?,
+                exception: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "exception", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                stack: ::lk_agents_abi::python::attr_with(obj, "LogRecord", "stack", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+            })
+    }
+}
+
 pub mod duplex {
     use pyo3::prelude::*;
 
@@ -6706,78 +6795,6 @@ pub mod voice_session {
     }
 }
 
-pub mod worker_cli {
-    use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
-    static CLI_ARGS_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static CLI_ARGS_CONSOLE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static CLI_ARGS_DOWNLOAD_FILES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn cli_args_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::cli::CliArgs> {
-        let py = obj.py();
-            if obj.is_instance(CLI_ARGS_START.import(py, "livekit.agents._generated.worker_cli", "CliArgsStart")?)? {
-                return Ok(::lk_agents_abi::worker::cli::CliArgs::Start { entrypoint: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "entrypoint", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, log_level: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "log_level", |v| v.extract::<::std::string::String>())?, log_format: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "log_format", |v| v.extract::<::std::string::String>())?, log_style: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "log_style", |v| v.extract::<::std::string::String>())?, dev: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "dev", |v| v.extract::<bool>())?, cli_addr: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "cli_addr", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, simulation: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "simulation", |v| v.extract::<bool>())?, ws_url: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "ws_url", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, api_key: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "api_key", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, api_secret: ::lk_agents_abi::python::attr_with(obj, "CliArgsStart", "api_secret", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })? });
-            }
-            if obj.is_instance(CLI_ARGS_CONSOLE.import(py, "livekit.agents._generated.worker_cli", "CliArgsConsole")?)? {
-                return Ok(::lk_agents_abi::worker::cli::CliArgs::Console { entrypoint: ::lk_agents_abi::python::attr_with(obj, "CliArgsConsole", "entrypoint", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, connect_addr: ::lk_agents_abi::python::attr_with(obj, "CliArgsConsole", "connect_addr", |v| v.extract::<::std::string::String>())?, record: ::lk_agents_abi::python::attr_with(obj, "CliArgsConsole", "record", |v| v.extract::<bool>())? });
-            }
-            if obj.is_instance(CLI_ARGS_DOWNLOAD_FILES.import(py, "livekit.agents._generated.worker_cli", "CliArgsDownloadFiles")?)? {
-                return Ok(::lk_agents_abi::worker::cli::CliArgs::DownloadFiles);
-            }
-            Err(super::not_a(obj, "CliArgsStart | CliArgsConsole | CliArgsDownloadFiles"))
-    }
-
-    pub fn cli_args_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::cli::CliArgs) -> PyResult<Bound<'py, PyAny>> {
-            match value {
-                ::lk_agents_abi::worker::cli::CliArgs::Start { entrypoint, log_level, log_format, log_style, dev, cli_addr, simulation, ws_url, api_key, api_secret } => {
-                    let kwargs = ::pyo3::types::PyDict::new(py);
-                    kwargs.set_item("entrypoint", match entrypoint { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    kwargs.set_item("log_level", ::pyo3::IntoPyObjectExt::into_bound_py_any(log_level, py)?)?;
-                    kwargs.set_item("log_format", ::pyo3::IntoPyObjectExt::into_bound_py_any(log_format, py)?)?;
-                    kwargs.set_item("log_style", ::pyo3::IntoPyObjectExt::into_bound_py_any(log_style, py)?)?;
-                    kwargs.set_item("dev", ::pyo3::IntoPyObjectExt::into_bound_py_any(dev, py)?)?;
-                    kwargs.set_item("cli_addr", match cli_addr { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    kwargs.set_item("simulation", ::pyo3::IntoPyObjectExt::into_bound_py_any(simulation, py)?)?;
-                    kwargs.set_item("ws_url", match ws_url { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    kwargs.set_item("api_key", match api_key { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    kwargs.set_item("api_secret", match api_secret { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    crate::host::construct(CLI_ARGS_START.import(py, "livekit.agents._generated.worker_cli", "CliArgsStart")?.as_any(), (), Some(&kwargs))
-                },
-                ::lk_agents_abi::worker::cli::CliArgs::Console { entrypoint, connect_addr, record } => {
-                    let kwargs = ::pyo3::types::PyDict::new(py);
-                    kwargs.set_item("entrypoint", match entrypoint { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    kwargs.set_item("connect_addr", ::pyo3::IntoPyObjectExt::into_bound_py_any(connect_addr, py)?)?;
-                    kwargs.set_item("record", ::pyo3::IntoPyObjectExt::into_bound_py_any(record, py)?)?;
-                    crate::host::construct(CLI_ARGS_CONSOLE.import(py, "livekit.agents._generated.worker_cli", "CliArgsConsole")?.as_any(), (), Some(&kwargs))
-                },
-                ::lk_agents_abi::worker::cli::CliArgs::DownloadFiles => crate::host::construct(CLI_ARGS_DOWNLOAD_FILES.import(py, "livekit.agents._generated.worker_cli", "CliArgsDownloadFiles")?.as_any(), (), None),
-            }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
-    static LOG_FIELDS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn log_fields_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::cli::LogFields> {
-        let py = obj.py();
-            if !obj.is_instance(LOG_FIELDS.import(py, "livekit.agents._generated.worker_cli", "LogFields")?)? {
-                return Err(super::not_a(obj, "LogFields"));
-            }
-            Ok(::lk_agents_abi::worker::cli::LogFields {
-                level: ::lk_agents_abi::python::attr_with(obj, "LogFields", "level", |v| v.extract::<::std::string::String>())?,
-                name: ::lk_agents_abi::python::attr_with(obj, "LogFields", "name", |v| v.extract::<::std::string::String>())?,
-                pid: ::lk_agents_abi::python::attr_with(obj, "LogFields", "pid", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(v, "LogFields.pid")).map(Some) })?,
-                created: ::lk_agents_abi::python::attr_with(obj, "LogFields", "created", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "LogFields.created"))?,
-                msg: ::lk_agents_abi::python::attr_with(obj, "LogFields", "msg", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "LogFields.msg")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("LogFields.msg: expected a dict")) }).map(Some) })?,
-                extra: ::lk_agents_abi::python::attr_with(obj, "LogFields", "extra", |v| match ::lk_agents_abi::python::value_from_py(v, "LogFields.extra")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("LogFields.extra: expected a dict")) })?,
-            })
-    }
-}
-
 pub mod worker_endpoint {
     use pyo3::prelude::*;
 
@@ -7115,7 +7132,8 @@ pub mod worker_options {
                 port: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "port", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<u16>(v, "ServerOptions.port")).map(::lk_agents_abi::Maybe::Given) })?,
                 load_threshold: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "load_threshold", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.load_threshold")).map(::lk_agents_abi::Maybe::Given) })?,
                 num_idle_processes: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "num_idle_processes", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "ServerOptions.num_idle_processes")).map(::lk_agents_abi::Maybe::Given) })?,
-                drain_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "drain_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.drain_timeout")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                drain_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "drain_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.drain_timeout")).map(::lk_agents_abi::Maybe::Given) })?,
+                shutdown_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "shutdown_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.shutdown_timeout")).map(::lk_agents_abi::Maybe::Given) })?,
                 max_retry: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "max_retry", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "ServerOptions.max_retry")).map(::lk_agents_abi::Maybe::Given) })?,
                 permissions: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "permissions", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::generated::records::worker_options::worker_permissions_from_py(v)).map(::lk_agents_abi::Maybe::Given) })?,
                 http_proxy: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "http_proxy", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,

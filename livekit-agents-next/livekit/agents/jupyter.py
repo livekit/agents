@@ -13,7 +13,7 @@ from livekit.protocol import models
 from livekit.rtc.jupyter import display_room
 
 from . import _core, cli
-from ._generated.worker_cli import CliArgsStart
+from ._generated.cli import CliArgsStart
 from .job import JobExecutorType
 from .worker import AgentServer
 
@@ -103,16 +103,15 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
     cli._run_worker(
         server,
         CliArgsStart(
-            entrypoint=None,
             log_level="DEBUG",
-            log_format="json",
-            log_style="json",
             dev=False,
             cli_addr=None,
             simulation=False,
             ws_url=ws_url or None,
             api_key=api_key or None,
             api_secret=api_secret or None,
+            shutdown_timeout=None,
+            drain_timeout=None,
         ),
         unregistered=True,
     )

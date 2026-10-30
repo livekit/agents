@@ -25,6 +25,7 @@ extern crate self as lk_agents_abi;
 
 pub mod a2a;
 pub mod agent;
+pub mod cli;
 pub mod errors;
 pub mod evals;
 pub mod inference;

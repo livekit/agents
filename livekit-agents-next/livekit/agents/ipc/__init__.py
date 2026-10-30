@@ -6,18 +6,15 @@ What runs inside a process is ``ipc.child``."""
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import multiprocessing as mp
 import os
-import signal
 import socket
 import sys
 import threading
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from enum import Enum
 from multiprocessing.context import BaseContext
-from types import FrameType
 from typing import Any, Literal
 
 from .. import _core, utils
@@ -37,35 +34,6 @@ class JobStatus(Enum):
     RUNNING = "running"
     FAILED = "failed"
     SUCCESS = "success"
-
-
-_mask_ctrl_c_refcount = 0
-_mask_ctrl_c_original: Callable[[int, FrameType | None], Any] | int | None = signal.SIG_DFL
-
-
-@contextlib.contextmanager
-def _mask_ctrl_c() -> Generator[None, None, None]:
-    """Temporarily ignore SIGINT so forked/spawned children inherit SIG_IGN.
-
-    Unlike pthread_sigmask (per-thread), signal.signal is process-wide and SIG_IGN is preserved
-    across exec() per POSIX, so children start with SIGINT ignored whichever thread forks. It is
-    refcounted so concurrent starts (the pool warming several processes) don't clobber each
-    other's saved handler, and only touched from the main thread (signal.signal's rule)."""
-    global _mask_ctrl_c_refcount, _mask_ctrl_c_original
-
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    if _mask_ctrl_c_refcount == 0:
-        _mask_ctrl_c_original = signal.signal(signal.SIGINT, signal.SIG_IGN)
-    _mask_ctrl_c_refcount += 1
-    try:
-        yield
-    finally:
-        _mask_ctrl_c_refcount -= 1
-        if _mask_ctrl_c_refcount == 0:
-            signal.signal(signal.SIGINT, _mask_ctrl_c_original)
 
 
 class _JobThread:
@@ -238,10 +206,9 @@ class JobExecutor:
             if self._thread:
                 self._proc.start()
             else:
-                with _mask_ctrl_c():
-                    await self._loop.run_in_executor(
-                        None, start_process, self._proc, method, register
-                    )
+                # The parent must keep receiving shutdown signals while children start.
+                # Job processes install their own signal policy in ipc.child.
+                await self._loop.run_in_executor(None, start_process, self._proc, method, register)
         except BaseException as error:
             if self._thread:
                 child_end.close()

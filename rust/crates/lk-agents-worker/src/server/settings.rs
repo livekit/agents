@@ -31,8 +31,10 @@ pub struct ServerSettings {
     pub port: EnvOption<u16>,
     pub load_threshold: EnvOption<f32>,
     pub num_idle_processes: Option<EnvOption<u32>>,
-    /// `drain()`'s deadline in seconds; zero waits for every job.
+    /// Maximum drain time in seconds; zero skips waiting for natural completion.
     pub drain_timeout: f64,
+    /// Overall launcher budget, including draining and host cleanup.
+    pub shutdown_timeout: f64,
     pub max_retry: u32,
     pub permissions: WorkerPermissions,
     pub http_proxy: Option<String>,
@@ -69,6 +71,7 @@ impl Default for ServerSettings {
             load_threshold: DEFAULT_LOAD_THRESHOLD,
             num_idle_processes: None,
             drain_timeout: crate::DRAIN_TIMEOUT.as_secs_f64(),
+            shutdown_timeout: crate::DRAIN_TIMEOUT.as_secs_f64() + 10.0,
             max_retry: 16,
             permissions: WorkerPermissions::default(),
             http_proxy: None,
@@ -163,7 +166,10 @@ impl ServerSettings {
             next.num_idle_processes = Some(EnvOption::Fixed(value));
         }
         if let Given(value) = options.drain_timeout {
-            next.drain_timeout = value.unwrap_or(0.0);
+            next.drain_timeout = value;
+        }
+        if let Given(value) = options.shutdown_timeout {
+            next.shutdown_timeout = value;
         }
         next.validate()?;
         if next.multiprocessing_context == "forkserver" && !cfg!(target_os = "linux") {
@@ -175,8 +181,10 @@ impl ServerSettings {
     }
 
     fn validate(&self) -> Result<(), String> {
+        crate::shutdown::DrainOptions::new(self.shutdown_timeout, self.drain_timeout)?;
         for (name, value) in [
             ("drain_timeout", self.drain_timeout),
+            ("shutdown_timeout", self.shutdown_timeout),
             ("job_memory_warn_mb", self.job_memory_warn_mb),
             ("job_memory_limit_mb", self.job_memory_limit_mb),
             ("shutdown_process_timeout", self.shutdown_process_timeout),

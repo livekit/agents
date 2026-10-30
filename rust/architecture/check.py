@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+CARGO_RUNNER = os.environ.get("CARGO_RUNNER", "cargo")
+
 CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media")}
 PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
@@ -22,7 +24,13 @@ UNRESTRICTED = (
 )
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.
-ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net", "lk-agents-storage"}
+ASYNC = {
+    "lk-agents-inference",
+    "lk-agents-worker",
+    "lk-agents-net",
+    "lk-agents-storage",
+    "lk-agents-cli",
+}
 # The I/O policy's crates (rust/architecture/io/clippy.toml): everything that runs beside the host.
 IO = ASYNC | {"lk-agents-runtime", "lk-agents-py"}
 # The documented crate graph (rust-core.md "Crates and dependencies"): each checked crate's allowed
@@ -38,6 +46,7 @@ GRAPH = {
     # blocking I/O pool is an instance of media's worker pool.
     "lk-agents-net": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
     "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
+    "lk-agents-cli": {"lk-agents-abi", "lk-agents-worker", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
     # The DST runs the runtime's real executors over faked ports (decision 92); providers and the
     # network are fakes at their ABI boundary, never inference's or net's code. The A2A DST runs
@@ -83,6 +92,7 @@ WARNING_CLEAN = {
         "storage",
         "inference",
         "worker",
+        "cli",
         "codegen",
         "bindgen",
         "host-derive",
@@ -342,6 +352,8 @@ def use_violations(root: Path, paths: list[str]) -> dict[str, int]:
             continue
         text = (root / path).read_text()
         for kind, pattern in checks:
+            if not pattern.search(text):
+                continue
             for key, count in item_uses(text, pattern).items():
                 violations[f"{kind}-use:{path}:{key}"] = count
     return violations
@@ -453,7 +465,14 @@ def read_baselines(root: Path, paths: dict[str, str]) -> tuple[set[str], list[st
 
 def cargo_metadata(manifest: Path, *args: str) -> dict:
     """The all-feature resolved graph; Cargo's own errors reach stderr."""
-    command = ["cargo", "metadata", "--manifest-path", str(manifest), "--locked", "--all-features"]
+    command = [
+        CARGO_RUNNER,
+        "metadata",
+        "--manifest-path",
+        str(manifest),
+        "--locked",
+        "--all-features",
+    ]
     result = subprocess.run(
         [*command, "--format-version", "1", *args], check=True, stdout=subprocess.PIPE, text=True
     )
@@ -470,10 +489,9 @@ def shipped_dependency_violations(manifest: Path) -> set[str]:
     )
 
 
-def check_boundaries() -> int:
+def check_boundaries(metadata: dict) -> int:
     root = Path(__file__).resolve().parents[2]
     manifest = root / "rust/Cargo.toml"
-    metadata = cargo_metadata(manifest)
     expected = {name for name in PURE if (root / "rust/crates" / name / "Cargo.toml").exists()}
     members = set(metadata["workspace_members"])
     found = {p["name"] for p in metadata["packages"] if p["id"] in members}
@@ -529,31 +547,45 @@ def warning_violations(records: list[dict], names: Mapping[str, str]) -> list[st
         for record in records
         if record.get("reason") == "compiler-message"
         and record["message"]["level"] == "warning"
+        and not (record["message"].get("code") or {}).get("code", "").startswith("clippy::")
         and names.get(record["package_id"]) in WARNING_CLEAN
     ]
 
 
-def check_warnings() -> int:
+def check_workspace(metadata: dict, target: Path) -> int:
+    """One Clippy pass checks compilation and compiler warnings across the workspace."""
     root = Path(__file__).resolve().parents[2]
-    config = ["--config", str(root / "rust/.cargo/config.toml")]
-    manifest = ["--manifest-path", str(root / "rust/Cargo.toml"), "--locked"]
-    metadata = subprocess.run(
-        ["cargo", "metadata", *config, *manifest, "--no-deps", "--format-version=1"],
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    names = {p["id"]: p["name"] for p in json.loads(metadata.stdout)["packages"]}
+    names = {p["id"]: p["name"] for p in metadata["packages"]}
     process = subprocess.run(
-        ["cargo", "check", *config, *manifest, "--tests", "--workspace", "--message-format=json"],
+        [
+            CARGO_RUNNER,
+            "clippy",
+            "--manifest-path",
+            str(root / "rust/Cargo.toml"),
+            "--locked",
+            "--workspace",
+            "--all-targets",
+            "--features",
+            "lk-agents-py/ffmpeg",
+            "--no-deps",
+            "--target-dir",
+            str(target),
+            "--message-format=json",
+        ],
         cwd=root,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
     )
     records = [json.loads(line) for line in process.stdout.splitlines()]
+    for record in records:
+        if record.get("reason") != "compiler-message":
+            continue
+        message = record["message"]
+        if message["level"] == "error" or (message.get("code") or {}).get("code", "").startswith(
+            "clippy::"
+        ):
+            sys.stderr.write(message.get("rendered") or message["message"])
     if process.returncode:
-        sys.stderr.write(process.stderr)
         return process.returncode
     errors = warning_violations(records, names)
     for error in errors:
@@ -641,13 +673,11 @@ def target_directory(root: Path) -> Path:
     """Use Cargo's target selection for helpers and compiler fixtures alike."""
     result = subprocess.run(
         [
-            "cargo",
+            CARGO_RUNNER,
             "metadata",
             "--no-deps",
             "--format-version=1",
             "--locked",
-            "--config",
-            str(root / "rust/.cargo/config.toml"),
             "--manifest-path",
             str(root / "rust/Cargo.toml"),
         ],
@@ -659,13 +689,11 @@ def target_directory(root: Path) -> Path:
     return Path(json.loads(result.stdout)["target_directory"])
 
 
-def build_helper(root: Path) -> Path:
-    subprocess.run(
+def build_helper(root: Path, target: Path | None = None) -> Path:
+    process = subprocess.run(
         [
-            "cargo",
+            CARGO_RUNNER,
             "build",
-            "--config",
-            str(root / "rust/.cargo/config.toml"),
             "--quiet",
             "--manifest-path",
             str(root / "rust/Cargo.toml"),
@@ -674,25 +702,45 @@ def build_helper(root: Path) -> Path:
             "lk-agents-codegen",
             "--bin",
             "lk-agents-codegen",
+            "--message-format=json",
+            *(["--target-dir", str(target)] if target is not None else []),
         ],
         cwd=root,
-        check=True,
+        text=True,
+        capture_output=True,
     )
-    return target_directory(root) / "debug/lk-agents-codegen"
+    sys.stderr.write(process.stderr)
+    if process.returncode:
+        for line in process.stdout.splitlines():
+            record = json.loads(line)
+            if record.get("reason") == "compiler-message":
+                sys.stderr.write(record["message"].get("rendered") or str(record["message"]))
+        raise subprocess.CalledProcessError(process.returncode, process.args)
+    for line in process.stdout.splitlines():
+        record = json.loads(line)
+        if (
+            record.get("reason") == "compiler-artifact"
+            and record["target"]["name"] == "lk-agents-codegen"
+            and record.get("executable")
+        ):
+            return Path(record["executable"])
+    raise ValueError("Cargo did not report the codegen executable")
 
 
-def command(root: Path, crates: list[str], mode: str = "all") -> list[str]:
+def command(
+    root: Path, crates: list[str], mode: str = "all", target: Path | None = None
+) -> list[str]:
     args = [
-        "cargo",
+        CARGO_RUNNER,
         "clippy",
         "--no-deps",
-        "--config",
-        str(root / "rust/.cargo/config.toml"),
         "--manifest-path",
         str(root / "rust/Cargo.toml"),
         "--locked",
         "--all-targets",
     ]
+    if target is not None:
+        args.extend(["--target-dir", str(target)])
     for crate in crates:
         args.extend(["-p", crate])
     if mode == "all":
@@ -884,10 +932,9 @@ def compiler_messages(output: str | list[dict]) -> list[dict]:
     ]
 
 
-def check_clippy() -> int:
+def check_clippy(helper: Path, target: Path) -> int:
     root = Path(__file__).resolve().parents[2]
-    helper = build_helper(root)
-    return max(check_policy(root, helper, policy) for policy in POLICIES)
+    return max(check_policy(root, helper, policy, target / policy.name) for policy in POLICIES)
 
 
 def library(root: Path, crate: str) -> str:
@@ -896,7 +943,7 @@ def library(root: Path, crate: str) -> str:
     return manifest.get("lib", {}).get("name", crate.replace("-", "_"))
 
 
-def check_policy(root: Path, helper: Path, policy: Policy) -> int:
+def check_policy(root: Path, helper: Path, policy: Policy, target: Path) -> int:
     crates = sorted(name for name in policy.crates if (root / "rust/crates" / name).is_dir())
     errors: list[str] = []
     snapshots = {
@@ -916,13 +963,12 @@ def check_policy(root: Path, helper: Path, policy: Policy) -> int:
     locations = set()
     for mode in policy.modes:
         process = subprocess.run(
-            command(root, crates, mode),
+            command(root, crates, mode, target / mode),
             cwd=root,
             env=env,
             text=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
         )
-        sys.stderr.write(process.stderr)
         records = [json.loads(line) for line in process.stdout.splitlines()]
         if process.returncode:
             for record in records:
@@ -972,7 +1018,20 @@ def check_policy(root: Path, helper: Path, policy: Policy) -> int:
 
 
 def main() -> int:
-    return check_boundaries() or check_warnings() or check_clippy()
+    root = Path(__file__).resolve().parents[2]
+    metadata = cargo_metadata(root / "rust/Cargo.toml")
+    target = Path(metadata["target_directory"])
+    # A sibling stays usable when mbx has collected the default target's symlink destination.
+    target = target.with_name(target.name + "-checks")
+    if check_boundaries(metadata) or check_workspace(metadata, target / "workspace"):
+        return 1
+    # Clippy's different feature/lint sets otherwise replace each other's Cargo fingerprints.
+    # Keep their mutable state private; the compiler cache still shares equivalent artifacts.
+    helper = build_helper(root, target / "tools")
+    return (
+        check_clippy(helper, target)
+        or subprocess.run([str(helper), "--check"], cwd=root).returncode
+    )
 
 
 if __name__ == "__main__":

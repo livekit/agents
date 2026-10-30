@@ -2,11 +2,19 @@
 # Shared CI / launch-gate step. Checks never rewrite a source or baseline.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+cargo_runner="${CARGO_RUNNER:-cargo}"
 
-env PYTHONPATH="$PWD/rust/architecture" python3 -m unittest test_check test_clippy
-python3 rust/architecture/check.py
-cargo test --config "$PWD/rust/.cargo/config.toml" \
-    --manifest-path rust/Cargo.toml --locked -q -p lk-agents-codegen --bins
-cargo run --config "$PWD/rust/.cargo/config.toml" \
-    --manifest-path rust/Cargo.toml --locked -q \
-    -p lk-agents-codegen --bin lk-agents-codegen -- --check
+case "${1:-}" in
+    "")
+        python3 -u rust/architecture/check.py
+        ;;
+    --tests)
+        env PYTHONPATH="$PWD/rust/architecture" python3 -m unittest test_check test_clippy
+        "$cargo_runner" test \
+            --manifest-path rust/Cargo.toml --locked -q -p lk-agents-codegen --bins
+        ;;
+    *)
+        echo 'Usage: check.sh [--tests]' >&2
+        exit 2
+        ;;
+esac

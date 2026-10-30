@@ -106,8 +106,9 @@ in the supplied order before job readiness. `setup_fnc` initializes
 process-local resources after preloading. Import failures stop initialization
 and identify the module; see [Python preloading](internals/rust-core.md#python-preloading).
 
-The entrypoint module runs the server with `cli.run_app(server)`, which serves
-the subcommands `lk agent dev|start|console` invokes:
+The Python entrypoint runs the server with `cli.run_app(server)`. The shared
+`lk-agents-cli` crate parses `start` and `console`; the Go `lk agent` command
+owns development reloads, console interaction, and terminal presentation:
 
 ```python
 from livekit.agents import AgentServer, cli
@@ -126,8 +127,63 @@ if __name__ == "__main__":
 | `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |
 | `load_threshold` | the load (0 to 1) above which the worker stops taking jobs |
 | `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
-| `drain_timeout` | how long a draining worker waits for its running jobs |
+| `drain_timeout` | maximum seconds to wait for active work after stopping admission; default 3600; zero skips waiting |
+| `shutdown_timeout` | total process shutdown budget in seconds, including draining and cleanup; default 3610; must exceed `drain_timeout` |
 | `prometheus_port` | serve the worker's Prometheus metrics on this local port; off when not given |
+
+## Launching and shutdown
+
+```bash
+python main.py start --shutdown-timeout 55 --drain-timeout 45
+python -m livekit.agents start main.py --shutdown-timeout 55 --drain-timeout 45
+```
+
+Both forms execute the entrypoint's `if __name__ == "__main__"` block, which calls
+`cli.run_app(server)`. The module form is a Python-only adapter: it forwards the
+command arguments and makes sibling imports available as a direct script launch
+would. It does not search the module's globals for a server. The Go CLI can use
+either form without changing the shared Rust CLI.
+
+`start` accepts `--url`, `--api-key`,
+`--api-secret`, `--log-level`, `--dev`, `--simulation`, `--cli-addr`,
+`--shutdown-timeout`, and `--drain-timeout`. CLI timeout values override server
+configuration. `console` accepts required `--connect-addr` and `--record`. Both commands
+operate on the server supplied to `cli.run_app(server)`. Help and invalid
+arguments are handled before starting that server. The launcher has no `download-files` command.
+
+The process emits JSON logs in every mode. The Go CLI owns colors and layout.
+For compatibility with existing Go launchers, `--reload-addr` aliases
+`--cli-addr`, and the hidden `--log-format` option is accepted without changing
+JSON output. Neither option adds another rendering or execution path.
+
+On SIGTERM, SIGINT, or SIGHUP, the native signal listener starts one monotonic
+shutdown deadline and notifies the host. The host stops accepting work through the
+worker's drain operation, waits for active work, closes remaining resources, and
+finalizes its event loop. The drain phase reserves
+`shutdown_timeout - drain_timeout` seconds for closure and cleanup. Time spent
+waiting for the host to respond consumes that same budget. Early drain completion
+makes its unused time available for cleanup. Repeated SIGTERM never restarts the
+deadline; repeated Ctrl+C also keeps the original deadline.
+
+The CLI owns process signal handling for its lifetime; applications must not replace
+these handlers. Only one launcher can listen at a time. Registration failures abort
+startup before the worker accepts work. The native listener starts the deadline
+even when the host event loop is blocked before receiving the shutdown notification.
+
+A native deadline remains responsive while host tasks, callbacks, executor
+threads, or log output are blocked. If the deadline expires, the process exits
+nonzero. Successful cleanup disarms it only after the host loop closes. It does
+not reset or add a new cleanup timeout after draining.
+
+Configure the application budget below the deployment's termination grace period,
+leaving room for any `preStop` hook and an operational margin. A signal carries
+no Kubernetes grace-period value; the framework does not query Kubernetes or
+assume its default. Forced termination can still preempt application cleanup.
+
+Signal capture, parsing, normalized log records, the remote CLI connection, and
+deadline enforcement are shared host-neutral Rust services. Each language host supplies its already
+constructed server; the shared Rust CLI never searches for or imports application modules.
+Python logging conversion and asyncio ownership remain in the Python adapter.
 
 The agent is named once, `AgentServer(agent_name=)`: the lane every door of
 the server writes, and the first segment of every door's address,

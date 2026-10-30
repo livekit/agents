@@ -56,9 +56,6 @@ dependencies = [
     "httpx2>=2.12,<3",
     "aiofiles>=24",
     "pyyaml>=6.0.3",
-    # Required by the deprecated rich CLI (`cli.run_app`); drop when it is removed.
-    "typer>=0.15.1",
-    "click~=8.1",
     "sounddevice>=0.5",
     "watchfiles>=1.0",
     # `AgentServer.http`: the ASGI app the core's endpoint server drives (`http.py`).
@@ -169,10 +166,13 @@ exclude = [
 [tool.uv]
 cache-keys = [
     { file = "pyproject.toml" },
+    { file = "../.cargo/config.toml" },
     { file = "../rust/Cargo.toml" },
     { file = "../rust/Cargo.lock" },
     { file = "../rust/crates/**/Cargo.toml" },
     { file = "../rust/crates/**/*.rs" },
+    { file = "../rust/crates/lk-agents-media/csrc/**" },
+    { file = "../rust/crates/lk-agents-media/vendor/*.pin" },
 ]
 exclude-newer = "7 days"
 exclude-newer-package = { livekit = "0 days", livekit-api = "0 days", livekit-protocol = "0 days", livekit-blingfire = "0 days" }

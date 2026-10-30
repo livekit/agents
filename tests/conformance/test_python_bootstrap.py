@@ -16,72 +16,70 @@ import pytest
 
 from livekit import api
 from livekit.agents import AgentServer, cli
-from livekit.agents._generated.worker_cli import CliArgsStart
+from livekit.agents._generated.cli import CliArgsStart
 from livekit.protocol import models
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
-@pytest.mark.parametrize("entry", ["main", "run_app"])
-def test_startup_failure_exits_nonzero_after_cleanup(entry: str) -> None:
+@pytest.mark.parametrize("failure", ["startup", "drain"])
+def test_launcher_failure_exits_nonzero_after_cleanup(failure: str) -> None:
     code = """
         import sys
         from livekit.agents import AgentServer, cli
 
         class FailingServer(AgentServer):
             async def _run(self, **kwargs):
-                raise RuntimeError("startup refused")
+                if FAILURE == "startup":
+                    raise RuntimeError("startup refused")
             async def _drain(self):
                 print("drained")
+                if FAILURE == "drain":
+                    raise RuntimeError("drain refused")
             async def aclose(self):
                 print("closed")
 
         server = FailingServer()
-        cli._load_server = lambda _: server
         sys.argv = ["agent.py", "start"]
     """
-    code = textwrap.dedent(code)
-    code += f"\n{'sys.exit(cli.main())' if entry == 'main' else 'cli.run_app(server)'}\n"
+    code = f"FAILURE = {failure!r}\n" + textwrap.dedent(code)
+    code += "\ncli.run_app(server)\n"
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(code)],
         capture_output=True,
         text=True,
         timeout=20,
     )
-    assert "startup refused" in result.stdout + result.stderr
+    assert f"{failure} refused" in result.stdout + result.stderr
     assert "drained" in result.stdout and "closed" in result.stdout
     assert result.returncode != 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("entry", ["main", "run_app"])
-@pytest.mark.parametrize("failure", ["import", "download"])
-def test_plugin_failure_exits_nonzero(entry: str, failure: str) -> None:
+@pytest.mark.parametrize(
+    "arguments, status", [("--help", 0), ("start --help", 0), ("download-files", 2)]
+)
+def test_cli_diagnostics_do_not_run_the_server(arguments: str, status: int) -> None:
     code = textwrap.dedent("""
         import sys
-        from types import SimpleNamespace
         from livekit.agents import AgentServer, cli
 
         def fail(*args):
-            raise RuntimeError("plugin unavailable")
+            raise AssertionError("server must not be loaded")
 
-        plugin = SimpleNamespace(package="broken", download_files=fail)
-        sys.modules["livekit.plugins"] = SimpleNamespace(__path__=[])
-        cli.Plugin.registered_plugins = []
-        sys.argv = ["agent.py", "download-files"]
+        cli._run_worker = fail
+        cli._run_console = fail
     """)
-    if failure == "import":
-        code += textwrap.dedent("""
-            cli.pkgutil.iter_modules = lambda *args: [SimpleNamespace(name="broken", ispkg=True)]
-            cli.importlib.import_module = fail
-        """)
-    else:
-        code += "cli.Plugin.registered_plugins = [plugin]\n"
-    code += "sys.exit(cli.main())\n" if entry == "main" else "cli.run_app(AgentServer())\n"
+    code += f"sys.argv = ['agent.py', *{arguments!r}.split()]\n"
+    code += "cli.run_app(AgentServer())\n"
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=20
     )
-    assert "plugin unavailable" in result.stdout + result.stderr
-    assert result.returncode != 0, result.stdout + result.stderr
+    assert result.returncode == status, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    if status == 0:
+        assert "Usage:" in result.stdout
+    else:
+        assert "download-files" in result.stderr
 
 
 @pytest.mark.parametrize("credentials", ["explicit", "environment", "join_tokens"])
@@ -146,7 +144,6 @@ def test_notebook_starts_and_dispatches_with_available_credentials(
         server: AgentServer, args: CliArgsStart, *, unregistered: bool = False
     ) -> None:
         assert unregistered, "notebooks with join tokens cannot register as workers"
-        assert args.log_style == "json"
         server._update_options(
             ws_url=args.ws_url or "", api_key=args.api_key or "", api_secret=args.api_secret or ""
         )

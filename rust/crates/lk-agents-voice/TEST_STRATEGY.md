@@ -42,7 +42,7 @@ All under `rust/crates/lk-agents-fuzz/src`:
 
 A run is deterministic. `drive::simulate_with(schedule, ..)` gives each case its own
 single-threaded Tokio runtime with paused virtual time and a scheduler RNG pinned by the case's
-`schedule` (the `tokio_unstable` cfg in `rust/.cargo/config.toml` exposes `rng_seed`).
+`schedule` (the `tokio_unstable` cfg in `.cargo/config.toml` exposes `rng_seed`).
 Applying an input does not yield: only `Advance` and the awaits reach the executor, so a case
 can build a burst the driver untangles in one cycle. `drive::queue::Policy` picks the next event
 the driver sees: `Arrival` (the channel's order) or `Pos` (partial-order sampling over the event

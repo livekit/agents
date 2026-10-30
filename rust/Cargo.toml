@@ -13,6 +13,7 @@ members = ["crates/*", "ai_slop/*"]
 #   (cd ../livekit-agents-next && maturin develop)
 default-members = [
     "crates/lk-agents-abi",
+    "crates/lk-agents-cli",
     "ai_slop/lk-agents-bindgen",
     "ai_slop/lk-agents-codegen",
     "crates/lk-agents-core",
@@ -95,16 +96,9 @@ rmcp         = { version = "3.1", default-features = false, features = [
 
 [profile.dev]
 debug = 1
-# NOT "unpacked", which is the macOS default and what this workspace used until it became
-# unusable. Unpacked emits one `.o` per codegen unit next to the rlib, names it by a hash of the
-# build, and cargo never garbage-collects the previous set -- so every rebuild ADDS a full copy.
-# Measured before this change: 1,000,414 orphan `.o` files and 71 GB under target/, ~40 % of them
-# belonging to crates that no longer exist (`lk_agents_types`, `lk_agents_eot`, `turn`, ...).
-# At that size the directory costs minutes merely to enumerate: a NO-OP `cargo check --workspace`
-# took 4m43s wall for 0.19 s of CPU, and `make t0` -- the tier whose whole purpose is to be the
-# fast inner loop -- took 4m36s for 12.5 s. "off" embeds the debuginfo in the rlib instead, so
-# nothing accumulates; dsymutil still never runs, which is the one thing "packed" would cost us.
-split-debuginfo = "off"
+# The repository-root .cargo/config.toml selects the symbol format per target.
+# On macOS, embedded symbols avoid dsymutil and accumulating unpacked objects;
+# Windows MSVC retains its supported packed format.
 
 # The ~270 third-party crates never need debuginfo: we do not step into them, and their line
 # tables are the bulk of both the link input and the artifact size. Our own crates keep the
@@ -113,10 +107,12 @@ split-debuginfo = "off"
 [profile.dev.package."*"]
 debug = 0
 
+# Generated Python adapters are the largest codegen unit. The fast path keeps
+# line tables in the runtime and decision crates; python-debug restores them here.
+[profile.dev.package.lk-agents-py]
+debug = 0
+
 [profile.test]
 debug = 1
-# Inherited from `profile.dev` in principle, but spelled out: `cargo test`/`nextest` build test
-# targets under this profile, and it was the test binaries -- one per integration test, rebuilt
-# on every run -- that produced the largest single share of the orphan `.o` files above
-# (the driver, then its own crate `lk_agents_driver`, alone: 83,440).
-split-debuginfo = "off"
+# Test binaries use the same target-specific symbol policy in .cargo/config.toml.
+# The previous unpacked policy produced thousands of orphan objects per integration test.

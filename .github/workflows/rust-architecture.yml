@@ -36,7 +36,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: architecture-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: architecture-${{ runner.os }}-
+            rust/target-checks
+          key: architecture-v2-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: architecture-v2-${{ runner.os }}-
       - name: Check architecture and its counterexamples
-        run: bash rust/architecture/check.sh
+        run: |
+          bash rust/architecture/check.sh
+          bash rust/architecture/check.sh --tests

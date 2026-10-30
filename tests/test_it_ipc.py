@@ -50,7 +50,15 @@ if sys.platform == "win32":
 class Worker:
     """This file run as a worker in a subprocess, its stdout collected as JSON log lines."""
 
-    def __init__(self, tmp_path: Path, scenario: str, jobs: int, **options: Any) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        scenario: str,
+        jobs: int,
+        *,
+        module_launch: bool = False,
+        **options: Any,
+    ) -> None:
         self.dir = tmp_path
         env = {
             **os.environ,
@@ -61,8 +69,13 @@ class Worker:
             "PYTHONUNBUFFERED": "1",
         }
         self.out = (tmp_path / "stdout").open("w+")
+        command = (
+            [sys.executable, "-m", "livekit.agents", "start", __file__]
+            if module_launch
+            else [sys.executable, __file__]
+        )
         self.proc = subprocess.Popen(
-            [sys.executable, __file__],
+            command,
             env=env,
             stdout=self.out,
             stderr=subprocess.STDOUT,
@@ -246,7 +259,7 @@ def test_slow_initialization_is_killed_and_job_runs_on_next_process(worker) -> N
     w.marker("room-0.shutdown", timeout=60)
     assert w.wait() == 0, w.tail()
     (line,) = w.logged("error initializing process")
-    assert "initialization timed out" in line["exc_info"], line
+    assert "initialization timed out" in line["exception"], line
 
 
 def test_job_processes_exit_when_the_worker_is_killed(worker) -> None:
@@ -261,6 +274,21 @@ def test_job_processes_exit_when_the_worker_is_killed(worker) -> None:
     w.proc.wait()
     lingering = [pid for pid in children if not _gone(pid, 20)]
     assert not lingering, f"processes outlived their worker: {lingering}"
+
+
+@pytest.mark.parametrize("shutdown_signal", [signal.SIGTERM, signal.SIGINT])
+@pytest.mark.parametrize("module_launch", [False, True])
+def test_cli_signal_drains_and_reaps_a_real_job_process(
+    worker, shutdown_signal: int, module_launch: bool
+) -> None:
+    """The CLI still owns signals after spawning and warming the real process pool."""
+    w = worker("cli_shutdown", module_launch=module_launch, shutdown_timeout=5.0, drain_timeout=0.4)
+    job = json.loads(w.marker("room-0.started"))
+    os.kill(w.proc.pid, shutdown_signal)
+    assert w.wait(timeout=8) == 0, w.tail()
+    assert (w.dir / "room-0.shutdown").exists(), w.tail()
+    assert _gone(job["pid"], 3), "the CLI left its job process alive"
+    assert not w.logged("shutdown deadline exceeded"), w.tail()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
@@ -303,6 +331,10 @@ async def _entrypoint(ctx: Any) -> None:
         time.sleep(600)
     elif scenario == "idle":
         await asyncio.sleep(600)
+    elif scenario == "cli_shutdown":
+        # A connected job normally returns its entrypoint and stays alive until shutdown.
+        # The fake room has the same lifetime without requiring a LiveKit server.
+        return
     elif scenario == "memory":
         hog = bytearray(800 * 1024 * 1024)
         for i in range(0, len(hog), 4096):
@@ -371,7 +403,17 @@ def _worker_main() -> None:
     server = AgentServer()
     server._update_options(**options)
     server.rtc_session()(_entrypoint)
-    cli.setup_logging("DEBUG", "json")
+    if SCENARIO == "cli_shutdown":
+        job_task: asyncio.Task[None] | None = None
+
+        def start_job() -> None:
+            nonlocal job_task
+            job_task = asyncio.create_task(server._simulate_job("room-0", fake_job=True))
+
+        server._on_started.append(start_job)
+        args = _core.parse_cli(["agent", "start"]).args
+        raise SystemExit(cli._run_worker(server, args, unregistered=True))
+    cli.setup_logging("DEBUG")
     asyncio.run(_drive(server, int(os.environ["IT_JOBS"])))
 
 

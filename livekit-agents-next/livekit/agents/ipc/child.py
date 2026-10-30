@@ -66,7 +66,7 @@ class JobArgs:
     setup_fnc: Callable[[JobProcess], None] | None = None
     user_arguments: Any | None = None
     mp_cch: socket.socket | PipeEnd | None = None
-    log_config: tuple[str, str] | None = None
+    log_config: str | None = None
     logger_levels: dict[str, int] = field(default_factory=dict)
     # the server's settings as environment variables, which the job's code reads
     env: tuple[tuple[str, str], ...] = ()
@@ -423,20 +423,14 @@ def thread_main(args: JobArgs) -> None:
     serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)
 
 
-def log_to_stdout(
-    config: tuple[str, str] | None, levels: dict[str, int], fields: dict[str, Any]
-) -> None:
-    """A child process writes its own log lines, as the worker does (``config``: its level and
-    line style), to the stdout it inherits; each record stamped with ``fields``, the process's
-    (its pid, the job's ids once one runs). A worker that set up no logging (``server._run()``
-    from the user's code) has its processes log at its root level, colored on a terminal."""
-
+def log_to_stdout(config: str | None, levels: dict[str, int], fields: dict[str, Any]) -> None:
+    """Write the child's structured logs with the worker's level and process fields."""
     from ..cli import setup_logging
 
-    if config is None:
-        root = logging.getLevelName(levels.get("root", logging.WARNING))
-        config = (root, "dev" if sys.stdout.isatty() else "json")
-    setup_logging(*config).addFilter(_Stamp(fields))
+    configured_level = (
+        config if config is not None else logging.getLevelName(levels.get("root", logging.WARNING))
+    )
+    setup_logging(configured_level).addFilter(_Stamp(fields))
     for name, level in levels.items():
         logging.getLogger(name).setLevel(level)
 

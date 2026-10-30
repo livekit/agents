@@ -349,40 +349,42 @@ impl ServerRuntime {
             None => {}
         }
         let mut drained = false;
-        while running {
-            tokio::select! {
-                biased;
-                changed = control.changed() => {
-                    if changed.is_err() { break; }
-                    let request = control.borrow_and_update().clone();
-                    if request.close { break; }
-                    if request.drain.is_some() && !drain_requested {
-                        drain_requested = true;
-                        self.set_phase(ServerPhase::Draining);
-                        drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
+        if running {
+            loop {
+                tokio::select! {
+                    biased;
+                    changed = control.changed() => {
+                        if changed.is_err() { break; }
+                        let request = control.borrow_and_update().clone();
+                        if request.close { break; }
+                        if request.drain.is_some() && !drain_requested {
+                            drain_requested = true;
+                            self.set_phase(ServerPhase::Draining);
+                            drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
+                        }
                     }
-                }
-                result = async { started_notification.as_mut().expect("notification pending").0.as_mut().await }, if started_notification.is_some() => {
-                    let (_, readiness) = started_notification.take().expect("notification pending");
-                    match result {
-                        Ok(()) => { readiness.send_replace(true); }
-                        Err(error) => { failure = Some(error.to_string()); break; }
+                    result = async { started_notification.as_mut().expect("notification pending").0.as_mut().await }, if started_notification.is_some() => {
+                        let (_, readiness) = started_notification.take().expect("notification pending");
+                        match result {
+                            Ok(()) => { readiness.send_replace(true); }
+                            Err(error) => { failure = Some(error.to_string()); break; }
+                        }
                     }
-                }
-                result = pending_drain(&mut drain), if drain.is_some() => {
-                    drain = None;
-                    drained = true;
-                    Self::settle(&self.drain_outcome, result);
-                }
-                result = pending_worker(&mut resources.connection), if resources.connection.is_some() => {
-                    // The connection is gone: nothing of it is left to stop.
-                    resources.connection = None;
-                    resources.worker = None;
-                    failure = Some(match result.unwrap_or_else(|error| Err(error.to_string())) {
-                        Ok(()) => "worker connection stopped".into(),
-                        Err(error) => format!("{:?}: {error}", ServerResource::Worker),
-                    });
-                    break;
+                    result = pending_drain(&mut drain), if drain.is_some() => {
+                        drain = None;
+                        drained = true;
+                        Self::settle(&self.drain_outcome, result);
+                    }
+                    result = pending_worker(&mut resources.connection), if resources.connection.is_some() => {
+                        // The connection is gone: nothing of it is left to stop.
+                        resources.connection = None;
+                        resources.worker = None;
+                        failure = Some(match result.unwrap_or_else(|error| Err(error.to_string())) {
+                            Ok(()) => "worker connection stopped".into(),
+                            Err(error) => format!("{:?}: {error}", ServerResource::Worker),
+                        });
+                        break;
+                    }
                 }
             }
         }

@@ -564,3 +564,11 @@ class WarningContracts(unittest.TestCase):
         for records in ([], self.transcript(success=False), self.transcript()):
             with self.subTest(records=len(records)), self.assertRaises(ValueError):
                 warning_violations(records, self.NAMES)
+
+    @patch("check.WARNING_CLEAN", {"lk-agents-core"})
+    def test_clippy_diagnostics_do_not_change_the_compiler_warning_baseline(self):
+        records = self.transcript("lk-agents-core")
+        records[0]["message"]["code"] = {"code": "clippy::disallowed_methods"}
+        self.assertEqual(warning_violations(records, self.NAMES), [])
+        records[0]["message"]["code"] = {"code": "unused_imports"}
+        self.assertEqual(warning_violations(records, self.NAMES), ["lk-agents-core"])

@@ -1,7 +1,7 @@
 .PHONY: help install format format-check lint lint-fix fix type-check check unit-tests \
-        link-rtc link-rtc-local unlink-rtc status doctor
+        link-rtc link-rtc-local unlink-rtc status doctor build build-debug rust-check
 
-ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+ROOT := $(CURDIR)
 AGENTS_PROJECT := $(ROOT)/livekit-agents-next
 PYTHON_SDKS := $(abspath $(ROOT)/../python-sdks)
 RUST_SDKS := $(abspath $(ROOT)/../rust-sdks)
@@ -9,11 +9,16 @@ PYTHON_RTC := $(PYTHON_SDKS)/livekit-rtc
 # The FFI crate livekit-rtc is built against: its own rust-sdks submodule.
 RTC_RUST_SDK := $(PYTHON_RTC)/rust-sdks
 
-OS := $(shell uname -s | tr A-Z a-z)
+ifeq ($(OS),Windows_NT)
+HOST_OS := windows
+ARCH := $(if $(filter ARM64,$(PROCESSOR_ARCHITECTURE)),aarch64,x86_64)
+else
+HOST_OS := $(shell uname -s | tr A-Z a-z)
 ARCH := $(shell uname -m)
-FFI_OS := $(if $(filter darwin,$(OS)),macos,$(OS))
+endif
+FFI_OS := $(if $(filter darwin,$(HOST_OS)),macos,$(HOST_OS))
 FFI_ARCH := $(if $(filter aarch64,$(ARCH)),arm64,$(ARCH))
-FFI_LIB := $(if $(filter darwin,$(OS)),liblivekit_ffi.dylib,liblivekit_ffi.so)
+FFI_LIB := $(if $(filter windows,$(HOST_OS)),livekit_ffi.dll,$(if $(filter darwin,$(HOST_OS)),liblivekit_ffi.dylib,liblivekit_ffi.so))
 
 .DEFAULT_GOAL := help
 
@@ -22,6 +27,15 @@ help: ## Show this help message
 
 install: ## Install all dependencies with dev extras
 	uv sync --all-extras --dev
+
+build: ## Rebuild the Python extension in place with the fast dev profile
+	$(MAKE) -C rust python
+
+build-debug: ## Rebuild the Python extension with native debug symbols
+	$(MAKE) -C rust python-debug
+
+rust-check: ## Check all Rust crates and test targets, including FFmpeg
+	$(MAKE) -C rust check
 
 format: ## Format code with ruff
 	uv run ruff format .

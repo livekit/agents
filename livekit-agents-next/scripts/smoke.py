@@ -821,45 +821,25 @@ async def toolsets() -> None:
 
 
 async def cli() -> None:
-    """What ``lk agent`` drives, short of a LiveKit server: the command line, the entrypoint's
-    server found in a package, the log lines (JSON and colored), the dev channel to a stand-in
+    """What ``lk agent`` drives, short of a LiveKit server: the command line, the structured JSON log lines, the dev channel to a stand-in
     CLI keeping a job across a reload, and the exit policy."""
-    import os
     import struct
-    import tempfile
     import traceback
-    from pathlib import Path
 
     from livekit.agents import cli as agents_cli
-    from livekit.agents._exceptions import CLIError
-    from livekit.agents._generated.worker_cli import CliArgsStart
+    from livekit.agents._generated.cli import CliArgsStart
     from livekit.agents.job import JobAcceptArguments, RunningJobInfo
     from livekit.protocol import agent as agent_proto
     from livekit.protocol.agent_pb import agent_dev
 
     print("== cli")
-    args = _core.parse_cli(["start", "agent.py", "--dev", "--reload-addr", "127.0.0.1:1"])
+    args = _core.parse_cli(["agent", "start", "--dev", "--reload-addr", "127.0.0.1:1"]).args
     assert isinstance(args, CliArgsStart)
-    assert (args.entrypoint, args.cli_addr, args.log_style) == (
-        "agent.py",
-        "127.0.0.1:1",
-        "dev",
-    ), args
-    for bad in (["start", "--cli-addr", "x"], ["console"], ["serve"]):
-        with contextlib.suppress(CLIError):
-            _core.parse_cli(bad)
-            raise AssertionError(f"{bad} parsed")
+    assert args.cli_addr == "127.0.0.1:1", args
+    from livekit.agents._generated.cli import CliParseResultDisplay
 
-    with tempfile.TemporaryDirectory() as root:
-        package = Path(root, "myapp")
-        package.mkdir()
-        (package / "__init__.py").write_text("")
-        (package / "agent.py").write_text(
-            "from livekit.agents import AgentServer\nserver = AgentServer()\n"
-        )
-        found = agents_cli._load_server(str(package / "agent.py"))
-        assert type(found).__name__ == "AgentServer", found
-        print(f"entrypoint {_core.entrypoint_module(str(package / 'agent.py'))[0]}")
+    for bad in (["start", "--cli-addr", "x"], ["console"], ["serve"]):
+        assert isinstance(_core.parse_cli(["agent", *bad]), CliParseResultDisplay)
 
     try:
         raise ValueError("boom")
@@ -867,11 +847,9 @@ async def cli() -> None:
         exc_info = sys.exc_info()
     record = logging.LogRecord("livekit.agents", logging.ERROR, __file__, 1, "x=%d", (3,), exc_info)
     record.job_id = "AJ_1"
-    line = json.loads(agents_cli._LogFormatter("json", ensure_ascii=True).format(record))
+    line = json.loads(agents_cli._LogFormatter(ensure_ascii=True).format(record))
     assert (line["message"], line["level"], line["job_id"]) == ("x=3", "ERROR", "AJ_1"), line
-    assert "ValueError: boom" in line["exc_info"], line
-    colored = agents_cli._LogFormatter("compact", ensure_ascii=False).format(record)
-    assert "x=3" in colored and '{"job_id": "AJ_1"}' in colored and "boom" in colored, colored
+    assert "ValueError: boom" in line["exception"], line
     assert traceback  # the record carries a real traceback
 
     class Server:
@@ -955,11 +933,10 @@ async def cli() -> None:
     assert server.reloaded[0].url == "wss://x", server.reloaded
     assert server.reloaded[0].token not in ("", kept_token), server.reloaded
 
-    exits = _core.ExitSignals(escalate=False)
-    assert exits.signal(False) == "schedule"
-    exits.served()
-    assert exits.signal(True) == "force"
-    assert os.getpid() > 0
+    shutdown = _core.Shutdown(1.0, 0.0)
+    assert shutdown.begin()
+    assert not shutdown.begin()
+    shutdown.closed()
 
 
 async def decoder() -> None:
@@ -1200,7 +1177,7 @@ async def entrypoint(ctx):
 
 async def main(style):
     if style != "none":
-        cli.setup_logging("INFO", style)
+        cli.setup_logging("INFO")
     proc = JobExecutor(
         job_entrypoint_fnc=entrypoint, session_end_fnc=None,
         simulation_end_fnc=None, initialize_timeout=60,
@@ -1226,8 +1203,7 @@ if __name__ == "__main__":
 
 def job_logs() -> None:
     """A job process writes its own log lines to the stdout it inherits, as the worker does
-    (JSON, and the dev layout), stamped with its pid and its job; an extra no JSON holds (an
-    ``Agent``) as its string."""
+    stamped with its pid and its job; non-JSON extras use their string representation."""
     import os
     import tempfile
 
@@ -1239,20 +1215,17 @@ def job_logs() -> None:
         script = Path(root, "job_logs.py")
         script.write_text(_JOB_LOGS)
         # "none": a worker that set up no logging, its processes still log (JSON off a terminal)
-        for style in ("json", "dev", "none"):
+        for style in ("json", "none"):
             run = subprocess.run(
                 [sys.executable, str(script), style], capture_output=True, text=True, timeout=120
             )
             lines = [line for line in run.stdout.splitlines() if "from the job" in line]
             assert run.returncode == 0 and len(lines) == 1, (run.stdout, run.stderr)
             line = lines[0]
-            if style in ("json", "none"):
-                record = json.loads(line)
-                assert record["job_id"] == "AJ_logs" and record["room"] == "logs", record
-                assert record["pid"] not in (os.getpid(), None), record
-                assert record["lk.pii.output"].startswith(pii), record
-            else:
-                assert "AJ_logs" in line and pii in line, line
+            record = json.loads(line)
+            assert record["job_id"] == "AJ_logs" and record["room"] == "logs", record
+            assert record["pid"] not in (os.getpid(), None), record
+            assert record["lk.pii.output"].startswith(pii), record
             print(f"{style}: the job's line, stamped with its job")
 
 

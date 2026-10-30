@@ -57,6 +57,9 @@ pub mod text_session;
 
 pub use lk_agents_worker as worker;
 
+/// Process launcher and its host adapters.
+pub use lk_agents_cli as cli;
+
 /// Synchronous media algorithms used by the generated host adapters.
 pub use lk_agents_media as media;
 

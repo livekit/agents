@@ -292,106 +292,6 @@ pub fn endpoint_url_base(py: Python<'_>, ws_url: ::std::string::String, agent_na
     Ok(out)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
-type WorkerCliImpl = <crate::Selected as super::Implementations>::WorkerCli;
-
-#[pyfunction]
-#[pyo3(signature = (argv))]
-pub fn parse_cli<'py>(py: Python<'py>, argv: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
-    let out = py.detach(|| <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::parse_cli(argv)).map_err(|e: ::lk_agents_abi::worker::cli::CliError| <::lk_agents_abi::worker::cli::CliError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(crate::generated::records::worker_cli::cli_args_to_py(py, out)?)
-}
-
-#[pyfunction]
-#[pyo3(signature = (path))]
-pub fn entrypoint_module(py: Python<'_>, path: ::std::option::Option<::std::string::String>) -> PyResult<(::std::string::String, ::std::string::String)> {
-    crate::host::check_pid()?;
-    let out = py.detach(|| <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::entrypoint_module(path)).map_err(|e: ::lk_agents_abi::worker::cli::CliError| <::lk_agents_abi::worker::cli::CliError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
-}
-
-/// One log line in `style`: `message` is the formatted message, `asctime` the record's time
-/// as the host formats it, `exception` and `stack` the tracebacks.
-#[pyfunction]
-#[pyo3(signature = (style, record, message, asctime, exception, stack, ensure_ascii))]
-pub fn format_log_record(py: Python<'_>, style: ::std::string::String, record: Bound<'_, PyAny>, message: ::std::string::String, asctime: ::std::string::String, exception: ::std::option::Option<::std::string::String>, stack: ::std::option::Option<::std::string::String>, ensure_ascii: bool) -> PyResult<::std::string::String> {
-    let record = crate::generated::records::worker_cli::log_fields_from_py(&record)?;
-    let out = py.detach(|| <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::format_log_record(style, record, message, asctime, exception, stack, ensure_ascii));
-    Ok(out)
-}
-
-/// The development launcher connection.
-#[pyfunction]
-#[pyo3(signature = (cli_addr, agent_name, url, api_key, api_secret, server))]
-pub fn dev_channel<'py>(py: Python<'py>, cli_addr: ::std::string::String, agent_name: ::std::string::String, url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, server: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
-    let server = crate::generated::worker::DevServerProxy::from_host(&server)?;
-    crate::host::future_into_py(py, async move {
-        let out = <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-    })
-}
-
-/// Create the control endpoints for process bootstrap.
-#[pyfunction]
-pub fn ipc_pair(py: Python<'_>) -> PyResult<(i64, i64)> {
-    crate::host::check_pid()?;
-    let out = py.detach(|| <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::ipc_pair()).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
-}
-
-// Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
-type ExitSignalsImpl = <crate::Selected as super::Implementations>::CliSignals;
-
-/// The process launcher's signal and final event-loop cleanup owner.
-#[pyclass(frozen, name = "ExitSignals", module = "livekit.agents._core")]
-pub struct ExitSignals(pub(crate) ::std::sync::Arc<ExitSignalsImpl>);
-
-#[pymethods]
-impl ExitSignals {
-    #[new]
-    #[pyo3(signature = (escalate = true))]
-    fn new(py: Python<'_>, escalate: bool) -> PyResult<ExitSignals> {
-        crate::host::check_pid()?;
-        let out = py.detach(|| <ExitSignalsImpl as ::lk_agents_abi::worker::cli::CliSignals>::new(escalate));
-        Ok(ExitSignals(::std::sync::Arc::new(out)))
-    }
-
-    #[pyo3(signature = (exit_served))]
-    fn signal(&self, py: Python<'_>, exit_served: bool) -> PyResult<::std::string::String> {
-        crate::host::check_pid()?;
-        let out = py.detach(|| <ExitSignalsImpl as ::lk_agents_abi::worker::cli::CliSignals>::signal(&self.0, exit_served));
-        Ok(out)
-    }
-
-    fn served(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| <ExitSignalsImpl as ::lk_agents_abi::worker::cli::CliSignals>::served(&self.0));
-        Ok(())
-    }
-
-    fn draining(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| <ExitSignalsImpl as ::lk_agents_abi::worker::cli::CliSignals>::draining(&self.0));
-        Ok(())
-    }
-
-    /// Arm the native deadline before the host cancels tasks or closes its executor.
-    fn closing(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| <ExitSignalsImpl as ::lk_agents_abi::worker::cli::CliSignals>::closing(&self.0));
-        Ok(())
-    }
-
-    /// Disarm the deadline only after the host event loop has actually closed.
-    fn closed(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| <ExitSignalsImpl as ::lk_agents_abi::worker::cli::CliSignals>::closed(&self.0));
-        Ok(())
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
 type JobSupervisorImpl = <crate::Selected as super::Implementations>::JobSupervisor;
 
@@ -933,6 +833,16 @@ impl JobRun {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
+type ProcessBootstrapImpl = <crate::Selected as super::Implementations>::ProcessBootstrap;
+
+#[pyfunction]
+pub fn ipc_pair(py: Python<'_>) -> PyResult<(i64, i64)> {
+    crate::host::check_pid()?;
+    let out = py.detach(|| <ProcessBootstrapImpl as ::lk_agents_abi::worker::ipc_host::ProcessBootstrap>::ipc_pair()).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerConfigImpl = <crate::Selected as super::Implementations>::ServerConfig;
 
@@ -1008,6 +918,13 @@ impl ServerConfig {
     fn drain_timeout(&self, py: Python<'_>) -> PyResult<f64> {
         crate::host::check_pid()?;
         let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::drain_timeout(&self.0));
+        Ok(out)
+    }
+
+    #[getter]
+    fn shutdown_timeout(&self, py: Python<'_>) -> PyResult<f64> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::shutdown_timeout(&self.0));
         Ok(out)
     }
 
@@ -1621,91 +1538,6 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
             };
             let o = out.bind(py);
             let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_finalize_simulation"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = item_0.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_finalize_simulation"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<bool>())?, (item_1.extract::<::std::string::String>())?,)) })()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
-            Ok(out)
-        })
-        })
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
-
-/// [`::lk_agents_abi::worker::cli::DevServer`] over a host `livekit.agents.cli._DevServer`.
-#[derive(Clone)]
-pub struct DevServerProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
-}
-
-impl DevServerProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::cli::DevServer>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::cli::DevServer>(obj) {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::cli::DevServer>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::cli::DevServer>(obj) {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::cli::DevServer>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
-        let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::host::capture_context(obj.py())?,
-        };
-        Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
-    }
-}
-
-impl ::lk_agents_abi::worker::cli::DevServer for DevServerProxy {
-    fn running_jobs(&self) -> ::std::result::Result<::std::vec::Vec<(::std::vec::Vec<u8>, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, bool)>, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_running_jobs")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 8 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 8 items", "DevServer._core_running_jobs"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; let item_5 = tuple.get_item(5)?; let item_6 = tuple.get_item(6)?; let item_7 = tuple.get_item(7)?; Ok((({ if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_0, "DevServer._core_running_jobs") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "DevServer._core_running_jobs") }).collect::<PyResult<Vec<_>>>()) } })?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<::std::string::String>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?, (item_5.extract::<::std::string::String>())?, (item_6.extract::<::std::string::String>())?, (item_7.extract::<bool>())?,)) })() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
-            Ok(out)
-        })
-    }
-
-    fn reload_jobs(&self, jobs: ::std::vec::Vec<(::std::vec::Vec<u8>, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, ::std::string::String, bool)>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let jobs_arg = jobs;
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "DevServer._core_reload_jobs", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(jobs_arg, py)?];
-                Ok((host.bind(py).getattr("_core_reload_jobs")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
-        ::std::boxed::Box::pin(async move {
-        let out = started.await;
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

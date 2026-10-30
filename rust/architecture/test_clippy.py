@@ -8,12 +8,38 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import check as clippy
 from check import ratchet
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER: Path
+
+
+class HelperContracts(unittest.TestCase):
+    def test_uses_cargos_reported_executable_instead_of_guessing_a_target_path(self):
+        executable = "/tmp/private build/debug/lk-agents-codegen.exe"
+        records = [
+            {"reason": "compiler-artifact", "target": {"name": "another-bin"}},
+            {
+                "reason": "compiler-artifact",
+                "target": {"name": "lk-agents-codegen"},
+                "executable": executable,
+            },
+            {"reason": "build-finished", "success": True},
+        ]
+        result = subprocess.CompletedProcess([], 0, "\n".join(map(json.dumps, records)), "")
+        with patch.object(clippy.subprocess, "run", return_value=result):
+            self.assertEqual(clippy.build_helper(ROOT), Path(executable))
+
+    def test_missing_helper_artifact_fails(self):
+        result = subprocess.CompletedProcess(
+            [], 0, json.dumps({"reason": "build-finished", "success": True}), ""
+        )
+        with patch.object(clippy.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ValueError, "did not report the codegen executable"):
+                clippy.build_helper(ROOT)
 
 
 class ClippyContracts(unittest.TestCase):
@@ -211,11 +237,9 @@ class ClippyContracts(unittest.TestCase):
         source = ROOT / "rust/architecture/fixtures.rs"
         env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / "rust/architecture")}
         command = [
-            "cargo",
+            clippy.CARGO_RUNNER,
             "clippy",
             "--no-deps",
-            "--config",
-            str(ROOT / "rust/.cargo/config.toml"),
             "--manifest-path",
             str(ROOT / "rust/Cargo.toml"),
             "--locked",
@@ -363,11 +387,9 @@ class IoPolicyContracts(unittest.TestCase):
         io = next(policy for policy in clippy.POLICIES if policy.name == "io")
         env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / io.conf)}
         command = [
-            "cargo",
+            clippy.CARGO_RUNNER,
             "clippy",
             "--no-deps",
-            "--config",
-            str(ROOT / "rust/.cargo/config.toml"),
             "--manifest-path",
             str(ROOT / "rust/Cargo.toml"),
             "--locked",

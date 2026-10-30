@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 pub mod a2a;
 pub mod agent;
+pub mod cli;
 pub mod errors;
 pub mod evals;
 pub mod inference;
@@ -46,6 +47,8 @@ pub trait Implementations: 'static {
     type VoiceAgent: ::lk_agents_abi::agent::VoiceAgent;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
+    type Cli: ::lk_agents_abi::cli::Cli;
+    type CliShutdown: ::lk_agents_abi::cli::CliShutdown;
     type ApiErrorFunctions: ::lk_agents_abi::errors::ApiErrorFunctions;
     type JudgeRunner: ::lk_agents_abi::evals::JudgeRunner;
     type Evaluations: ::lk_agents_abi::evals::Evaluations;
@@ -170,12 +173,11 @@ pub trait Implementations: 'static {
     type AsgiSend: ::lk_agents_abi::worker::endpoint_host::AsgiSend;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
-    type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
-    type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
     type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
     type ProcessPool: ::lk_agents_abi::worker::ipc_host::ProcessPool;
     type JobRun: ::lk_agents_abi::worker::ipc_host::JobRun;
+    type ProcessBootstrap: ::lk_agents_abi::worker::ipc_host::ProcessBootstrap;
     type ServerConfig: ::lk_agents_abi::worker::server_host::ServerConfig;
     type ServerRuntime: ::lk_agents_abi::worker::server_host::ServerRuntime;
 }
@@ -198,6 +200,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
+    m.add_function(wrap_pyfunction!(cli::parse_cli, m)?)?;
+    m.add_function(wrap_pyfunction!(cli::format_log_record, m)?)?;
+    m.add_function(wrap_pyfunction!(cli::dev_channel, m)?)?;
+    m.add_class::<cli::Shutdown>()?;
     m.add_function(wrap_pyfunction!(errors::http_error_display, m)?)?;
     m.add_class::<evals::CoreJudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
@@ -427,16 +433,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::parse_cli, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::entrypoint_module, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::format_log_record, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::dev_channel, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::ipc_pair, m)?)?;
-    m.add_class::<worker::ExitSignals>()?;
     m.add_class::<worker::JobSupervisor>()?;
     m.add_class::<worker::IpcClient>()?;
     m.add_class::<worker::ProcPool>()?;
     m.add_class::<worker::JobRun>()?;
+    m.add_function(wrap_pyfunction!(worker::ipc_pair, m)?)?;
     m.add_class::<worker::ServerConfig>()?;
     m.add_class::<worker::ServerRuntime>()?;
     m.add_class::<voice::NodeText>()?;

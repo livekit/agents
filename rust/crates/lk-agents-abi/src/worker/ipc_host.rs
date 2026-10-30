@@ -450,3 +450,10 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         #[host(context)] context: CallContext,
     ) -> Result<(), WorkerError>;
 }
+
+/// Native process bootstrap operations, shared by language hosts.
+#[crate::host(functions)]
+pub trait ProcessBootstrap {
+    #[host(function)]
+    fn ipc_pair() -> Result<(i64, i64), crate::errors::HostError>;
+}

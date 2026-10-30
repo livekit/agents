@@ -8,13 +8,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Self
 
-from livekit.agents.cli import _DevServer
 from livekit.agents.http import AsgiApplication, ExchangeStream
 from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
-from .worker_cli import CliArgs, LogFields
 from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
 from .worker_ipc import StartJobFields
 from .worker_options import ServerOptions
@@ -82,47 +80,6 @@ def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | No
     """`https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
     the URL and the agent are known; a worker registered without a deployment is `default`.
     """
-
-def parse_cli(argv: Sequence[str]) -> CliArgs: ...
-
-def entrypoint_module(path: str | None) -> tuple[str, str]: ...
-
-def format_log_record(
-    style: str,
-    record: LogFields,
-    message: str,
-    asctime: str,
-    exception: str | None,
-    stack: str | None,
-    ensure_ascii: bool,
-) -> str:
-    """One log line in `style`: `message` is the formatted message, `asctime` the record's time
-    as the host formats it, `exception` and `stack` the tracebacks.
-    """
-
-async def dev_channel(
-    cli_addr: str,
-    agent_name: str,
-    url: str,
-    api_key: str,
-    api_secret: str,
-    server: _DevServer,
-) -> None:
-    """The development launcher connection."""
-
-def ipc_pair() -> tuple[int, int]:
-    """Create the control endpoints for process bootstrap."""
-
-class ExitSignals:
-    """The process launcher's signal and final event-loop cleanup owner."""
-    def __new__(cls, escalate: bool = True) -> Self: ...
-    def signal(self, exit_served: bool) -> str: ...
-    def served(self) -> None: ...
-    def draining(self) -> None: ...
-    def closing(self) -> None:
-        """Arm the native deadline before the host cancels tasks or closes its executor."""
-    def closed(self) -> None:
-        """Disarm the deadline only after the host event loop has actually closed."""
 
 class JobSupervisor:
     def __new__(
@@ -285,6 +242,8 @@ class JobRun:
         context this call captured.
         """
 
+def ipc_pair() -> tuple[int, int]: ...
+
 class ServerConfig:
     def __new__(cls, options: ServerOptions) -> Self:
         """`options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
@@ -307,6 +266,8 @@ class ServerConfig:
         """Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set)."""
     @property
     def drain_timeout(self) -> float: ...
+    @property
+    def shutdown_timeout(self) -> float: ...
     @property
     def simulation(self) -> bool: ...
     @simulation.setter

@@ -13,6 +13,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!rust/crates/lk-agents-media/build/
+!rust/crates/lk-agents-media/build/*.rs
 develop-eggs/
 dist/
 downloads/
@@ -78,6 +80,7 @@ docs/_build/
 # PyBuilder
 .pybuilder/
 target/
+target-checks/
 
 # Jupyter Notebook
 .ipynb_checkpoints

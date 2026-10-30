@@ -13,8 +13,15 @@
 
 #[path = "build/blingfire.rs"]
 mod blingfire;
+#[path = "build/cache.rs"]
+mod cache;
+#[path = "build/libraries.rs"]
+mod libraries;
+#[path = "build/settings.rs"]
+mod settings;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=LK_AGENTS_NATIVE_DEBUG");
     if std::env::var_os("CARGO_FEATURE_BLINGFIRE").is_some() {
         blingfire::build();
     }
@@ -36,12 +43,12 @@ fn main() {
     let inc = prefix.join("include");
     let lib = prefix.join("lib");
     assert!(
-        find_lib(&lib, "avcodec"),
+        libraries::archive(&lib, "avcodec").is_some(),
         "no avcodec static library under {}; set LK_CODECS_FFMPEG_PREFIX or run vendor/fetch.sh",
         lib.display()
     );
 
-    cc::Build::new()
+    settings::compiler(false)
         .file("csrc/lk_agents_media.c")
         .include(&inc)
         .flag_if_supported("-std=c11")
@@ -50,22 +57,18 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lib.display());
     // Order matters for static archives: dependents before dependencies.
-    for l in ["avformat", "avcodec", "swresample", "avutil"] {
-        println!("cargo:rustc-link-lib=static={l}");
+    for name in ["avformat", "avcodec", "swresample", "avutil"] {
+        link_archive(&lib, name);
     }
-    // libopus: pkg-config if it is there, otherwise assume the prefix carries it statically.
-    if let Ok(out) = std::process::Command::new("pkg-config").args(["--libs", "opus"]).output()
-        && out.status.success()
-    {
-        for tok in String::from_utf8_lossy(&out.stdout).split_whitespace() {
-            if let Some(rest) = tok.strip_prefix("-L") {
-                println!("cargo:rustc-link-search=native={rest}");
-            } else if let Some(rest) = tok.strip_prefix("-l") {
-                println!("cargo:rustc-link-lib={rest}");
-            }
-        }
+    // Prebuilt installs can carry Opus themselves. Otherwise let pkg-config handle
+    // target-specific configuration and platform linker flags.
+    if libraries::archive(&lib, "opus").is_some() {
+        link_archive(&lib, "opus");
+    } else {
+        pkg_config::Config::new().probe("opus")
+            .expect("Opus is required: install its development package or include its static library in LK_CODECS_FFMPEG_PREFIX/lib");
     }
-    if cfg!(target_os = "macos") {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         // libavutil's mach_absolute_time / VideoToolbox-free build still wants these.
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=CoreMedia");
@@ -73,7 +76,7 @@ fn main() {
         println!("cargo:rustc-link-lib=z");
         println!("cargo:rustc-link-lib=bz2");
         println!("cargo:rustc-link-lib=iconv");
-    } else if cfg!(target_os = "linux") {
+    } else if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=z");
     }
@@ -128,16 +131,54 @@ fn build_vendored() -> std::path::PathBuf {
         assert!(st.success(), "vendor/fetch.sh failed");
     }
 
-    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let prefix = out.join("ffmpeg-prefix");
-    if find_lib(&prefix.join("lib"), "avcodec") {
-        return prefix;
+    assert_eq!(
+        std::env::var("HOST").expect("HOST"),
+        std::env::var("TARGET").expect("TARGET"),
+        "cross-compiling FFmpeg requires LK_CODECS_FFMPEG_PREFIX for the target"
+    );
+    println!("cargo:rerun-if-changed={}", src.display());
+    let mut key = settings::key(false);
+    key.input("recipe", include_bytes!("build.rs"));
+    key.tree(&src).expect("hash ffmpeg source tree");
+    key.input(
+        "x86asm",
+        if which("nasm").is_some() || which("yasm").is_some() { b"enabled" } else { b"disabled" },
+    );
+    for args in
+        [vec!["--version"], vec!["--modversion", "opus"], vec!["--cflags", "--libs", "opus"]]
+    {
+        if let Ok(output) = std::process::Command::new("pkg-config").args(args).output() {
+            key.input("pkg-config-stdout", &output.stdout);
+            key.input("pkg-config-stderr", &output.stderr);
+        }
     }
-    let build = out.join("ffmpeg-build");
-    std::fs::create_dir_all(&build).unwrap();
+    cache::get_or_build(
+        &settings::root(),
+        "ffmpeg",
+        &key.finish(),
+        |prefix| {
+            prefix.join("include/libavcodec/avcodec.h").is_file()
+                && ["avcodec", "avformat", "avutil", "swresample"]
+                    .iter()
+                    .all(|name| libraries::archive(&prefix.join("lib"), name).is_some())
+        },
+        |staging, prefix| {
+            compile_ffmpeg(&src, staging, prefix);
+            Ok(())
+        },
+    )
+    .expect("build or reuse cached ffmpeg")
+}
+
+fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::path::Path) {
+    let build = entry.join("build");
+    std::fs::create_dir_all(&build).expect("create ffmpeg build directory");
 
     let mut args: Vec<String> = vec![format!("--prefix={}", prefix.display())];
     args.extend(CONFIGURE.iter().map(|s| (*s).to_owned()));
+    if !settings::native_debug() {
+        args.push("--disable-debug".into());
+    }
     // Without nasm configure aborts rather than degrading, so degrade explicitly.
     if which("nasm").is_none() && which("yasm").is_none() {
         println!(
@@ -155,13 +196,43 @@ fn build_vendored() -> std::path::PathBuf {
     );
     let jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
     run(std::process::Command::new("make").arg(format!("-j{jobs}")).current_dir(&build), "make");
-    run(std::process::Command::new("make").arg("install").current_dir(&build), "make install");
-    prefix
+    // DESTDIR isolates an interrupted installer from the final cache entry while
+    // keeping the final prefix embedded in FFmpeg's pkg-config files.
+    let destination = entry.join("install");
+    run(
+        std::process::Command::new("make")
+            .arg("install")
+            .arg(format!("DESTDIR={}", destination.display()))
+            .current_dir(&build),
+        "make install",
+    );
+    let relative_prefix: std::path::PathBuf =
+        prefix
+            .components()
+            .filter_map(|part| {
+                if let std::path::Component::Normal(name) = part { Some(name) } else { None }
+            })
+            .collect();
+    let installed = destination.join(relative_prefix);
+    for directory in ["include", "lib"] {
+        std::fs::rename(installed.join(directory), entry.join(directory))
+            .expect("collect installed FFmpeg artifacts");
+    }
+    std::fs::remove_dir_all(build).expect("remove ffmpeg build intermediates");
+    std::fs::remove_dir_all(destination).expect("remove FFmpeg installation staging directory");
 }
 
-/// `--toolchain=msvc` emits `libfoo.a` while an import-library build emits `foo.lib`; accept either.
-fn find_lib(dir: &std::path::Path, stem: &str) -> bool {
-    dir.join(format!("lib{stem}.a")).exists() || dir.join(format!("{stem}.lib")).exists()
+/// MSVC accepts exact filenames; Unix linkers use their conventional archive names.
+fn link_archive(directory: &std::path::Path, name: &str) {
+    let path = libraries::archive(directory, name)
+        .unwrap_or_else(|| panic!("missing static {name} library under {}", directory.display()));
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        let filename =
+            path.file_name().expect("archive filename").to_str().expect("ASCII library name");
+        println!("cargo:rustc-link-lib=static:+verbatim={filename}");
+    } else {
+        println!("cargo:rustc-link-lib=static={name}");
+    }
 }
 
 fn which(bin: &str) -> Option<std::path::PathBuf> {

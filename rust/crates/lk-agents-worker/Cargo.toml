@@ -26,8 +26,6 @@ log.workspace = true
 url = "2"
 # The endpoint exchange's HTTP/1.1 request head (`endpoint.rs`).
 httparse = "1"
-# The log lines' timestamps (`cli.rs`).
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 [target.'cfg(unix)'.dependencies]
 # Process signals and waits (`ipc/process.rs`), socket options (`ipc/channel.rs`).
 libc = "0.2"

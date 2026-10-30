@@ -7,7 +7,17 @@ This project uses **uv** as the package manager. All commands run from the repos
 ### Installation
 ```bash
 make install          # Install all dependencies with dev extras (uv sync --all-extras --dev)
+make build            # Rebuild the Python extension in place (after install)
+make build-debug      # Rebuild with native debug symbols
+make -C rust build     # Build every workspace crate, including FFmpeg
+make rust-check       # Check every Rust crate and test target, including FFmpeg
 ```
+
+For parallel worktrees, keep a private Cargo target directory per worktree.
+Make uses `mbx` by default for Rust commands; install it with
+`cargo install --locked mbx`. Use `CARGO_RUNNER=cargo` for ordinary Cargo.
+See `docs/internals/rust-core.md` (Local builds) for setup and other cache tools.
+Do not point concurrent worktrees at one writable `CARGO_TARGET_DIR`.
 
 ### Versioning
 
@@ -27,8 +37,8 @@ make check            # Run all checks (format-check, lint, type-check)
 Rust commands live in `rust/Makefile`:
 ```bash
 make -C rust clippy        # Shared purity policy for ABI, core, voice and media
-make -C rust architecture  # Full architecture gate, fixtures and codegen checks
-make -C rust check         # Rust formatting and the architecture gate
+make -C rust check         # Workspace Clippy, boundaries and codegen
+make -C rust test-checks   # Checker counterexamples and codegen tests
 ```
 
 ### Testing
@@ -76,7 +86,7 @@ lk agent dev               # Development mode with hot reload (connects to LiveK
 lk agent console           # Talk to the agent in the terminal
 lk agent start             # Production mode
 ```
-`lk agent` (the Go livekit-cli) runs `python main.py start [--dev]`, `console` or `download-files`;
+`lk agent` (the Go livekit-cli) runs `python main.py start [--dev]` or `python main.py console`;
 those subcommands are its internal interface, not a user entry point.
 
 ### Linking Local python-rtc (for SDK development)
@@ -196,6 +206,7 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-net       # Async I/O: transport, token signing, host stream adapter, A2A client, ProcessEnv
 ├── lk-agents-inference # Async I/O: provider clients, retry/fallback/reconnect, TTS emitter, judges
 ├── lk-agents-worker    # Async I/O: registration, jobs, IPC, process pool and supervision
+├── lk-agents-cli       # Host-neutral launcher: clap, JSON logs, remote CLI and process shutdown
 ├── lk-agents-runtime   # The I/O layer of voice and text: executors, room I/O, drivers, HostInvoker
 ├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
 ├── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
@@ -244,7 +255,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 ## Rust architecture rules
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
-  `net -> core`, `net -> media`, `py -> abi`, async I/O crates `-> net`, `fuzz` and
+  `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
+  crates `-> net`, `fuzz` and
   `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
   executors over faked ports, the fake room among them) and `fuzz -> storage` (the A2A DST runs
   real storage) are allowed composition edges.
@@ -306,4 +318,5 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   with a reason. Baselines shrink by violation kind and location identity, never by count:
   removing one violation does not permit another. Never add or broaden an exemption.
 - Run `rust/architecture/check.sh` for dependency, clippy, baseline and file-length enforcement;
-  CI and the launch gate use the same step. Every check has deliberately failing fixtures.
+  CI and the launch gate also run `rust/architecture/check.sh --tests`. Every check has
+  deliberately failing fixtures.

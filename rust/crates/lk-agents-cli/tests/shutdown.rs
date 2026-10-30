@@ -4,8 +4,8 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use lk_agents_abi::worker::cli::CliSignals as _;
-use lk_agents_worker::cli_signals::CliSignals;
+use lk_agents_abi::cli::CliShutdown as _;
+use lk_agents_cli::shutdown::Shutdown;
 
 fn watchdog_process(mode: &str, stderr: Stdio) -> Output {
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
@@ -35,7 +35,7 @@ fn incomplete_loop_cleanup_terminates_nonzero() {
     assert_eq!(output.status.code(), Some(1));
     #[cfg(unix)]
     assert_eq!(
-        String::from_utf8_lossy(&output.stderr).matches("incomplete event-loop cleanup").count(),
+        String::from_utf8_lossy(&output.stderr).matches("shutdown deadline exceeded").count(),
         1
     );
 }
@@ -75,11 +75,11 @@ fn saturated_stderr_cannot_hold_the_cleanup_owner_alive() {
 #[ignore = "subprocess entrypoint for native watchdog tests"]
 fn watchdog_child() {
     let mode = std::env::var("LK_TEST_CLI_CLOSE").expect("watchdog scenario");
-    let signals = CliSignals::new(false);
-    signals.closing();
+    let signals = Shutdown::new(0.2, 0.0).unwrap();
+    signals.begin();
     if mode == "closed" {
         signals.closed();
-        thread::sleep(Duration::from_millis(5500));
+        thread::sleep(Duration::from_millis(400));
     } else {
         thread::sleep(Duration::from_secs(30));
     }

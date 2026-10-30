@@ -9,3 +9,9 @@
 # cfg only unlocks tokio APIs, it does not change behaviour on its own.
 [build]
 rustflags = ["--cfg", "tokio_unstable"]
+
+# Only macOS needs an explicit override to prevent Maturin from forcing dsymutil.
+# Keep global flags valid while Cargo queries any target, including Windows MSVC,
+# where `off` is unsupported. Other targets retain their native debug format.
+[target.'cfg(target_os = "macos")']
+rustflags = ["--cfg", "tokio_unstable", "-C", "split-debuginfo=off"]

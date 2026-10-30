@@ -158,7 +158,8 @@ impl generated::Implementations for Selected {
     type IpcClient = lk_agents_runtime::worker::ipc::ChildChannel;
     type ProcessPool = lk_agents_runtime::worker::ipc::ProcessPool;
     type JobRun = lk_agents_runtime::worker::ipc::JobRun;
-    type WorkerCli = lk_agents_runtime::worker::cli::Commands;
+    type Cli = lk_agents_runtime::cli::Commands;
+    type ProcessBootstrap = lk_agents_runtime::worker::ipc::process::Bootstrap;
     type EndpointStream = lk_agents_runtime::worker::endpoint::host::NativeStream;
     type EndpointServer = lk_agents_runtime::worker::endpoint::host::Endpoints;
     type AsgiReceive = lk_agents_runtime::worker::endpoint::host::ReceiveCall;
@@ -170,7 +171,7 @@ impl generated::Implementations for Selected {
     type InferenceCredentials = lk_agents_runtime::inference::credentials::Credentials;
     type JoinTokens = lk_agents_runtime::net::token::JoinTokens;
     type InferenceModels = lk_agents_runtime::inference::models::Models;
-    type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;
+    type CliShutdown = lk_agents_runtime::cli::shutdown::Shutdown;
     type SessionReportProjection = lk_agents_runtime::cores::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
     type EventRetention = lk_agents_runtime::net::session_report::EventRetention;

@@ -53,6 +53,12 @@ from ._generated._core_classes import (
     rtc_wire_names as rtc_wire_names,
     video_queue_frames as video_queue_frames,
 )
+from ._generated._core_cli import (
+    Shutdown as Shutdown,
+    dev_channel as dev_channel,
+    format_log_record as format_log_record,
+    parse_cli as parse_cli,
+)
 from ._generated._core_errors import (
     http_error_display as http_error_display,
 )
@@ -320,7 +326,6 @@ from ._generated._core_voice import (
 from ._generated._core_worker import (
     EndpointServer as EndpointServer,
     EndpointStream as EndpointStream,
-    ExitSignals as ExitSignals,
     IpcClient as IpcClient,
     JobRun as JobRun,
     JobSupervisor as JobSupervisor,
@@ -330,12 +335,8 @@ from ._generated._core_worker import (
     _core_AsgiReceive as _core_AsgiReceive,
     _core_AsgiSend as _core_AsgiSend,
     cpu_count as cpu_count,
-    dev_channel as dev_channel,
     endpoint_url_base as endpoint_url_base,
-    entrypoint_module as entrypoint_module,
-    format_log_record as format_log_record,
     ipc_pair as ipc_pair,
     job_timeline as job_timeline,
-    parse_cli as parse_cli,
     room_join_token as room_join_token,
 )

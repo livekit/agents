@@ -89,6 +89,10 @@ impl ServerConfig for Configuration {
         self.get().drain_timeout
     }
 
+    fn shutdown_timeout(&self) -> f64 {
+        self.get().shutdown_timeout
+    }
+
     fn simulation(&self) -> bool {
         self.get().simulation
     }
@@ -332,13 +336,9 @@ impl ServerRuntime for AgentServerRuntime {
     }
 
     async fn drain(&self, timeout: Option<f64>) -> Result<(), WorkerError> {
-        let timeout = timeout
-            .filter(|timeout| *timeout != 0.0)
-            .map(Duration::try_from_secs_f64)
-            .transpose()
-            .map_err(|_| {
-                WorkerError::Invalid("drain timeout must be finite and nonnegative".into())
-            })?;
+        let timeout = timeout.map(Duration::try_from_secs_f64).transpose().map_err(|_| {
+            WorkerError::Invalid("drain timeout must be finite and nonnegative".into())
+        })?;
         let runtime = self.runtime.clone();
         self.spawner.run(async move { runtime.drain(timeout).await }).await.map_err(|error| {
             if error == "drain timed out" {

@@ -21,7 +21,7 @@ def test_production_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO", "json")
+    setup_logging("INFO")
     logging.getLogger().info("café عاوز 🗣️")
     stdout.flush()
 
@@ -29,7 +29,7 @@ def test_production_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
     assert record["message"] == "café عاوز 🗣️"
 
 
-def test_development_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
+def test_cli_logging_preserves_all_unicode_on_cp1252_stdout(monkeypatch):
     output = io.BytesIO()
     stdout = io.TextIOWrapper(output, encoding="cp1252")
     root = logging.getLogger()
@@ -38,14 +38,12 @@ def test_development_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch)
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO", "dev")
+    setup_logging("INFO")
     logging.getLogger().info("café عاوز 🗣️")
     stdout.flush()
 
-    message = output.getvalue().decode("cp1252", errors="replace")
-    assert "café" in message
-    assert r"\u0639" in message
-    assert r"\U0001f5e3" in message
+    record = json.loads(output.getvalue().decode("cp1252"))
+    assert record["message"] == "café عاوز 🗣️"
 
 
 def test_cli_logging_setup_preserves_locale_encoded_stdout_for_print(monkeypatch):
@@ -56,7 +54,7 @@ def test_cli_logging_setup_preserves_locale_encoded_stdout_for_print(monkeypatch
     monkeypatch.setattr(root, "level", logging.NOTSET)
     monkeypatch.setattr(sys, "stdout", stdout)
 
-    setup_logging("INFO", "json")
+    setup_logging("INFO")
     print("café")
     stdout.flush()
 
@@ -72,8 +70,9 @@ def test_production_cli_logging_keeps_raw_unicode_on_utf8_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO", "json")
+    setup_logging("INFO")
     logging.getLogger().info("café")
     stdout.flush()
 
-    assert '"message": "café"' in output.getvalue().decode("utf-8")
+    assert "café" in output.getvalue().decode("utf-8")
+    assert json.loads(output.getvalue())["message"] == "café"

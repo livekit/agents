@@ -9,6 +9,7 @@ license.workspace = true
 # Tokio, sockets, real clocks, task ownership, effect execution and the async host bridge. Cores
 # never depend on it. Grown from consumers: each module lands with the slice that uses it.
 [dependencies]
+lk-agents-cli = { path = "../lk-agents-cli" }
 parking_lot.workspace = true
 rmcp.workspace = true
 sse-stream = "0.2"

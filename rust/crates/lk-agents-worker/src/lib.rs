@@ -9,8 +9,6 @@ pub use load::{DefaultLoadCalc, LoadInputs, WorkerStatus};
 pub(crate) const LOG: &str = "livekit.agents";
 
 pub mod agent_server;
-pub mod cli;
-pub mod cli_signals;
 pub mod config;
 pub mod diagnostics;
 pub mod endpoint;
@@ -18,6 +16,7 @@ pub mod hw;
 pub mod ipc;
 pub mod protocol;
 pub mod server;
+pub mod shutdown;
 pub mod transport;
 mod worker;
 #[cfg(test)]

@@ -1,14 +1,16 @@
 # Rust architecture checks
 
 Run `bash rust/architecture/check.sh` from any directory in a full Git checkout.
-CI and the launch gate call this entry point directly. CI runs the architecture
-step once, then calls `launch-gate.sh --skip-architecture` for the remaining suites.
+CI and the launch gate also run `bash rust/architecture/check.sh --tests` for
+checker counterexamples and codegen tests. CI runs this step once, then calls
+`launch-gate.sh --skip-architecture` for the remaining suites.
 Checks never rewrite sources or baselines. Cargo honors `CARGO_TARGET_DIR` and
 the workspace Rust flags.
 
-From the repository root, `make -C rust architecture` runs the same gate.
-`make -C rust clippy` runs a scoped diagnostic pass, and `make -C rust check`
-checks formatting followed by the architecture gate. Run `make -C rust` for help.
+From the repository root, `make -C rust check` runs this enforcement gate.
+`make -C rust format-check` checks formatting separately.
+`make -C rust clippy` runs just the scoped diagnostic pass.
+`make -C rust test-checks` tests the checkers themselves. Run `make -C rust` for help.
 
 - `check.py` validates all-feature Cargo dependency closures, including normal,
   build and dev edges, resolved for each platform a wheel ships for (an edge only
@@ -18,7 +20,7 @@ checks formatting followed by the architecture gate. Run `make -C rust` for help
   Forbidden executor, transport, host and SDK families include Tokio, futures,
   PyO3, rusqlite and LiveKit SDKs; protocol records are allowed.
   The async I/O crates (inference, worker, net, storage) are outside the purity bans
-  and the Clippy policy; their workspace edges are checked.
+  and the restricted Clippy policy; ordinary workspace Clippy still checks them.
 - A `#[path]` module stays inside its own crate's tree (`src/`, `tests/`, ..): a file under a core's
   directory compiled by another crate would escape that core's dependency and Clippy policy, so
   every core-directory file is either compiled by its own crate (and linted with it) or an
@@ -39,8 +41,18 @@ checks formatting followed by the architecture gate. Run `make -C rust` for help
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only
   `executors-baseline.json`.
+- A workspace Clippy pass compiles every crate and target with FFmpeg enabled,
+  replacing a separate workspace `cargo check`. Metadata is resolved once for
+  dependency and warning checks; Cargo's reported executable is reused for the
+  syntax helper and codegen drift check. Each compiler configuration keeps its
+  own state beside Cargo's target directory (`target-checks/workspace`,
+  `target-checks/default`, `target-checks/python`, `target-checks/all`, and
+  `target-checks/tools`). This prevents successive
+  invocations from replacing each other's fingerprints. mbx still shares
+  equivalent compiled artifacts across configurations and worktrees.
 - Warning-clean crates (`WARNING_CLEAN` in `check.py`, a list that only grows) stay clean:
-  any compiler warning of theirs in `cargo check --tests --workspace` fails. ABI, voice,
+  any compiler warning of theirs in the workspace Clippy pass fails. Existing Clippy diagnostics remain subject to
+  the separate purity policy below. ABI, voice,
   runtime, py, fuzz and external path dependencies are not gated yet.
 - Git-tracked handwritten Rust files have a 1,250-line limit. A generated file's
   first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
@@ -81,7 +93,6 @@ For example, from the repository root:
 
 ```bash
 CLIPPY_CONF_DIR="$PWD/rust/architecture" cargo clippy \
-    --config "$PWD/rust/.cargo/config.toml" \
     --manifest-path rust/Cargo.toml --locked --no-deps --all-targets \
     -p lk-agents-abi -p lk-agents-core -p lk-agents-voice -p lk-agents-media
 ```

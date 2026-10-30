@@ -75,11 +75,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: launch-gate-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: launch-gate-${{ runner.os }}-
+            rust/target-checks
+          key: launch-gate-v2-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: launch-gate-v2-${{ runner.os }}-
 
       - name: Rust architecture
-        run: bash rust/architecture/check.sh
+        run: |
+          bash rust/architecture/check.sh
+          bash rust/architecture/check.sh --tests
 
       # Pull requests and pushes: the 1024-seed survey plus 4096 campaign seeds. Nightly and on
       # demand: the full 32768.

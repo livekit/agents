@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import AgentServer, JobContext, _core, cli
-from livekit.agents._generated.worker_cli import CliArgsConsole, CliArgsStart
+from livekit.agents._generated.cli import CliArgsConsole, CliArgsStart
 from livekit.agents.job import RunningJobInfo
 from livekit.agents.worker import _ServerCallbacks
 
@@ -21,11 +21,21 @@ def test_cli_generated_args_matrix_dispatches_every_command_and_preserves_status
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server = AgentServer()
-    monkeypatch.setattr(cli, "_load_server", lambda _: server)
     calls: list[tuple[str, Any]] = []
 
     def run_worker(server: AgentServer, args: CliArgsStart) -> int:
-        calls.append(("start", (args.ws_url, args.api_key, args.api_secret, args.log_style)))
+        calls.append(
+            (
+                "start",
+                (
+                    args.ws_url,
+                    args.api_key,
+                    args.api_secret,
+                    args.shutdown_timeout,
+                    args.drain_timeout,
+                ),
+            )
+        )
         return 17
 
     def run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
@@ -33,20 +43,18 @@ def test_cli_generated_args_matrix_dispatches_every_command_and_preserves_status
 
     monkeypatch.setattr(cli, "_run_worker", run_worker)
     monkeypatch.setattr(cli, "_run_console", run_console)
-    monkeypatch.setattr(cli, "_download_files", lambda: 19)
     assert (
-        cli.main(["start", "app.py", "--dev", "--simulation", "--url", "wss://cli.example"]) == 17
+        cli._launch(["start", "--dev", "--simulation", "--url", "wss://cli.example"], server) == 17
     )
-    assert calls.pop() == ("start", ("wss://cli.example", None, None, "compact"))
-    assert cli.main(["console", "--connect-addr", "127.0.0.1:9", "--record"]) == 0
+    assert calls.pop() == ("start", ("wss://cli.example", None, None, None, None))
+    assert cli._launch(["console", "--connect-addr", "127.0.0.1:9", "--record"], server) == 0
     assert calls.pop() == ("console", ("127.0.0.1:9", True))
-    assert cli.main(["download-files"]) == 19
-    console = _core.parse_cli(["console", "--connect-addr", "127.0.0.1:9"])
+    console = _core.parse_cli(["agent", "console", "--connect-addr", "127.0.0.1:9"]).args
     assert isinstance(console, CliArgsConsole)
-    monkeypatch.setattr(sys, "argv", ["app.py", "download-files"])
+    monkeypatch.setattr(sys, "argv", ["app.py", "start"])
     with pytest.raises(SystemExit) as exited:
         cli.run_app(server)
-    assert exited.value.code == 19
+    assert exited.value.code == 17
 
 
 @pytest.mark.skipif(sys.platform == "linux", reason="Linux supports forkserver directly")

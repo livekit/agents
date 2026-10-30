@@ -55,3 +55,15 @@ image = { workspace = true, optional = true }
 [build-dependencies]
 # Compiles the native wrappers when `ffmpeg` or `blingfire` is enabled.
 cc = "1"
+pkg-config = "0.3"
+sha2 = "0.10"
+tempfile = "3"
+
+[dev-dependencies]
+sha2 = "0.10"
+tempfile = "3"
+
+# The native artifact cache is build-script code; its test sits beside it.
+[[test]]
+name = "native_cache"
+path = "build/native_cache.rs"

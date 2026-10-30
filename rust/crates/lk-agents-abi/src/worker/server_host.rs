@@ -40,6 +40,8 @@ pub trait ServerConfig: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn drain_timeout(&self) -> f64;
     #[host(getter)]
+    fn shutdown_timeout(&self) -> f64;
+    #[host(getter)]
     fn simulation(&self) -> bool;
     #[host(setter, name = "simulation")]
     fn set_simulation(&self, value: bool);
