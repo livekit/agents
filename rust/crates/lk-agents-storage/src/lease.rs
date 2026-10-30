@@ -3,7 +3,6 @@
 //! [`Lease`] handle stops it. A waiter paces its acquire attempts with [`LanePoll`].
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use parking_lot::Mutex;
@@ -141,18 +140,10 @@ fn extend(fence: &Fence, lease_secs: i64) -> ExtendLease<'_> {
     ExtendLease { lane: &fence.lane, holder: &fence.holder, token: &fence.token, lease_secs }
 }
 
-/// The default lease TTL, measured on the database's clock.
-pub const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(10);
-/// The default interval at which an open run renews.
-pub const DEFAULT_RENEW_INTERVAL: Duration = Duration::from_secs(3);
-
-/// A lease TTL as the whole seconds the database counts, rounded up.
-pub fn lease_secs(ttl: Duration) -> i64 {
-    (ttl.as_secs() + u64::from(ttl.subsec_nanos() > 0)) as i64
-}
-
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -166,6 +157,6 @@ mod tests {
         assert_eq!(p.next(t0 + ms(700)), Some(t0 + ms(1500)));
         assert_eq!(p.next(t0 + ms(1500)), Some(t0 + ms(2500)));
         assert_eq!(p.next(t0 + ms(2500)), None);
-        assert_eq!(lease_secs(Duration::from_millis(1500)), 2);
+        assert_eq!(LeaseTiming::new(ms(1500), ms(1)).unwrap().secs(), 2);
     }
 }

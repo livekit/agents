@@ -13,7 +13,7 @@ use crate::db::{
     self, Acquire, Acquired, Commit, Committed, EventWrite, Fenced, ItemPage,
     Receive, Resolution, TaskPage, TaskQuery,
 };
-use crate::lease::{LanePoll, lease_secs};
+use crate::lease::LanePoll;
 use crate::run::{
     self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunWrites,
     SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
@@ -51,17 +51,16 @@ impl LeaseTiming {
         Ok(Self { ttl, renew_interval })
     }
 
+    /// The TTL as the whole seconds the database counts, rounded up.
     pub(crate) fn secs(&self) -> i64 {
-        lease_secs(self.ttl)
+        (self.ttl.as_secs() + u64::from(self.ttl.subsec_nanos() > 0)) as i64
     }
 }
 
 impl Default for LeaseTiming {
+    /// A 10 s lease, measured on the database's clock, renewed every 3 s.
     fn default() -> Self {
-        Self {
-            ttl: crate::lease::DEFAULT_LEASE_TTL,
-            renew_interval: crate::lease::DEFAULT_RENEW_INTERVAL,
-        }
+        Self { ttl: Duration::from_secs(10), renew_interval: Duration::from_secs(3) }
     }
 }
 
