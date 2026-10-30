@@ -198,7 +198,8 @@ pub fn request_answered_once(record: &Record) -> Vec<Violation> {
 /// An error answer is one the client can act on: retry (`Unavailable`, `Uncertain`, a lost
 /// lease or a fenced conflict), a cancelled turn, `Rejected` only under `reject`, `NotFound` for
 /// a thread that is gone, `Unauthorized` only while the database refused the key during the
-/// request. A framework-internal `Invalid` never reaches the client.
+/// request, `TooLarge` for a commit refused as too large when no row could carry the failure. A
+/// framework-internal `Invalid` never reaches the client.
 pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
     record
         .requests
@@ -224,6 +225,7 @@ pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
                     | StorageError::LeaseLost(_)
                     | StorageError::VersionConflict { .. }
                     | StorageError::NotFound(_)
+                    | StorageError::TooLarge { .. }
                     | StorageError::Cancelled(_) => true,
                     _ => false,
                 };
