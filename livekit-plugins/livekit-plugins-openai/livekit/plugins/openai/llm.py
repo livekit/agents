@@ -43,6 +43,7 @@ from livekit.agents.utils import is_given, resolve_env_int
 from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
+from .log import logger
 from .models import (
     _REASONING_EFFORT_LOW_MODELS,
     _REASONING_EFFORT_NONE_MODELS,
@@ -1072,6 +1073,13 @@ class LLM(llm.LLM):
                 "use openai.responses.LLM instead"
             )
         if tools and self._opts.model in _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS:
+            if self._opts.reasoning_effort != "none":
+                logger.warning(
+                    "%s only supports reasoning_effort='none' with function tools, "
+                    "overriding reasoning_effort=%r",
+                    self._opts.model,
+                    self._opts.reasoning_effort,
+                )
             extra["reasoning_effort"] = "none"
 
         return LLMStream(
