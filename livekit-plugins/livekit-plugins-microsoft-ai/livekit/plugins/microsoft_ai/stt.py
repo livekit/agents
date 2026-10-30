@@ -468,6 +468,9 @@ class SpeechStream(stt.RecognizeStream):
             if self._input_error is not None:
                 raise self._input_error
             feed_ended = True
+            # consume() commits the rest itself, with the samples after the last inference
+            # window: an END_OF_SPEECH from the VAD marks that window and would leave them out
+            vad_stream.flush()
             vad_stream.end_input()
 
         async def drain(position: int) -> None:

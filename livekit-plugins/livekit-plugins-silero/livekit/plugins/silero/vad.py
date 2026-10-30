@@ -355,6 +355,31 @@ class VADStream(agents.vad.VADStream):
             else:
                 resampler = None
 
+        def _copy_speech_buffer() -> rtc.AudioFrame:
+            # copy the data from speech_buffer
+            assert self._speech_buffer is not None
+            speech_data = self._speech_buffer[: self._speech_buffer_index].tobytes()
+
+            return rtc.AudioFrame(
+                sample_rate=self._input_sample_rate,
+                num_channels=1,
+                samples_per_channel=self._speech_buffer_index,
+                data=speech_data,
+            )
+
+        def _send_end_of_speech() -> None:
+            self._event_ch.send_nowait(
+                agents.vad.VADEvent(
+                    type=agents.vad.VADEventType.END_OF_SPEECH,
+                    samples_index=pub_current_sample,
+                    timestamp=pub_timestamp,
+                    silence_duration=silence_threshold_duration,
+                    speech_duration=max(0.0, pub_speech_duration - silence_threshold_duration),
+                    frames=[_copy_speech_buffer()],
+                    speaking=False,
+                )
+            )
+
         async for input_frame in self._input_ch:
             if isinstance(input_frame, self._FlushSentinel):
                 _reset_state()
@@ -477,18 +502,6 @@ class VADStream(agents.vad.VADStream):
                     self._speech_buffer[: self._prefix_padding_samples] = padding_data
                     self._speech_buffer_index = self._prefix_padding_samples
 
-                def _copy_speech_buffer() -> rtc.AudioFrame:
-                    # copy the data from speech_buffer
-                    assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[: self._speech_buffer_index].tobytes()
-
-                    return rtc.AudioFrame(
-                        sample_rate=self._input_sample_rate,
-                        num_channels=1,
-                        samples_per_channel=self._speech_buffer_index,
-                        data=speech_data,
-                    )
-
                 if pub_speaking:
                     pub_speech_duration += window_duration
                 else:
@@ -554,21 +567,7 @@ class VADStream(agents.vad.VADStream):
                     ):
                         pub_speaking = False
                         pub_silence_duration = silence_threshold_duration
-
-                        self._event_ch.send_nowait(
-                            agents.vad.VADEvent(
-                                type=agents.vad.VADEventType.END_OF_SPEECH,
-                                samples_index=pub_current_sample,
-                                timestamp=pub_timestamp,
-                                silence_duration=pub_silence_duration,
-                                speech_duration=max(
-                                    0.0, pub_speech_duration - silence_threshold_duration
-                                ),
-                                frames=[_copy_speech_buffer()],
-                                speaking=False,
-                            )
-                        )
-
+                        _send_end_of_speech()
                         pub_speech_duration = 0.0
 
                         _reset_write_cursor()
@@ -599,3 +598,16 @@ class VADStream(agents.vad.VADStream):
                             samples_per_channel=len(data) // 2,
                         )
                     )
+
+        # no more silence can arrive to close this segment
+        if pub_speaking:
+            if input_frames:
+                # the samples short of a full inference window still belong to this speech
+                assert self._speech_buffer is not None
+                tail = utils.combine_frames(input_frames).data
+                tail = tail[: len(self._speech_buffer) - self._speech_buffer_index]
+                tail_end = self._speech_buffer_index + len(tail)
+                self._speech_buffer[self._speech_buffer_index : tail_end] = tail
+                self._speech_buffer_index = tail_end
+
+            _send_end_of_speech()

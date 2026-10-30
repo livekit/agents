@@ -6,16 +6,17 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import aiohttp
+import numpy as np
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError
-from livekit.agents.inference import STT
+from livekit.agents.inference import STT, vad as inference_vad
 from livekit.agents.inference.stt import SpeechStream
 from livekit.agents.stt import RecognizeStream, SpeechEventType
 
@@ -544,6 +545,65 @@ async def test_socket_close_after_input_end_is_accepted(close_code: int) -> None
     assert connection_count == 1
     assert not errors
     assert transcripts == ["final words"]
+
+
+async def test_input_ending_in_open_speech_sends_one_session_finalize() -> None:
+    """The VAD closing the open segment at input end must not repeat the input-end finalize."""
+    message_types: list[str] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "input_audio":
+                continue
+            message_types.append(event["type"])
+            if event["type"] == "session.finalize":
+                # leave the VAD time to close its segment and any second finalize to arrive
+                await asyncio.sleep(0.2)
+                await ws.send_json({"type": "session.closed"})
+        return ws
+
+    class _Model:
+        sample_rate = 16000
+        window_size_samples = 512
+
+        def predict(self, samples: np.ndarray) -> float:
+            return float(np.any(samples))
+
+        __call__ = predict
+
+        def reset(self) -> None:
+            pass
+
+    async with _gateway(handler) as (base_url, session):
+        with patch.object(inference_vad, "_NativeVAD", _Model):
+            stt = STT(
+                model="openai/gpt-live-transcribe",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                vad=inference_vad.VAD(min_speech_duration=0.032),
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                for _ in range(10):
+                    stream.push_frame(
+                        rtc.AudioFrame(
+                            data=np.full(512, 100, dtype=np.int16).tobytes(),
+                            sample_rate=16000,
+                            num_channels=1,
+                            samples_per_channel=512,
+                        )
+                    )
+                stream.end_input()
+                await asyncio.wait_for(_final_transcripts(stream), timeout=2.0)
+            finally:
+                await stream.aclose()
+
+    assert message_types == ["session.create", "session.finalize"]
 
 
 async def test_session_closed_after_input_end_finishes_without_another_close() -> None:
