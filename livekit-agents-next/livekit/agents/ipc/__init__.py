@@ -119,8 +119,6 @@ class JobExecutor:
     ) -> None:
         preload_modules = preload_module_names(preload_modules)
         setup_fnc = validate_setup_fnc(setup_fnc)
-        if thread and os.name == "nt":
-            raise ValueError("the thread executor is not supported on Windows; use a spawn process")
         self._loop = loop
         self._mp_ctx = mp_ctx or mp.get_context(
             "forkserver" if sys.platform == "linux" else "spawn"

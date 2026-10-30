@@ -1661,7 +1661,8 @@ worker's end. A `Runner` has three operations: `finished()` resolves with its
 ends it where it can be forced and `memory_mb()` samples its own footprint.
 The process executor's runner is killed by `stop()` and finishes once reaped;
 a launch that fails after the OS created the child still returns the runner,
-which kills it. The thread executor runs the job on a thread of the worker: `stop()` cannot force it, it has no footprint of its own, and
+which kills it. The thread executor runs the job on a thread of the worker
+(every platform): `stop()` cannot force it, it has no footprint of its own, and
 it finishes when the thread reports its return. Supervision ends a runner the
 same way whichever it is: it asks it to shut down over the channel, then calls
 `stop()`, and waits for `finished()` within its deadlines.
