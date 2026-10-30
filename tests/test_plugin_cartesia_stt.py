@@ -33,28 +33,47 @@ def test_auto_endpoint_does_not_use_billed_duration_as_speech_end():
 
 
 @pytest.mark.parametrize("end_time", [0.4, 0.0, None])
-def test_endpoint_uses_words_instead_of_billed_duration(end_time):
+def test_endpoint_uses_words_and_preserves_transcript_spans(end_time):
     stream = object.__new__(LegacyRecognizeStream)
     stream._speaking = False
     stream._language = None
     stream._request_id = "test"
     stream._speech_duration = 0.0
+    stream._last_speech_end_time = 0.0
     stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append, closed=False)
     for turn in range(2):
-        message = {"type": "transcript", "is_final": True, "text": "hello", "duration": 100.0}
-        if end_time is not None:
-            message["words"] = [
-                {"word": "hello", "start": 0.1 + turn, "end": end_time + turn if end_time else 0.0}
-            ]
-        stream._process_stream_event(message)
+        for is_final, start, end in [(False, 7.0, 7.5), (True, 7.5, 8.0)]:
+            message = {
+                "type": "transcript",
+                "is_final": is_final,
+                "text": "hello",
+                "duration": 0.5,
+            }
+            if end_time is not None:
+                message["words"] = [
+                    {
+                        "word": "hello",
+                        "start": 0.1 + turn,
+                        "end": end_time + turn if end_time else 0.0,
+                    }
+                ]
+            stream._process_stream_event(message)
+            transcript = events[-2] if is_final else events[-1]
+            assert transcript.type == (
+                stt.SpeechEventType.FINAL_TRANSCRIPT
+                if is_final
+                else stt.SpeechEventType.INTERIM_TRANSCRIPT
+            )
+            assert transcript.alternatives[0].start_time == pytest.approx(start + turn)
+            assert transcript.alternatives[0].end_time == pytest.approx(end + turn)
         assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
         if end_time:
+            assert events[-1].alternatives[0].start_time == pytest.approx(7.1 + turn)
             assert events[-1].alternatives[0].end_time == pytest.approx(7.4 + turn)
         else:
             assert events[-1].alternatives == []
-            assert events[-2].alternatives[0].end_time == 0.0
 
 
 @pytest.mark.no_concurrent
