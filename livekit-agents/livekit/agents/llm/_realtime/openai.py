@@ -2128,16 +2128,15 @@ class RealtimeSession(
             extra={"error": event.error},
         )
 
-        # close any open partial stream so consumers waiting for is_final don't hang
+        # end the turn's transcript, empty when nothing was heard, so consumers waiting for
+        # is_final don't hang
         partial = self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
         turn_started_at = self._input_speech_started_at.pop(event.item_id, None)
-        if partial is None:
-            return
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
                 item_id=event.item_id,
-                transcript=partial,
+                transcript=partial or "",
                 is_final=True,
                 turn_started_at=turn_started_at,
             ),

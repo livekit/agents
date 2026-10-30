@@ -255,3 +255,56 @@ async def test_a_result_that_lands_while_a_question_waits_is_told_after_the_pers
         rt.hear("yes")
         await soon(lambda: "We have 10 slots." in spoken(session), "the result told")
 
+
+@pytest.mark.rule("B95")
+async def test_a_claimed_call_with_no_words_since_the_question_is_not_the_answer(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="book sunday")], when=answering("book sunday")),
+        Reply(
+            "",
+            [call("ask", "a2", request="the patient confirms yes")],
+            when=answering("book sunday"),
+        ),
+        Reply("", [call("ask", "a3", request="yes")], when=answering("yes")),
+    )
+    questions = asking("Sunday at 14:00?", "Sunday at 14:00?", answer="Booked.", heard=heard)
+    async with LiveSession(llm=model) as session:
+        await session.start(
+            Agent(instructions="front desk", tools=[expert(questions, announce=False)])
+        )
+        rt = model.active_session
+        rt.hear("book sunday")
+        await soon(lambda: "Sunday at 14:00?" in spoken(session), "the question")
+        rt.noise()
+        await soon(lambda: len(heard) > 1, "the model's call")
+        rt.hear("yes")
+        await soon(lambda: heard[-1][1] == "yes", "the answer")
+
+    first = heard[0][0]
+    assert [text for task, text in heard if task == first] == ["book sunday", "yes"]
+
+
+@pytest.mark.rule("B95")
+async def test_an_empty_transcript_after_a_question_is_nothing_said_at_once(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="book sunday")], when=answering("book sunday")),
+        Reply("", [call("ask", "a2", request="the patient confirms yes")]),
+    )
+    questions = asking("Sunday at 14:00?", "Sunday at 14:00?", answer="Booked.", heard=heard)
+    async with LiveSession(llm=model) as session:
+        await session.start(
+            Agent(instructions="front desk", tools=[expert(questions, announce=False)])
+        )
+        rt = model.active_session
+        rt.hear("book sunday")
+        await soon(lambda: "Sunday at 14:00?" in spoken(session), "the question")
+        rt.hear("")  # noise the provider transcribed as nothing
+        await asyncio.wait_for(soon(lambda: len(heard) > 1, "the model's call"), 1.0)
+
+    assert heard[1][1] == "the patient confirms yes"

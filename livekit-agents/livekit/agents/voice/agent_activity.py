@@ -347,6 +347,8 @@ class _Question:
     transition: InputRequired
     output: llm.FunctionCallOutput | None
     asked: bool = False
+    asked_at: float = 0.0
+    """When it was put to the person on this call; only what they say after it answers it."""
     row: TaskRow | None = None
     """The lane's task of a question asked by another door, which completes once answered."""
 
@@ -538,8 +540,9 @@ class AgentActivity(RecognitionHooks):
         # person's words and reference
         self._forced_tool: str | None = None
         self._answering: tuple[str, _Question] | None = None
-        # a spoken turn whose transcript has not arrived: a realtime model may answer it first
-        self._turn_transcript: asyncio.Future[str] | None = None
+        # a spoken turn whose transcript has not arrived: a realtime model may answer it first.
+        # it settles with the person's message, or None when the turn said nothing
+        self._turn_transcript: asyncio.Future[llm.ChatMessage | None] | None = None
         # clear while a question asked on the call waits for the person's next turn: background
         # replies wait for it, so nothing is said between the question and that turn
         self._turn_after_question = asyncio.Event()
@@ -1808,6 +1811,8 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._turn_after_question.set()
+            if self._turn_transcript is not None and not self._turn_transcript.done():
+                self._turn_transcript.set_result(None)
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
@@ -2496,24 +2501,28 @@ class AgentActivity(RecognitionHooks):
                 # generating, which would otherwise stamp the turn after the reply it prompted
                 msg.created_at = ev.turn_started_at
                 msg.metrics = {"started_speaking_at": ev.turn_started_at}
-            if not ev.transcript.strip():
+            said = msg if ev.transcript.strip() else None
+            if self._turn_transcript is not None and not self._turn_transcript.done():
+                self._turn_transcript.set_result(said)
+            if said is None:
                 return  # an empty transcript is no turn: nothing to commit, nothing it answers
             self._answer_pending_input(msg)
             self._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
-            if self._turn_transcript is not None and not self._turn_transcript.done():
-                self._turn_transcript.set_result(ev.transcript)
 
-    async def _user_said(self, timeout: float = 5.0) -> str | None:
-        """What the person said in the turn being answered: the transcript of a spoken turn
-        once it has arrived, else the last user message in the history."""
+    async def _user_said(self, since: float) -> str | None:
+        """What the person said after ``since``: the spoken turn whose transcript is pending,
+        once it arrives, else their last message; None when they have said nothing since."""
         pending = self._turn_transcript
         if pending is not None and not pending.done():
-            with contextlib.suppress(asyncio.TimeoutError):
-                return await asyncio.wait_for(asyncio.shield(pending), timeout)
+            msg = await asyncio.shield(pending)
+            if msg is not None:
+                # a transcript is stamped when its turn started
+                return msg.text_content if msg.created_at >= since else None
         for item in reversed(self._chat_ctx.items):
             if item.type == "message" and item.role == "user":
-                return item.text_content
+                # a transcript is stamped when its turn started
+                return item.text_content if item.created_at >= since else None
         return None
 
     def _claim_next_turn(self, tool_name: str, question: _Question) -> None:
@@ -2551,14 +2560,18 @@ class AgentActivity(RecognitionHooks):
         if self._answering is None or tool.info.name != self._answering[0]:
             return raw_arguments
         question = self._answering[1]
+        said = await self._user_said(question.asked_at)
+        if not said or self._answering is None or self._answering[1] is not question:
+            # the person has said nothing since the question, or another call took the
+            # answer: this call is the model's own, and the claim waits for their turn
+            return raw_arguments
         run_ctx._answer_ref = question.transition._answer_ref
         self._answering = None
         # TODO(agents-2.0): the realtime model makes this call itself (Gemini Live cannot
         # leave the reply to the framework), so the next waiting question is asked at once,
         # without waiting for the expert's follow-up
         self._ask_next()
-        said = await self._user_said()
-        return (answer_arguments(tool, said) if said else None) or raw_arguments
+        return answer_arguments(tool, said) or raw_arguments
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
@@ -3359,6 +3372,7 @@ class AgentActivity(RecognitionHooks):
         """Puts a question to the person: as written when verbatim, else in the model's words.
         On a realtime model a delegate's question claims the next turn for its tool."""
         transition, out = question.transition, question.output
+        question.asked_at = time.time()
         claimed = (
             out.name
             if out is not None and question.relays and isinstance(self.llm, llm.RealtimeModel)
@@ -3420,7 +3434,9 @@ class AgentActivity(RecognitionHooks):
             pending.output = text
             pending.created_at = message.created_at
             self._session._tool_items_added([pending])
-        if not front.relays or isinstance(self.llm, llm.RealtimeModel):
+        # a claimed answer is taken by the tool's call, which asks the next one
+        claimed = self._answering is not None and self._answering[1] is front
+        if not claimed and (not front.relays or isinstance(self.llm, llm.RealtimeModel)):
             self._ask_next()
 
     def _relay_answer(self, question: _Question, message: llm.ChatMessage) -> SpeechHandle:
