@@ -651,6 +651,26 @@ impl TaskMachine {
         Operation::Pickup(task_id)
     }
 
+    /// A run whose save could not be written: the inbox rows its drain picked up fail, then the
+    /// message's own task, `storage-unavailable`; nobody else would fail them but `worker-lost`.
+    fn fail_run(&mut self) -> Operation {
+        self.answer = None;
+        let own = self.task_id.clone();
+        let picked: Vec<String> =
+            std::mem::take(&mut self.task_ids).into_iter().filter(|t| *t != own).collect();
+        if picked.is_empty() {
+            let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
+            return self.fail_task(own, REASON_STORAGE_UNAVAILABLE, then);
+        }
+        self.phase = Phase::Failing;
+        self.failing = Some(Failing {
+            reason: REASON_STORAGE_UNAVAILABLE,
+            then: Phase::Abandon { fail_task: true },
+            target: FailTarget::Orphans { skip: Vec::new() },
+        });
+        self.failed(REASON_STORAGE_UNAVAILABLE, picked)
+    }
+
     /// Fails a dead holder's `working` rows `worker-lost`, but `skip`; `then` follows.
     fn fail_orphans(&mut self, skip: Vec<String>, then: Phase) -> Operation {
         self.phase = Phase::Failing;
@@ -841,11 +861,7 @@ impl TaskMachine {
                     ..Answer::row(task_id, task, Some("not-written"))
                 }));
             }
-            (Phase::Abandon { fail_task: true }, Completion::Done) => {
-                self.answer = None;
-                let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
-                self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
-            }
+            (Phase::Abandon { fail_task: true }, Completion::Done) => self.fail_run(),
             (Phase::Abandon { fail_task: false }, Completion::Done) => {
                 return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
                     StorageError::Invalid("a run was abandoned without its cause".into())
@@ -1063,8 +1079,7 @@ impl TaskMachine {
                     // its staged changes are absent, so a question it answered still waits
                     _ => {
                         self.error = Some(error);
-                        let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
-                        self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
+                        self.fail_run()
                     }
                 }
             }

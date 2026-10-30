@@ -459,6 +459,25 @@ fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() 
     }
 }
 
+/// A2A_SEED=0 (worker_lost_only_when_it_died, Task): a drain whose commit was refused failed only
+/// its own message's task; the inbox rows it had picked up stayed `working`, and the next holder
+/// failed them `worker-lost` though no worker died. They fail `storage-unavailable` with it.
+#[test]
+fn a_refused_drain_commit_fails_the_rows_it_picked_up() {
+    let mut m = machine(Policy::Batch);
+    m.phase = Phase::Run { path: Path::Drain, step: RunStep::Commit };
+    m.pending = Some(1);
+    m.task_ids = vec!["drained".into(), "receipt".into()];
+    let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
+    let fail = operation(at(&mut m, Duration::ZERO, Err(refused)));
+    assert!(
+        matches!(&fail, Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+            if failed.len() == 1 && failed[0].0 == "drained"),
+        "{fail:?}"
+    );
+    assert!(matches!(step(&mut m, Completion::Done), Operation::Pickup(t) if t == "receipt"));
+}
+
 /// A2A_SEED=1 8 9 (answer_is_an_outcome, Queue): a run closed with nothing of its own whose
 /// commit the database refused reached the client as the raw storage error. A refused close
 /// settles like a refused turn commit: the message's task fails `storage-unavailable`.
