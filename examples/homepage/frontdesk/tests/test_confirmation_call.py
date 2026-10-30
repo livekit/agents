@@ -1,8 +1,10 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
+from livekit.agents import llm
 from livekit.agents.llm import ToolError
 
 from clinic import Clinic
@@ -19,6 +21,23 @@ MONDAY = date(2026, 9, 28)
 @dataclass
 class FakeContext:
     userdata: CallState
+    function_call: llm.FunctionCall = field(
+        default_factory=lambda: llm.FunctionCall(
+            call_id="call_tool", name="tool", arguments="{}"
+        )
+    )
+
+
+class HangUp:
+    def __init__(self, call_id: str, items: list[llm.ChatItem]) -> None:
+        self.function_call = llm.FunctionCall(
+            call_id=call_id, name="end_call", arguments="{}"
+        )
+        self.session = SimpleNamespace(history=SimpleNamespace(items=items))
+        self.speech_handle = SimpleNamespace(add_done_callback=lambda cb: None)
+
+    async def wait_for_playout(self) -> None:
+        pass
 
 
 @pytest.fixture
@@ -40,9 +59,7 @@ def appointment(clinic: Clinic):
 
 
 @pytest.fixture
-def agent(monkeypatch: pytest.MonkeyPatch, clinic, appointment) -> ConfirmationCall:
-    monkeypatch.setenv("LIVEKIT_API_KEY", "unused")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "unused")
+def agent(clinic, appointment) -> ConfirmationCall:
     return ConfirmationCall(clinic, appointment)
 
 
@@ -101,6 +118,27 @@ async def test_only_the_patients_own_appointment_can_be_confirmed(
     other = next(a for a in clinic.appointments if a.patient != appointment.patient)
     with pytest.raises(ToolError):
         await agent.confirm_appointment(context, other.id)
+
+
+async def test_hanging_up_waits_until_the_confirmation_is_heard(
+    agent, context, clinic, appointment
+):
+    await verify(agent, context, clinic, appointment)
+    await agent.confirm_appointment(context, appointment.id)
+    items: list[llm.ChatItem] = [
+        llm.FunctionCallOutput(
+            call_id="call_tool", name="confirm_appointment", output="", is_error=False
+        )
+    ]
+    with pytest.raises(ToolError, match="first tell them that it's confirmed"):
+        await agent.end_call(HangUp("call_end", items))
+    items += [
+        llm.FunctionCallOutput(
+            call_id="call_end", name="end_call", output="", is_error=True
+        ),
+        llm.ChatMessage(role="assistant", content=["You're confirmed. Bye!"]),
+    ]
+    await agent.end_call(HangUp("call_end_again", items))
 
 
 def test_inbound_only_tools_are_not_on_the_outbound_call(agent):

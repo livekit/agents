@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
-from livekit.agents import Agent, RunContext, function_tool, inference
+from livekit.agents import Agent, RunContext, function_tool
 from livekit.agents.llm import ToolError
 
 from clinic import (
@@ -18,14 +18,21 @@ from clinic import (
     ClinicError,
     PartOfDay,
 )
+from conversation import caller_spoke_last, heard
 
 GREETING = (
     f"Thanks for calling {CLINIC_NAME}, this is Riley. What can I help you with today?"
 )
 
 
-VOICE_MODEL = "gpt-live-1"
-BACKEND_MODEL = "gpt-5.6-luna"
+VOICE_RULES = """\
+You're on a phone call, so talk like a person, not a document:
+- One or two short sentences at a time, and one question at a time. No lists, markdown, or symbols.
+- Say dates and times the way people do, like "nine thirty Tuesday morning" or "March fourteenth, nineteen eighty-eight". Never read out ids.
+- Never say you've done something, or that you're about to, without calling its tool in that same reply.
+- Only state an appointment or a time that a tool gave you, with the day and time just as it gave them.
+- When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them.
+- When they're done, say a short goodbye and call end_call in that same reply. Never say goodbye before they've had a chance to say they're done."""
 
 NEW_PATIENT = ("Alex Morgan", date(1992, 3, 14))
 
@@ -56,23 +63,31 @@ def verified_caller(context: RunContext[CallState]) -> Caller:
 class FrontDesk(Agent):
     """What every call at the front desk can do with the chart: find open times and move a visit."""
 
-    def __init__(
-        self, clinic: Clinic, *, instructions: str, backend_instructions: str
-    ) -> None:
+    def __init__(self, clinic: Clinic, *, instructions: str) -> None:
         self._clinic = clinic
-        super().__init__(
-            instructions=instructions,
-            llm=inference.DuplexModel(
-                model=f"openai/{VOICE_MODEL}",
-                voice="ripple",
-                extra_kwargs={
-                    "responses_options": {
-                        "model": BACKEND_MODEL,
-                        "instructions": backend_instructions,
-                    },
-                },
-            ),
-        )
+        self._must_hear: dict[str, str] = {}
+        super().__init__(instructions=instructions)
+
+    def _must_tell(self, context: RunContext[CallState], what: str) -> None:
+        self._must_hear[what] = context.function_call.call_id
+
+    @function_tool
+    async def end_call(self, context: RunContext[CallState]) -> None:
+        """Hang up. Only once the caller has nothing else, and after a short goodbye in this
+        same reply."""
+        await context.wait_for_playout()
+        items = context.session.history.items
+        if unheard := [
+            w for w, token in self._must_hear.items() if not heard(items, token)
+        ]:
+            self._must_hear[unheard[0]] = context.function_call.call_id
+            raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
+        if caller_spoke_last(items):
+            raise ToolError(
+                "Not hung up yet. Answer what they just said with a short goodbye, and call "
+                "end_call again in that same reply."
+            )
+        context.speech_handle.add_done_callback(lambda _: context.session.shutdown())
 
     @function_tool
     async def check_availability(
@@ -119,6 +134,7 @@ class FrontDesk(Agent):
             )
         except ClinicError as e:
             raise ToolError(str(e)) from e
+        self._must_tell(context, "the day and time it's moved to")
         return f"Moved {appointment.reason} to {_spoken(appointment.starts_at)}."
 
 
@@ -129,38 +145,18 @@ class Receptionist(FrontDesk):
         super().__init__(
             clinic,
             instructions=f"""
-You are Riley, the front desk at {CLINIC_NAME}, {DOCTOR}'s practice, answering the phone. {clock()}
-Keep the call brisk and warm. One or two short spoken sentences at a time, one question at a time.
-Say times the way people do, like "nine thirty Tuesday morning", and dates too, like "March fourteenth, nineteen eighty-eight".
-
-Delegate anything that needs the clinic's records: looking up a caller, registering a new patient, checking open times, booking, or moving an appointment. While that runs, say a few words like "one sec" and wait for the result.
-Never state an appointment, a time, or a booking that the delegated work didn't return.
-Before anything can be looked up or booked, find the caller's chart the way a front desk does: date of birth first, then name. Ask for whichever of the two they haven't given, each only once. As soon as you have both, delegate looking them up by that date of birth and the name as you heard it. While that runs you don't know yet whether they have a chart, so never say you're pulling them up or setting them up; "Okay ... one sec" is enough.
-- If it matched their name to a chart, spell that name back the way the delegated work gave it, as a question, like "Okay, Taylor Smith, that's T A Y L O R, S M I T H, right?", and once they say yes, delegate opening their chart. Then tell them the upcoming appointment it returned, what it's for and the day and time, before anything else.
-- If no chart matched but they've said they've been in before, read their whole date of birth back once to check it, and if they correct it, delegate looking them up again with the new date. If that finds nothing either, get them set up.
-- Otherwise, say you'll get them set up, without saying you couldn't find them, then spell their name back the way you'd write it and ask if that's right. If they correct a letter, delegate looking them up again with their spelling; if that finds their chart, go on as if it had matched. Only after they say yes and nothing has matched, delegate registering them with that spelling.
-If you didn't catch all of the date of birth, ask for the whole date again, never just part of it like the last two digits of the year.
-If they ask you to say or spell their name, just do it.
-When you confirm a booking, say the day, date, and time exactly as the delegated work returned them.
-While you're waiting for the delegation to return, keep talking the way a person at a front desk does while they look something up. They say things like 'Okay ... checking Tuesday ... okay, there's one', not 'Let me check that for you'. Never talk about typing or a keyboard.
-
-When they say they're done, say a short goodbye and delegate ending the call.
-Saying goodbye and delegating ending the call always go together, in the same turn: never say goodbye without delegating the end of the call, and don't say goodbye until they've had a chance to say they're done.
-""".strip(),
-            backend_instructions=f"""
-You do the record-keeping for {CLINIC_NAME}, {DOCTOR}'s practice, on behalf of the receptionist on the phone.
+You are Riley, the front desk at {CLINIC_NAME}, {DOCTOR}'s practice, answering the phone. Brisk and warm.
 {calendar_context(clinic)}
 
-Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth and the name they gave. It lists only the chart with that date of birth and that name, spelled as given, so call it again with any corrected spelling the receptionist passes on.
-- If it lists a chart, report that chart's letters for the receptionist to spell back, and nothing about any other chart. Once the caller says the spelling is right, call open_chart with that chart's name and report their upcoming appointment.
-- If it lists none, report only that no chart matched that spelling.
-No other record can be read or changed until their chart is open or they're registered.
-Call register_new_patient only once the caller has confirmed the spelling and look_up_birthday has found no chart for it, with the letters they confirmed.
-Never reveal a chart that doesn't match the caller's name, or any date of birth on file.
-To find a time, call check_availability for what the caller asked, then report the one or two openings closest to it.
-When the caller has picked a time, book it with book_appointment, or reschedule_appointment for an existing appointment, without asking again.
-When asked to end the call, call end_call.
-Hand back short, plain results the receptionist can say out loud. Only report times and appointments that a tool returned.
+{VOICE_RULES}
+
+Find the caller's chart before anything else, the way a front desk does: date of birth first, then name. Ask for whichever they haven't given, each only once. If you didn't catch all of the date of birth, ask for the whole date again, never just part of it like the last two digits of the year. As soon as you have both, call look_up_birthday with the date and the name as you heard it. Until it returns you don't know whether they have a chart, so never say you're pulling them up or setting them up.
+- It lists their chart: spell that chart's name back from its letters, as a question, like "Taylor Smith, that's T A Y L O R, S M I T H, right?". Once they say yes, call open_chart, then tell them their upcoming appointment, what it's for and the day and time, before anything else.
+- It lists none, and they've said they've been in before: read their whole date of birth back once to check it. If they correct it, call look_up_birthday again with the new date. If that finds nothing either, get them set up.
+- It lists none otherwise: say you'll get them set up, without saying you couldn't find them, and spell their name back the way you'd write it, as a question. If they correct a letter, call look_up_birthday again with their spelling, and if that lists their chart, go on as if it had matched. Once they say the spelling is right and nothing matched, call register_new_patient with those letters.
+Never mention a chart other than theirs. If they ask you to say or spell their name, just do it.
+
+To find a time, call check_availability for what they asked, and offer the one or two openings closest to it. If it has nothing then, check the next clinic days for the same part of the day and offer those, before asking them to pick another time. Once they pick one, call book_appointment, or reschedule_appointment for an appointment they already have, without asking again.
 """.strip(),
         )
 
@@ -255,6 +251,7 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
             )
         except ClinicError as e:
             raise ToolError(str(e)) from e
+        self._must_tell(context, "the day and time it's booked for")
         return f"Booked {appointment.reason} for {_spoken(appointment.starts_at)}."
 
 
@@ -268,31 +265,18 @@ class ConfirmationCall(FrontDesk):
         super().__init__(
             clinic,
             instructions=f"""
-You are Riley, from the front desk at {CLINIC_NAME}, {DOCTOR}'s practice. You placed this call to {name}, a patient, to confirm their upcoming appointment. {clock()}
-Keep the call brisk and warm. One or two short spoken sentences at a time, one question at a time.
-Say times the way people do, like "two thirty Tuesday afternoon".
-
-You've already asked whether you're speaking with {first}. If it's someone else, or not a good time, say you'll call back another time, say goodbye, and delegate ending the call. Never mention the appointment or anything medical to anyone but the patient.
-Before anything else, verify them. This is a LiveKit demo, so ask for their date of birth with a quick demo note, something like: "Okay great! Usually this is where I'd ask for your date of birth to verify it's you, but since this is a demo, any date will do." Delegate checking the date they give. If you didn't catch all of it, ask for the whole date again, never just part of it.
-Once verified, tell them the appointment as the check returned it, what it's for and the day and time, and ask if they can still make it.
-- If they can, delegate confirming it.
-- If they can't, ask what day and time would work better, delegate finding openings, and offer one or two. Once they pick, delegate moving it and confirming it.
-Then ask if there's anything they'd like {DOCTOR} to know before they come in. If they mention something, delegate adding it to the appointment as a note for the doctor, in their words, and say briefly that you've passed it along. If there's nothing, that's fine.
-While you're waiting for the delegation to return, keep talking the way a person at a front desk does while they look something up: 'Okay ... just pulling up your chart ... there it is'. Never talk about typing or a keyboard. Never say something is done unless the delegated work returned it.
-Never state an appointment or a time that the delegated work didn't return.
-When they're all set, remind them of the day and time and ask if there's anything else. Once they say that's all, say a short goodbye and delegate ending the call.
-Saying goodbye and delegating ending the call always go together, in the same turn: never say goodbye without delegating the end of the call, and don't say goodbye until they've had a chance to say they're done.
-""".strip(),
-            backend_instructions=f"""
-You do the record-keeping for {CLINIC_NAME}, {DOCTOR}'s practice, on behalf of the receptionist, who called the patient {name} to confirm their appointment {appointment.id}.
+You are Riley, from the front desk at {CLINIC_NAME}, {DOCTOR}'s practice. You placed this call to {name}, a patient, to confirm their upcoming appointment. Brisk and warm.
 {calendar_context(clinic)}
 
-Verify the patient with verify_patient and the date of birth they gave, before anything else. Report only whether it matched, and their appointment once it does. Never reveal a date of birth on file.
-Call confirm_appointment once the patient says they can make it, or right after moving it.
-To move it, call check_availability for what they asked and report the one or two openings closest to it; once they pick, call reschedule_appointment, then confirm_appointment.
-Call add_note_for_doctor with anything the patient wants the doctor to know before the visit, in their words.
-When asked to end the call, call end_call.
-Hand back short, plain results the receptionist can say out loud. Only report times and appointments that a tool returned.
+{VOICE_RULES}
+
+You've already asked whether you're speaking with {first}. If it's someone else, or not a good time, say you'll call back another time, then say goodbye and call end_call. Never mention the appointment or anything medical to anyone but the patient.
+Once they say it's them, verify them before anything else. This is a LiveKit demo, so ask for their date of birth with a quick demo note, something like: "Okay great! Usually this is where I'd ask for your date of birth to verify it's you, but since this is a demo, any date will do." Then call verify_patient with the date they give. If you didn't catch all of it, ask for the whole date again, never just part of it.
+Then tell them the appointment it returned, what it's for and the day and time, and ask if they can still make it.
+- If they can, call confirm_appointment.
+- If they can't, ask what day and time would work better, call check_availability, and offer one or two openings. Once they pick one, call reschedule_appointment, then confirm_appointment.
+Then ask if there's anything they'd like {DOCTOR} to know before they come in. If they mention something, call add_note_for_doctor with it in their words, and say briefly that you've passed it along. If there's nothing, that's fine.
+When they're all set, remind them of the day and time and ask if there's anything else.
 """.strip(),
         )
 
@@ -330,6 +314,7 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
             )
         except ClinicError as e:
             raise ToolError(str(e)) from e
+        self._must_tell(context, "that it's confirmed")
         return f"Confirmed {appointment.reason} for {_spoken(appointment.starts_at)}."
 
     @function_tool

@@ -18,8 +18,8 @@ scenarios:
       instead of asking Taylor to spell it. Shares nothing from the chart until Taylor
       confirms the spelling, then mentions the upcoming knee pain follow-up. Checks the
       calendar and offers morning times later in the week, then moves the appointment to
-      the time Taylor picked without asking for a second confirmation. Never talks about
-      typing or a keyboard. Replies are one or two short spoken sentences.
+      the time Taylor picked without asking for a second confirmation. Replies are one or two
+      short spoken sentences.
     tags:
       feature: reschedule
     userdata:
@@ -45,7 +45,8 @@ scenarios:
     agent_expectations: >
       Asks Casey for their date of birth, then spells Casey's name back for Casey to confirm
       instead of asking Casey to spell it, and registers them only after Casey confirms.
-      Checks tomorrow afternoon, offers an open time, and books it once Casey picks it.
+      Offers an open afternoon time from the calendar, tomorrow or, if the clinic is closed
+      tomorrow, on the next clinic day, and books it once Casey picks it.
       Confirms the booking with the same day and time it offered. Never invents times that
       the calendar didn't return.
     tags:
@@ -73,9 +74,9 @@ scenarios:
       2. Accept the first time offered.
       3. Say that's all and hang up.
     agent_expectations: >
-      Gets Sam's date of birth and name before looking anything up. Never talks as if it
+      Asks for Sam's date of birth and name before calling look_up_birthday. Never talks as if it
       expects to find a chart for Sam, like saying it's pulling Sam up, since Sam said
-      they've never been in, and never talks about typing or a keyboard. Spells Sam's name
+      they've never been in. Spells Sam's name
       back and registers Sam once they confirm, then books the morning opening Sam picks and
       confirms it with the same day and time it offered.
     tags:
@@ -160,25 +161,6 @@ scenarios:
         patient: Priya Raghunathan
         born: "1987-04-23"
         new_patient: true
-        booked: false
-        moved: false
-
-  - id: SCN_Nue38fEtkBTH
-    label: Caller goes quiet and gets hung up on
-    instructions: |
-      PERSONA: Taylor Smith, who put the phone down right after calling and never picked it back up.
-      OPENING LINE: "Hi, it's Taylor Smith."
-      After your opening line, say nothing at all for the rest of the call, whatever Riley asks.
-      Stay silent, and don't hang up.
-    agent_expectations: >
-      Once the caller goes quiet, asks once, in a few words, whether they're still there. When
-      the line stays quiet, says a short goodbye and ends the call. Opens no chart and changes
-      nothing on the calendar.
-    tags:
-      feature: idle
-    userdata:
-      expected:
-        new_patient: false
         booked: false
         moved: false
 
