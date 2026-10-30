@@ -66,6 +66,7 @@ pub trait Implementations: 'static {
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
+    type ChatRequestView: ::lk_agents_abi::llm::llm::ChatRequestView;
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
@@ -144,6 +145,7 @@ pub trait Implementations: 'static {
     type SttNodeEvents: ::lk_agents_abi::voice::nodes::SttNodeEvents;
     type DefaultNodes: ::lk_agents_abi::voice::nodes::DefaultNodes<Frames = Self::TtsNodeFrames, Events = Self::SttNodeEvents>;
     type SpeechHandle: ::lk_agents_abi::voice::speech_handle::SpeechHandle;
+    type RoomEventBus: ::lk_agents_abi::voice::rtc::RoomEventBus;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
     type ByteStreamSender: ::lk_agents_abi::voice::rtc::ports::ByteStreamSender;
@@ -241,6 +243,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;
     m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;
+    m.add_class::<llm::ChatRequest>()?;
     m.add_class::<llm::McpSession>()?;
     m.add_function(wrap_pyfunction!(llm::resolve_mcp_tool_options, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_raw_schema, m)?)?;
@@ -375,7 +378,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::tts_node, m)?)?;
     m.add_function(wrap_pyfunction!(voice::stt_node, m)?)?;
     m.add_class::<voice::SpeechHandle>()?;
-    m.add_function(wrap_pyfunction!(voice::_core_create_room_event_bus, m)?)?;
+    m.add_class::<voice::RoomEventBus>()?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_subscribed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_unsubscribed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_track_published, m)?)?;

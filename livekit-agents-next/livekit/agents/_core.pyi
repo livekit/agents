@@ -48,8 +48,6 @@ from ._generated._core_classes import (
     TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
     UPLOAD_TIMEOUT_SECONDS as UPLOAD_TIMEOUT_SECONDS,
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
-    ChatRequest as ChatRequest,
-    RoomEventBus as RoomEventBus,
     SessionClosing as SessionClosing,
     StaleHandle as StaleHandle,
     rtc_wire_names as rtc_wire_names,
@@ -93,6 +91,7 @@ from ._generated._core_invoke import (
 )
 from ._generated._core_llm import (
     AdaptiveNoiseGate as AdaptiveNoiseGate,
+    ChatRequest as ChatRequest,
     DuplexRealtimeModel as DuplexRealtimeModel,
     FallbackLlm as FallbackLlm,
     FallbackLlmChunks as FallbackLlmChunks,
@@ -264,6 +263,7 @@ from ._generated._core_voice import (
     PlayoutLedger as PlayoutLedger,
     PlayState as PlayState,
     RoomAudioInput as RoomAudioInput,
+    RoomEventBus as RoomEventBus,
     RoomVideoInput as RoomVideoInput,
     RpcHandler as RpcHandler,
     SessionOptions as SessionOptions,
@@ -273,7 +273,6 @@ from ._generated._core_voice import (
     TtsNodeFrames as TtsNodeFrames,
     VoiceSession as VoiceSession,
     WarmTransfer as WarmTransfer,
-    _core_create_room_event_bus as _core_create_room_event_bus,
     _core_create_room_session as _core_create_room_session,
     _core_NodeCalls as _core_NodeCalls,
     _core_playback_begin as _core_playback_begin,

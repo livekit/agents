@@ -136,7 +136,6 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolChoice {
 /// `chat_ctx`/`tools` are Rust's plain data; `chat_ctx_host`/`tools_host` are side-table refs to
 /// the canonical host objects a `Py*` provider hands straight to the plugin. Rust cannot rebuild
 /// a live `Tool` callable.
-#[crate::class]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChatRequest {
     pub chat_ctx: ChatContext,
@@ -196,18 +195,44 @@ impl ToolChoice {
 /// The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
 /// host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
 /// `ChatContext.to_dict()` form, read only when the request carries no host context of its own.
-#[crate::host(object)]
-impl ChatRequest {
+#[crate::host(class(name = "ChatRequest"))]
+pub trait ChatRequestView: Send + Sync + Sized + 'static {
     /// The key of the host's canonical `llm.ChatContext`, when the request came from one.
     #[host(getter)]
-    pub fn chat_ctx_host(&self) -> Option<u64> {
+    fn chat_ctx_host(&self) -> Option<u64>;
+    /// `ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
+    /// rendered): the context of a request the core minted itself.
+    #[host(getter)]
+    fn chat_ctx(&self) -> serde_json::Value;
+    /// The names of the tools this turn offers, in order: the host pool is narrowed to these.
+    #[host(getter)]
+    fn tool_names(&self) -> Vec<String>;
+    /// Canonical declarations of every function offered by this request, including tools
+    /// executed by the core that have no callable object in the host pool.
+    #[host(getter)]
+    fn function_schemas(&self) -> Vec<crate::llm::provider_format::tools::RawFunctionDescription>;
+    /// The key of the host's live `list[Tool]` pool.
+    #[host(getter)]
+    fn tools_host(&self) -> Option<u64>;
+    /// The keys of the pools the session added on top of the agent's.
+    #[host(getter)]
+    fn tools_host_extra(&self) -> Vec<u64>;
+    #[host(getter)]
+    fn parallel_tool_calls(&self) -> Option<bool>;
+    #[host(getter)]
+    fn tool_choice(&self) -> Option<serde_json::Value>;
+    #[host(getter)]
+    fn extra(&self) -> Option<Extra>;
+    #[host(getter)]
+    fn inference_class(&self) -> Option<String>;
+}
+
+impl ChatRequestView for ChatRequest {
+    fn chat_ctx_host(&self) -> Option<u64> {
         self.chat_ctx_host.as_ref().map(HostRef::id)
     }
 
-    /// `ChatContext.to_dict()` of [`chat_ctx`](Self::chat_ctx), timestamps kept (images and audio
-    /// are not rendered): the context of a request the core minted itself.
-    #[host(getter)]
-    pub fn chat_ctx(&self) -> serde_json::Value {
+    fn chat_ctx(&self) -> serde_json::Value {
         use crate::llm::to_dict::{DumpCx, ModelDump, ToDictOptions};
         let opts = ToDictOptions { exclude_timestamp: false, ..Default::default() };
         let cx = DumpCx { opts: &opts, host: &Default::default() };
@@ -217,18 +242,11 @@ impl ChatRequest {
         }
     }
 
-    /// The names of the tools this turn offers, in order: the host pool is narrowed to these.
-    #[host(getter)]
-    pub fn tool_names(&self) -> Vec<String> {
+    fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|t| t.name.clone()).collect()
     }
 
-    /// Canonical declarations of every function offered by this request, including tools
-    /// executed by the core that have no callable object in the host pool.
-    #[host(getter)]
-    pub fn function_schemas(
-        &self,
-    ) -> Vec<crate::llm::provider_format::tools::RawFunctionDescription> {
+    fn function_schemas(&self) -> Vec<crate::llm::provider_format::tools::RawFunctionDescription> {
         self.tools
             .iter()
             .filter(|tool| tool.provider_tool.is_none())
@@ -240,35 +258,27 @@ impl ChatRequest {
             .collect()
     }
 
-    /// The key of the host's live `list[Tool]` pool.
-    #[host(getter)]
-    pub fn tools_host(&self) -> Option<u64> {
+    fn tools_host(&self) -> Option<u64> {
         self.tools_host.as_ref().map(HostRef::id)
     }
 
-    /// The keys of the pools the session added on top of the agent's.
-    #[host(getter)]
-    pub fn tools_host_extra(&self) -> Vec<u64> {
+    fn tools_host_extra(&self) -> Vec<u64> {
         self.tools_host_extra.iter().map(HostRef::id).collect()
     }
 
-    #[host(getter)]
-    pub fn parallel_tool_calls(&self) -> Option<bool> {
+    fn parallel_tool_calls(&self) -> Option<bool> {
         self.parallel_tool_calls
     }
 
-    #[host(getter)]
-    pub fn tool_choice(&self) -> Option<serde_json::Value> {
+    fn tool_choice(&self) -> Option<serde_json::Value> {
         self.tool_choice.as_ref().map(ToolChoice::to_host_json)
     }
 
-    #[host(getter)]
-    pub fn extra(&self) -> Option<Extra> {
+    fn extra(&self) -> Option<Extra> {
         self.extra.clone()
     }
 
-    #[host(getter)]
-    pub fn inference_class(&self) -> Option<String> {
+    fn inference_class(&self) -> Option<String> {
         self.inference_class.clone()
     }
 }

@@ -694,6 +694,96 @@ pub fn llm_usage_chunk<'py>(py: Python<'py>, chunk: Bound<'_, PyAny>) -> PyResul
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::llm::chat_chunk_to_py(py, value)?)).transpose()?)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
+type ChatRequestImpl = <crate::Selected as super::Implementations>::ChatRequestView;
+
+/// The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
+/// host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
+/// `ChatContext.to_dict()` form, read only when the request carries no host context of its own.
+#[pyclass(frozen, name = "ChatRequest", module = "livekit.agents._core")]
+pub struct ChatRequest(pub(crate) ::std::sync::Arc<ChatRequestImpl>);
+
+#[pymethods]
+impl ChatRequest {
+    /// The key of the host's canonical `llm.ChatContext`, when the request came from one.
+    #[getter]
+    fn chat_ctx_host(&self, py: Python<'_>) -> PyResult<::std::option::Option<u64>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::chat_ctx_host(&self.0));
+        Ok(out)
+    }
+
+    /// `ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
+    /// rendered): the context of a request the core minted itself.
+    #[getter]
+    fn chat_ctx<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::chat_ctx(&self.0));
+        Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+    }
+
+    /// The names of the tools this turn offers, in order: the host pool is narrowed to these.
+    #[getter]
+    fn tool_names(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tool_names(&self.0));
+        Ok(out)
+    }
+
+    /// Canonical declarations of every function offered by this request, including tools
+    /// executed by the core that have no callable object in the host pool.
+    #[getter]
+    fn function_schemas(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<::lk_agents_abi::llm::provider_format::tools::RawFunctionDescription>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::function_schemas(&self.0));
+        Ok(out)
+    }
+
+    /// The key of the host's live `list[Tool]` pool.
+    #[getter]
+    fn tools_host(&self, py: Python<'_>) -> PyResult<::std::option::Option<u64>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tools_host(&self.0));
+        Ok(out)
+    }
+
+    /// The keys of the pools the session added on top of the agent's.
+    #[getter]
+    fn tools_host_extra(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<u64>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tools_host_extra(&self.0));
+        Ok(out)
+    }
+
+    #[getter]
+    fn parallel_tool_calls(&self, py: Python<'_>) -> PyResult<::std::option::Option<bool>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::parallel_tool_calls(&self.0));
+        Ok(out)
+    }
+
+    #[getter]
+    fn tool_choice<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tool_choice(&self.0));
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::value_to_py(py, &value)?)).transpose()?)
+    }
+
+    #[getter]
+    fn extra<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::extra(&self.0));
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::extra_to_py(py, &value)?.into_any())).transpose()?)
+    }
+
+    #[getter]
+    fn inference_class(&self, py: Python<'_>) -> PyResult<::std::option::Option<::std::string::String>> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::inference_class(&self.0));
+        Ok(out)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 type McpSessionImpl = <crate::Selected as super::Implementations>::McpSession;
 
@@ -1705,7 +1795,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "Llm._core_chat", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(req_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, crate::generated::llm::ChatRequest(::std::sync::Arc::new(req_arg)))?.into_any()];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);

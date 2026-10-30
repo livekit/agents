@@ -138,193 +138,106 @@ impl fmt::Debug for RoomEvent {
     }
 }
 
-/// The runtime's native event fan-out. This port contains no queue or synchronization state.
+/// The runtime's native event fan-out (`_core.RoomEventBus`), which a host room's SDK callbacks
+/// push into. This port contains no queue or synchronization state.
+#[crate::host(native(refused = "expected a _core.RoomEventBus"))]
 pub trait RoomEventSink: Send + Sync {
     fn subscribe(&self) -> Receiver<RoomEvent>;
     fn emit(&self, event: RoomEvent) -> usize;
     fn subscriber_count(&self) -> usize;
 }
 
-/// The SDK's callback handle; the one live fan-out remains runtime-owned.
-#[crate::class(from_py_object)]
-#[derive(Clone)]
-pub struct RoomEventBus(pub Arc<dyn RoomEventSink>);
-
-// Register the native value class; SDK callbacks use the modern function boundary below.
-#[crate::host(object)]
-impl RoomEventBus {
-    #[host(getter)]
-    pub fn subscriber_count(&self) -> usize {
-        self.0.subscriber_count()
-    }
+/// The fan-out a host room creates and hands its SDK callbacks.
+#[crate::host(class(name = "RoomEventBus", native = RoomEventSink))]
+pub trait RoomEventBus: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
 }
 
-impl RoomEventBus {
-    pub fn subscribe(&self) -> Receiver<RoomEvent> {
-        self.0.subscribe()
-    }
-    pub fn emit(&self, event: RoomEvent) -> usize {
-        self.0.emit(event)
-    }
-}
-
-impl RoomEventBus {
-    pub fn track_subscribed(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.0.emit(RoomEvent::TrackSubscribed { participant, publication });
-    }
-
-    pub fn track_unsubscribed(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.0.emit(RoomEvent::TrackUnsubscribed { participant, publication });
-    }
-
-    pub fn track_published(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.0.emit(RoomEvent::TrackPublished { participant, publication });
-    }
-
-    pub fn track_unpublished(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.0.emit(RoomEvent::TrackUnpublished { participant, publication });
-    }
-
-    pub fn local_track_published(&self, publication: Arc<dyn TrackPublication>) {
-        self.0.emit(RoomEvent::LocalTrackPublished { publication });
-    }
-
-    pub fn participant_connected(&self, participant: Arc<dyn RemoteParticipant>) {
-        self.0.emit(RoomEvent::ParticipantConnected { participant });
-    }
-
-    pub fn participant_active(&self, participant: Arc<dyn RemoteParticipant>) {
-        self.0.emit(RoomEvent::ParticipantActive { participant });
-    }
-
-    pub fn participant_attributes_changed(&self, participant: Arc<dyn RemoteParticipant>) {
-        self.0.emit(RoomEvent::ParticipantAttributesChanged { participant });
-    }
-
-    pub fn participant_disconnected(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        reason: DisconnectReason,
-    ) {
-        self.0.emit(RoomEvent::ParticipantDisconnected { participant, reason });
-    }
-
-    pub fn connection_state_changed(&self, state: ConnectionState) {
-        self.0.emit(RoomEvent::ConnectionStateChanged { state });
-    }
-
-    pub fn disconnected(&self, reason: DisconnectReason) {
-        self.0.emit(RoomEvent::Close { reason });
-    }
-
-    pub fn sip_dtmf_received(&self, digit: String, participant: Option<ParticipantIdentity>) {
-        self.0.emit(RoomEvent::SipDtmf { digit, participant });
-    }
-}
-
-/// Native construction and SDK callbacks for the runtime-owned event fan-out.
+/// The SDK callbacks of a host room, each emitting its event into the room's fan-out.
 #[crate::host(functions)]
 pub trait RtcRuntime: Send + Sync + Sized + 'static {
-    #[host(function, name = "_core_create_room_event_bus")]
-    fn create_room_event_bus() -> RoomEventBus;
-
     #[host(function, name = "_core_room_track_subscribed")]
     fn track_subscribed(
-        bus: RoomEventBus,
+        bus: Arc<dyn RoomEventSink>,
         participant: Arc<dyn RemoteParticipant>,
         publication: Arc<dyn TrackPublication>,
     ) {
-        bus.track_subscribed(participant, publication);
+        bus.emit(RoomEvent::TrackSubscribed { participant, publication });
     }
 
     #[host(function, name = "_core_room_track_unsubscribed")]
     fn track_unsubscribed(
-        bus: RoomEventBus,
+        bus: Arc<dyn RoomEventSink>,
         participant: Arc<dyn RemoteParticipant>,
         publication: Arc<dyn TrackPublication>,
     ) {
-        bus.track_unsubscribed(participant, publication);
+        bus.emit(RoomEvent::TrackUnsubscribed { participant, publication });
     }
 
     #[host(function, name = "_core_room_track_published")]
     fn track_published(
-        bus: RoomEventBus,
+        bus: Arc<dyn RoomEventSink>,
         participant: Arc<dyn RemoteParticipant>,
         publication: Arc<dyn TrackPublication>,
     ) {
-        bus.track_published(participant, publication);
+        bus.emit(RoomEvent::TrackPublished { participant, publication });
     }
 
     #[host(function, name = "_core_room_track_unpublished")]
     fn track_unpublished(
-        bus: RoomEventBus,
+        bus: Arc<dyn RoomEventSink>,
         participant: Arc<dyn RemoteParticipant>,
         publication: Arc<dyn TrackPublication>,
     ) {
-        bus.track_unpublished(participant, publication);
+        bus.emit(RoomEvent::TrackUnpublished { participant, publication });
     }
 
     #[host(function, name = "_core_room_local_track_published")]
-    fn local_track_published(bus: RoomEventBus, publication: Arc<dyn TrackPublication>) {
-        bus.local_track_published(publication);
+    fn local_track_published(bus: Arc<dyn RoomEventSink>, publication: Arc<dyn TrackPublication>) {
+        bus.emit(RoomEvent::LocalTrackPublished { publication });
     }
 
     #[host(function, name = "_core_room_participant_connected")]
-    fn participant_connected(bus: RoomEventBus, participant: Arc<dyn RemoteParticipant>) {
-        bus.participant_connected(participant);
+    fn participant_connected(bus: Arc<dyn RoomEventSink>, participant: Arc<dyn RemoteParticipant>) {
+        bus.emit(RoomEvent::ParticipantConnected { participant });
     }
 
     #[host(function, name = "_core_room_participant_active")]
-    fn participant_active(bus: RoomEventBus, participant: Arc<dyn RemoteParticipant>) {
-        bus.participant_active(participant);
+    fn participant_active(bus: Arc<dyn RoomEventSink>, participant: Arc<dyn RemoteParticipant>) {
+        bus.emit(RoomEvent::ParticipantActive { participant });
     }
 
     #[host(function, name = "_core_room_participant_attributes_changed")]
-    fn participant_attributes_changed(bus: RoomEventBus, participant: Arc<dyn RemoteParticipant>) {
-        bus.participant_attributes_changed(participant);
+    fn participant_attributes_changed(bus: Arc<dyn RoomEventSink>, participant: Arc<dyn RemoteParticipant>) {
+        bus.emit(RoomEvent::ParticipantAttributesChanged { participant });
     }
 
     #[host(function, name = "_core_room_participant_disconnected")]
     fn participant_disconnected(
-        bus: RoomEventBus,
+        bus: Arc<dyn RoomEventSink>,
         participant: Arc<dyn RemoteParticipant>,
         reason: DisconnectReason,
     ) {
-        bus.participant_disconnected(participant, reason);
+        bus.emit(RoomEvent::ParticipantDisconnected { participant, reason });
     }
 
     #[host(function, name = "_core_room_connection_state_changed")]
-    fn connection_state_changed(bus: RoomEventBus, state: ConnectionState) {
-        bus.connection_state_changed(state);
+    fn connection_state_changed(bus: Arc<dyn RoomEventSink>, state: ConnectionState) {
+        bus.emit(RoomEvent::ConnectionStateChanged { state });
     }
 
     #[host(function, name = "_core_room_disconnected")]
-    fn disconnected(bus: RoomEventBus, reason: DisconnectReason) {
-        bus.disconnected(reason);
+    fn disconnected(bus: Arc<dyn RoomEventSink>, reason: DisconnectReason) {
+        bus.emit(RoomEvent::Close { reason });
     }
 
     #[host(function, name = "_core_room_sip_dtmf_received")]
     fn sip_dtmf_received(
-        bus: RoomEventBus,
+        bus: Arc<dyn RoomEventSink>,
         digit: String,
         participant: Option<ParticipantIdentity>,
     ) {
-        bus.sip_dtmf_received(digit, participant);
+        bus.emit(RoomEvent::SipDtmf { digit, participant });
     }
 }

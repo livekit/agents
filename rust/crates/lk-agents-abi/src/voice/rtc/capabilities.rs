@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::VideoFrameRef;
-use super::events::RoomEventBus;
+use super::events::RoomEventSink;
 use super::ports::{ByteStreamIngress, RpcCallback, TextStreamIngress};
 use super::{
     AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity, ParticipantKind,
@@ -49,7 +49,7 @@ pub trait RtcRoom: Send + Sync {
     /// Where the room emits its events. `dyn RtcRoom::events` subscribes to it; a host
     /// room pushes into it from its own handlers.
     #[host(read_once, name = "_core_event_bus")]
-    fn event_bus(&self) -> &RoomEventBus;
+    fn event_bus(&self) -> &Arc<dyn RoomEventSink>;
 
     /// Route every stream opened on `topic` into `streams`. Errors if the topic already has a
     /// handler -- the SDK's `ValueError`, which both callers treat as a warn-and-continue.

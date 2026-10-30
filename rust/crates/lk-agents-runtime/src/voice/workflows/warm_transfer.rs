@@ -523,7 +523,7 @@ mod tests {
     use lk_agents_abi::voice::workflows::IoEnableState;
     use lk_agents_abi::voice::rtc::{
         ByteStreamIngress, ConnectionState, LocalParticipant, ParticipantIdentity,
-        RemoteParticipant, RoomEventBus, RtcError, TextStreamIngress,
+        RemoteParticipant, RoomEventSink, RtcError, TextStreamIngress,
     };
     use lk_agents_voice::workflows::prompts::warm_transfer as p;
 
@@ -548,7 +548,7 @@ mod tests {
         fn remote_participants(&self) -> Result<Vec<Arc<dyn RemoteParticipant>>, RtcError> {
             unreachable!()
         }
-        fn event_bus(&self) -> &RoomEventBus {
+        fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
             unreachable!()
         }
         fn register_byte_stream_handler(

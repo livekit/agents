@@ -12,7 +12,7 @@ use lk_agents_abi::voice::room_owner::{RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioSource, AudioStreamOptions, AudioTrackFeature, ByteStreamIngress,
     ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity, ParticipantKind,
-    RemoteParticipant, RoomEvent, RoomEventBus, RtcError, RtcRoom, StreamInfo, StreamTextOptions,
+    RemoteParticipant, RoomEvent, RoomEventSink, RtcError, RtcRoom, StreamInfo, StreamTextOptions,
     TextStreamIngress, TextStreamWriter, TrackPublication, TrackPublishOptions, TrackSid,
     TrackSource, Transcription, VideoFrameRef, silence_frame,
 };
@@ -181,7 +181,7 @@ impl RtcRoom for StreamingRoom {
     fn remote_participants(&self) -> Result<Vec<Arc<dyn RemoteParticipant>>, RtcError> {
         self.room.remote_participants()
     }
-    fn event_bus(&self) -> &RoomEventBus {
+    fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
         self.room.event_bus()
     }
     fn register_byte_stream_handler(
@@ -368,8 +368,14 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     let current = room.add_participant("person", ParticipantKind::Standard);
     current.publish_microphone("microphone");
     io.set_participant(Some("person".into())).await.unwrap();
-    room.event_bus().track_unpublished(old.clone(), old_publication);
-    room.event_bus().participant_disconnected(old, DisconnectReason::ClientInitiated);
+    room.event_bus().emit(RoomEvent::TrackUnpublished {
+        participant: old.clone(),
+        publication: old_publication,
+    });
+    room.event_bus().emit(RoomEvent::ParticipantDisconnected {
+        participant: old,
+        reason: DisconnectReason::ClientInitiated,
+    });
     room.press_dtmf(&"person".into(), "1");
     within_a_second(async {
         while !matches!(events.recv().await, Some(RoomIoEvent::KeyPressed(_))) {}
@@ -998,7 +1004,7 @@ impl RtcRoom for StalledRoom {
     fn remote_participants(&self) -> Result<Vec<Arc<dyn RemoteParticipant>>, RtcError> {
         self.inner.remote_participants()
     }
-    fn event_bus(&self) -> &RoomEventBus {
+    fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
         self.inner.event_bus()
     }
     fn register_byte_stream_handler(

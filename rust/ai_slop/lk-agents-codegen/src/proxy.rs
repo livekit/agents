@@ -391,9 +391,12 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Instance { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));
         }
-        Ty::Shared { class, family, .. } => {
+        Ty::Shared { class, family, value: false, .. } => {
             format!("::pyo3::Bound::new(py, crate::generated::{family}::{class}({v}))?.into_any()")
         }
+        Ty::Shared { class, family, value: true, .. } => format!(
+            "::pyo3::Bound::new(py, crate::generated::{family}::{class}(::std::sync::Arc::new({v})))?.into_any()"
+        ),
         // Seconds, as the host's timeouts and delays are.
         Ty::Duration => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}.as_secs_f64(), py)?")

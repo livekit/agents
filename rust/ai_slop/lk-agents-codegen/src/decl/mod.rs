@@ -611,11 +611,13 @@ pub enum Ty {
         family: String,
     },
     /// `Arc<T>` of an ABI type implementing a declared class: the `_core` object itself, shared
-    /// both ways (`<family>::<class>` holds the `Arc`).
+    /// both ways (`<family>::<class>` holds the `Arc`). `value`: a plain `T`, the host holding a
+    /// handle over a clone and handing a clone back.
     Shared {
         rust: String,
         class: String,
         family: String,
+        value: bool,
     },
     /// `Self::<assoc>` declared `handle(class = "X")`: an implementation's own object handed to
     /// the host as the registration shell's class `crate::handles::X` (`From` the implementation's
@@ -720,6 +722,7 @@ impl Ty {
                 format!("({})", ts.iter().map(Ty::rust).collect::<Vec<_>>().join(", "))
             }
             Ty::Record(r) => r.rust.clone(),
+            Ty::Shared { rust, value: true, .. } => rust.clone(),
             Ty::Shared { rust, .. } => format!("::std::sync::Arc<{rust}>"),
             Ty::This => "Self".into(),
             Ty::Proxy { rust, boxed: true, .. } => format!("::std::boxed::Box<dyn {rust}>"),

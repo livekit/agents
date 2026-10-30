@@ -9,8 +9,6 @@
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
 
-from typing import Any
-
 WARM_TRANSFER_IDENTITY: str
 TWILIO_RINGING_TIMEOUT: float
 def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
@@ -27,39 +25,6 @@ SDK_SHUTDOWN_TIMEOUT_SECONDS: float
 UPLOAD_TIMEOUT_SECONDS: int
 REDACTED_EXCEPTION: str
 REDACTED_LOG_BODY: str
-
-
-class RoomEventBus:
-    @property
-    def subscriber_count(self) -> int: ...
-
-
-class ChatRequest:
-    """The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
-    host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
-    `ChatContext.to_dict()` form, read only when the request carries no host context of its own.
-    """
-
-    @property
-    def chat_ctx_host(self) -> int | None: ...
-    @property
-    def chat_ctx(self) -> Any: ...
-    @property
-    def tool_names(self) -> list[str]: ...
-    @property
-    def function_schemas(self) -> list[dict[str, Any]]: ...
-    @property
-    def tools_host(self) -> int | None: ...
-    @property
-    def tools_host_extra(self) -> list[int]: ...
-    @property
-    def parallel_tool_calls(self) -> bool | None: ...
-    @property
-    def tool_choice(self) -> Any | None: ...
-    @property
-    def extra(self) -> dict[str, Any] | None: ...
-    @property
-    def inference_class(self) -> str | None: ...
 
 
 class StaleHandle(RuntimeError):

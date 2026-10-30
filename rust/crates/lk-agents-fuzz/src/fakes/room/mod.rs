@@ -1,6 +1,6 @@
 //! The room the DST runs the runtime's room executors in: the ABI room capabilities in memory,
 //! recording what was done and playing out on the run's clock, as the LiveKit SDK behaves.
-use lk_agents_abi::voice::rtc::{RoomEventBus, RoomEventSink};
+use lk_agents_abi::voice::rtc::RoomEventSink;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::capabilities::{
@@ -30,7 +30,7 @@ pub use track::{FakeTrackPublication, StreamRequests, subscribe_local};
 pub struct FakeRtc {
     clock: Arc<dyn Clock>,
     /// The runtime's room event fan-out each room's SDK callbacks emit into.
-    bus: fn() -> RoomEventBus,
+    bus: fn() -> Arc<dyn RoomEventSink>,
     /// `Some` only from [`with_virtual_clock`](FakeRtc::with_virtual_clock); `advance` needs it.
     virtual_clock: Option<Arc<VirtualClock>>,
     rooms: Mutex<Vec<Arc<FakeRoom>>>,
@@ -38,11 +38,11 @@ pub struct FakeRtc {
 
 impl FakeRtc {
     /// Share the session's clock, so playout and the core's timers run on one timeline.
-    pub fn new(clock: Arc<dyn Clock>, bus: fn() -> RoomEventBus) -> Arc<Self> {
+    pub fn new(clock: Arc<dyn Clock>, bus: fn() -> Arc<dyn RoomEventSink>) -> Arc<Self> {
         Arc::new(FakeRtc { clock, bus, virtual_clock: None, rooms: Mutex::default() })
     }
 
-    pub fn with_virtual_clock(bus: fn() -> RoomEventBus) -> (Arc<Self>, Arc<VirtualClock>) {
+    pub fn with_virtual_clock(bus: fn() -> Arc<dyn RoomEventSink>) -> (Arc<Self>, Arc<VirtualClock>) {
         let clock = Arc::new(VirtualClock::new());
         let rtc = Arc::new(FakeRtc {
             clock: clock.clone(),
@@ -92,7 +92,6 @@ impl FakeRtc {
 pub struct FakeRoom {
     name: String,
     bus: Arc<dyn RoomEventSink>,
-    bus_port: RoomEventBus,
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
@@ -125,15 +124,13 @@ impl Default for RoomState {
 }
 
 impl FakeRoom {
-    fn new(name: &str, clock: Arc<dyn Clock>, bus_port: RoomEventBus) -> Arc<Self> {
-        let bus = bus_port.0.clone();
+    fn new(name: &str, clock: Arc<dyn Clock>, bus: Arc<dyn RoomEventSink>) -> Arc<Self> {
         let auto_subscribe = Arc::new(AtomicBool::new(true));
         let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone(), auto_subscribe.clone()));
         Arc::new(FakeRoom {
             name: name.to_owned(),
             local_dyn: local.clone(),
             local,
-            bus_port,
             bus,
             auto_subscribe,
             state: Mutex::new(RoomState::default()),
@@ -357,8 +354,8 @@ impl RtcRoom for FakeRoom {
             .collect())
     }
 
-    fn event_bus(&self) -> &RoomEventBus {
-        &self.bus_port
+    fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
+        &self.bus
     }
 
     fn register_byte_stream_handler(

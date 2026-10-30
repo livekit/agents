@@ -115,16 +115,18 @@ impl RoomEventSink for RoomEventBus {
 
 impl RoomEventBus {
     /// A new fan-out as the port a room's SDK callbacks emit into.
-    pub fn port() -> lk_agents_abi::voice::rtc::events::RoomEventBus {
-        lk_agents_abi::voice::rtc::events::RoomEventBus(Arc::new(Self::new()))
+    pub fn port() -> Arc<dyn RoomEventSink> {
+        Arc::new(Self::new())
     }
 }
 
-impl lk_agents_abi::voice::rtc::events::RtcRuntime for RoomEventBus {
-    fn create_room_event_bus() -> lk_agents_abi::voice::rtc::events::RoomEventBus {
-        Self::port()
+impl lk_agents_abi::voice::rtc::events::RoomEventBus for RoomEventBus {
+    fn new() -> Self {
+        Self::default()
     }
 }
+
+impl lk_agents_abi::voice::rtc::events::RtcRuntime for RoomEventBus {}
 
 struct AdmittedSource<T> {
     source: Receiver<T>,
@@ -346,79 +348,6 @@ pub fn text_streams(room: &dyn RtcRoom, topic: &str) -> Result<Receiver<TextStre
     Ok(receiver)
 }
 
-impl RoomEventBus {
-    pub fn track_subscribed(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.emit(RoomEvent::TrackSubscribed { participant, publication });
-    }
-
-    pub fn track_unsubscribed(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.emit(RoomEvent::TrackUnsubscribed { participant, publication });
-    }
-
-    pub fn track_published(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.emit(RoomEvent::TrackPublished { participant, publication });
-    }
-
-    pub fn track_unpublished(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        publication: Arc<dyn TrackPublication>,
-    ) {
-        self.emit(RoomEvent::TrackUnpublished { participant, publication });
-    }
-
-    pub fn local_track_published(&self, publication: Arc<dyn TrackPublication>) {
-        self.emit(RoomEvent::LocalTrackPublished { publication });
-    }
-
-    pub fn participant_connected(&self, participant: Arc<dyn RemoteParticipant>) {
-        self.emit(RoomEvent::ParticipantConnected { participant });
-    }
-
-    pub fn participant_active(&self, participant: Arc<dyn RemoteParticipant>) {
-        self.emit(RoomEvent::ParticipantActive { participant });
-    }
-
-    pub fn participant_attributes_changed(&self, participant: Arc<dyn RemoteParticipant>) {
-        self.emit(RoomEvent::ParticipantAttributesChanged { participant });
-    }
-
-    /// The reason is read inside the host's handler and travels on the event; read later, it races
-    /// the SDK's own mutation of the participant.
-    pub fn participant_disconnected(
-        &self,
-        participant: Arc<dyn RemoteParticipant>,
-        reason: DisconnectReason,
-    ) {
-        self.emit(RoomEvent::ParticipantDisconnected { participant, reason });
-    }
-
-    pub fn connection_state_changed(&self, state: ConnectionState) {
-        self.emit(RoomEvent::ConnectionStateChanged { state });
-    }
-
-    /// `rtc.Room`'s `disconnected(reason)`.
-    pub fn disconnected(&self, reason: DisconnectReason) {
-        self.emit(RoomEvent::Close { reason });
-    }
-
-    /// `rtc.Room`'s `sip_dtmf_received(ev)`: `ev.digit`, and `ev.participant`'s identity.
-    pub fn sip_dtmf_received(&self, digit: String, participant: Option<ParticipantIdentity>) {
-        self.emit(RoomEvent::SipDtmf { digit, participant });
-    }
-}
 
 #[cfg(test)]
 mod tests {

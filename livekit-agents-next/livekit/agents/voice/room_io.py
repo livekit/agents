@@ -248,7 +248,7 @@ class Room:
 
     def __init__(self, room: rtc.Room) -> None:
         self._room = room
-        self._bus = _core._core_create_room_event_bus()
+        self._bus = _core.RoomEventBus()
         self._local = LocalParticipant(self)
         bus = self._bus
         room.on(

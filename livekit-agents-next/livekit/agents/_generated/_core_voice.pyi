@@ -24,7 +24,7 @@ from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoIn
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import AudioFrame
 
-from .._core import RoomEventBus, SessionRecorder, VoiceAgent
+from .._core import SessionRecorder, VoiceAgent
 from ..types import NotGivenOr, TimedString
 from .agent_nodes import NodeFrame
 from .amd import AMDPredictionEvent, AmdConstants
@@ -321,7 +321,9 @@ class SpeechHandle:
     async def wait_until_created(self) -> None:
         """Resolves once the loop has created the speech and put it in the queue."""
 
-def _core_create_room_event_bus() -> RoomEventBus: ...
+class RoomEventBus:
+    """The fan-out a host room creates and hands its SDK callbacks."""
+    def __new__(cls) -> Self: ...
 
 def _core_room_track_subscribed(
     bus: RoomEventBus,

@@ -1012,6 +1012,24 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     assert!(err.contains("Result<T, E>"), "{err}");
 }
 
+// Catches: a plain value of an ABI type implementing a declared class (a request the core hands a
+// host provider) refused, or handed over as anything but a `_core` handle over its own clone.
+#[test]
+fn a_value_implementing_a_declared_class_crosses_as_a_handle_over_a_clone() {
+    let decls = read(
+        "#[derive(Clone)]\npub struct Request;\n#[crate::host(class(name = \"Request\"))]\npub trait RequestView: Sized {}\nimpl RequestView for Request {}\n\
+         #[crate::host(proxy(host = \"livekit.agents.Model\"))]\n\
+         pub trait Model: Send + Sync {\n\
+             #[host(notify, name = \"_core_send\")] fn send(&self, req: &Request);\n\
+         }",
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    let want = "::pyo3::Bound::new(py, crate::generated::llm::Request(::std::sync::Arc::new(req_arg)))?";
+    assert!(llm.contains(want), "{want}\n{llm}");
+}
+
 // Catches: a host class without the `_core_*` surface (an io leg) called directly instead of
 // through its declared view, or a shared `_core` object read back as a copy rather than the very
 // object the host holds.

@@ -683,7 +683,7 @@ impl Resolver<'_> {
                         if args.is_empty() && self.arc_object(*module, *item, at)?.is_some() =>
                     {
                         let (class, family) = self.arc_object(*module, *item, at)?.expect("checked");
-                        Ty::Shared { rust: self.krate.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?, class, family }
+                        Ty::Shared { rust: self.krate.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?, class, family, value: false }
                     }
                     (["std", "boxed", "Box"], [inner @ Shape::Named { .. }]) => {
                         Ty::Boxed(Box::new(self.classify(inner, at)?))
@@ -919,6 +919,9 @@ impl Resolver<'_> {
                 emit: unit || words.iter().any(|w| w == "emit"),
                 literal: unit,
             }));
+        }
+        if let Some((class, family)) = self.arc_object(module, item, at)? {
+            return Ok(Ty::Shared { rust, class, family, value: true });
         }
         for i in &k.modules[module].items {
             let syn::Item::Impl(imp) = i else { continue };

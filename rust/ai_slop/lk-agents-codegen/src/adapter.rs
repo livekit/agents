@@ -803,8 +803,11 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Proxy { declared: Some((family, name)), .. } => {
             format!("crate::generated::{family}::{name}Proxy::from_host(&{v})")
         }
-        Ty::Shared { class, family, .. } => format!(
+        Ty::Shared { class, family, value: false, .. } => format!(
             "{v}.cast::<crate::generated::{family}::{class}>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)"
+        ),
+        Ty::Shared { class, family, value: true, .. } => format!(
+            "{v}.cast::<crate::generated::{family}::{class}>().map(|this| ::std::clone::Clone::clone(&*this.get().0)).map_err(::pyo3::PyErr::from)"
         ),
         // The host's async iterable, pulled in a copy of the context the call was made in.
         Ty::HostSource(item) => format!(
@@ -907,10 +910,11 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Handle { class, .. } => {
             (format!("crate::handles::{class}"), format!("crate::handles::{class}::from({{}})"))
         }
-        Ty::Shared { class, family, .. } => (
+        Ty::Shared { class, family, value, .. } => (
             "Bound<'py, PyAny>".into(),
             format!(
-                "::pyo3::Bound::new({{py}}, crate::generated::{family}::{class}({{}}))?.into_any()"
+                "::pyo3::Bound::new({{py}}, crate::generated::{family}::{class}({}))?.into_any()",
+                if *value { "::std::sync::Arc::new({})" } else { "{}" }
             ),
         ),
         Ty::Duplex { class, .. } => (

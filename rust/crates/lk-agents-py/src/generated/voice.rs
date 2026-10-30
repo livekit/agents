@@ -880,19 +880,42 @@ impl SpeechHandle {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/events.rs.
+type RoomEventBusImpl = <crate::Selected as super::Implementations>::RoomEventBus;
+
+/// The fan-out a host room creates and hands its SDK callbacks.
+#[pyclass(frozen, name = "RoomEventBus", module = "livekit.agents._core")]
+pub struct RoomEventBus(pub(crate) ::std::sync::Arc<RoomEventBusImpl>);
+
+#[pymethods]
+impl RoomEventBus {
+    #[new]
+    fn new(py: Python<'_>) -> PyResult<RoomEventBus> {
+        crate::host::check_pid()?;
+        let out = py.detach(|| <RoomEventBusImpl as ::lk_agents_abi::voice::rtc::RoomEventBus>::new());
+        Ok(RoomEventBus(::std::sync::Arc::new(out)))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::rtc::RoomEventSink`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(),
+        read: |obj| {
+            let this = obj.cast::<RoomEventBus>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/rtc/events.rs.
 type RtcRuntimeImpl = <crate::Selected as super::Implementations>::RtcRuntime;
 
 #[pyfunction]
-pub fn _core_create_room_event_bus(py: Python<'_>) -> PyResult<::lk_agents_abi::voice::rtc::RoomEventBus> {
-    crate::host::check_pid()?;
-    let out = py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::create_room_event_bus());
-    Ok(out)
-}
-
-#[pyfunction]
 #[pyo3(signature = (bus, participant, publication))]
-pub fn _core_room_track_subscribed(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_track_subscribed(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     let publication = crate::generated::voice::TrackPublicationProxy::from_host(&publication)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::track_subscribed(bus, participant, publication));
@@ -901,8 +924,9 @@ pub fn _core_room_track_subscribed(py: Python<'_>, bus: ::lk_agents_abi::voice::
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant, publication))]
-pub fn _core_room_track_unsubscribed(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_track_unsubscribed(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     let publication = crate::generated::voice::TrackPublicationProxy::from_host(&publication)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::track_unsubscribed(bus, participant, publication));
@@ -911,8 +935,9 @@ pub fn _core_room_track_unsubscribed(py: Python<'_>, bus: ::lk_agents_abi::voice
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant, publication))]
-pub fn _core_room_track_published(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_track_published(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     let publication = crate::generated::voice::TrackPublicationProxy::from_host(&publication)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::track_published(bus, participant, publication));
@@ -921,8 +946,9 @@ pub fn _core_room_track_published(py: Python<'_>, bus: ::lk_agents_abi::voice::r
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant, publication))]
-pub fn _core_room_track_unpublished(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_track_unpublished(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     let publication = crate::generated::voice::TrackPublicationProxy::from_host(&publication)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::track_unpublished(bus, participant, publication));
@@ -931,8 +957,9 @@ pub fn _core_room_track_unpublished(py: Python<'_>, bus: ::lk_agents_abi::voice:
 
 #[pyfunction]
 #[pyo3(signature = (bus, publication))]
-pub fn _core_room_local_track_published(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, publication: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_local_track_published(py: Python<'_>, bus: Bound<'_, PyAny>, publication: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let publication = crate::generated::voice::TrackPublicationProxy::from_host(&publication)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::local_track_published(bus, publication));
     Ok(())
@@ -940,8 +967,9 @@ pub fn _core_room_local_track_published(py: Python<'_>, bus: ::lk_agents_abi::vo
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant))]
-pub fn _core_room_participant_connected(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_participant_connected(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::participant_connected(bus, participant));
     Ok(())
@@ -949,8 +977,9 @@ pub fn _core_room_participant_connected(py: Python<'_>, bus: ::lk_agents_abi::vo
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant))]
-pub fn _core_room_participant_active(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_participant_active(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::participant_active(bus, participant));
     Ok(())
@@ -958,8 +987,9 @@ pub fn _core_room_participant_active(py: Python<'_>, bus: ::lk_agents_abi::voice
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant))]
-pub fn _core_room_participant_attributes_changed(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>) -> PyResult<()> {
+pub fn _core_room_participant_attributes_changed(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::participant_attributes_changed(bus, participant));
     Ok(())
@@ -967,8 +997,9 @@ pub fn _core_room_participant_attributes_changed(py: Python<'_>, bus: ::lk_agent
 
 #[pyfunction]
 #[pyo3(signature = (bus, participant, reason))]
-pub fn _core_room_participant_disconnected(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, participant: Bound<'_, PyAny>, reason: ::lk_agents_abi::voice::room_io::DisconnectReason) -> PyResult<()> {
+pub fn _core_room_participant_disconnected(py: Python<'_>, bus: Bound<'_, PyAny>, participant: Bound<'_, PyAny>, reason: ::lk_agents_abi::voice::room_io::DisconnectReason) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     let participant = crate::generated::voice::RemoteParticipantProxy::from_host(&participant)?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::participant_disconnected(bus, participant, reason));
     Ok(())
@@ -976,24 +1007,27 @@ pub fn _core_room_participant_disconnected(py: Python<'_>, bus: ::lk_agents_abi:
 
 #[pyfunction]
 #[pyo3(signature = (bus, state))]
-pub fn _core_room_connection_state_changed(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, state: ::lk_agents_abi::voice::rtc::ConnectionState) -> PyResult<()> {
+pub fn _core_room_connection_state_changed(py: Python<'_>, bus: Bound<'_, PyAny>, state: ::lk_agents_abi::voice::rtc::ConnectionState) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::connection_state_changed(bus, state));
     Ok(())
 }
 
 #[pyfunction]
 #[pyo3(signature = (bus, reason))]
-pub fn _core_room_disconnected(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, reason: ::lk_agents_abi::voice::room_io::DisconnectReason) -> PyResult<()> {
+pub fn _core_room_disconnected(py: Python<'_>, bus: Bound<'_, PyAny>, reason: ::lk_agents_abi::voice::room_io::DisconnectReason) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::disconnected(bus, reason));
     Ok(())
 }
 
 #[pyfunction]
 #[pyo3(signature = (bus, digit, participant))]
-pub fn _core_room_sip_dtmf_received(py: Python<'_>, bus: ::lk_agents_abi::voice::rtc::RoomEventBus, digit: ::std::string::String, participant: ::std::option::Option<::lk_agents_abi::voice::room_io::ParticipantIdentity>) -> PyResult<()> {
+pub fn _core_room_sip_dtmf_received(py: Python<'_>, bus: Bound<'_, PyAny>, digit: ::std::string::String, participant: ::std::option::Option<::lk_agents_abi::voice::room_io::ParticipantIdentity>) -> PyResult<()> {
     crate::host::check_pid()?;
+    let bus = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&bus).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("bus", ": expected a _core.RoomEventBus")))?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::sip_dtmf_received(bus, digit, participant));
     Ok(())
 }
@@ -3332,7 +3366,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let req_arg = ::std::clone::Clone::clone(req);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionNodes.llm", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(req_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, crate::generated::llm::ChatRequest(::std::sync::Arc::new(req_arg)))?.into_any()];
                 Ok((host.bind(py).getattr("llm")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -3522,7 +3556,7 @@ impl NodeTranscript {
 pub struct RtcRoomProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     local: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>,
-    event_bus: ::lk_agents_abi::voice::rtc::RoomEventBus,
+    event_bus: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>,
 }
 
 impl RtcRoomProxy {
@@ -3555,7 +3589,7 @@ impl RtcRoomProxy {
         };
         let event_bus = {
             let v = crate::host::read(obj, "_core_event_bus")?;
-            v.extract::<::lk_agents_abi::voice::rtc::RoomEventBus>().map_err(::pyo3::PyErr::from)?
+            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("RtcRoom._core_event_bus", ": expected a _core.RoomEventBus")))?
         };
         Ok(RtcRoomProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), local, event_bus })
     }
@@ -3643,7 +3677,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         })
     }
 
-    fn event_bus(&self) -> &::lk_agents_abi::voice::rtc::RoomEventBus {
+    fn event_bus(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink> {
         &self.event_bus
     }
 
