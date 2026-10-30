@@ -29,6 +29,7 @@ from ._exceptions import (
     AssignmentTimeoutError,
     UnexpectedModelBehavior,
     create_api_error_from_http,
+    create_api_error_from_response,
 )
 from .job import (
     AutoSubscribe,
@@ -246,6 +247,7 @@ __all__ = [
     "APIStatusError",
     "APITimeoutError",
     "create_api_error_from_http",
+    "create_api_error_from_response",
     "APIConnectOptions",
     "NotGiven",
     "NOT_GIVEN",

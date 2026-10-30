@@ -574,7 +574,11 @@ class TTS(tts.TTS):
                 timeout,
             )
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            raise create_api_error_from_http(
+                e.message,
+                status=e.status,
+                request_id=e.headers.get("x-request-id") if e.headers else None,
+            ) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference TTS connection timed out.") from e
         except aiohttp.ClientConnectorError as e:
@@ -846,7 +850,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError() from None
 
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from None
+            raise create_api_error_from_http(
+                e.message,
+                status=e.status,
+                request_id=e.headers.get("x-request-id") if e.headers else None,
+            ) from None
 
         except APIError:
             raise

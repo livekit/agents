@@ -1434,7 +1434,11 @@ class SpeechStream(stt.SpeechStream):
             if session_id is not None:
                 self._request_id = session_id
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            raise create_api_error_from_http(
+                e.message,
+                status=e.status,
+                request_id=e.headers.get("x-request-id") if e.headers else None,
+            ) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
         except aiohttp.ClientConnectorError as e:
