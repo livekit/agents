@@ -20,13 +20,13 @@ fn credentials() -> Option<(String, String, String)> {
     // The *inference* key pair, which is distinct from the room key pair. `resolve_credential`
     // reproduces the reference's fallback (§creds), and the point of using it here rather than
     // reading the vars directly is that the fallback itself gets exercised against a real key.
-    let key = lk_agents_net::credentials::resolve_api_key(
+    let key = lk_agents_inference::credentials::resolve_api_key(
         None,
         std::env::var("LIVEKIT_INFERENCE_API_KEY").ok().as_deref(),
         std::env::var("LIVEKIT_API_KEY").ok().as_deref(),
     )
     .ok()?;
-    let secret = lk_agents_net::credentials::resolve_api_secret(
+    let secret = lk_agents_inference::credentials::resolve_api_secret(
         None,
         std::env::var("LIVEKIT_INFERENCE_API_SECRET").ok().as_deref(),
         std::env::var("LIVEKIT_API_SECRET").ok().as_deref(),

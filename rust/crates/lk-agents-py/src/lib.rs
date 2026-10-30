@@ -165,7 +165,7 @@ impl generated::Implementations for Selected {
     type ServerRuntime = lk_agents_runtime::worker::agent_server::AgentServerRuntime;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
-    type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;
+    type InferenceCredentials = lk_agents_runtime::inference::credentials::Credentials;
     type JoinTokens = lk_agents_runtime::net::token::JoinTokens;
     type InferenceModels = lk_agents_runtime::inference::models::Models;
     type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;

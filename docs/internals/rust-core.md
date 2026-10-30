@@ -225,6 +225,8 @@ crates.
 lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
   process.rs      process Tokio runtime, fork guard, the `ProcessEnv` it lends
+  tcp.rs          the console's TCP connector (a boundary adapter outside the executors)
+  monotone.rs     a level-triggered cell whose value only moves forward (speech and playout marks)
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
   agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
   text_session/   TextSession driver over agent_run's execution; the declared runner

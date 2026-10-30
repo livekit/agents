@@ -28,6 +28,7 @@ pub mod amd;
 // The avatar sessions the gateway provisions: one create and one terminate over HTTPS.
 pub mod avatar;
 pub mod codecs;
+pub mod credentials;
 
 pub mod llm;
 // `_core`'s inference lookups, declared in ABI.

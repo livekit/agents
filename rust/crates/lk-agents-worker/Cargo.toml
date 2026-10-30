@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The WebTransport worker connection.
+web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
 parking_lot.workspace = true
 livekit-protocol.workspace = true
 prost.workspace = true
@@ -37,7 +39,6 @@ getrandom = "0.3"
 
 [dev-dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util"] }

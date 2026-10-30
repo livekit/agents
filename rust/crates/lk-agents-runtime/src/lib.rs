@@ -49,6 +49,7 @@ pub mod a2a;
 pub mod agent_run;
 pub mod host;
 pub mod mcp;
+pub mod monotone;
 pub mod process;
 pub mod recording;
 
@@ -66,3 +67,4 @@ pub mod avatar;
 /// Runtime room execution over the ABI-declared SDK capabilities.
 pub mod room_io;
 pub mod rtc;
+pub mod tcp;

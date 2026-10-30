@@ -16,7 +16,7 @@ use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackTracker,
 };
 use lk_agents_abi::{AudioFrame, Clock, Spawner};
-use lk_agents_net::tcp::Connector;
+use crate::tcp::Connector;
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
@@ -58,7 +58,7 @@ impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
     fn new(env: &ProcessEnv, addr: String) -> Self {
         Self::with_ports(
             addr,
-            Arc::new(lk_agents_net::tcp::Tcp::new(env.runtime)),
+            Arc::new(crate::tcp::Tcp::new(env.runtime)),
             env.clock.clone(),
         )
     }
@@ -122,7 +122,7 @@ impl SessionTransport for Transport {
                 return Ok(());
             };
             let addr = &self.io.addr;
-            let lk_agents_net::tcp::Connection { read, mut write } = self
+            let crate::tcp::Connection { read, mut write } = self
                 .io
                 .connector
                 .connect(addr)

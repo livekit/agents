@@ -13,7 +13,7 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{
     Clock, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TimedString, Ts,
 };
-use lk_agents_net::monotone::Monotone;
+use crate::monotone::Monotone;
 use lk_agents_voice::room_io::transcription::{
     Admission, Batch, ParticipantTracks, Subject, Writer, WriterEffect, cancellable,
     close_attributes, open_attributes,

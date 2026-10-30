@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lk_agents_net::webtransport::{RecvStream, SendStream, Session};
+use web_transport_quinn::proto::ConnectRequest;
+use web_transport_quinn::{ClientBuilder, RecvStream, SendStream, Session};
 use tokio::sync::Mutex;
 
 use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
@@ -262,9 +263,21 @@ impl WorkerTransport for WtTransport {
         headers: Vec<(String, String)>,
     ) -> Result<Connected, TransportError> {
         let url = super::agent_url(url, worker_token, true);
-        let session = lk_agents_net::webtransport::connect(&url, headers, self.insecure)
-            .await
-            .map_err(transport_err)?;
+        let url = url.parse::<url::Url>().map_err(transport_err)?;
+        let mut request = ConnectRequest::new(url);
+        for (name, value) in headers {
+            let name: web_transport_quinn::http::HeaderName =
+                name.parse().map_err(transport_err)?;
+            request = request.with_header(name, value.parse().map_err(transport_err)?);
+        }
+        // `insecure` is reserved for local servers with a self-signed certificate.
+        let client = if self.insecure {
+            ClientBuilder::new().dangerous().with_no_certificate_verification()
+        } else {
+            ClientBuilder::new().with_system_roots()
+        }
+        .map_err(transport_err)?;
+        let session = client.connect(request).await.map_err(transport_err)?;
         let (send, recv) = session.open_bi().await.map_err(transport_err)?;
         Ok(Connected {
             sink: Arc::new(WtSink { send: Mutex::new(send), session: session.clone() }),

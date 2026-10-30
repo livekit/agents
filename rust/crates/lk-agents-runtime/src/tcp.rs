@@ -1,6 +1,6 @@
 //! Raw TCP connections on the hosting process's reactor, exposed as generic byte IO ports.
 
-use crate::task::TokioSpawner;
+use lk_agents_net::task::TokioSpawner;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::SpawnerExt;
 use std::io;
@@ -40,7 +40,7 @@ impl Connector for Tcp {
 async fn connect_on(runtime: &tokio::runtime::Handle, addr: String) -> io::Result<Connection> {
     // Opened on the owning reactor, wherever the caller polls; dropping the wait cancels it.
     let connecting = TokioSpawner::new(runtime.clone()).spawn(async move {
-        let stream = crate::dns::connect(addr).await?;
+        let stream = lk_agents_net::dns::connect(addr).await?;
         let (read, write) = stream.into_split();
         Ok(Connection { read: Box::new(read), write: Box::new(write) })
     });

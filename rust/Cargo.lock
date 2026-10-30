@@ -1526,7 +1526,6 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tonic-types",
  "url",
- "web-transport-quinn",
 ]
 
 [[package]]

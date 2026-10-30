@@ -6,7 +6,7 @@ use lk_agents_abi::voice::io::{
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString};
-use lk_agents_net::monotone::Monotone;
+use crate::monotone::Monotone;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::lifecycle::{
     SyncEffect, SyncEvent, SyncLifecycle, TranscriptOutput as Out,

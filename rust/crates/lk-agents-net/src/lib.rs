@@ -2,7 +2,6 @@
 //!
 //! - [`clock`]: the process's clocks, on Tokio time.
 //! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
-//! - [`monotone`]: a level-triggered cell whose value only moves forward.
 //! - [`http`]: HTTPS exchanges reporting transport observations, under [`attempts`].
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
@@ -16,28 +15,23 @@
 //! - [`token`]: framework credentials signed with LiveKit's token crate.
 //! - [`transport`]: the WebSocket seam, transport errors and waits bounded on a clock.
 //! - [`websocket`]: the real WebSocket transport over `tokio-tungstenite`.
-//! - [`webtransport`]: raw QUIC sessions with TLS and HTTP connect headers.
 
 pub mod a2a_auth;
 pub mod a2a_client;
 pub mod attempts;
 pub mod blocking_io;
 pub mod clock;
-pub mod credentials;
 pub mod dns;
 pub mod env;
 pub mod http;
 pub mod lock;
-pub mod monotone;
 pub mod session_report;
 pub mod source;
 pub mod sse;
 pub mod task;
-pub mod tcp;
 pub mod token;
 pub mod transport;
 pub mod websocket;
-pub mod webtransport;
 
 pub mod connection_pool;
 
