@@ -126,7 +126,7 @@ pub(crate) async fn realtime_generation_task(
             text.flush();
         }
         let text_result = match generation.text_out.as_deref() {
-            Some(text) => super::forward::finish_text(text, handle, played.is_err()).await,
+            Some(text) => super::forward::finish_text(text, handle, played.is_err()).await.map(drop),
             None => Ok(()),
         };
         binding.text_drained();

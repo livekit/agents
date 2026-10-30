@@ -333,14 +333,21 @@ impl Pump<'_> {
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included. The activated binding decides it.
         let leg_state = text_out.map(|leg| *leg.state());
-        if plan(playback.binding).end_unvoiced(&heard, leg_state) {
+        let unvoiced = plan(playback.binding).end_unvoiced(&heard, leg_state);
+        // Its words settle below first: a `transcription_node` emits them later, or never when the
+        // speech is cut, and an audio end the synchroniser took with no words would open a
+        // segment of its own that the next speech's words join (seed 24984).
+        let delivered = match playback.binding.text() {
+            Some(text) => {
+                let result = finish_text(text.as_ref(), self.handle, false).await;
+                playback.binding.text_drained();
+                result?
+            }
+            None => true,
+        };
+        if unvoiced && delivered {
             let audio = playback.binding.audio().expect("bound audio output");
             end_unvoiced(shared, self.handle.id(), audio.as_ref());
-        }
-        if let Some(text) = binding.text() {
-            let result = finish_text(text.as_ref(), self.handle, false).await;
-            binding.text_drained();
-            result?;
         }
         Ok(heard)
     }
@@ -514,14 +521,17 @@ pub(super) async fn drain_segment_text(
 }
 
 /// A segment owns its text node until output delivery or cancellation cleanup settles.
+/// Settles the segment's text chain; `true` when its words went through, `false` when it was
+/// cancelled (asked, or by the speech's interruption).
 pub(super) async fn finish_text(
     text: &dyn TextOutput,
     handle: &SpeechHandle,
     cancel: bool,
-) -> Result<(), DriverError> {
+) -> Result<bool, DriverError> {
     if cancel {
         text.cancel_flush();
-        return text.wait_for_flush().await.map_err(DriverError::TextOutput);
+        text.wait_for_flush().await.map_err(DriverError::TextOutput)?;
+        return Ok(false);
     }
     let mut completion = text.wait_for_flush();
     let mut interrupted = Box::pin(handle.wait_for_interrupted());
@@ -533,10 +543,10 @@ pub(super) async fn finish_text(
     })
     .await;
     match outcome {
-        Some(result) => result.map_err(DriverError::TextOutput),
+        Some(result) => result.map(|()| true).map_err(DriverError::TextOutput),
         None => {
             text.cancel_flush();
-            completion.await.map_err(DriverError::TextOutput)
+            completion.await.map(|()| false).map_err(DriverError::TextOutput)
         }
     }
 }
