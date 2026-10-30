@@ -12,9 +12,9 @@ use lk_agents_abi::voice::room_owner::{RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioSource, AudioStreamItem, AudioStreamOptions, AudioTrackFeature,
     ByteStreamIngress, ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity,
-    ParticipantKind, RemoteParticipant, RoomEvent, RoomEventSink, RtcError, RtcRoom, StreamInfo,
-    StreamTextOptions, TextStreamIngress, TextStreamWriter, TrackPublication, TrackPublishOptions,
-    TrackSid, TrackSource, Transcription, VideoFrameRef, silence_frame,
+    ParticipantKind, ProcessorFailure, RemoteParticipant, RoomEvent, RoomEventSink, RtcError,
+    RtcRoom, StreamInfo, StreamTextOptions, TextStreamIngress, TextStreamWriter, TrackPublication,
+    TrackPublishOptions, TrackSid, TrackSource, Transcription, VideoFrameRef, silence_frame,
 };
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
@@ -229,7 +229,7 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
         Arc::new(StreamingRoom { local: room.local().clone(), room, text: watch::channel(None).0 });
     let config = RoomIoConfig { audio_output: None, text_input: true, ..config() };
     let io = room_io(room.clone(), clock, config);
-    let mut events = io.events().unwrap();
+    let (mut events, _) = io.events().unwrap();
     io.clone().start();
     let _ = io.wait_for_ready().await;
     while events.try_recv().is_ok() {}
@@ -362,7 +362,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     let old = room.add_participant("person", ParticipantKind::Standard);
     let old_publication = old.publish_microphone("microphone");
     let io = room_io(room.clone(), clock, microphone_only());
-    let mut events = io.events().unwrap();
+    let (mut events, _) = io.events().unwrap();
     io.clone().start();
     io.wait_for_ready().await.unwrap();
     room.remove_participant(&"person".into(), DisconnectReason::ClientInitiated);
@@ -555,20 +555,22 @@ fn input(
     session_input(room, clock, AudioInputConfig::default(), handler).0
 }
 
-/// One session's microphone reader, and the room events it reports to.
+/// One session's microphone reader, and the processor failures it reports to that session, one
+/// at a time: the session takes each report before the next fits.
 fn session_input(
     room: &Arc<FakeRoom>,
     clock: Arc<VirtualClock>,
     config: AudioInputConfig,
     handler: Option<Arc<PreConnectAudioHandler>>,
-) -> (Arc<ParticipantAudioInput>, tokio::sync::mpsc::Receiver<RoomIoEvent>) {
+) -> (Arc<ParticipantAudioInput>, tokio::sync::mpsc::Receiver<ProcessorFailure>) {
     let spawner = Arc::new(TokioSpawner::current());
-    let (events, reported) = tokio::sync::mpsc::channel(8);
-    (ParticipantAudioInput::new(room.clone(), spawner, clock, config, handler, events), reported)
+    let (failures, reported) = tokio::sync::mpsc::channel(1);
+    (ParticipantAudioInput::new(room.clone(), spawner, clock, config, handler, failures), reported)
 }
 
 // Catches: a processor failure reported to every session in the room or once per failed frame,
-// one never reaching the session's events, and a recovered processor never reported again.
+// a report dropped because the session had yet to take the previous one, and a recovered
+// processor never reported again.
 #[tokio::test(start_paused = true)]
 async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed() {
     let (room, clock) = fake_room("processor-spans");
@@ -582,30 +584,34 @@ async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed
         ..Default::default()
     };
     let plain = AudioInputConfig { noise_cancellation: None, ..denoised.clone() };
-    let (failing, mut failing_events) = session_input(&room, clock.clone(), denoised, None);
-    let (healthy, mut healthy_events) = session_input(&room, clock, plain, None);
+    let (failing, mut failing_reports) = session_input(&room, clock.clone(), denoised, None);
+    let (healthy, mut healthy_reports) = session_input(&room, clock, plain, None);
     for input in [&failing, &healthy] {
         input.set_participant(Some("user".into())).unwrap();
         input.handle_event(&subscribed(&user, mic.clone())).unwrap();
     }
     yields(4).await;
-    // The denoiser rejects chunks 5 and 21: two spans, the second after a clean frame.
+    // The denoiser rejects chunks 5 and 21: two spans, the second after a clean frame. The frames
+    // arrive together: the second span opens before the session took the first report.
     for chunk in [5i16, 21, 6, 21, 7] {
-        let data = chunk.to_le_bytes().repeat(480);
-        mic.push_frame(AudioFrame::new(data, 24000, 1, 480));
-        for input in [&failing, &healthy] {
-            assert!(input.next_frame().await.unwrap().is_some(), "the input stopped hearing");
+        mic.push_frame(AudioFrame::new(chunk.to_le_bytes().repeat(480), 24000, 1, 480));
+    }
+    let hearing = async {
+        for _ in 0..5 {
+            for input in [&failing, &healthy] {
+                assert!(input.next_frame().await.unwrap().is_some(), "the input stopped hearing");
+            }
         }
-    }
-    let mut reported = Vec::new();
-    while let Ok(event) = failing_events.try_recv() {
-        reported.push(event);
-    }
-    assert_eq!(reported.len(), 2, "one report per failing span");
-    assert!(reported.iter().all(
-        |event| matches!(event, RoomIoEvent::InputProcessorFailed(f) if f.label == "fake.Denoiser")
-    ));
-    assert!(healthy_events.try_recv().is_err(), "another session's input never failed");
+    };
+    let reports = async { [failing_reports.recv().await, failing_reports.recv().await] };
+    let ((), reports) =
+        tokio::time::timeout(Duration::from_secs(1), async { tokio::join!(hearing, reports) })
+            .await
+            .expect("every failing span is reported");
+    assert_eq!(reports.map(|failure| failure.unwrap().label), ["fake.Denoiser"; 2]);
+    yields(4).await;
+    assert!(failing_reports.try_recv().is_err(), "one report per failing span");
+    assert!(healthy_reports.try_recv().is_err(), "another session's input never failed");
     failing.aclose().await;
     healthy.aclose().await;
 }

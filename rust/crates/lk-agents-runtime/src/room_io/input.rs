@@ -4,10 +4,10 @@
 use crate::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
-use lk_agents_abi::voice::room_owner::RoomIoEvent;
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ParticipantIdentity,
-    RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid, VideoFrameRef,
+    ProcessorFailure, RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid,
+    VideoFrameRef,
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamSource, Ts};
 use lk_agents_net::task::TaskSet;
@@ -221,14 +221,14 @@ fn route<R: Reader>(reader: &Arc<R>, event: &RoomEvent) -> Result<()> {
 
 /// Reads a stream until voice retires its reader or it ends, then retires the stream. `admit`
 /// turns a stream item into the frame it delivers, if any.
-async fn pump<S: Send + 'static, T: Send + 'static>(
+async fn pump<S: Send + 'static, T: Send + 'static, A: Future<Output = Option<T>>>(
     readers: &Readers<T>,
     clock: &dyn Clock,
     generation: u64,
     mut stream: Box<dyn StreamSource<S>>,
     replay: impl Future<Output = bool>,
     end: impl FnOnce() -> Option<T>,
-    mut admit: impl FnMut(S) -> Option<T>,
+    mut admit: impl FnMut(S) -> A,
 ) {
     let reading = async {
         if !replay.await {
@@ -237,7 +237,7 @@ async fn pump<S: Send + 'static, T: Send + 'static>(
         loop {
             match stream.next().await {
                 Ok(Some(item)) => {
-                    if let Some(frame) = admit(item)
+                    if let Some(frame) = admit(item).await
                         && !readers.deliver(generation, Ok(frame))
                     {
                         return;
@@ -329,7 +329,8 @@ impl Reader for ParticipantVideoInput {
         self.pumps.spawn(self.spawner.as_ref(), "video track pump", async move {
             let readers = &owner.readers;
             let clock = owner.clock.as_ref();
-            pump(readers, clock, generation, stream, async { true }, || None, Some).await;
+            let admit = |frame| std::future::ready(Some(frame));
+            pump(readers, clock, generation, stream, async { true }, || None, admit).await;
         });
         Ok(())
     }
@@ -356,8 +357,8 @@ pub struct ParticipantAudioInput {
     clock: Arc<dyn Clock>,
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
-    /// The session's room events, where a processor's failing span is reported.
-    events: tokio::sync::mpsc::Sender<RoomIoEvent>,
+    /// Where a processor's failing span is reported to the session.
+    failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
     readers: Readers<AudioFrame>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
@@ -370,7 +371,7 @@ impl ParticipantAudioInput {
         clock: Arc<dyn Clock>,
         config: AudioInputConfig,
         pre_connect: Option<Arc<PreConnectAudioHandler>>,
-        events: tokio::sync::mpsc::Sender<RoomIoEvent>,
+        failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
     ) -> Arc<Self> {
         Arc::new(Self {
             room,
@@ -378,7 +379,7 @@ impl ParticipantAudioInput {
             clock,
             config,
             pre_connect,
-            events,
+            failures,
             readers: Readers::new(AUDIO_SOURCES, lk_agents_abi::AUDIO_QUEUE_FRAMES),
             pumps: Arc::default(),
         })
@@ -397,18 +398,21 @@ impl ParticipantAudioInput {
     }
 
     /// A frame to deliver, or a processor failure reported when it opens that processor's span.
-    fn admit(&self, spans: &Mutex<ProcessorSpans>, item: AudioStreamItem) -> Option<AudioFrame> {
+    async fn admit(
+        &self,
+        spans: &Mutex<ProcessorSpans>,
+        item: AudioStreamItem,
+    ) -> Option<AudioFrame> {
         match item {
             AudioStreamItem::Frame(frame) => {
                 spans.lock().frame();
                 Some(frame)
             }
             AudioStreamItem::ProcessorFailed(failure) => {
+                // A span reports once, so its report waits for room rather than drop; a closed
+                // channel is a session that is gone.
                 if spans.lock().failed(&failure.label) {
-                    let label = failure.label.clone();
-                    if self.events.try_send(RoomIoEvent::InputProcessorFailed(failure)).is_err() {
-                        log::warn!(target: "livekit.agents", label = label.as_str(); "input processor failure not reported: room events full or closed");
-                    }
+                    let _ = self.failures.send(failure).await;
                 }
                 None
             }
@@ -437,8 +441,10 @@ impl ParticipantAudioInput {
         for frame in frames {
             match input_stream.process_audio(vec![frame]).await {
                 Ok(items) => {
-                    for frame in items.into_iter().filter_map(|item| self.admit(spans, item)) {
-                        if !self.readers.deliver(generation, Ok(frame)) {
+                    for item in items {
+                        if let Some(frame) = self.admit(spans, item).await
+                            && !self.readers.deliver(generation, Ok(frame))
+                        {
                             return false;
                         }
                     }

@@ -17,7 +17,7 @@ use lk_agents_abi::voice::room_owner::{self, RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::voice::rtc::events::RoomEvent;
 use lk_agents_abi::voice::rtc::{
-    ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind,
+    ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind, ProcessorFailure,
 };
 use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt,
@@ -55,7 +55,9 @@ pub struct RoomIo {
     connected: Monotone<bool>,
 
     events_tx: mpsc::Sender<RoomIoEvent>,
-    events_rx: Mutex<Option<mpsc::Receiver<RoomIoEvent>>>,
+    /// The session's room events, and apart from them the input processors' failing spans: a
+    /// failing span waits for the session rather than drop, or take the slots other events need.
+    events_rx: Mutex<Option<(mpsc::Receiver<RoomIoEvent>, mpsc::Receiver<ProcessorFailure>)>>,
 
     tasks: Arc<TaskSet>,
     /// The close, which waits `tasks` out; it holds this object until it ends.
@@ -95,6 +97,7 @@ impl RoomIo {
         });
 
         let (events_tx, events_rx) = mpsc::channel(ROOM_EVENT_CAPACITY);
+        let (failures_tx, failures_rx) = mpsc::channel(ROOM_EVENT_CAPACITY);
         let audio_input = config.audio_input.as_ref().map(|a| {
             ParticipantAudioInput::new(
                 room.clone(),
@@ -102,7 +105,7 @@ impl RoomIo {
                 clock.clone(),
                 a.clone(),
                 pre_connect.clone(),
-                events_tx.clone(),
+                failures_tx.clone(),
             )
         });
 
@@ -154,7 +157,7 @@ impl RoomIo {
             pre_connect,
             connected: Monotone::new(false),
             events_tx,
-            events_rx: Mutex::new(Some(events_rx)),
+            events_rx: Mutex::new(Some((events_rx, failures_rx))),
             tasks: Arc::default(),
             closing: std::sync::OnceLock::new(),
             execution: Mutex::new(Execution {
@@ -169,7 +172,9 @@ impl RoomIo {
         })
     }
 
-    pub fn events(&self) -> Option<mpsc::Receiver<RoomIoEvent>> {
+    pub fn events(
+        &self,
+    ) -> Option<(mpsc::Receiver<RoomIoEvent>, mpsc::Receiver<ProcessorFailure>)> {
         self.events_rx.lock().take()
     }
 
@@ -669,7 +674,7 @@ impl room_owner::RoomIo for RoomIo {
         if !self.begin_work() {
             return;
         }
-        let Some(mut events) = self.events() else {
+        let Some((mut events, mut failures)) = self.events() else {
             self.finish_starting();
             return;
         };
@@ -684,6 +689,9 @@ impl room_owner::RoomIo for RoomIo {
                     // What the room said before the stop still reaches the session: the room's
                     // `Close` stops this loop at the instant it is queued here (seed 19655).
                     while let Ok(event) = events.try_recv() && listener(event) {}
+                    while let Ok(failure) = failures.try_recv()
+                        && listener(RoomIoEvent::InputProcessorFailed(failure))
+                    {}
                     while let Some(Ok(Some(event))) = rtc_events.next().now_or_never()
                         && rtc_listener(event)
                     {}
@@ -693,6 +701,10 @@ impl room_owner::RoomIo for RoomIo {
                     biased;
                     () = &mut stopped => continue,
                     event = events.recv() => { if event.is_none_or(|event| !listener(event)) { break; } },
+                    // Without an audio input nothing sends, and the arm is off.
+                    Some(failure) = failures.recv() => {
+                        if !listener(RoomIoEvent::InputProcessorFailed(failure)) { break; }
+                    },
                     event = rtc_events.next() => match event {
                         Ok(Some(event)) => { if !rtc_listener(event) { break; } },
                         Ok(None) => break,
