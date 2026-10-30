@@ -467,7 +467,9 @@ class PipeEnd:
         return (PipeEnd, (popen.duplicate_for_child(self._handle),))
 
     def dup(self) -> PipeEnd:
-        import _winapi  # type: ignore[import-not-found,unused-ignore]
+        if sys.platform != "win32":
+            raise NotImplementedError("a pipe end exists only on Windows")
+        import _winapi
 
         process = _winapi.GetCurrentProcess()
         return PipeEnd(
@@ -482,8 +484,8 @@ class PipeEnd:
         return handle
 
     def close(self) -> None:
-        if self._handle is not None:
-            import _winapi  # type: ignore[import-not-found,unused-ignore]
+        if sys.platform == "win32" and self._handle is not None:
+            import _winapi
 
             _winapi.CloseHandle(self.detach())
 
