@@ -96,10 +96,8 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
             "TTS metrics"
         }
         AgentMetrics::Eou(m) => {
-            fields.extend([
-                ("end_of_utterance_delay", LogValue::Float(round_to(m.end_of_utterance_delay, 2))),
-                ("transcription_delay", LogValue::Float(round_to(m.transcription_delay, 2))),
-            ]);
+            fields.extend(seconds("end_of_utterance_delay", m.end_of_utterance_delay));
+            fields.extend(seconds("transcription_delay", m.transcription_delay));
             // `on_user_turn_completed_delay` is on the record but not in the log line.
             "EOU metrics"
         }

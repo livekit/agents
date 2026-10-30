@@ -2556,8 +2556,8 @@ pub mod metrics {
             }
             Ok(::lk_agents_abi::metrics::EouMetrics {
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "EOUMetrics.timestamp"))?,
-                end_of_utterance_delay: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "end_of_utterance_delay", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "EOUMetrics.end_of_utterance_delay"))?,
-                transcription_delay: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "transcription_delay", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "EOUMetrics.transcription_delay"))?,
+                end_of_utterance_delay: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "end_of_utterance_delay", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "EOUMetrics.end_of_utterance_delay")).map(Some) })?,
+                transcription_delay: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "transcription_delay", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "EOUMetrics.transcription_delay")).map(Some) })?,
                 on_user_turn_completed_delay: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "on_user_turn_completed_delay", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "EOUMetrics.on_user_turn_completed_delay"))?,
                 speech_id: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "speech_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 metadata: ::lk_agents_abi::python::attr_with(obj, "EOUMetrics", "metadata", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::metrics::metadata_from_py(v)).map(Some) })?,
@@ -2568,8 +2568,8 @@ pub mod metrics {
             let ::lk_agents_abi::metrics::EouMetrics { timestamp, end_of_utterance_delay, transcription_delay, on_user_turn_completed_delay, speech_id, metadata } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
-            kwargs.set_item("end_of_utterance_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_of_utterance_delay, py)?)?;
-            kwargs.set_item("transcription_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcription_delay, py)?)?;
+            kwargs.set_item("end_of_utterance_delay", match end_of_utterance_delay { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("transcription_delay", match transcription_delay { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("on_user_turn_completed_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(on_user_turn_completed_delay, py)?)?;
             kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::metadata_to_py(py, x)? })?;

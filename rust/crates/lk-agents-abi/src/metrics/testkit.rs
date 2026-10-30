@@ -79,8 +79,8 @@ pub fn vad() -> VadMetrics {
 pub fn eou() -> EouMetrics {
     EouMetrics {
         timestamp: 0.0,
-        end_of_utterance_delay: 0.0,
-        transcription_delay: 0.0,
+        end_of_utterance_delay: Some(0.0),
+        transcription_delay: Some(0.0),
         on_user_turn_completed_delay: 0.0,
         speech_id: None,
         metadata: None,

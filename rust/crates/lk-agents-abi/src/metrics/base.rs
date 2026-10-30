@@ -247,12 +247,14 @@ impl VadMetrics {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EouMetrics {
     pub timestamp: f64,
-    /// Amount of time between the end of speech from VAD and the decision to end the user's turn.
-    /// Set to 0.0 if the end of speech was not detected.
-    pub end_of_utterance_delay: f64,
-    /// Time taken to obtain the transcript after the end of the user's speech.
-    /// Set to 0.0 if the end of speech was not detected.
-    pub transcription_delay: f64,
+    /// Amount of time between the end of speech from VAD and the decision to end the user's turn;
+    /// ``None`` if the end of speech was not detected.
+    #[host(default = None)]
+    pub end_of_utterance_delay: Option<f64>,
+    /// Time taken to obtain the transcript after the end of the user's speech; ``None`` if the end
+    /// of speech was not detected.
+    #[host(default = None)]
+    pub transcription_delay: Option<f64>,
     /// Time taken to invoke the user's `Agent.on_user_turn_completed` callback.
     pub on_user_turn_completed_delay: f64,
     #[host(default = None)]
