@@ -144,7 +144,7 @@ class _ContextInfo:
     # monotonically increasing timestamps within an agent turn.
     cumulative_time: float = 0.0
     generation_end_time: float = 0.0
-    # `usage.processedCharactersCount` counts the context's characters so far.
+    # On the WebSocket, `usage.processedCharactersCount` is the characters processed so far.
     billed_characters: int | None = None
 
 
@@ -1314,6 +1314,8 @@ class ChunkedStream(tts.ChunkedStream):
                             if timed_strings:
                                 output_emitter.push_timed_transcript(timed_strings)
 
+                        # HTTP streaming reports per message: the first carries the
+                        # request's count, the rest zero, so the reports add up.
                         if usage := result.get("usage"):
                             output_emitter.report_usage(
                                 characters_count=usage.get("processedCharactersCount", 0)

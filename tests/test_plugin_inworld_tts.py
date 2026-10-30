@@ -196,3 +196,45 @@ async def test_http_body_omits_delivery_mode_when_not_given():
     body = captured.get("json")
     assert isinstance(body, dict)
     assert "deliveryMode" not in body
+
+
+async def test_http_stream_bills_the_request_count_once() -> None:
+    """HTTP streaming reports ``processedCharactersCount`` per message: the first carries
+    the request's count and the rest zero (Inworld synthesize-speech-stream reference)."""
+    import base64
+
+    from livekit.plugins.inworld import TTS
+
+    def line(characters: int) -> bytes:
+        audio = base64.b64encode(bytes(4800)).decode()
+        usage = {"processedCharactersCount": characters, "modelId": "inworld-tts-2"}
+        return json.dumps({"result": {"audioContent": audio, "usage": usage}}).encode() + b"\n"
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        @property
+        def content(self):
+            async def lines():
+                for n in (11, 0, 0):
+                    yield line(n)
+
+            return lines()
+
+    class _Request:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, *exc):
+            return None
+
+    tts = TTS(api_key="test-key", model="inworld-tts-2", encoding="PCM")
+    session = MagicMock()
+    session.json_serialize = json.dumps
+    session.request = lambda *args, **kwargs: _Request()
+    tts._session = session
+
+    frames = [audio async for audio in tts.synthesize("Hello world")]
+    assert [f.characters_count for f in frames if f.characters_count is not None] == [11]
+    assert frames[-1].is_final and frames[-1].characters_count == 11
