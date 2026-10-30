@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import io
 import logging
 import multiprocessing as mp
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -681,18 +683,20 @@ def _create_thread_proc(
     *,
     close_timeout: float,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+    initialize_process_fnc: Callable[[JobProcess], None] = _initialize_proc,
+    initialize_timeout: float = 20.0,
 ) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
     # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
     # in-process synchronization here
     start_args = _new_start_args(mp.get_context("spawn"))
     loop = asyncio.get_running_loop()
     proc = ipc.job_thread_executor.ThreadJobExecutor(
-        initialize_process_fnc=_initialize_proc,
+        initialize_process_fnc=initialize_process_fnc,
         job_entrypoint_fnc=job_entrypoint_fnc,
         session_end_fnc=None,
         simulation_end_fnc=None,
         inference_executor=None,
-        initialize_timeout=20.0,
+        initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         session_end_timeout=300.0,
         ping_interval=2.5,
@@ -733,6 +737,353 @@ async def test_thread_shutdown_no_job_join_before_ack_is_read():
     assert time.monotonic() - started_at < 1.0, "aclose() waited for an ack that was sent"
     assert proc.status == ipc.job_executor.JobStatus.SUCCESS
     assert start_args.shutdown_counter.value == 0
+
+
+async def test_thread_aclose_after_initialize_cancelled():
+    """Regression test: a cancelled initialize() never resolves the initialize future,
+    so the main task never started the monitor task (the sole channel reader) and
+    aclose() waited forever for a ShuttingDown message that nobody read, hanging the
+    worker shutdown."""
+    init_started = threading.Event()
+    release_init = threading.Event()
+
+    def _initialize_proc_gated(proc: JobProcess) -> None:
+        # hold the runner's warm-up until initialize() has been cancelled, so the
+        # cancel can't race with a warm-up that already finished
+        init_started.set()
+        release_init.wait(timeout=10.0)
+
+    proc, _ = _create_thread_proc(close_timeout=0.5, initialize_process_fnc=_initialize_proc_gated)
+    await proc.start()
+
+    init_task = asyncio.create_task(proc.initialize())
+    try:
+        await _poll_until(init_started.is_set)
+
+        init_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await init_task
+
+        release_init.set()  # the runner acks the queued shutdown once its warm-up ends
+        await asyncio.wait_for(proc.aclose(), timeout=5.0)
+        assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    finally:
+        release_init.set()  # never leave the runner blocked in its warm-up
+
+
+async def test_thread_aclose_during_pending_initialize():
+    """Regression test: aclose() racing a still-running (not cancelled) initialize().
+    The close used to resolve the initialize future while initialize()'s response read
+    was still pending, starting the monitor task as a second reader of the duplex
+    (a concurrent-read error that also failed aclose()), and initialize() then
+    crashed double-setting the already-failed future. aclose() must first stop the
+    in-flight read, and both calls must end cleanly."""
+    init_started = threading.Event()
+    release_init = threading.Event()
+
+    def _initialize_proc_gated(proc: JobProcess) -> None:
+        # hold the runner's warm-up so initialize()'s response read stays pending
+        init_started.set()
+        release_init.wait(timeout=10.0)
+
+    proc, _ = _create_thread_proc(close_timeout=2.0, initialize_process_fnc=_initialize_proc_gated)
+    await proc.start()
+
+    init_task = asyncio.create_task(proc.initialize())
+    await _poll_until(init_started.is_set)
+    assert not proc._initialize_fut.done(), "initialize() should still be reading"
+
+    close_task = asyncio.create_task(proc.aclose())
+    try:
+        # the deterministic window: aclose() resolves the initialize future while
+        # the runner is still warming up (the response read still pending), and
+        # only then is the warm-up allowed to finish
+        await _poll_until(proc._initialize_fut.done, timeout=5.0)
+        release_init.set()
+
+        await asyncio.wait_for(close_task, timeout=5.0)
+        assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+        # initialize() must fail cleanly (the close aborts its read), not crash
+        # double-setting the resolved future. The close no longer cancels the
+        # in-flight read -- it closes the duplex under it, so the read ends
+        # with DuplexClosed (frame-aligned) instead of a mid-frame
+        # cancellation.
+        with pytest.raises((asyncio.CancelledError, duplex_unix.DuplexClosed)):
+            await init_task
+    finally:
+        release_init.set()  # never leave the runner blocked in its warm-up
+
+
+async def test_thread_aclose_during_inflight_response_frame():
+    """Regression test: aclose() used to cancel initialize()'s response read even
+    when it had already consumed the frame header of the InitializeResponse.
+    The monitor task then read the pending payload as a new frame header: the
+    stream was desynchronized, decoding failed with a struct.error that escaped
+    aclose() itself, and the ShutdownRequestAck/ShuttingDown messages were lost.
+    The close must let the in-flight frame finish before handing the channel
+    over to the monitor task."""
+    proc, _ = _create_thread_proc(close_timeout=5.0)
+    await proc.start()
+
+    # instrument the parent duplex (per instance, safe to run concurrently): hold
+    # the first payload read so the close commits its strategy while the
+    # response frame is in flight, and record every frame the duplex delivers
+    # as an aligned header+payload pair
+    reader = proc._pch._reader
+    orig_readexactly = reader.readexactly
+    header_consumed = asyncio.Event()
+    payload_released = asyncio.Event()
+    read_state = {"expect_header": True, "header": b"", "gated": False}
+    frames: list[bytes] = []
+
+    async def _readexactly_spy(n: int) -> bytes:
+        if read_state["expect_header"]:
+            data = await orig_readexactly(n)
+            read_state["header"] = data
+            read_state["expect_header"] = False
+            header_consumed.set()
+            return data
+
+        if not read_state["gated"]:
+            read_state["gated"] = True
+            # the frame header is consumed but not its payload yet
+            await payload_released.wait()
+        data = await orig_readexactly(n)
+        frames.append(read_state["header"] + data)
+        read_state["expect_header"] = True
+        return data
+
+    reader.readexactly = _readexactly_spy
+
+    init_task = asyncio.create_task(proc.initialize())
+    await _poll_until(header_consumed.is_set)
+    init_read_task = proc._init_read_task
+    assert not init_read_task.done(), "the response read should be parked mid-frame"
+
+    close_task = asyncio.create_task(proc.aclose())
+    # the close either cancels the mid-frame read right away (the old behavior,
+    # which desynchronizes the stream) or waits for it to finish the frame;
+    # once it has committed either way, let the response payload through
+    for _ in range(20):
+        if init_read_task.done():
+            break
+        await asyncio.sleep(0.01)
+    payload_released.set()
+
+    try:
+        await init_task
+    except asyncio.CancelledError:
+        pass  # the close aborted the in-flight initialize()
+
+    await asyncio.wait_for(close_task, timeout=10.0)
+
+    await _poll_until(lambda: not proc._thread.is_alive())
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+    def _frame(msg: object) -> bytes:
+        payload = ipc.channel._write_message(msg)
+        return len(payload).to_bytes(4, "big") + payload
+
+    assert _frame(ipc.proto.ShutdownRequestAck()) in frames, "the monitor lost the shutdown ack"
+    assert _frame(ipc.proto.ShuttingDown()) in frames, "the monitor lost the ShuttingDown message"
+
+
+async def _start_midframe_initialize(close_timeout: float, initialize_timeout: float = 20.0):
+    """Start an initialize() whose response frame is held mid-flight: the frame
+    header is consumed, the payload read is gated on an event (the reader-side
+    view of a runner that has written the header but not the payload yet)."""
+    proc, _ = _create_thread_proc(
+        close_timeout=close_timeout, initialize_timeout=initialize_timeout
+    )
+    await proc.start()
+
+    reader = proc._pch._reader
+    orig_readexactly = reader.readexactly
+    header_consumed = asyncio.Event()
+    payload_released = asyncio.Event()
+    read_state = {"expect_header": True, "gated": False}
+
+    async def _readexactly_spy(n: int) -> bytes:
+        if read_state["expect_header"]:
+            data = await orig_readexactly(n)
+            read_state["expect_header"] = False
+            header_consumed.set()
+            return data
+        if not read_state["gated"]:
+            read_state["gated"] = True
+            await payload_released.wait()
+        return await orig_readexactly(n)
+
+    reader.readexactly = _readexactly_spy
+
+    init_task = asyncio.create_task(proc.initialize())
+    await _poll_until(header_consumed.is_set)
+    return proc, init_task, payload_released
+
+
+async def test_thread_aclose_slow_inflight_response_frame():
+    """Regression test: the response payload arrives after aclose()'s one-second
+    grace for the in-flight frame. The close used to fall back to cancelling
+    the read between the frame header and its payload, desynchronizing the
+    channel: the monitor task then misparsed the late payload as a frame
+    header and the decoding error escaped aclose() itself. Past the grace the
+    duplex is closed instead -- the read ends frame-aligned and the close
+    completes cleanly without a graceful shutdown handshake."""
+    proc, init_task, payload_released = await _start_midframe_initialize(close_timeout=5.0)
+
+    close_task = asyncio.create_task(proc.aclose())
+    await asyncio.sleep(1.5)  # past the one-second grace, while the payload is still gated
+
+    payload_released.set()  # the runner finishes the frame, too late for the grace
+
+    await asyncio.wait_for(close_task, timeout=10.0)
+    with contextlib.suppress(asyncio.CancelledError, duplex_unix.DuplexClosed):
+        await init_task
+
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+
+async def test_thread_initialize_cancelled_midframe():
+    """Regression test: initialize() cancelled externally while its response
+    read is mid-frame. initialize()'s cleanup used to cancel the read between
+    the frame header and its payload; the monitor task that aclose() starts
+    afterwards then read the pending payload as a new frame header and the
+    decoding error escaped aclose(). The cleanup closes the duplex instead --
+    the read ends frame-aligned and both calls complete cleanly."""
+    proc, init_task, payload_released = await _start_midframe_initialize(close_timeout=5.0)
+
+    init_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await init_task
+
+    payload_released.set()  # the runner finishes the frame it started
+
+    await asyncio.wait_for(proc.aclose(), timeout=10.0)
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+
+async def test_thread_initialize_timeout_midframe():
+    """Regression test: initialize() timing out while its response read is
+    mid-frame. The timeout used to cancel the read between the frame header and
+    its payload (the bare wait_for cancels the read it wraps), leaving the
+    pending payload for the monitor task to misparse; the decoding error then
+    escaped aclose(). The read is shielded from the timeout and the cleanup
+    closes the duplex, so both initialize() and aclose() end cleanly."""
+    proc, init_task, payload_released = await _start_midframe_initialize(
+        close_timeout=5.0, initialize_timeout=0.5
+    )
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(init_task, timeout=5.0)
+
+    payload_released.set()  # the runner finishes the frame it started
+
+    await asyncio.wait_for(proc.aclose(), timeout=10.0)
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+
+@pytest.mark.no_concurrent
+async def test_thread_warmup_failure_keeps_its_traceback(caplog: pytest.LogCaptureFixture):
+    """Regression test: thread_main caught every initialize() failure as a closed
+    channel and dropped it at debug level. A warm-up (initialize_process_fnc) that
+    raises is a real initialization error, and its traceback is the only diagnostic
+    for it: the runner used to surface it as an unhandled thread exception, so it
+    must be logged with the traceback instead of being reported as a channel that
+    closed while nothing had run.
+
+    Runs sequentially: the runner logs from its own thread, and the per-test capture
+    of the concurrent harness is keyed on a contextvar a plain thread doesn't inherit.
+    """
+    caplog.set_level(logging.DEBUG, logger="livekit.agents")
+
+    proc, _ = _create_thread_proc(
+        close_timeout=10.0, initialize_process_fnc=_failing_initialize_proc
+    )
+    await proc.start()
+    # the failed warm-up now also fails initialize() (the worker refuses the dead
+    # runner, see the test below); the traceback must still reach the log
+    with pytest.raises(RuntimeError, match="runner initialization failed"):
+        await asyncio.wait_for(proc.initialize(), timeout=10.0)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert "simulated init failure" in caplog.text, "the warm-up failure was not logged"
+    assert "Traceback (most recent call last)" in caplog.text, "the failure lost its traceback"
+    assert "channel closed during initialization" not in caplog.text, (
+        "a failed warm-up was reported as a closed channel"
+    )
+
+
+@pytest.mark.no_concurrent
+async def test_thread_initialize_refuses_a_runner_that_failed_its_warmup():
+    """Regression test: ThreadJobExecutor.initialize() asserted that the first
+    message was an InitializeResponse but ignored its error field. The runner's
+    warm-up raised, so it reported the failure and exited, yet the executor
+    resolved initialization successfully and the pool queued the dead runner as
+    warmed. A job dispatched to it was written into a dead channel, its entrypoint
+    never ran, and the executor still reported SUCCESS. An error in the response
+    must fail initialize() and leave the initialize future failed, which is what
+    the pool and _main_task() read as "this runner is not usable".
+
+    Runs sequentially: like its warm-up-failure peer it drives the runner thread
+    through shared in-process primitives.
+    """
+    proc, _ = _create_thread_proc(
+        close_timeout=2.0, initialize_process_fnc=_failing_initialize_proc
+    )
+    await proc.start()
+    try:
+        with pytest.raises(
+            RuntimeError, match="runner initialization failed: simulated init failure"
+        ):
+            await asyncio.wait_for(proc.initialize(), timeout=10.0)
+
+        assert proc._initialize_fut.done(), "initialize() left the runner half-initialized"
+        assert isinstance(proc._initialize_fut.exception(), RuntimeError), (
+            "a runner whose warm-up failed was still reported as initialized"
+        )
+    finally:
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+
+async def test_thread_aclose_without_initialize():
+    """Regression test: start() then aclose() with no initialize(). The
+    ShutdownRequest is the runner's very first message; it used to die on its
+    "first message must be InitializeRequest" assert (an uncaught exception in
+    the runner thread) while the executor reported SUCCESS. The runner must exit
+    cleanly and the executor status must stay accurate."""
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    thread_crashed = threading.Event()
+    original_thread_main = job_proc_lazy_main.thread_main
+
+    def _spy_thread_main(args) -> None:
+        try:
+            original_thread_main(args)
+        except BaseException:
+            thread_crashed.set()
+            raise
+
+    job_proc_lazy_main.thread_main = _spy_thread_main
+    try:
+        proc, start_args = _create_thread_proc(close_timeout=2.0)
+        await proc.start()
+
+        await asyncio.wait_for(proc.aclose(), timeout=5.0)
+    finally:
+        job_proc_lazy_main.thread_main = original_thread_main
+
+    # the executor can observe the join before the thread has fully unwound:
+    # wait for the thread itself before judging whether it crashed
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert not thread_crashed.is_set(), "runner crashed on the initial ShutdownRequest"
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.initialize_counter.value == 0
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
 
 
 async def test_thread_job_graceful_shutdown():

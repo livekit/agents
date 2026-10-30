@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
+import struct
 import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+
+from google.protobuf.message import DecodeError
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
@@ -69,6 +72,7 @@ class ThreadJobExecutor:
 
         self._main_atask: asyncio.Task[None] | None = None
         self._initialize_fut = asyncio.Future[None]()
+        self._init_read_task: asyncio.Task[channel.Message] | None = None
         self._closing = False
         self._lock = asyncio.Lock()
         self._shutdown_ack_fut = asyncio.Future[None]()
@@ -180,13 +184,41 @@ class ThreadJobExecutor:
         try:
             logger.info("initializing job runner", extra=self.logging_extra())
             start_time = time.perf_counter()
-            init_res = await asyncio.wait_for(
-                channel.arecv_message(self._pch, proto.IPC_MESSAGES),
-                timeout=self._opts.initialize_timeout,
-            )
+            # the response read is tracked so a concurrent aclose() can stop it
+            # before the monitor task (started once the initialize future is
+            # resolved) becomes a second reader of the duplex
+            read_task = asyncio.create_task(channel.arecv_message(self._pch, proto.IPC_MESSAGES))
+            self._init_read_task = read_task
+            try:
+                # shield the read so the timeout cancels the shield, not the
+                # read itself: a read interrupted between a frame header and
+                # its payload desynchronizes the channel for the next reader
+                init_res = await asyncio.wait_for(
+                    asyncio.shield(read_task), timeout=self._opts.initialize_timeout
+                )
+            finally:
+                # the read must never outlive initialize(); when it has not
+                # finished it can only be stopped losslessly by closing the
+                # duplex (the read then ends with DuplexClosed, frame-aligned).
+                # A bare cancel could land between a frame header and its
+                # payload and leave the pending payload for the monitor task
+                # to misparse as a new frame header. The close comes first so
+                # a read parked on the actual socket read is woken by the
+                # channel teardown before the cancel.
+                if not read_task.done():
+                    with contextlib.suppress(duplex_unix.DuplexClosed):
+                        await self._pch.aclose()
+                    await utils.aio.cancel_and_wait(read_task)
+                self._init_read_task = None
             assert isinstance(init_res, proto.InitializeResponse), (
                 "first message must be InitializeResponse"
             )
+            if init_res.error:
+                # the warm-up raised: the runner reports the failure and exits, so
+                # this executor must not be marked ready (the pool would queue the
+                # dead runner and dispatch a job whose entrypoint never runs)
+                raise RuntimeError(f"runner initialization failed: {init_res.error}")
+
             logger.info(
                 "job runner initialized",
                 extra={
@@ -195,15 +227,21 @@ class ThreadJobExecutor:
                 },
             )
         except asyncio.TimeoutError:
-            self._initialize_fut.set_exception(
-                asyncio.TimeoutError("runner initialization timed out")
-            )
+            if not self._initialize_fut.done():
+                self._initialize_fut.set_exception(
+                    asyncio.TimeoutError("runner initialization timed out")
+                )
             raise
         except Exception as e:  # should be channel.ChannelClosed most of the time
-            self._initialize_fut.set_exception(e)
+            if not self._initialize_fut.done():
+                self._initialize_fut.set_exception(e)
             raise
         else:
-            self._initialize_fut.set_result(None)
+            if not self._initialize_fut.done():
+                # a concurrent aclose() may have failed the future while this read
+                # was completing; the main task treats both as "initialization
+                # did not complete"
+                self._initialize_fut.set_result(None)
 
     async def aclose(self) -> None:
         """
@@ -212,6 +250,40 @@ class ThreadJobExecutor:
         """
         if not self.started:
             return
+
+        if not self._initialize_fut.done():
+            # a still-running initialize() may be reading the channel; stop its
+            # read first, otherwise the monitor task started once the initialize
+            # future is resolved below becomes a second reader of the duplex
+            init_read_task = self._init_read_task
+            if init_read_task is not None and not init_read_task.done():
+                # the read must first finish the frame it has started: cancelling
+                # between the frame header and its payload would desynchronize the
+                # channel and the monitor task would read the pending payload as a
+                # new frame header, failing to decode it and losing the messages
+                # that follow (e.g. the shutdown ack). when the runner is
+                # unresponsive instead, the read is parked on the next frame header
+                # with nothing consumed. The bound only covers a runner that stops
+                # writing a frame halfway; a runner that dies closes its end of the
+                # channel, which ends the read on its own (DuplexClosed). Past the
+                # bound the duplex is closed rather than cancelled: a mid-frame
+                # cancel would desynchronize the channel for the monitor task that
+                # starts below, while the close ends the read frame-aligned and
+                # the monitor task immediately sees DuplexClosed.
+                await asyncio.wait([init_read_task], timeout=1.0)
+                if not init_read_task.done():
+                    with contextlib.suppress(duplex_unix.DuplexClosed):
+                        await self._pch.aclose()
+                    await utils.aio.cancel_and_wait(init_read_task)
+
+            if not self._initialize_fut.done():
+                # never initialized (a cancelled initialize() also leaves this future
+                # unresolved, its CancelledError isn't caught): unblock the main task
+                # waiting on this future so it starts the monitor task, the sole reader
+                # of the channel, and the runner can ack the queued shutdown request
+                self._initialize_fut.set_exception(
+                    RuntimeError("runner closed before initialization completed")
+                )
 
         self._closing = True
         with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
@@ -312,6 +384,17 @@ class ThreadJobExecutor:
                 try:
                     msg = await channel.arecv_message(self._pch, proto.IPC_MESSAGES)
                 except utils.aio.duplex_unix.DuplexClosed:
+                    break
+                except (struct.error, ValueError, KeyError, DecodeError):
+                    # a frame that fails to decode means the stream is
+                    # desynchronized (e.g. an interrupted response read left a
+                    # partial frame behind); the channel cannot be trusted
+                    # anymore, so treat it like a closed one instead of
+                    # letting the decoding error escape the close
+                    logger.error(
+                        "invalid frame on the IPC channel, closing it",
+                        extra=self.logging_extra(),
+                    )
                     break
 
                 if isinstance(msg, proto.PongResponse):
