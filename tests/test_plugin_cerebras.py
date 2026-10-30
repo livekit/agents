@@ -12,6 +12,9 @@ from livekit.plugins.cerebras.llm import _PayloadTransport
 
 pytestmark = pytest.mark.plugin("cerebras")
 
+if not os.environ.get("CEREBRAS_API_KEY"):
+    pytest.skip("needs CEREBRAS_API_KEY", allow_module_level=True)
+
 # gpt-oss-120b supports both basic chat and function calling.
 CHAT_MODEL = "gpt-oss-120b"
 TOOL_MODEL = "gpt-oss-120b"
