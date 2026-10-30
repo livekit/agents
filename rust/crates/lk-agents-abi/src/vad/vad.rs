@@ -2,15 +2,19 @@
 
 use crate::VadEvent;
 use crate::errors::ProviderError;
-use lk_agents_host_derive::Host;
 
 use crate::AudioFrame;
 use crate::utils::stream::{StreamSink, StreamSource};
 
 // `vad.py:71`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-#[python(dataclass, module = "vad", path = "livekit.agents", name = "VADCapabilities")]
-#[binding(extract)]
+#[crate::host(record(
+    module = "vad",
+    path = "livekit.agents",
+    name = "VADCapabilities",
+    dataclass,
+    extract,
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct VadCapabilities {
     // Seconds between `INFERENCE_DONE` events; the driver guards against zero (`vad.py:127`).
     pub update_interval: f64,

@@ -1,6 +1,6 @@
 //! Host-visible speech transformations; implementations live with voice algorithms.
 
-use super::{ExpressiveTag, NonverbalField, SpeechSteering};
+use super::{ExpressiveTag, SpeechSteering};
 use crate::ChatItem;
 use std::collections::BTreeMap;
 
@@ -9,7 +9,7 @@ pub trait MarkupFunctions {
     #[host(function, pid = true)]
     fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String>;
     #[host(function)]
-    fn supported_nonverbals(provider: String) -> BTreeMap<NonverbalField, Vec<String>>;
+    fn supported_nonverbals(provider: String) -> crate::MarkupInfo;
     #[host(function)]
     fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>);
     #[host(function)]

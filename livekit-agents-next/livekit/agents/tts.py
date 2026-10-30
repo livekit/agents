@@ -182,9 +182,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         sample_rate = sample_rate or max(t.sample_rate for t in tts)
         super().__init__(
             # the chain's own merge, read before any chain is built
-            capabilities=TTSCapabilities(
-                **_core.tts_fallback_capabilities([t.capabilities for t in tts])
-            ),
+            capabilities=_core.tts_fallback_capabilities([t.capabilities for t in tts]),
             sample_rate=sample_rate,
             num_channels=tts[0].num_channels,
         )

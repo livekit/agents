@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
+# `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/vad/events.rs
 #     rust/crates/lk-agents-abi/src/vad/vad.rs
 #
@@ -23,6 +24,16 @@ from livekit import rtc
 
 from ..utils import aio
 from .chat_items import MetricsMetadata
+
+# The declared records.
+
+
+@dataclass
+class VADCapabilities:
+    update_interval: float
+
+
+VADCapabilities.__module__ = "livekit.agents"
 
 
 @unique
@@ -66,11 +77,6 @@ class VADEvent:
     """Threshold used to detect silence."""
     raw_accumulated_speech: float = 0.0
     """Threshold used to detect speech."""
-
-
-@dataclass
-class VADCapabilities:
-    update_interval: float
 
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -266,6 +272,5 @@ class VADStream(ABC):
 # reporting `_generated.*` for a name whose import path never moved.
 VADEventType.__module__ = "livekit.agents"
 VADEvent.__module__ = "livekit.agents"
-VADCapabilities.__module__ = "livekit.agents"
 VAD.__module__ = "livekit.agents"
 VADStream.__module__ = "livekit.agents"

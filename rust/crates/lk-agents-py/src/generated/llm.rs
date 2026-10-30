@@ -380,10 +380,10 @@ impl FallbackTts {
     }
 
     #[getter]
-    fn capabilities(&self) -> PyResult<::lk_agents_abi::TtsCapabilities> {
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::capabilities(&self.0);
-        Ok(out)
+        Ok(crate::generated::records::tts::tts_capabilities_to_py(py, out)?)
     }
 
     #[getter]

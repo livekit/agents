@@ -115,7 +115,7 @@ def stt_capabilities(
 def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> STTCapabilities:
     """`stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
 
-def tts_fallback_capabilities(entries: Sequence[TTSCapabilities]) -> dict[str, object]:
+def tts_fallback_capabilities(entries: Sequence[TTSCapabilities]) -> TTSCapabilities:
     """`tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
 
 def merge_realtime_capabilities(caps: Sequence[dict[str, object]]) -> dict[str, object]:

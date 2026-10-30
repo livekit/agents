@@ -22,6 +22,7 @@ from .chat_items import ChatItem, ChatRole
 from .llm import ChatChunk, SerializedImage
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
+from .tts import TTSCapabilities
 
 def chat_ctx_copy_plan(
     facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
@@ -148,7 +149,7 @@ class FallbackTts:
     @property
     def active_index(self) -> int: ...
     @property
-    def capabilities(self) -> dict[str, object]: ...
+    def capabilities(self) -> TTSCapabilities: ...
     @property
     def sample_rate(self) -> int: ...
     @property

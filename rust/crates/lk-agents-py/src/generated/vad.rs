@@ -323,7 +323,7 @@ impl VadProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            v.extract::<::lk_agents_abi::VadCapabilities>()?
+            crate::generated::records::vad::vad_capabilities_from_py(&v)?
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;

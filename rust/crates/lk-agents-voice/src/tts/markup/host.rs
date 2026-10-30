@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::tts::markup::bindings::{MarkupClass, MarkupFunctions, TranscriptStripper};
-use lk_agents_abi::tts::markup::{self as abi, ExpressiveTag, NonverbalField, SpeechSteering};
+use lk_agents_abi::tts::markup::{self as abi, ExpressiveTag, SpeechSteering};
 
 use super::MarkupExt;
 
@@ -20,8 +20,8 @@ impl MarkupFunctions for SpeechMarkup {
     fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String> {
         super::chat_message_text_content(parts, assistant)
     }
-    fn supported_nonverbals(provider: String) -> BTreeMap<NonverbalField, Vec<String>> {
-        super::nonverbals_of(&provider)
+    fn supported_nonverbals(provider: String) -> lk_agents_abi::MarkupInfo {
+        lk_agents_abi::MarkupInfo { nonverbals: super::nonverbals_of(&provider) }
     }
     fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>) {
         super::split_all_markup(&text)

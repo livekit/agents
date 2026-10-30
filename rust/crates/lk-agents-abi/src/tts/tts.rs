@@ -18,27 +18,31 @@ use crate::{ApiConnectOptions, AudioFrame};
 
 // `TTSCapabilities` (`tts/tts.py`). The payload `FallbackTts`'s `capabilities` getter builds by
 // name is generated too, since a forgotten key would silently take the reference's default.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "TTSCapabilities")]
-// Both directions.
-#[binding(emit, extract)]
+#[crate::host(record(
+    module = "tts",
+    path = "livekit.agents.tts",
+    name = "TTSCapabilities",
+    dataclass,
+    extract,
+    emit,
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TtsCapabilities {
     /// Whether this TTS supports streaming (generally using websockets)
     // Whether this instance has a duplex path; read at construction (some plugins compute it).
     pub streaming: bool,
     /// Whether this TTS supports aligned transcripts with word timestamps
-    #[python(default = "False")]
+    #[host(default = false)]
     pub aligned_transcript: bool,
 }
 
 /// What the expressive markup pipeline can do with a given voice.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "MarkupInfo")]
+#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MarkupInfo {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// ``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op
-    #[python(default_factory = "dict")]
-    pub nonverbals: std::collections::HashMap<String, Vec<String>>,
+    #[host(default_factory = "dict")]
+    pub nonverbals: std::collections::BTreeMap<crate::tts::markup::NonverbalField, Vec<String>>,
 }
 
 // `tts.SynthesizedAudio` (`tts/tts.py:39-51`) plus the two fields a Python plugin carries in

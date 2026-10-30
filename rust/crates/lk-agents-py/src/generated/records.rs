@@ -5759,6 +5759,44 @@ pub mod tool_report {
     }
 }
 
+pub mod tts {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
+    static TTS_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tts_capabilities_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::TtsCapabilities> {
+        let py = obj.py();
+            if !obj.is_instance(TTS_CAPABILITIES.import(py, "livekit.agents._generated.tts", "TTSCapabilities")?)? {
+                return Err(super::not_a(obj, "TTSCapabilities"));
+            }
+            Ok(::lk_agents_abi::TtsCapabilities {
+                streaming: ::lk_agents_abi::python::attr_with(obj, "TTSCapabilities", "streaming", |v| v.extract::<bool>())?,
+                aligned_transcript: ::lk_agents_abi::python::attr_with(obj, "TTSCapabilities", "aligned_transcript", |v| v.extract::<bool>())?,
+            })
+    }
+
+    pub fn tts_capabilities_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::TtsCapabilities) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::TtsCapabilities { streaming, aligned_transcript } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("streaming", ::pyo3::IntoPyObjectExt::into_bound_py_any(streaming, py)?)?;
+            kwargs.set_item("aligned_transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(aligned_transcript, py)?)?;
+            crate::host::construct(TTS_CAPABILITIES.import(py, "livekit.agents._generated.tts", "TTSCapabilities")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
+    static MARKUP_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn markup_info_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::MarkupInfo) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::MarkupInfo { nonverbals } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("nonverbals", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in nonverbals { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k.as_str(), py)?, ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?; } d.into_any() })?;
+            crate::host::construct(MARKUP_INFO.import(py, "livekit.agents._generated.tts", "MarkupInfo")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod turn {
     use pyo3::prelude::*;
 
@@ -6189,6 +6227,24 @@ pub mod usage {
             kwargs.set_item("settled", ::pyo3::IntoPyObjectExt::into_bound_py_any(settled, py)?)?;
             kwargs.set_item("complete", ::pyo3::IntoPyObjectExt::into_bound_py_any(complete, py)?)?;
             crate::host::construct(USAGE.import(py, "livekit.agents._generated.usage", "Usage")?.as_any(), (), Some(&kwargs))
+    }
+}
+
+pub mod vad {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/vad/vad.rs.
+    static VAD_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn vad_capabilities_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::VadCapabilities> {
+        let py = obj.py();
+            if !obj.is_instance(VAD_CAPABILITIES.import(py, "livekit.agents._generated.vad", "VADCapabilities")?)? {
+                return Err(super::not_a(obj, "VADCapabilities"));
+            }
+            Ok(::lk_agents_abi::VadCapabilities {
+                update_interval: ::lk_agents_abi::python::attr_with(obj, "VADCapabilities", "update_interval", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "VADCapabilities.update_interval"))?,
+            })
     }
 }
 

@@ -84,7 +84,8 @@ pub use llm::realtime::{
 };
 pub use stt::stt::{AlignedTranscript, Stt, SttCapabilities, SttSink, SttSource};
 pub use tts::tts::{
-    AudioEncoding, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource, no_duplex_path,
+    AudioEncoding, MarkupInfo, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
+    no_duplex_path,
 };
 pub use utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, RetryReport, StreamSink, StreamSource};
 pub use vad::vad::{Vad, VadCapabilities, VadSink, VadSource};

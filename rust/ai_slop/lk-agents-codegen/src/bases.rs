@@ -863,7 +863,7 @@ impl Writer<'_> {
         b.push_str("\n        def _provider_key(self) -> str:\n");
         docstring(b, &key.doc, 12);
         b.push_str(&format!(
-            "            return \"\"\n\n        def _core(self) -> _core.Markup:\n            return _core.Markup(self._provider_key())\n\n        @property\n        def info(self) -> {info}:\n            \"\"\"The queryable markup matrix for this voice.\"\"\"\n            return {info}(nonverbals=_core.supported_nonverbals(self._provider_key()))\n"
+            "            return \"\"\n\n        def _core(self) -> _core.Markup:\n            return _core.Markup(self._provider_key())\n\n        @property\n        def info(self) -> {info}:\n            \"\"\"The queryable markup matrix for this voice.\"\"\"\n            return _core.supported_nonverbals(self._provider_key())\n"
         ));
         for f in o.methods.iter().filter(|method| method.name != "_provider_key") {
             let (params, ret) = (&f.params, &f.ret);

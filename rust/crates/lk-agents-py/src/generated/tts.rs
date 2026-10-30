@@ -29,7 +29,7 @@ pub fn chat_message_text_content(parts: ::std::vec::Vec<::std::string::String>, 
 #[pyo3(signature = (provider))]
 pub fn supported_nonverbals<'py>(py: Python<'py>, provider: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::supported_nonverbals(provider);
-    Ok({ let d = ::pyo3::types::PyDict::new(py); for (k, x) in out { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k.as_str(), py)?, ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?; } d.into_any() })
+    Ok(crate::generated::records::tts::markup_info_to_py(py, out)?)
 }
 
 #[pyfunction]
@@ -369,7 +369,7 @@ impl TtsProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            v.extract::<::lk_agents_abi::TtsCapabilities>()?
+            crate::generated::records::tts::tts_capabilities_from_py(&v)?
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;

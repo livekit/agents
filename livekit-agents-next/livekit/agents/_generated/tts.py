@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
+# `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/tts/tts.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -33,6 +34,8 @@ from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
 
+# The declared records.
+
 
 @dataclass
 class TTSCapabilities:
@@ -48,6 +51,10 @@ class MarkupInfo:
 
     nonverbals: dict[str, list[str]] = field(default_factory=dict)
     """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
+
+
+TTSCapabilities.__module__ = "livekit.agents.tts"
+MarkupInfo.__module__ = "livekit.agents.tts"
 
 
 @dataclass
@@ -155,7 +162,7 @@ class TTS(
         @property
         def info(self) -> MarkupInfo:
             """The queryable markup matrix for this voice."""
-            return MarkupInfo(nonverbals=_core.supported_nonverbals(self._provider_key()))
+            return _core.supported_nonverbals(self._provider_key())
 
         def llm_instructions(self, *, speech_steering: SpeechSteeringOptions | None = None) -> str | None:
             """The instructions teaching the LLM this voice's markup, ``None`` without markup."""
@@ -584,8 +591,6 @@ class _ChunkedStreamFromStream(ChunkedStream):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-TTSCapabilities.__module__ = "livekit.agents.tts"
-MarkupInfo.__module__ = "livekit.agents.tts"
 SynthesizedAudio.__module__ = "livekit.agents.tts"
 TTSError.__module__ = "livekit.agents.tts"
 TTS.__module__ = "livekit.agents.tts"

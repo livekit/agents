@@ -184,9 +184,10 @@ pub fn stt_fallback_capabilities<'py>(py: Python<'py>, entries: Bound<'_, PyAny>
 /// `tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
 #[pyfunction]
 #[pyo3(signature = (entries))]
-pub fn tts_fallback_capabilities(entries: ::std::vec::Vec<::lk_agents_abi::TtsCapabilities>) -> PyResult<::lk_agents_abi::TtsCapabilities> {
+pub fn tts_fallback_capabilities<'py>(py: Python<'py>, entries: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let entries = entries.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::tts::tts_capabilities_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_fallback_capabilities(entries);
-    Ok(out)
+    Ok(crate::generated::records::tts::tts_capabilities_to_py(py, out)?)
 }
 
 /// The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
