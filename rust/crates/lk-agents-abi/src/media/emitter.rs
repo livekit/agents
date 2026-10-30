@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::errors::HostError;
+use crate::usage::TokenUsage;
 use crate::{AudioFrame, TimedString};
 
 /// Where a synthesis' audio goes: `tts.py`'s `_EmitterOutput` over the host channel. Its calls
@@ -22,6 +23,8 @@ pub trait EmitterOutput: Send + Sync {
         segment_id: String,
         is_final: bool,
         timed_transcript: Vec<TimedString>,
+        usage: Option<TokenUsage>,
+        characters_count: Option<u64>,
     );
     /// An attribute of the synthesis' current span, when it is recording.
     #[host(notify)]
@@ -64,6 +67,15 @@ pub trait AudioEmitter: Send + Sync + Sized + 'static {
     fn push_timed_transcript(
         &self,
         #[host(one_or_many)] delta_text: Vec<TimedString>,
+    ) -> Result<(), EmitterError>;
+    /// What the provider reported it billed for the open segment, carried on the segment's final
+    /// frame. Reports add up, one per provider request; providers that report nothing keep the
+    /// framework's own measure (characters sent, audio received).
+    #[host(call)]
+    fn report_usage(
+        &self,
+        #[host(default = None)] usage: Option<TokenUsage>,
+        #[host(kw, default = None)] characters_count: Option<u64>,
     ) -> Result<(), EmitterError>;
     #[host(call)]
     fn flush(&self) -> Result<(), EmitterError>;

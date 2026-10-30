@@ -63,6 +63,12 @@ pub struct SynthesizedAudio {
     /// Current segment of the synthesized audio (streaming only)
     #[host(default = "")]
     pub delta_text: String,
+    /// Token usage the provider reported for the segment, on its final frame
+    #[host(default = None)]
+    pub usage: Option<crate::usage::TokenUsage>,
+    /// Characters the provider billed for the segment, on its final frame
+    #[host(default = None)]
+    pub characters_count: Option<u64>,
     // `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
     // seconds (a host's `perf_counter()` stamp is converted where it is read). `None` when absent
     // (`generation.py:426` branches on it); `0.0` is legitimate.
@@ -95,6 +101,8 @@ impl SynthesizedAudio {
             is_final: false,
             segment_id: String::new(),
             delta_text: String::new(),
+            usage: None,
+            characters_count: None,
             started_time: None,
             timed_transcript: Vec::new(),
             encoding: AudioEncoding::Pcm,

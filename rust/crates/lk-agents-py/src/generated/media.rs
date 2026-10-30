@@ -101,6 +101,10 @@ fn _extract_audio_emitter_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::v
     if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) }
 }
 
+fn _extract_audio_emitter_report_usage_characters_count(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u64>(&obj, "characters_count")).map(Some) }
+}
+
 fn _extract_audio_emitter_pushed_duration_idx(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
     ::lk_agents_abi::python::number_from_py::<i64>(&obj, "idx")
 }
@@ -160,6 +164,17 @@ impl AudioEmitter {
         crate::host::check_pid()?;
         let delta_text = (if delta_text.is_instance_of::<::pyo3::types::PyList>() { delta_text.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::conversions::timed_string_from_py(&item) }).collect::<PyResult<Vec<_>>>()) } else { (crate::conversions::timed_string_from_py(&delta_text)).map(|item| vec![item]) })?;
         py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::push_timed_transcript(&self.0, delta_text)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// What the provider reported it billed for the open segment, carried on the segment's final
+    /// frame. Reports add up, one per provider request; providers that report nothing keep the
+    /// framework's own measure (characters sent, audio received).
+    #[pyo3(signature = (usage = None, *, characters_count = None))]
+    fn report_usage(&self, py: Python<'_>, usage: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_audio_emitter_report_usage_characters_count)] characters_count: ::std::option::Option<u64>) -> PyResult<()> {
+        crate::host::check_pid()?;
+        let usage = usage.map(|v| crate::generated::records::usage::token_usage_from_py(&v)).transpose()?;
+        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::report_usage(&self.0, usage, characters_count)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -471,15 +486,17 @@ impl EmitterOutputProxy {
 }
 
 impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
-    fn send(&self, frame: ::lk_agents_abi::AudioFrame, request_id: ::std::string::String, segment_id: ::std::string::String, is_final: bool, timed_transcript: ::std::vec::Vec<::lk_agents_abi::TimedString>) {
+    fn send(&self, frame: ::lk_agents_abi::AudioFrame, request_id: ::std::string::String, segment_id: ::std::string::String, is_final: bool, timed_transcript: ::std::vec::Vec<::lk_agents_abi::TimedString>, usage: ::std::option::Option<::lk_agents_abi::usage::TokenUsage>, characters_count: ::std::option::Option<u64>) {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let request_id_arg = request_id;
         let segment_id_arg = segment_id;
         let is_final_arg = is_final;
         let timed_transcript_arg = timed_transcript;
+        let usage_arg = usage;
+        let characters_count_arg = characters_count;
         ::lk_agents_runtime::host::notify(&self.notifier, "EmitterOutput.send", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 5] = [crate::conversions::audio_frame_to_py(py, frame_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::types::PyList::new(py, timed_transcript_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 7] = [crate::conversions::audio_frame_to_py(py, frame_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final_arg, py)?, ::pyo3::types::PyList::new(py, timed_transcript_arg.into_iter().map(|x| PyResult::Ok(crate::conversions::timed_string_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), match usage_arg { None => py.None().into_bound(py), Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count_arg, py)?];
                 Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }

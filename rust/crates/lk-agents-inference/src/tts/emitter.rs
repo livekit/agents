@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString, Ts};
 use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
@@ -85,6 +86,7 @@ enum Op {
     Push(Vec<u8>),
     Frame(Frame),
     Words(Vec<TimedString>),
+    Usage(Option<TokenUsage>, Option<u64>),
     Flush,
     EndInput,
 }
@@ -181,6 +183,8 @@ impl Inner {
                     audio.segment_id,
                     audio.is_final,
                     audio.timed_transcript,
+                    audio.usage,
+                    audio.characters_count,
                 );
             }
             HostEffect::Arm(delay) => self.arm(delay),
@@ -274,6 +278,7 @@ impl Inner {
             Op::Push(data) => self.run(|m, now, eff| m.push(now, &data, eff)),
             Op::Frame(frame) => self.run(|m, now, eff| m.push_frame(now, frame, eff)),
             Op::Words(words) => self.run(|m, _, _| m.push_timed_transcript(words)),
+            Op::Usage(usage, characters) => self.run(|m, _, _| m.report_usage(usage, characters)),
             Op::Flush => self.run(|m, now, eff| m.flush(now, eff)),
             Op::EndInput => self.run(|m, now, eff| m.end_input(now, eff)),
         }
@@ -475,6 +480,14 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
             return Ok(());
         }
         self.0.apply(Op::Words(delta_text))
+    }
+
+    fn report_usage(
+        &self,
+        usage: Option<TokenUsage>,
+        characters_count: Option<u64>,
+    ) -> Result<(), EmitterError> {
+        self.0.apply(Op::Usage(usage, characters_count))
     }
 
     fn flush(&self) -> Result<(), EmitterError> {

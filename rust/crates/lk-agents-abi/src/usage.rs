@@ -59,6 +59,32 @@ impl TokenUsage {
     pub fn total_tokens(&self) -> u64 {
         self.input_tokens + self.output_tokens
     }
+
+    /// Adds `other`. A breakdown stays known only while both supply it: a partial breakdown is
+    /// never presented as a total.
+    pub fn add(&mut self, other: &TokenUsage) {
+        fn both(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+            Some(a? + b?)
+        }
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        for (x, y) in [
+            (&mut self.cache_read_tokens, other.cache_read_tokens),
+            (&mut self.cache_write_tokens, other.cache_write_tokens),
+            (&mut self.output_reasoning_tokens, other.output_reasoning_tokens),
+            (&mut self.input_text_tokens, other.input_text_tokens),
+            (&mut self.input_audio_tokens, other.input_audio_tokens),
+            (&mut self.input_image_tokens, other.input_image_tokens),
+            (&mut self.output_text_tokens, other.output_text_tokens),
+            (&mut self.output_audio_tokens, other.output_audio_tokens),
+            (&mut self.output_image_tokens, other.output_image_tokens),
+            (&mut self.cache_read_text_tokens, other.cache_read_text_tokens),
+            (&mut self.cache_read_audio_tokens, other.cache_read_audio_tokens),
+            (&mut self.cache_read_image_tokens, other.cache_read_image_tokens),
+        ] {
+            *x = both(*x, y);
+        }
+    }
 }
 
 /// An LLM's usage, realtime models included.

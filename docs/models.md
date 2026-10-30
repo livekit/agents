@@ -110,6 +110,13 @@ plugin's classes, not these bases.
 | `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
 | `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TimedString` words) and `USERDATA_TTS_STARTED_TIME` |
 
+A TTS plugin whose provider reports what it billed passes it on with
+`output_emitter.report_usage(usage, characters_count=...)`: tokens as a
+`TokenUsage`, billed characters as a count, each report one provider request's
+share of the open segment. It rides on the segment's final `SynthesizedAudio`
+(`usage`, `characters_count`) into `TTSMetrics` and the usage totals; see
+[usage](usage.md#text-to-speech). A provider that reports nothing needs no call.
+
 `ChoiceDelta.extra` and `FunctionToolCall.extra` carry provider data (such as
 Google thought signatures) as a JSON object: a value that is not JSON fails the
 stream when the framework reads the chunk.

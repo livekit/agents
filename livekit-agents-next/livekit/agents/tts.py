@@ -40,6 +40,7 @@ from .types import (
 
 if TYPE_CHECKING:
     from ._generated.chat_items import MetricsMetadata
+    from ._generated.usage import TokenUsage
 
 __all__ = [
     "TTS",
@@ -76,13 +77,20 @@ class _EmitterOutput:
         segment_id: str,
         is_final: bool,
         timed_transcript: list[TimedString],
+        usage: TokenUsage | None,
+        characters_count: int | None,
     ) -> None:
         if self._ch.closed:
             return
         frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcript
         self._ch.send_nowait(
             SynthesizedAudio(
-                frame=frame, request_id=request_id, segment_id=segment_id, is_final=is_final
+                frame=frame,
+                request_id=request_id,
+                segment_id=segment_id,
+                is_final=is_final,
+                usage=usage,
+                characters_count=characters_count,
             )
         )
 
@@ -126,6 +134,8 @@ def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:
         if words := audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
             output_emitter.push_timed_transcript(words)
         output_emitter.push_frame(audio.frame)
+        if audio.usage is not None or audio.characters_count is not None:
+            output_emitter.report_usage(audio.usage, characters_count=audio.characters_count)
 
     return out
 

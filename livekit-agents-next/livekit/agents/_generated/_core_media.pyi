@@ -13,6 +13,7 @@ from livekit.agents.utils.images import _FrameReader
 from livekit.rtc import AudioFrame
 
 from ..types import TimedString
+from .usage import TokenUsage
 
 def _core_install_frame_reader(reader: _FrameReader) -> None:
     """Hands the runtime the host's frame reader; images of host frames need it."""
@@ -57,6 +58,16 @@ class AudioEmitter:
     def push(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
     def push_frame(self, frame: AudioFrame) -> None: ...
     def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None: ...
+    def report_usage(
+        self,
+        usage: TokenUsage | None = None,
+        *,
+        characters_count: int | None = None,
+    ) -> None:
+        """What the provider reported it billed for the open segment, carried on the segment's final
+        frame. Reports add up, one per provider request; providers that report nothing keep the
+        framework's own measure (characters sent, audio received).
+        """
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     async def join(self) -> None:

@@ -37,6 +37,7 @@ from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
 from .types import ProviderId
+from .usage import TokenUsage
 
 # The declared records.
 
@@ -80,6 +81,10 @@ class SynthesizedAudio:
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
     """Current segment of the synthesized audio (streaming only)"""
+    usage: TokenUsage | None = None
+    """Token usage the provider reported for the segment, on its final frame"""
+    characters_count: int | None = None
+    """Characters the provider billed for the segment, on its final frame"""
 
 
 ExpressiveTag.__module__ = "livekit.agents.tts"

@@ -395,25 +395,7 @@ fn fold(acc: &mut Option<Measurement>, m: &Measurement) {
     fn both<T: std::ops::Add<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
         Some(a? + b?)
     }
-    let (t, u) = (&mut a.tokens, &m.tokens);
-    t.input_tokens += u.input_tokens;
-    t.output_tokens += u.output_tokens;
-    for (x, y) in [
-        (&mut t.cache_read_tokens, u.cache_read_tokens),
-        (&mut t.cache_write_tokens, u.cache_write_tokens),
-        (&mut t.output_reasoning_tokens, u.output_reasoning_tokens),
-        (&mut t.input_text_tokens, u.input_text_tokens),
-        (&mut t.input_audio_tokens, u.input_audio_tokens),
-        (&mut t.input_image_tokens, u.input_image_tokens),
-        (&mut t.output_text_tokens, u.output_text_tokens),
-        (&mut t.output_audio_tokens, u.output_audio_tokens),
-        (&mut t.output_image_tokens, u.output_image_tokens),
-        (&mut t.cache_read_text_tokens, u.cache_read_text_tokens),
-        (&mut t.cache_read_audio_tokens, u.cache_read_audio_tokens),
-        (&mut t.cache_read_image_tokens, u.cache_read_image_tokens),
-    ] {
-        *x = both(*x, y);
-    }
+    a.tokens.add(&m.tokens);
     a.connection_duration = both(a.connection_duration, m.connection_duration);
     a.audio_duration = both(a.audio_duration, m.audio_duration);
     a.characters_count = both(a.characters_count, m.characters_count);

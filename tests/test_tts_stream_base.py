@@ -7,7 +7,8 @@ import asyncio
 
 import pytest
 
-from livekit.agents import APIConnectionError, APIConnectOptions, tts
+from livekit.agents import APIConnectionError, APIConnectOptions, TokenUsage, tts
+from livekit.agents.metrics import TTSMetrics
 
 pytestmark = pytest.mark.unit
 
@@ -216,3 +217,47 @@ async def test_a_core_opened_stream_carries_its_expressive_option() -> None:
             assert stream._expressive is expressive
         finally:
             await stream.aclose()
+
+
+class _BilledTTS(tts.TTS):
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24000, num_channels=1
+        )
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    ) -> tts.ChunkedStream:
+        return _Billed(tts=self, input_text=text, conn_options=conn_options)
+
+
+class _Billed(tts.ChunkedStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id="r", sample_rate=24000, num_channels=1, mime_type="audio/pcm"
+        )
+        output_emitter.push(b"\x00\x00" * 2400)
+        output_emitter.report_usage(TokenUsage(input_tokens=3, output_tokens=40))
+        output_emitter.report_usage(characters_count=7)
+        output_emitter.report_usage(TokenUsage(input_tokens=2, output_tokens=10))
+
+
+# Catches: a provider's reported usage lost between the emitter and the metrics, or the
+# framework's character count kept when the provider reported what it billed.
+async def test_reported_usage_rides_the_final_frame_into_the_metrics() -> None:
+    provider = _BilledTTS()
+    metrics: list[TTSMetrics] = []
+    provider.on("metrics_collected", metrics.append)
+
+    async with provider.synthesize("Hello there, world") as stream:
+        frames = [audio async for audio in stream]
+
+    assert [(f.usage, f.characters_count) for f in frames if not f.is_final] == [(None, None)] * (
+        len(frames) - 1
+    )
+    assert frames[-1].is_final
+    assert frames[-1].usage == TokenUsage(input_tokens=5, output_tokens=50)
+    assert frames[-1].characters_count == 7
+    [record] = metrics
+    assert (record.tokens.input_tokens, record.tokens.output_tokens) == (5, 50)
+    assert record.characters_count == 7

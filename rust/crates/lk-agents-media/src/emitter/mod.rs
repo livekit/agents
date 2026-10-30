@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::{AudioByteStream, Frame};
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::{AudioEncoding, AudioFrame, SynthesizedAudio};
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{TimedString, Ts};
 
 /// What the machine asks of its owner, in order.
@@ -37,6 +38,9 @@ const MARKER_DIVISOR: u32 = 100;
 struct SegmentCtx {
     segment_id: String,
     audio_duration: f64,
+    /// What the provider reported, carried on the final frame.
+    usage: Option<TokenUsage>,
+    characters_count: Option<u64>,
 }
 
 #[derive(Default)]
@@ -178,7 +182,12 @@ impl AudioEmitter {
             return Err(EmitterError::SegmentAlreadyOpen);
         }
         self.audio_durations.push(0.0);
-        self.seg = Some(SegmentCtx { segment_id: segment_id.to_string(), audio_duration: 0.0 });
+        self.seg = Some(SegmentCtx {
+            segment_id: segment_id.to_string(),
+            audio_duration: 0.0,
+            usage: None,
+            characters_count: None,
+        });
         Ok(())
     }
 
@@ -256,6 +265,28 @@ impl AudioEmitter {
             return Ok(());
         }
         self.timed_transcripts.extend(words);
+        Ok(())
+    }
+
+    /// What the provider billed for the open segment; reports add up.
+    pub fn report_usage(
+        &mut self,
+        usage: Option<TokenUsage>,
+        characters_count: Option<u64>,
+    ) -> Result<(), EmitterError> {
+        if !self.live()? {
+            return Ok(());
+        }
+        let seg = self.seg.as_mut().ok_or(EmitterError::NoSegment)?;
+        if let Some(usage) = usage {
+            match &mut seg.usage {
+                Some(total) => total.add(&usage),
+                None => seg.usage = Some(usage),
+            }
+        }
+        if let Some(n) = characters_count {
+            *seg.characters_count.get_or_insert(0) += n;
+        }
         Ok(())
     }
 
@@ -469,6 +500,10 @@ impl AudioEmitter {
     }
 
     fn build_event(&mut self, frame: Frame, is_final: bool) -> SynthesizedAudio {
+        let (usage, characters_count) = match self.seg.as_mut().filter(|_| is_final) {
+            Some(seg) => (seg.usage.take(), seg.characters_count.take()),
+            None => (None, None),
+        };
         SynthesizedAudio {
             frame: AudioFrame::new(
                 frame.data,
@@ -480,6 +515,8 @@ impl AudioEmitter {
             is_final,
             segment_id: self.seg.as_ref().map(|s| s.segment_id.clone()).unwrap_or_default(),
             delta_text: String::new(),
+            usage,
+            characters_count,
             // Stamped by `ChunkedStream`/`SynthesizeStream` on the way out (`tts.py:502`).
             started_time: None,
             // Consumed, not copied, or the synchroniser speaks the words twice.

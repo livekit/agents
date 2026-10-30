@@ -441,6 +441,11 @@ pub fn synthesized_audio_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Synthesized
         is_final: obj.getattr("is_final")?.extract()?,
         segment_id: obj.getattr("segment_id")?.extract()?,
         delta_text: obj.getattr("delta_text")?.extract()?,
+        usage: match obj.getattr("usage")? {
+            usage if usage.is_none() => None,
+            usage => Some(crate::generated::records::usage::token_usage_from_py(&usage)?),
+        },
+        characters_count: obj.getattr("characters_count")?.extract()?,
         started_time,
         timed_transcript,
         encoding: AudioEncoding::default(),
@@ -476,6 +481,10 @@ pub fn synthesized_audio_to_py<'py>(
     kwargs.set_item("is_final", value.is_final)?;
     kwargs.set_item("segment_id", value.segment_id)?;
     kwargs.set_item("delta_text", value.delta_text)?;
+    if let Some(usage) = value.usage {
+        kwargs.set_item("usage", crate::generated::records::usage::token_usage_to_py(py, usage)?)?;
+    }
+    kwargs.set_item("characters_count", value.characters_count)?;
     crate::host::construct(CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?, (), Some(&kwargs))
 }
 

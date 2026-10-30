@@ -144,7 +144,7 @@ and `tokens: TokenUsage`.
 | --- | --- |
 | `LLMUsage`, including realtime | `connection_duration`: metered session-connection seconds |
 | `STTUsage` | `audio_duration`: processed input audio seconds |
-| `TTSUsage` | `audio_duration`: synthesized output audio seconds; `characters_count`: synthesized characters |
+| `TTSUsage` | `audio_duration`: synthesized output audio seconds; `characters_count`: billed characters as the provider reported them, else the characters synthesized ([text to speech](#text-to-speech)) |
 | `EOTUsage` | Request count |
 | `InterruptionUsage` | Request count |
 
@@ -185,6 +185,27 @@ across models is useful for volume; it is not a cost calculation.
 Usage is consumption, not an invoice. Pricing, currency conversion, taxes, and
 discounts are separate concerns. A missing measurement is never treated as a
 known zero charge.
+
+### Text to speech
+
+A TTS request's usage is what its provider reported billing, when it reports it,
+and the framework's own measure otherwise. The plugin reports each provider
+request with `AudioEmitter.report_usage(usage, characters_count=...)`. Reports
+for one segment add up and ride on its final `SynthesizedAudio` (`usage`,
+`characters_count`), from which `TTSMetrics` and `TTSUsage` take them. A
+forwarding stream (a fallback or sentence adapter) reports what it forwards
+into its own emitter, so each request counts once.
+
+| Measure | Reported by the provider | Otherwise |
+| --- | --- | --- |
+| `tokens` | Token-billed models (OpenAI `gpt-4o-mini-tts`, Mistral): input and output tokens, with the input's text/audio split when given | Zero |
+| `characters_count` | The billed characters (AWS Polly, Deepgram, ElevenLabs HTTP, Inworld, MiniMax, Speechify, Vakyam), which can differ from the text sent (markup, normalization) | The characters of the text synthesized |
+| `audio_duration` | Not taken from providers | The audio the framework received |
+
+The providers above report usage on the endpoints their plugins use; every
+other TTS plugin's provider reports none there, and its usage is the
+framework's measure. Provider credits and billed seconds have no typed field:
+none of these providers reports them on the synthesis response.
 
 ## Counting and missing measurements
 

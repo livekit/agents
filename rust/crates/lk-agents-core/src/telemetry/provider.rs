@@ -170,6 +170,9 @@ pub struct TtsMetricState {
     request_id: String,
     segment_id: String,
     texts: VecDeque<String>,
+    /// What the provider reported billing, from the frames that carried it.
+    tokens: TokenUsage,
+    characters: Option<u64>,
 }
 /// The TTS streams' metric fold as the host drives it (`_core.TtsMetricState`).
 impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
@@ -212,6 +215,8 @@ impl TtsMetricState {
             request_id: String::new(),
             segment_id: String::new(),
             texts: VecDeque::new(),
+            tokens: TokenUsage::default(),
+            characters: None,
         }
     }
 
@@ -224,6 +229,12 @@ impl TtsMetricState {
         self.audio += audio.frame.duration();
         self.request_id.clone_from(&audio.request_id);
         self.segment_id.clone_from(&audio.segment_id);
+        if let Some(usage) = &audio.usage {
+            self.tokens.add(usage);
+        }
+        if let Some(n) = audio.characters_count {
+            *self.characters.get_or_insert(0) += n;
+        }
         audio.is_final
     }
 
@@ -233,6 +244,7 @@ impl TtsMetricState {
     }
 
     /// The record for `text`, then the figures reset. A streamed segment with no text has none.
+    /// The characters are the provider's billed count when it reported one, else `text`'s.
     pub fn finish(
         &mut self,
         now: f64,
@@ -251,8 +263,11 @@ impl TtsMetricState {
             duration: now - start,
             audio_duration: self.audio,
             cancelled: context.cancelled,
-            characters_count: text.chars().count() as u32,
-            tokens: TokenUsage::default(),
+            characters_count: self
+                .characters
+                .take()
+                .map_or(text.chars().count() as u32, |n| u32::try_from(n).unwrap_or(u32::MAX)),
+            tokens: std::mem::take(&mut self.tokens),
             streamed: self.streamed,
             // A stream's connection is reported apart (`_report_connection_acquired`).
             acquire_time: None,

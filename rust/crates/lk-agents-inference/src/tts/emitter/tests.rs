@@ -3,6 +3,7 @@ use std::sync::{Arc, Weak};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::media::emitter::{AudioEmitter as _, EmitterOutput};
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioFrame, TimedString};
 use lk_agents_net::clock::RealClock;
 use parking_lot::Mutex;
@@ -34,6 +35,8 @@ impl EmitterOutput for Output {
         _segment_id: String,
         is_final: bool,
         _timed_transcript: Vec<TimedString>,
+        _usage: Option<TokenUsage>,
+        _characters_count: Option<u64>,
     ) {
         self.sent.lock().push(Sent {
             samples: frame.samples_per_channel,
