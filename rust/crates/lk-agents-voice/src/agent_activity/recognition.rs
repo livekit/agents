@@ -61,9 +61,10 @@ impl Driver {
         self.session.stt_requests.insert(stream, request);
     }
 
-    /// The stream ended: its request is measured when it reported usage.
+    /// The stream ended: its request is measured when it reported usage. The stream keeps its
+    /// request for the reports that arrive after its end.
     pub(crate) fn stt_stream_ended(&mut self, stream: lk_agents_abi::resources::ResourceId) {
-        if let Some(request) = self.session.stt_requests.remove(&stream) {
+        if let Some(&request) = self.session.stt_requests.get(&stream) {
             self.session.usage.finish(request, true);
         }
     }
@@ -88,8 +89,7 @@ impl Driver {
                 metadata: Some(id.metadata()),
             };
             let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record));
-            // The stream's request takes the report here; one from a stream already ended counts
-            // as its own measured request.
+            // The stream's request takes the report here, also after the stream ended.
             let request = self.session.stt_requests.get(&stream).copied();
             if let Some(request) = request {
                 self.session.usage.report_delta(request, &metrics);

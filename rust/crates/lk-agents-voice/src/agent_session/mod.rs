@@ -49,7 +49,7 @@ pub(crate) struct VoiceSession {
     >,
     /// The realtime responses created and not yet measured, by response id.
     pub(crate) realtime_requests: std::collections::BTreeMap<String, u64>,
-    /// The request of each recognition stream opened and not yet ended, by stream.
+    /// The request of each recognition stream opened, by stream; kept after the stream ended.
     pub(crate) stt_requests: std::collections::BTreeMap<lk_agents_abi::resources::ResourceId, u64>,
     pub(crate) next_request: u64,
     pub(crate) states: AgentUserState,

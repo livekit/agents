@@ -139,3 +139,22 @@ fn a_streams_usage_reports_add_to_its_one_request() {
     assert_eq!((stt.requests, stt.audio_duration), (1, Some(5.0)));
     assert!(u.complete);
 }
+
+// usage.md "Counting": a report that arrives after its stream ended still belongs to the stream's
+// one request; it adds its audio, creates no request, and resolves a stream that ended unmeasured.
+#[test]
+fn a_late_stream_report_adds_to_the_ended_request() {
+    let report = |secs| {
+        let mut stt = lk_agents_abi::metrics::testkit::stt();
+        stt.audio_duration = Some(secs);
+        AgentMetrics::Stt(stt)
+    };
+    let mut l = Ledger::default();
+    l.start(1, ModelKind::Stt, "deepgram", "nova-3");
+    l.finish(1, true);
+    assert_eq!(l.snapshot().unmeasured_requests, 1);
+    l.report_delta(1, &report(2.0));
+    let u = l.snapshot();
+    let [ModelUsage::Stt(stt)] = u.models.as_slice() else { panic!("{:?}", u.models) };
+    assert_eq!((stt.requests, stt.unmeasured_requests, stt.audio_duration), (1, 0, Some(2.0)));
+}

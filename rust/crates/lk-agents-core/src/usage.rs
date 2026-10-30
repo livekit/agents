@@ -52,10 +52,18 @@ struct Pending {
     partial: Option<Measurement>,
 }
 
+/// A request that ended, for the stream reports that arrive after it.
+#[derive(Debug, Clone, Copy)]
+struct Ended {
+    bucket: usize,
+    unmeasured: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Ledger {
     buckets: Vec<Bucket>,
     pending: BTreeMap<u64, Pending>,
+    ended: BTreeMap<u64, Ended>,
     tool_calls: u64,
     settled: bool,
     revision: u64,
@@ -84,21 +92,32 @@ impl Ledger {
     }
 
     /// A streaming request's usage report for its latest period: it adds to the earlier ones
-    /// (usage.md "Counting": a stream's reports create no new requests).
+    /// (usage.md "Counting": a stream's reports create no new requests). A report after the
+    /// stream ended adds to its ended request, and measures it if it ended unmeasured.
     pub fn report_delta(&mut self, request: u64, metrics: &AgentMetrics) {
         let Some((_, _, delta)) = measure(metrics) else { return };
         if let Some(pending) = self.pending.get_mut(&request) {
             fold(&mut pending.partial, &delta);
-            self.revision += 1;
+        } else if let Some(ended) = self.ended.get_mut(&request) {
+            let bucket = &mut self.buckets[ended.bucket];
+            fold(&mut bucket.measured, &delta);
+            if std::mem::take(&mut ended.unmeasured) {
+                bucket.unmeasured -= 1;
+            }
+        } else {
+            return;
         }
+        self.revision += 1;
     }
 
     /// `request` ended. Its last report counts as consumption either way; the request stays
     /// unmeasured unless it `completed` with a report.
     pub fn finish(&mut self, request: u64, completed: bool) {
         let Some(Pending { bucket, partial }) = self.pending.remove(&request) else { return };
+        let unmeasured = !(completed && partial.is_some());
+        self.ended.insert(request, Ended { bucket, unmeasured });
         let bucket = &mut self.buckets[bucket];
-        if !(completed && partial.is_some()) {
+        if unmeasured {
             bucket.unmeasured += 1;
         }
         if let Some(partial) = partial {
