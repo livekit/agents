@@ -34,7 +34,7 @@ use lk_agents_abi::{
 };
 
 use crate::{
-    fakes::{Measured, Timing, delay, measured},
+    fakes::{Measured, RealtimeDelays, Timing, delay, measured},
     input::{AGENT_TURNS, USER_TURNS},
     record::{Breach, Tag},
 };
@@ -245,6 +245,7 @@ const FUNCTION_CALL_SHARE: (u64, u64) = (8, 94);
 pub struct Server {
     rng: Rng,
     timing: Timing,
+    delays: RealtimeDelays,
     vad: Option<Vad>,
     instructions: usize,
     tools: Vec<String>,
@@ -282,6 +283,7 @@ impl Server {
         Server {
             rng: Rng::with_seed(seed),
             timing: Timing::default(),
+            delays: RealtimeDelays::default(),
             vad: None,
             instructions: 0,
             tools: Vec::new(),
@@ -313,11 +315,13 @@ impl Server {
         audio: bool,
         tool_calls: Option<u8>,
         timing: Timing,
+        delays: RealtimeDelays,
     ) {
         self.vad = vad;
         self.audio = audio;
         self.tool_calls = tool_calls;
         self.timing = timing;
+        self.delays = delays;
     }
 
     pub fn instructions(&mut self, instructions: &str) {
@@ -523,7 +527,8 @@ impl Server {
         }
         let unanswered =
             self.items.last().filter(|i| i.function_call).and_then(|i| i.call_id.clone());
-        let delay = self.answer_after(now, &CREATED_AFTER_CREATE);
+        let lag = self.delays.created.unwrap_or_else(|| self.delay(&CREATED_AFTER_CREATE));
+        let delay = self.answer_in(now, lag);
         let instructions = instructions.map(str::len);
         let r = self.respond(later(now, delay), Some(request), tool_choice, instructions);
         // A reply asked after the outputs reads them.
@@ -813,10 +818,10 @@ impl Server {
             self.put(t, Happening::MessageDone { r });
             self.put(t, Happening::CallDone { r });
         } else {
-            t = later(t, self.delay(&DONE_AFTER_LAST_AUDIO) / 2);
+            t = later(t, self.done_after_audio() / 2);
             self.put(t, Happening::MessageDone { r });
         }
-        let done_at = later(t, self.delay(&DONE_AFTER_LAST_AUDIO) / 2);
+        let done_at = later(t, self.done_after_audio() / 2);
         self.put(done_at, Happening::Done { r, status: GenerationStatus::Completed });
         r
     }
@@ -925,9 +930,18 @@ impl Server {
 
     fn answer_after(&mut self, now: Ts, measured: &Measured) -> u64 {
         let lag = self.delay(measured);
+        self.answer_in(now, lag)
+    }
+
+    fn answer_in(&mut self, now: Ts, lag: u64) -> u64 {
         let at = later(now, lag).max(self.answered);
         self.answered = at;
         at.saturating_duration_since(now).as_millis() as u64
+    }
+
+    /// How long after its last audio a reply ends; its message ends halfway.
+    fn done_after_audio(&mut self) -> u64 {
+        self.delays.done.unwrap_or_else(|| self.delay(&DONE_AFTER_LAST_AUDIO))
     }
 
     fn delay(&mut self, measured: &Measured) -> u64 {

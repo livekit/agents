@@ -54,6 +54,7 @@ const ID_PREFIX: &str = "duplex_";
 pub struct FakeDuplex {
     registry: Arc<Registry>,
     seed: u64,
+    late_words: Option<u64>,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
 }
@@ -62,10 +63,11 @@ impl FakeDuplex {
     pub fn new(
         registry: Arc<Registry>,
         seed: u64,
+        late_words: Option<u64>,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
     ) -> Arc<Self> {
-        Arc::new(FakeDuplex { registry, seed, clock, spawner })
+        Arc::new(FakeDuplex { registry, seed, late_words, clock, spawner })
     }
 }
 
@@ -103,6 +105,7 @@ impl Realtime for FakeDuplex {
         Box::pin(async move {
             let model = Arc::new(Model {
                 registry: self.registry.clone(),
+                late_words: self.late_words,
                 clock: self.clock.clone(),
                 slot: OnceLock::new(),
                 state: Mutex::new(State {
@@ -228,6 +231,7 @@ impl State {
 
 struct Model {
     registry: Arc<Registry>,
+    late_words: Option<u64>,
     clock: Arc<dyn Clock>,
     slot: OnceLock<Slot>,
     state: Mutex<State>,
@@ -359,13 +363,14 @@ impl Model {
         let end = after(frames * FRAME_MS);
         let words: Vec<&str> = text.split_inclusive(' ').collect();
         let per_word = frames * FRAME_MS / words.len() as u64;
-        let late = st.rng.u64(0..100) < LATE_TEXT && words.len() > 2;
+        let late = words.len() > 2 && (self.late_words.is_some() || st.rng.u64(0..100) < LATE_TEXT);
         let trailing = if late { st.rng.usize(1..=2) } else { 0 };
         for (i, word) in words.iter().enumerate() {
             let word = (*word).to_owned();
             let begin = i as u64 * per_word;
             if i >= words.len() - trailing {
-                let due = end.saturating_add(Duration::from_millis(st.rng.u64(400..2_000)));
+                let after = self.late_words.unwrap_or_else(|| st.rng.u64(400..2_000));
+                let due = end.saturating_add(Duration::from_millis(after));
                 out.push((due, Output::Late { utterance, word }));
             } else {
                 // With the first frame its text has arrived for and its sound is near.

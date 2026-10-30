@@ -75,6 +75,18 @@ const SWAP_MS: u64 = 50;
 /// The samples an audio delta carries.
 const DELTA_SAMPLES: usize = (server::DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 
+/// Delays a case sets rather than drawing them from the model's seed, in ms.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RealtimeDelays {
+    /// The server creates a reply this long after its `response.create`.
+    pub created: Option<u64>,
+    /// The server ends a reply (`response.done`) this long after its last audio.
+    pub done: Option<u64>,
+    /// A duplex model's utterance of more than two words has its last words' text arrive this
+    /// long after their sound.
+    pub late_words: Option<u64>,
+}
+
 /// How a realtime setup's server is configured.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerSetup {
@@ -92,6 +104,7 @@ pub struct ServerSetup {
     pub fallback: bool,
     /// What the server's delays are drawn against.
     pub timing: crate::fakes::Timing,
+    pub delays: RealtimeDelays,
 }
 
 pub struct FakeRealtime {
@@ -357,6 +370,7 @@ impl Socket {
             !self.setup.text_only,
             self.setup.tool_calls,
             self.setup.timing.clone(),
+            self.setup.delays,
         );
         server
     }

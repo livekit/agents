@@ -398,6 +398,8 @@ pub struct RealtimeSetup {
     /// A full-duplex speech model (`DuplexRealtimeAdapter`) instead of the server: it detects
     /// turns and speaks on its own; the server's switches above do not apply.
     pub duplex: bool,
+    /// Delays the case sets instead of the seed drawing them.
+    pub delays: crate::fakes::RealtimeDelays,
 }
 
 impl Default for RealtimeSetup {
@@ -410,6 +412,7 @@ impl Default for RealtimeSetup {
             text_only: false,
             fallback: false,
             duplex: false,
+            delays: Default::default(),
         }
     }
 }
