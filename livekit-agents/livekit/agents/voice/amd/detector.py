@@ -207,6 +207,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._result: AMDPredictionEvent | None = None
         self._closed = False
         self._span: trace.Span | None = None
+        self._disconnect_room: rtc.Room | None = None
+        self._listened_identity: str | None = None
 
         self._provided_detection_options: DetectionOptions = (
             detection_options if is_given(detection_options) else {}
@@ -342,6 +344,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._audio_ch and not self._audio_ch.closed:
             self._audio_ch.close()
 
+        if self._disconnect_room is not None:
+            self._disconnect_room.off("participant_disconnected", self._on_participant_disconnected)
+            self._disconnect_room = None
+
         if self._classifier:
             self._classifier.off("amd_prediction", self._on_amd_prediction)
             await self._classifier.close()
@@ -439,6 +445,12 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 self._settle_participant_missing("participant disappeared after track subscription")
                 return
 
+            # a hangup must still settle a verdict once listening has started,
+            # otherwise the session teardown closes AMD with no result
+            self._listened_identity = publisher.identity
+            self._disconnect_room = room
+            room.on("participant_disconnected", self._on_participant_disconnected)
+
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
                 self._sip_answer_task = asyncio.create_task(
                     self._wait_for_sip_answer(room, publisher.identity),
@@ -457,6 +469,25 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._classifier.start_detection_timer()
         self._classifier.start_listening()
         logger.debug("AMD starts listening")
+
+    def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        """Settle a pending verdict when the listened-to participant leaves.
+
+        Disconnects from other participants are ignored. If no verdict exists yet,
+        the result is settled as uncertain and the classifier is told the turn has
+        ended, so ``execute()`` does not wait for a greeting that will never finish.
+
+        Args:
+            participant: The remote participant that disconnected.
+        """
+        if participant.identity != self._listened_identity:
+            return
+        if self._closed or not self._classifier or self._result is not None:
+            return
+        self._settle_participant_missing("participant disconnected before a verdict")
+        if self._classifier and self._result is None:
+            # the callee is gone, so the greeting is over: release the verdict now
+            self._classifier.on_end_of_turn()
 
     def _settle_participant_missing(self, error: str) -> None:
         if self._closed or not self._classifier:
