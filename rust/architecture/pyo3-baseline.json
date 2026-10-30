@@ -21,6 +21,5 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/utils/maybe.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/utils/video.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/io.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/voice/room_io.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/rtc/error.rs"
 ]
