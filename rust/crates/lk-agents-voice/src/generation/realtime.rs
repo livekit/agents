@@ -120,11 +120,14 @@ impl RealtimePlayout {
         self.has_audio_output
     }
 
+    /// A message that played no audio but forwarded words ends the bound audio leg, as the
+    /// pipeline's transcript-only segment does. One with no words ends nothing: its text leg never
+    /// opened a segment, and an audio end alone would open one the next speech's words pair with.
     pub fn end_unvoiced(&self, heard: &Heard, has_text_output: bool) -> bool {
         heard.frames == 0
             && heard.complete
             && has_text_output
-            && self.carried_message()
+            && !self.text().is_empty()
             && self.has_audio_output
     }
 
@@ -358,4 +361,38 @@ pub fn unheard_messages(events: impl IntoIterator<Item = Event>) -> Vec<rt::Trun
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observed() -> RealtimeObservation {
+        RealtimeObservation { interrupted: false, synthesizing: false, tts_available: false }
+    }
+
+    // Catches: a message the server cancelled after starting it, before any of its words, ended
+    // the bound audio leg as an unvoiced segment. Its text leg had opened no segment, so the
+    // audio end alone opened one, and the next speech's words paired with it and were shown whole
+    // before their audio (`transcript_follows_audio`, survey seed 3465).
+    #[test]
+    fn only_a_message_that_forwarded_words_ends_the_audio_leg_unvoiced() {
+        let started = |id: &str| {
+            Event::MessageStarted(rt::MessageStarted { message_id: id.into(), response_id: None })
+        };
+        let mut playout = RealtimePlayout::default();
+        playout.bind(true);
+        let _ = playout.handle(started("m1"), observed());
+        let silent = Heard::complete(String::new(), Duration::ZERO, 0);
+        assert!(!playout.end_unvoiced(&silent, true), "a message with no words ends nothing");
+
+        let delta = rt::TextDelta {
+            message_id: "m1".into(),
+            response_id: None,
+            delta: "Hello.".into(),
+            start_time: None,
+        };
+        let _ = playout.handle(Event::TextDelta(delta), observed());
+        assert!(playout.end_unvoiced(&silent, true), "its words end the audio leg with none");
+    }
 }
