@@ -21,7 +21,7 @@ pub use time::Timebase;
 use crate::voice::nodes::Nodes;
 use crate::voice::session::transcript_sync::TranscriptSynchronizer;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::resources::Resources;
+use crate::voice::resources::Resources;
 use lk_agents_abi::voice::events::{CloseReason, HostWire};
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::voice::session::{

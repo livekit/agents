@@ -3,7 +3,7 @@
 //! and session Clock/Spawner as production. The harness only chooses what reaches the loop's queue
 //! and when.
 
-use lk_agents_abi::resources::Resources;
+use lk_agents_runtime::voice::resources::Resources;
 use lk_agents_abi::{AudioFrame, BoxFuture, Spawner, Stt, Vad};
 use lk_agents_runtime::voice::session::{
     OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
@@ -47,7 +47,7 @@ impl SessionExecutor for Handover {
     }
     fn open_realtime<'a>(
         &'a mut self,
-        resources: &'a lk_agents_abi::resources::Resources,
+        resources: &'a lk_agents_runtime::voice::resources::Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
     ) -> lk_agents_abi::BoxFuture<

@@ -204,7 +204,7 @@ impl SessionExecutor for Observing {
 
     fn open_legs<'a>(
         &'a mut self,
-        resources: &'a lk_agents_abi::resources::Resources,
+        resources: &'a crate::voice::resources::Resources,
         stt: Option<Arc<dyn lk_agents_abi::Stt>>,
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
@@ -213,7 +213,7 @@ impl SessionExecutor for Observing {
 
     fn open_realtime<'a>(
         &'a mut self,
-        resources: &'a lk_agents_abi::resources::Resources,
+        resources: &'a crate::voice::resources::Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
     ) -> lk_agents_abi::BoxFuture<

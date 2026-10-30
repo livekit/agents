@@ -5,7 +5,8 @@ use super::Runtime;
 use crate::voice::session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::{PushAudio, RealtimeCommand};
-use lk_agents_abi::resources::{ResourceId, Resources};
+use crate::voice::resources::Resources;
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::{
     AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamSink, Stt, Vad,

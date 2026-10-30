@@ -110,7 +110,7 @@ pub struct PeerHandle {
     pub time: Timebase,
     pub spawner: Arc<dyn lk_agents_abi::Spawner>,
     pub(crate) watch: WatchHub,
-    pub(crate) resources: lk_agents_abi::resources::Resources,
+    pub(crate) resources: crate::voice::resources::Resources,
     /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
     pub closing: tokio::sync::watch::Receiver<bool>,
 }
@@ -218,7 +218,7 @@ pub struct SessionShared {
     pub session_id: String,
     pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
     /// The providers by id.
-    pub resources: lk_agents_abi::resources::Resources,
+    pub resources: crate::voice::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
     pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.

@@ -6,7 +6,8 @@ use super::calls::Calls;
 use super::shared::{PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
 use crate::voice::session::Tx;
-use lk_agents_abi::resources::{ResourceId, Resources};
+use crate::voice::resources::Resources;
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamSink, Stt, Tts, Vad};
@@ -143,7 +144,7 @@ pub struct DriverBuilder {
     /// `expressive=`, the session's and the opening agent's.
     pub expressive: lk_agents_voice::generation::ExpressiveLayers,
     /// Where the providers below are registered, and every one handed over later.
-    pub resources: lk_agents_abi::resources::Resources,
+    pub resources: crate::voice::resources::Resources,
     pub llm: Option<Arc<dyn Llm>>,
     /// The runtime hands it over as the session runs it: adapted, under the agent's `tts_node`.
     pub tts: Option<Arc<dyn Tts>>,

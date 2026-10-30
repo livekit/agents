@@ -15,6 +15,7 @@ mod legs;
 pub mod nodes;
 mod recorder;
 pub mod remote_session;
+pub mod resources;
 pub mod session;
 pub mod speech_handle;
 mod storage;
