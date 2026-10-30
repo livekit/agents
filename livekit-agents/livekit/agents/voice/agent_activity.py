@@ -4445,9 +4445,19 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*authorization_tasks, *tasks)
             for tee in tees:
                 await tee.aclose()
+            # the server may already hold the reply the user never heard
+            if self.llm.capabilities.mutable_chat_context:
+                try:
+                    async with self._rt_chat_ctx_lock:
+                        await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to sync chat context to remove never-played messages",
+                        extra={"error": str(e)},
+                    )
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             _record_interruption(speech_handle)
-            return  # TODO(theomonnom): remove the message from the serverside history
+            return
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
