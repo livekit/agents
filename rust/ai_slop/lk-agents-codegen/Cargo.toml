@@ -27,7 +27,10 @@ name = "io-fixtures"
 path = "../../architecture/io/fixtures.rs"
 
 [dev-dependencies]
-tokio.workspace = true
+# The I/O policy's fixtures name Tokio's blocking-pool entries and a raw lock_api lock.
+tokio = { workspace = true, features = ["fs", "net", "io-std", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+lock_api = "0.4"
 futures = "0.3"
 rand = "0.9"
 uuid = { version = "1", features = ["v4"] }

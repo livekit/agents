@@ -35,7 +35,7 @@ impl Peer {
     async fn receipt(&self, name: &str) -> Result<String> {
         Ok(tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                match tokio::fs::read_to_string(self.directory.join(name)).await {
+                match std::fs::read_to_string(self.directory.join(name)) {
                     Ok(text) => return Ok::<_, std::io::Error>(text),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                         tokio::time::sleep(Duration::from_millis(10)).await

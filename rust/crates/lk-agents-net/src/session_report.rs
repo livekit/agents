@@ -152,6 +152,7 @@ impl SessionReportUploader {
         crate::transport::install_tls_provider();
         // One request per upload attempt: `attempts` is the retry loop.
         let client = reqwest::Client::builder()
+            .dns_resolver(crate::dns::Resolver)
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())

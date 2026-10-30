@@ -252,7 +252,7 @@ async fn media_never_block_measurements() {
                     let summary = recorder.finish(10.0).await.unwrap();
                     assert!(summary.bytes_written > 0);
                     assert_eq!(summary.dropped_input_samples, 0);
-                    tokio::fs::remove_file(path).await.unwrap();
+                    std::fs::remove_file(path).unwrap();
                 });
             }
             futures_util::future::join_all(tasks).await;

@@ -40,8 +40,7 @@ impl Connector for Tcp {
 async fn connect_on(runtime: &tokio::runtime::Handle, addr: String) -> io::Result<Connection> {
     // Opened on the owning reactor, wherever the caller polls; dropping the wait cancels it.
     let connecting = TokioSpawner::new(runtime.clone()).spawn(async move {
-        let stream = tokio::net::TcpStream::connect(addr).await?;
-        let _ = stream.set_nodelay(true);
+        let stream = crate::dns::connect(addr).await?;
         let (read, write) = stream.into_split();
         Ok(Connection { read: Box::new(read), write: Box::new(write) })
     });

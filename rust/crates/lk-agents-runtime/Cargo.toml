@@ -25,7 +25,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 log.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 base64.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }

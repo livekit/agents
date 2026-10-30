@@ -100,6 +100,7 @@ impl GatewayHttp {
     pub fn new() -> Result<Self, String> {
         crate::transport::install_tls_provider();
         let client = reqwest::Client::builder()
+            .dns_resolver(crate::dns::Resolver)
             .retry(reqwest::retry::never())
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))

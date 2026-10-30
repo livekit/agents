@@ -204,8 +204,11 @@ impl SqliteStorage {
         let directory = std::path::absolute(directory.as_ref())
             .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
         let threads = directory.join("threads");
-        tokio::fs::create_dir_all(&threads)
+        let created = threads.clone();
+        lk_agents_net::blocking_io::blocking_io()
+            .run((), move || std::fs::create_dir_all(created))
             .await
+            .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?
             .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?;
         let registry = FileConnection::open(directory.join("registry.sqlite"), true).await?;
         registry.batch(vec![Statement::raw(REGISTRY_SCHEMA)]).await?;
@@ -427,17 +430,22 @@ impl Storage for SqliteStorage {
             return Ok(());
         }
         let file = self.file(thread_id)?;
-        for suffix in ["", "-wal", "-shm"] {
-            let mut path = file.clone().into_os_string();
-            path.push(suffix);
-            match tokio::fs::remove_file(&path).await {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(StorageError::Unavailable(format!("{}: {e}", file.display())));
+        let removed = file.clone();
+        lk_agents_net::blocking_io::blocking_io()
+            .run((), move || {
+                for suffix in ["", "-wal", "-shm"] {
+                    let mut path = removed.clone().into_os_string();
+                    path.push(suffix);
+                    match std::fs::remove_file(&path) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                        _ => {}
+                    }
                 }
-                _ => {}
-            }
-        }
-        Ok(())
+                Ok(())
+            })
+            .await
+            .map_err(|e| StorageError::Unavailable(format!("{}: {e}", file.display())))?
+            .map_err(|e| StorageError::Unavailable(format!("{}: {e}", file.display())))
     }
 
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {

@@ -34,10 +34,17 @@ pub async fn connect_with_limit(
             .max_message_size(Some(limit))
             .max_frame_size(Some(limit))
     });
-    // no Nagle: a small request after a small frame must not wait for the peer's delayed ack
-    let (socket, _response) = tokio_tungstenite::connect_async_with_config(request, config, true)
+    let uri = request.uri();
+    let host = uri.host().ok_or_else(|| TransportError::Connect(format!("no host in {url}")))?;
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_owned();
+    let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
+    let stream = crate::dns::connect((host, port))
         .await
-        .map_err(classify_tungstenite)?;
+        .map_err(|error| TransportError::Connect(error.to_string()))?;
+    let (socket, _response) =
+        tokio_tungstenite::client_async_tls_with_config(request, stream, config, None)
+            .await
+            .map_err(classify_tungstenite)?;
     Ok(socket)
 }
 

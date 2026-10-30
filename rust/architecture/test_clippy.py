@@ -356,9 +356,10 @@ class ClippyContracts(unittest.TestCase):
 
 
 class IoPolicyContracts(unittest.TestCase):
-    """The I/O policy refuses a raw lock: only lk_agents_net::lock waits without the GIL."""
+    """The I/O policy refuses a raw lock (only lk_agents_net::lock waits without the GIL) and every
+    entry to Tokio's blocking pool (blocking work runs on our pools)."""
 
-    def test_the_io_policy_rejects_each_raw_lock(self):
+    def test_the_io_policy_rejects_raw_locks_and_the_tokio_blocking_pool(self):
         io = next(policy for policy in clippy.POLICIES if policy.name == "io")
         env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / io.conf)}
         command = [
@@ -381,7 +382,23 @@ class IoPolicyContracts(unittest.TestCase):
         process = subprocess.run(command, env=env, cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
         diagnostics = [m["message"] for m in clippy.compiler_messages(process.stdout)]
-        for name in ("std::sync::Mutex", "std::sync::RwLock", "parking_lot::Mutex", "parking_lot::RwLock"):
+        for name in (
+            "std::sync::Mutex",
+            "std::sync::RwLock",
+            "parking_lot::Mutex",
+            "parking_lot::RwLock",
+            "parking_lot::ReentrantMutex",
+            "parking_lot::FairMutex",
+            "lock_api::Mutex",
+            "tokio::task::spawn_blocking",
+            "tokio::runtime::Handle::spawn_blocking",
+            "tokio::task::block_in_place",
+            "tokio::net::lookup_host",
+            "tokio::fs::read_to_string",
+            "tokio::fs::File",
+            "tokio::io::stdin",
+            "tokio_tungstenite::connect_async",
+        ):
             with self.subTest(name=name):
                 self.assertTrue(any(f"`{name}`" in d for d in diagnostics), diagnostics)
 

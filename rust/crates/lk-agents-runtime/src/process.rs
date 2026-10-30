@@ -64,6 +64,11 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         // Codec/model work has its own admitted workers. Starting one async worker per CPU
         // here makes the first loop-facing constructor pay for unrelated native capacity.
         .worker_threads(2)
+        // Blocking work runs on our pools (lk_agents_media::pool::media_pool,
+        // lk_agents_net::blocking_io), never here: one thread is left for third-party crates
+        // that still resolve names through Tokio (web-transport-quinn and livekit-api's HTTP
+        // client), so they cannot grow a thread per stalled lookup.
+        .max_blocking_threads(1)
         .thread_name("lk-agents-runtime")
         .enable_all()
         .build()

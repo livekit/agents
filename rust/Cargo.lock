@@ -1399,12 +1399,14 @@ dependencies = [
  "crossbeam-channel",
  "futures",
  "lk-agents-bindgen",
+ "lock_api",
  "parking_lot",
  "proc-macro2",
  "quote",
  "rand 0.9.5",
  "syn 2.0.119",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "uuid",
 ]
 

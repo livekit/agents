@@ -365,11 +365,17 @@ impl pyo3_async_runtimes::generic::Runtime for ProcessRuntime {
         process_handle().expect("the process runtime").spawn(fut)
     }
 
+    /// On the blocking I/O pool, never Tokio's blocking pool; a panic fails the handle.
     fn spawn_blocking<F>(f: F) -> Self::JoinHandle
     where
         F: FnOnce() + Send + 'static,
     {
-        process_handle().expect("the process runtime").spawn_blocking(f)
+        process_handle().expect("the process runtime").spawn(async move {
+            let pool = lk_agents_runtime::net::blocking_io::blocking_io();
+            if let Err(panicked) = pool.run((), f).await {
+                std::panic::resume_unwind(Box::new(panicked));
+            }
+        })
     }
 }
 
