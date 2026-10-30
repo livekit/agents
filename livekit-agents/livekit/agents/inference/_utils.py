@@ -27,6 +27,9 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
+# The gateway sends "false" on terminal quota denials (out of credits, spent request
+# allowance, suspended project), which no retry can get past.
+HEADER_SHOULD_RETRY = "X-Should-Retry"
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;

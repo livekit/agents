@@ -36,6 +36,7 @@ from ..utils import is_given, resolve_env_int
 from ._realtime_models import is_duplex_model, is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
+    HEADER_SHOULD_RETRY,
     InferenceClass,
     create_access_token,
     extract_quota_usage,
@@ -209,6 +210,10 @@ def min_reasoning_effort(model: str) -> ReasoningEffort | None:
     Strips any provider prefix (e.g. ``openai/gpt-5`` -> ``gpt-5``) before matching.
     """
     return _MIN_REASONING_EFFORT.get(model.split("/")[-1])
+
+
+def _gateway_allows_retry(headers: httpx.Headers) -> bool:
+    return headers.get(HEADER_SHOULD_RETRY, "").strip().lower() != "false"
 
 
 OpenAIModels = Literal[
@@ -621,7 +626,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-                retryable=retryable,
+                retryable=retryable and _gateway_allows_retry(e.response.headers),
             ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
