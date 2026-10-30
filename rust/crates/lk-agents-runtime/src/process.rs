@@ -126,10 +126,10 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
     }
 }
 
-/// The process runtime's async workers.
-pub struct RuntimeWorkers;
+/// The process runtime's load: its async workers' busy time.
+pub struct RuntimeLoad;
 
-impl lk_agents_abi::metrics::RuntimeWorkers for RuntimeWorkers {
+impl lk_agents_abi::metrics::RuntimeLoad for RuntimeLoad {
     /// Starts nothing: a runtime not started in this process reports no workers.
     fn runtime_busy_seconds() -> Vec<f64> {
         let Some(handle) = started_handle() else { return Vec::new() };

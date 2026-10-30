@@ -78,7 +78,7 @@ pub trait Implementations: 'static {
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
     type StreamBuffer: ::lk_agents_abi::media::codecs::StreamBuffer;
     type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
-    type RuntimeWorkers: ::lk_agents_abi::metrics::RuntimeWorkers;
+    type RuntimeLoad: ::lk_agents_abi::metrics::RuntimeLoad;
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;

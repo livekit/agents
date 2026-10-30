@@ -22,9 +22,9 @@ pub enum OtelValue {
 /// One OTel observation: `(instrument, kind, value, attributes)`, attributes in insertion order.
 pub type OtelWire = (String, String, OtelValue, indexmap::IndexMap<String, String>);
 
-/// The process runtime's async workers, as the latency benchmark reads them.
+/// The process runtime's load, as the latency benchmark reads it.
 #[crate::host(functions(pid = false))]
-pub trait RuntimeWorkers {
+pub trait RuntimeLoad {
     /// Each async worker's total busy seconds so far; empty before the runtime started.
     #[host(function)]
     fn runtime_busy_seconds() -> Vec<f64>;
