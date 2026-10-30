@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import urlparse
@@ -44,6 +45,25 @@ SUPPORTED_OUTPUT_FORMATS = {
     44100: "raw-44100hz-16bit-mono-pcm",
     48000: "raw-48khz-16bit-mono-pcm",
 }
+
+_VOICE_LOCALE_RE = re.compile(r"^([a-z]{2}-[A-Z]{2})-")
+
+
+def _voice_locale(voice: str) -> str | None:
+    """Extract the primary locale from a standard Azure voice name."""
+    match = _VOICE_LOCALE_RE.match(voice)
+    return match.group(1) if match else None
+
+
+def _should_wrap_with_lang(voice: str, language: str | None) -> bool:
+    """Use an explicit language override for cross-locale multilingual synthesis."""
+    if not language:
+        return False
+
+    voice_locale = _voice_locale(voice)
+    return bool(
+        voice_locale and "MultilingualNeural" in voice and language.lower() != voice_locale.lower()
+    )
 
 
 @dataclass
@@ -261,11 +281,15 @@ class ChunkedStream(tts.ChunkedStream):
 
     def _build_ssml(self) -> str:
         lang = self._opts.language or "en-US"
+        voice_locale = _voice_locale(self._opts.voice)
+        wrap_with_lang = _should_wrap_with_lang(self._opts.voice, self._opts.language)
+        root_lang = voice_locale if wrap_with_lang and voice_locale else lang
+
         ssml = (
             f'<speak version="1.0" '
             f'xmlns="http://www.w3.org/2001/10/synthesis" '
             f'xmlns:mstts="http://www.w3.org/2001/mstts" '
-            f'xml:lang="{lang}">'
+            f'xml:lang="{root_lang}">'
         )
         ssml += f'<voice name="{self._opts.voice}">'
 
@@ -276,6 +300,9 @@ class ChunkedStream(tts.ChunkedStream):
             degree = f' styledegree="{self._opts.style.degree}"' if self._opts.style.degree else ""
             ssml += f'<mstts:express-as style="{self._opts.style.style}"{degree}>'
 
+        if wrap_with_lang:
+            ssml += f'<lang xml:lang="{lang}">'
+
         if is_given(self._opts.prosody):
             p = self._opts.prosody
 
@@ -285,6 +312,9 @@ class ChunkedStream(tts.ChunkedStream):
             ssml += f"<prosody{rate_attr}{vol_attr}{pitch_attr}>{self.input_text}</prosody>"
         else:
             ssml += self.input_text
+
+        if wrap_with_lang:
+            ssml += "</lang>"
 
         if is_given(self._opts.style):
             ssml += "</mstts:express-as>"
