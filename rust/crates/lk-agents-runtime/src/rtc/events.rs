@@ -5,13 +5,12 @@ use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::voice::rtc::capabilities::{RemoteParticipant, RtcRoom, TrackPublication};
+use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::voice::rtc::ports::{
     self, ByteStream, ByteStreamIngress, Receiver, RpcCallback, TextStream, TextStreamIngress,
 };
 use lk_agents_abi::voice::rtc::{
-    ConnectionState, DisconnectReason, ParticipantIdentity, RoomEvent, RoomEventSink, RtcError,
-    StreamInfo,
+    ParticipantIdentity, RoomEvent, RoomEventSink, RtcError, StreamInfo,
 };
 use lk_agents_abi::{Closed, StreamSource, Ts};
 use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
@@ -352,6 +351,7 @@ pub fn text_streams(room: &dyn RtcRoom, topic: &str) -> Result<Receiver<TextStre
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
     use lk_agents_voice::room_io::ingress::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
