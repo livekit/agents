@@ -146,7 +146,7 @@ exc = Hostile()
 
 mod session_bridge {
     //! The leaves and lists as their own impls cross them, and the call schemas the RTC seam sends.
-    use crate::python::{extract_generated, value_to_py};
+    use crate::python::value_to_py;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
     use serde_json::Value;
@@ -221,23 +221,6 @@ mod session_bridge {
             d.keys().iter().map(|k| k.extract::<String>().expect("str keys")).collect();
         out.sort();
         out
-    }
-
-    // Catches: a renamed or dropped keyword on `rtc.TranscriptionSegment`, especially `final`.
-    #[test]
-    fn a_transcription_segment_keys_all_six_and_spells_final_plainly() {
-        attach(|py| {
-            let seg = crate::voice::rtc::TranscriptionSegment {
-                id: "i".into(),
-                text: "t".into(),
-                start_time: 0,
-                end_time: 0,
-                language: "en".into(),
-                is_final: true,
-            };
-            let d = (&seg).into_pyobject(py).unwrap();
-            assert_eq!(keys(&d), ["end_time", "final", "id", "language", "start_time", "text"]);
-        });
     }
 
     /// Just enough of `livekit.rtc` for an `rtc.AudioFrame`.

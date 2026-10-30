@@ -29,23 +29,6 @@ REDACTED_EXCEPTION: str
 REDACTED_LOG_BODY: str
 
 
-class TrackPublishOptions:
-    """The host's view: what `_core_rtc.LocalParticipant._core_publish_audio_track` builds its
-    `rtc.AudioSource`, `LocalAudioTrack` and `rtc.TrackPublishOptions` from.
-    """
-
-    @property
-    def name(self) -> str: ...
-    @property
-    def source(self) -> str: ...
-    @property
-    def sample_rate(self) -> int: ...
-    @property
-    def num_channels(self) -> int: ...
-    @property
-    def queue_size_ms(self) -> int: ...
-
-
 class AudioStreamOptions:
     """The host's view: what `_core_rtc.TrackPublication._core_open_audio_stream` opens its
     `rtc.AudioStream` (and, with `auto_gain_control`, its `AudioProcessingModule`) with.
@@ -73,48 +56,6 @@ class VideoFrameRef:
     """
 
     def __init__(self, frame: Any, width: int, height: int, timestamp_us: int = 0) -> None: ...
-
-
-class StreamTextOptions:
-    """The host's view: `_core_rtc.LocalParticipant._core_stream_text` spreads it into
-    `stream_text(..)`, leaving `sender_identity` out when it is `None` (an explicit `None` would
-    publish the user's transcript as the agent).
-    """
-
-    @property
-    def topic(self) -> str: ...
-    @property
-    def sender_identity(self) -> str | None: ...
-    @property
-    def attributes(self) -> dict[str, str]: ...
-
-
-class StreamBytesOptions:
-    """The host's view: `_core_rtc.LocalParticipant._core_stream_bytes` spreads it into
-    `stream_bytes(..)`.
-    """
-
-    @property
-    def name(self) -> str: ...
-    @property
-    def topic(self) -> str: ...
-    @property
-    def destination_identities(self) -> list[str]: ...
-    @property
-    def attributes(self) -> dict[str, str]: ...
-
-
-class Transcription:
-    """The host's view: `_core_rtc.LocalParticipant._core_publish_transcription` builds the
-    `rtc.Transcription` and its `rtc.TranscriptionSegment`s (keyword dicts, `final` spelled plainly).
-    """
-
-    @property
-    def participant_identity(self) -> str: ...
-    @property
-    def track_sid(self) -> str: ...
-    @property
-    def segments(self) -> list[dict[str, Any]]: ...
 
 
 class PlaybackInfo:

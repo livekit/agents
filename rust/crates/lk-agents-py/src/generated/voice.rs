@@ -3833,7 +3833,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "LocalParticipant._core_publish_audio_track", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(opts_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::rtc_wire::track_publish_options_to_py(py, opts_arg)?];
                 Ok((host.bind(py).getattr("_core_publish_audio_track")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -3902,7 +3902,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let transcription_arg = transcription;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "LocalParticipant._core_publish_transcription", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(transcription_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::rtc_wire::transcription_to_py(py, transcription_arg)?];
                 Ok((host.bind(py).getattr("_core_publish_transcription")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -3925,7 +3925,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "LocalParticipant._core_stream_text", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(opts_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::rtc_wire::stream_text_options_to_py(py, opts_arg)?];
                 Ok((host.bind(py).getattr("_core_stream_text")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -3948,7 +3948,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "LocalParticipant._core_stream_bytes", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(opts_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::rtc_wire::stream_bytes_options_to_py(py, opts_arg)?];
                 Ok((host.bind(py).getattr("_core_stream_bytes")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {

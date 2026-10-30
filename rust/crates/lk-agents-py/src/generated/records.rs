@@ -3259,6 +3259,81 @@ pub mod recorder {
     }
 }
 
+pub mod rtc_wire {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static TRACK_PUBLISH_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn track_publish_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::room_io::TrackPublishOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::room_io::TrackPublishOptions { name, source, sample_rate, num_channels, queue_size_ms } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+            kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
+            kwargs.set_item("sample_rate", ::pyo3::IntoPyObjectExt::into_bound_py_any(sample_rate, py)?)?;
+            kwargs.set_item("num_channels", ::pyo3::IntoPyObjectExt::into_bound_py_any(num_channels, py)?)?;
+            kwargs.set_item("queue_size_ms", ::pyo3::IntoPyObjectExt::into_bound_py_any(queue_size_ms, py)?)?;
+            crate::host::construct(TRACK_PUBLISH_OPTIONS.import(py, "livekit.agents._generated.rtc_wire", "TrackPublishOptions")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static STREAM_TEXT_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn stream_text_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::StreamTextOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::StreamTextOptions { topic, sender_identity, attributes } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("topic", ::pyo3::IntoPyObjectExt::into_bound_py_any(topic, py)?)?;
+            kwargs.set_item("sender_identity", match sender_identity { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("attributes", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in attributes { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() })?;
+            crate::host::construct(STREAM_TEXT_OPTIONS.import(py, "livekit.agents._generated.rtc_wire", "StreamTextOptions")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static STREAM_BYTES_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn stream_bytes_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::StreamBytesOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::StreamBytesOptions { name, topic, destination_identities, attributes } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+            kwargs.set_item("topic", ::pyo3::IntoPyObjectExt::into_bound_py_any(topic, py)?)?;
+            kwargs.set_item("destination_identities", ::pyo3::types::PyList::new(py, destination_identities.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("attributes", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in attributes { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() })?;
+            crate::host::construct(STREAM_BYTES_OPTIONS.import(py, "livekit.agents._generated.rtc_wire", "StreamBytesOptions")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static TRANSCRIPTION_SEGMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn transcription_segment_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::TranscriptionSegment) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::TranscriptionSegment { id, text, start_time, end_time, language, is_final } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
+            kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+            kwargs.set_item("start_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time, py)?)?;
+            kwargs.set_item("end_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_time, py)?)?;
+            kwargs.set_item("language", ::pyo3::IntoPyObjectExt::into_bound_py_any(language, py)?)?;
+            kwargs.set_item("final", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final, py)?)?;
+            crate::host::construct(TRANSCRIPTION_SEGMENT.import(py, "livekit.agents._generated.rtc_wire", "TranscriptionSegment")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static TRANSCRIPTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn transcription_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::Transcription) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::Transcription { participant_identity, track_sid, segments } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("participant_identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(participant_identity, py)?)?;
+            kwargs.set_item("track_sid", ::pyo3::IntoPyObjectExt::into_bound_py_any(track_sid, py)?)?;
+            kwargs.set_item("segments", ::pyo3::types::PyList::new(py, segments.into_iter().map(|x| PyResult::Ok(crate::generated::records::rtc_wire::transcription_segment_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(TRANSCRIPTION.import(py, "livekit.agents._generated.rtc_wire", "Transcription")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod session_options {
     use pyo3::prelude::*;
 

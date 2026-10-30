@@ -7,7 +7,6 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use lk_agents_abi::{AudioFrame, HostRef, MediaRef};
-use lk_agents_host_derive::Host;
 
 pub mod capabilities;
 mod error;
@@ -276,44 +275,18 @@ pub fn rtc_wire_names()
 }
 
 /// Everything `_ParticipantAudioOutput` needs to publish its track, translated once at construction.
-#[crate::class]
+#[crate::host(record(module = "rtc_wire", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackPublishOptions {
     /// `track_name` on the wire; absent keeps the default (`roomio_audio`).
     pub name: String,
-    /// The protobuf int, which is what the host SDK carries a `rtc.TrackSource` as.
+    /// Crosses as its name; the host adapter maps it back to `rtc.TrackSource`.
     pub source: TrackSource,
     pub sample_rate: u32,
     pub num_channels: u16,
     /// `rtc.AudioSource(queue_size_ms=)`: the backpressure bound that paces `_forward_audio`
     /// against playout (`room_io` passes 200). Not on the wire; a zero default would mean no bound.
     pub queue_size_ms: u32,
-}
-
-/// The host's view: what `_core_rtc.LocalParticipant._core_publish_audio_track` builds its
-/// `rtc.AudioSource`, `LocalAudioTrack` and `rtc.TrackPublishOptions` from.
-#[crate::host(object)]
-impl TrackPublishOptions {
-    #[host(getter)]
-    pub fn name(&self) -> String {
-        self.name.clone()
-    }
-    #[host(getter)]
-    pub fn source(&self) -> TrackSource {
-        self.source
-    }
-    #[host(getter)]
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-    #[host(getter)]
-    pub fn num_channels(&self) -> u16 {
-        self.num_channels
-    }
-    #[host(getter)]
-    pub fn queue_size_ms(&self) -> u32 {
-        self.queue_size_ms
-    }
 }
 
 /// `_output._ParticipantAudioOutput.__init__`'s value, not the SDK's 1000.
@@ -430,9 +403,8 @@ impl VideoFrameRef {
 pub const VIDEO_QUEUE_FRAMES: usize = 4;
 
 /// `LocalParticipant.stream_text(...)`'s keyword arguments.
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::class]
+#[crate::host(record(module = "rtc_wire", emit))]
 pub struct StreamTextOptions {
     pub topic: String,
     /// Absent means omit the key: the writer then defaults to the local participant's identity.
@@ -440,30 +412,9 @@ pub struct StreamTextOptions {
     pub attributes: BTreeMap<String, String>,
 }
 
-/// The host's view: `_core_rtc.LocalParticipant._core_stream_text` spreads it into
-/// `stream_text(..)`, leaving `sender_identity` out when it is `None` (an explicit `None` would
-/// publish the user's transcript as the agent).
-#[crate::host(object)]
-impl StreamTextOptions {
-    #[host(getter)]
-    pub fn topic(&self) -> String {
-        self.topic.clone()
-    }
-    #[host(getter)]
-    pub fn sender_identity(&self) -> Option<ParticipantIdentity> {
-        self.sender_identity.clone()
-    }
-
-    #[host(getter)]
-    pub fn attributes(&self) -> BTreeMap<String, String> {
-        self.attributes.clone()
-    }
-}
-
 /// `LocalParticipant.stream_bytes(...)`'s keyword arguments.
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::class]
+#[crate::host(record(module = "rtc_wire", emit))]
 pub struct StreamBytesOptions {
     pub name: String,
     pub topic: String,
@@ -471,36 +422,13 @@ pub struct StreamBytesOptions {
     pub attributes: BTreeMap<String, String>,
 }
 
-/// The host's view: `_core_rtc.LocalParticipant._core_stream_bytes` spreads it into
-/// `stream_bytes(..)`.
-#[crate::host(object)]
-impl StreamBytesOptions {
-    #[host(getter)]
-    pub fn name(&self) -> String {
-        self.name.clone()
-    }
-    #[host(getter)]
-    pub fn topic(&self) -> String {
-        self.topic.clone()
-    }
-    #[host(getter)]
-    pub fn destination_identities(&self) -> Vec<ParticipantIdentity> {
-        self.destination_identities.clone()
-    }
-
-    #[host(getter)]
-    pub fn attributes(&self) -> BTreeMap<String, String> {
-        self.attributes.clone()
-    }
-}
-
 /// `rtc.TrackKind`'s numbers, as `TrackPublication.kind` carries them.
 pub const TRACK_KIND_AUDIO: i32 = 1;
 pub const TRACK_KIND_VIDEO: i32 = 2;
 
 /// `rtc.TranscriptionSegment`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
-#[binding(emit)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[crate::host(record(module = "rtc_wire", emit))]
 pub struct TranscriptionSegment {
     pub id: String,
     pub text: String,
@@ -514,29 +442,11 @@ pub struct TranscriptionSegment {
 
 /// `rtc.Transcription`, the argument to `publish_transcription`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::class]
+#[crate::host(record(module = "rtc_wire", emit))]
 pub struct Transcription {
     pub participant_identity: ParticipantIdentity,
     pub track_sid: TrackSid,
     pub segments: Vec<TranscriptionSegment>,
-}
-
-/// The host's view: `_core_rtc.LocalParticipant._core_publish_transcription` builds the
-/// `rtc.Transcription` and its `rtc.TranscriptionSegment`s (keyword dicts, `final` spelled plainly).
-#[crate::host(object)]
-impl Transcription {
-    #[host(getter)]
-    pub fn participant_identity(&self) -> ParticipantIdentity {
-        self.participant_identity.clone()
-    }
-    #[host(getter)]
-    pub fn track_sid(&self) -> TrackSid {
-        self.track_sid.clone()
-    }
-    #[host(getter)]
-    pub fn segments(&self) -> Vec<TranscriptionSegment> {
-        self.segments.clone()
-    }
 }
 
 /// What one `wait_for_playout` covered, measured since the previous one returned.

@@ -6,7 +6,7 @@ call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Coroutine
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
 
 from livekit import rtc
@@ -18,6 +18,7 @@ from ..utils import is_given
 from .io import TextOutput
 
 if TYPE_CHECKING:
+    from .._generated import rtc_wire
     from .agent_session import VoiceSession
 
 __all__ = [
@@ -392,7 +393,7 @@ class LocalParticipant:
         return [self._room._publication(p) for p in self._participant.track_publications.values()]
 
     async def _core_publish_audio_track(
-        self, opts: _core.TrackPublishOptions
+        self, opts: rtc_wire.TrackPublishOptions
     ) -> tuple[AudioSource, TrackPublication]:
         source = rtc.AudioSource(
             opts.sample_rate, opts.num_channels, queue_size_ms=opts.queue_size_ms
@@ -417,16 +418,16 @@ class LocalParticipant:
     async def _core_set_attributes(self, attributes: dict[str, str]) -> None:
         await self._participant.set_attributes(attributes)
 
-    async def _core_publish_transcription(self, transcription: _core.Transcription) -> None:
+    async def _core_publish_transcription(self, transcription: rtc_wire.Transcription) -> None:
         await self._participant.publish_transcription(
             rtc.Transcription(
                 participant_identity=transcription.participant_identity,
                 track_sid=transcription.track_sid,
-                segments=[rtc.TranscriptionSegment(**s) for s in transcription.segments],
+                segments=[rtc.TranscriptionSegment(**asdict(s)) for s in transcription.segments],
             )
         )
 
-    async def _core_stream_text(self, opts: _core.StreamTextOptions) -> TextStreamWriter:
+    async def _core_stream_text(self, opts: rtc_wire.StreamTextOptions) -> TextStreamWriter:
         sender: _TextStreamSender = {}
         if opts.sender_identity is not None:
             sender["sender_identity"] = opts.sender_identity
@@ -435,7 +436,7 @@ class LocalParticipant:
         )
         return TextStreamWriter(writer)
 
-    async def _core_stream_bytes(self, opts: _core.StreamBytesOptions) -> ByteStreamWriter:
+    async def _core_stream_bytes(self, opts: rtc_wire.StreamBytesOptions) -> ByteStreamWriter:
         writer = await self._participant.stream_bytes(
             name=opts.name,
             topic=opts.topic,
