@@ -248,6 +248,7 @@ class SpeechStream(stt.SpeechStream):
             "sampleRateHertz": opts.sample_rate,
             "numberOfChannels": opts.num_channels,
             "language": self._language,
+            "includeWordTimestamps": True,
         }
 
         if opts.enable_voice_profile:
@@ -289,6 +290,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 self._ws = ws
 
                 tasks = [
@@ -429,6 +431,8 @@ class SpeechStream(stt.SpeechStream):
         text = t.get("transcript", "")
         is_final = t.get("isFinal", False)
         voice_profile = t.get("voiceProfile")
+        words = t.get("wordTimestamps") or []
+        end_time = words[-1].get("endTimeMs", 0) / 1000 if words else 0.0
 
         # An empty-text final (VAD false positive, unrecognizable noise) must still
         # reach the END_OF_SPEECH emission below — otherwise _speaking stays True
@@ -456,6 +460,11 @@ class SpeechStream(stt.SpeechStream):
                             text=text,
                             language=LanguageCode(self._language),
                             metadata=metadata,
+                            start_time=words[0].get("startTimeMs", 0) / 1000
+                            + self.start_time_offset
+                            if end_time > 0
+                            else 0.0,
+                            end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
                         )
                     ],
                 )
@@ -467,5 +476,14 @@ class SpeechStream(stt.SpeechStream):
                 stt.SpeechEvent(
                     type=SpeechEventType.END_OF_SPEECH,
                     request_id=self._request_id,
+                    alternatives=[
+                        stt.SpeechData(
+                            language=LanguageCode(self._language),
+                            text="",
+                            end_time=end_time + self.start_time_offset,
+                        )
+                    ]
+                    if end_time > 0
+                    else [],
                 )
             )

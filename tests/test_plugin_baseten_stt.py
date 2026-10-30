@@ -1,11 +1,3 @@
-"""Baseten Whisper STT: end-of-input flush.
-
-When the input ends, the stream must send the last partial audio buffer and an
-``end_audio`` message, then keep reading until the server reports
-``{"type": "end_audio", "body": {"status": "finished"}}``. Transcripts for audio the
-server still had buffered arrive in between and must reach the caller.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -20,13 +12,39 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, stt
 from livekit.plugins.baseten import STT
 
+from .stt_reconnect import ReconnectClock
+
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_transcript_timing(monkeypatch):
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", model_endpoint="wss://test.invalid/stt", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(language="fr"))
+        clock.sockets[-1].respond(
+            {
+                "is_final": True,
+                "segments": [{"text": "hello", "start_time": 0.1, "end_time": 0.4}],
+            }
+        )
+        async with asyncio.timeout(2):
+            async for event in stream:
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                    assert event.alternatives[0].end_time == pytest.approx(17.4)
+                    break
+            else:
+                pytest.fail("No FINAL_TRANSCRIPT from the restarted stream")
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
 
 _SAMPLE_RATE = 16000
 
-# reply: flush right away. slow: flush after a pause longer than the 5 s idle poll.
-# ignore: never answer end_audio (older runtimes). drop: acknowledge, then close.
-# stall: acknowledge, then never finish.
+
 _Mode = Literal["reply", "slow", "ignore", "drop", "stall"]
 
 

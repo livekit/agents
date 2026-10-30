@@ -248,6 +248,51 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
     assert closed == [first.transport, second.transport]
 
 
+@pytest.mark.no_concurrent
+async def test_aws_transcript_after_idle_restart_uses_new_audio_offset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = 100.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    provider, stream, transcribe_stream = _make_stream(
+        monkeypatch,
+        output_error=aws_stt.BadRequestException(
+            "Your request timed out because no new audio was received for 15 seconds."
+        ),
+        max_retry=1,
+    )
+
+    try:
+        stream.push_frame(_frame(100))
+        await asyncio.wait_for(transcribe_stream.restarted.wait(), timeout=1.0)
+
+        now = 120.0
+        transcribe_stream.input_stream.event_sent.clear()
+        stream.push_frame(_frame(100))
+        await asyncio.wait_for(transcribe_stream.input_stream.event_sent.wait(), timeout=1.0)
+
+        result = SimpleNamespace(
+            start_time=0.0,
+            end_time=0.1,
+            is_partial=False,
+            language_code="en-US",
+            alternatives=[SimpleNamespace(transcript="hello", items=[])],
+        )
+        stream._process_transcript_event(
+            SimpleNamespace(transcript=SimpleNamespace(results=[result]))
+        )
+        async with asyncio.timeout(1.0):
+            async for event in stream:
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                    assert event.alternatives[0].end_time == pytest.approx(20.1)
+                    break
+            else:
+                pytest.fail("No FINAL_TRANSCRIPT from the restarted stream")
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
 @pytest.mark.parametrize("processing", [False, True])
 async def test_idle_timeouts_obey_retry_limit(monkeypatch, processing):
     provider, stream, transport = _make_stream(monkeypatch, max_retry=2)

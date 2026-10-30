@@ -230,3 +230,26 @@ async def test_heartbeat_timeout_reconnects_without_spinning() -> None:
         assert session.sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.simplismart.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", streaming=True, http_session=clock)
+    stream = simplismart_stt.SpeechStream(
+        stt=provider,
+        opts=provider._opts,
+        api_key="test-key",
+        http_session=clock,
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+    try:
+        await clock.check(stream, lambda: stream._reconnect_event.set())
+    finally:
+        await stream.aclose()
+        await provider.aclose()

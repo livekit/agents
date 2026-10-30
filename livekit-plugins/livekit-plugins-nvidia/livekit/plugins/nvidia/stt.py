@@ -339,8 +339,8 @@ class SpeechStream(stt.SpeechStream):
             words=[
                 TimedString(
                     text=getattr(word, "word", ""),
-                    start_time=getattr(word, "start_time", 0) + self.start_time_offset,
-                    end_time=getattr(word, "end_time", 0) + self.start_time_offset,
+                    start_time=getattr(word, "start_time", 0) / 1000.0 + self.start_time_offset,
+                    end_time=getattr(word, "end_time", 0) / 1000.0 + self.start_time_offset,
                 )
                 for word in words
             ]

@@ -179,7 +179,7 @@ async def test_skewed_provider_timestamp(mode: str, monkeypatch: pytest.MonkeyPa
     if mode == "stt":
         # accepted: the provider owns the boundary here and a skewed timestamp is
         # indistinguishable from a good one, so the delay under-reports
-        assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+        assert now <= ar._last_speaking_time <= time.time()
     else:
         assert ar._last_speaking_time == vad_anchor
 
@@ -309,6 +309,23 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
     # the anchor moved from 0.6 s ago to arrival time (bounded by the clock reads around the call)
     assert now <= ar._last_speaking_time <= time.time()
     assert ar._user_turn_committed is True
+
+
+@both_modes
+async def test_untimed_eos_does_not_inherit_an_earlier_segment_final(mode: str) -> None:
+    """A final can stabilize a segment while the utterance continues."""
+    now = time.time()
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0, mode=mode)
+    await ar._on_stt_event(_final_transcript(end_time=9.0))
+    assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
+
+    before_eos = time.time()
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
+    if mode == "stt":
+        assert before_eos <= ar._last_speaking_time <= time.time()
+    else:
+        assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
 
 
 @both_modes
