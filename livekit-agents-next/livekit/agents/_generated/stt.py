@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, Never
+from typing import Generic, Literal, Never, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import Self, TypeVar
@@ -143,9 +143,13 @@ class STTCapabilities:
 
 
 SpeechEventType.__module__ = "livekit.agents.stt"
+SpeechData.__annotations__ = get_type_hints(SpeechData)
 SpeechData.__module__ = "livekit.agents.stt"
+RecognitionUsage.__annotations__ = get_type_hints(RecognitionUsage)
 RecognitionUsage.__module__ = "livekit.agents.stt"
+SpeechEvent.__annotations__ = get_type_hints(SpeechEvent)
 SpeechEvent.__module__ = "livekit.agents.stt"
+STTCapabilities.__annotations__ = get_type_hints(STTCapabilities)
 STTCapabilities.__module__ = "livekit.agents.stt"
 
 

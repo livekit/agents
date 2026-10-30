@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, Never
+from typing import Generic, Literal, Never, get_type_hints
 
 from typing_extensions import Self, TypeVar
 
@@ -78,7 +78,9 @@ class VADCapabilities:
 
 
 VADEventType.__module__ = "livekit.agents"
+VADEvent.__annotations__ = get_type_hints(VADEvent)
 VADEvent.__module__ = "livekit.agents"
+VADCapabilities.__annotations__ = get_type_hints(VADCapabilities)
 VADCapabilities.__module__ = "livekit.agents"
 
 

@@ -196,7 +196,7 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
                 ));
             }
         }
-        body.push_str(&public_paths(&records));
+        body.push_str(&public_paths(&records, &mut runtime));
         let typing = typing.render(&[]);
         if !typing.is_empty() {
             runtime.add("typing", "TYPE_CHECKING");
@@ -236,10 +236,17 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
 /// `X.__module__ = "<path>"` for each class of a record with a public module, after every class:
 /// `repr`, `pickle` and the docs report the import path users write, not `_generated.*`. An alias
 /// (`Literal`, union) has no settable `__module__`.
-fn public_paths(records: &[&RecordDecl]) -> String {
+///
+/// A mutable dataclass's annotations are resolved here first: `typing.get_type_hints` looks names
+/// up in the class's module, and the public one does not import them all.
+fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
     let mut lines = Vec::new();
     for r in records {
         let Some(path) = &r.path else { continue };
+        if r.dataclass.is_some() {
+            runtime.add("typing", "get_type_hints");
+            lines.push(format!("{0}.__annotations__ = get_type_hints({0})\n", r.name));
+        }
         let classes: Vec<&str> = match &r.body {
             RecordBody::Struct(_) => vec![&r.name],
             RecordBody::Variants(vs) if !r.transparent => {

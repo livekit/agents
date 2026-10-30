@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self, TypeVar
@@ -73,6 +73,7 @@ class RealtimeCapabilities:
     """Whether the model and the caller may speak at once, the model deciding when to yield"""
 
 
+RealtimeCapabilities.__annotations__ = get_type_hints(RealtimeCapabilities)
 RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
 
 

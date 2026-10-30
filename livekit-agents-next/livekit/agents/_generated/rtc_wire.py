@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import get_type_hints
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -104,4 +105,5 @@ class AudioOutputCapabilities:
     pause: bool
 
 
+AudioOutputCapabilities.__annotations__ = get_type_hints(AudioOutputCapabilities)
 AudioOutputCapabilities.__module__ = "livekit.agents.voice.io"

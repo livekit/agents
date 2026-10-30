@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Generic, Literal, Never
+from typing import Generic, Literal, Never, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self, TypeVar
@@ -68,8 +68,11 @@ class SynthesizedAudio:
     """Current segment of the synthesized audio (streaming only)"""
 
 
+TTSCapabilities.__annotations__ = get_type_hints(TTSCapabilities)
 TTSCapabilities.__module__ = "livekit.agents.tts"
+MarkupInfo.__annotations__ = get_type_hints(MarkupInfo)
 MarkupInfo.__module__ = "livekit.agents.tts"
+SynthesizedAudio.__annotations__ = get_type_hints(SynthesizedAudio)
 SynthesizedAudio.__module__ = "livekit.agents.tts"
 
 

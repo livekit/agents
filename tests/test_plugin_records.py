@@ -8,7 +8,6 @@ import typing
 import pytest
 
 from livekit.agents import stt
-from livekit.agents._generated import stt as generated_stt
 
 pytestmark = pytest.mark.unit
 
@@ -28,6 +27,7 @@ def test_plugin_records_build_by_position_mutate_and_convert_to_dicts() -> None:
     caps = stt.STTCapabilities(True, False)
     caps.diarization = True
     assert dataclasses.asdict(caps)["aligned_transcript"] is False
-    # Every annotation is importable at runtime from the module that defines the records.
+    # Every annotation resolves at runtime from the public path, as a user's introspection asks.
     for record in (stt.SpeechData, stt.SpeechEvent, stt.STTCapabilities):
-        assert typing.get_type_hints(record, vars(generated_stt))
+        assert record.__module__ == "livekit.agents.stt"
+        assert typing.get_type_hints(record)
