@@ -469,27 +469,24 @@ impl ServerRuntime {
         let admission_deadline =
             Duration::try_from_secs_f64(settings.initialize_process_timeout)
                 .map_err(|_| "initialization timeout must be finite and nonnegative")?;
-        let prepare = async {
+        let admit = async {
             loop {
                 match blocking_io.try_admit(()) {
-                    Ok(permit) => {
-                        break blocking_io.spawn_admitted(permit, move || {
-                            crate::diagnostics::initialize()?;
-                            Ok((
-                                prepare_prometheus_dir(configured.as_deref()),
-                                discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
-                            ))
-                        });
-                    }
+                    Ok(permit) => break permit,
                     Err(_) => blocking_io.wait_for_capacity(()).await,
                 }
             }
         };
-        resources.setup = Some(
-            tokio::time::timeout(admission_deadline, prepare)
-                .await
-                .map_err(|_| "server setup capacity wait timed out".to_owned())?,
-        );
+        let permit = tokio::time::timeout(admission_deadline, admit)
+            .await
+            .map_err(|_| "server setup capacity wait timed out".to_owned())?;
+        resources.setup = Some(blocking_io.spawn_admitted(permit, move || {
+            crate::diagnostics::initialize()?;
+            Ok((
+                prepare_prometheus_dir(configured.as_deref()),
+                discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
+            ))
+        }));
         let setup = resources.setup.as_mut().expect("setup owned before awaiting").await;
         resources.setup.take();
         let (directory, cpus) = setup.map_err(|error| error.to_string())??;
