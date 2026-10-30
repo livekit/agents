@@ -352,6 +352,11 @@ class _Question:
     row: TaskRow | None = None
     """The lane's task of a question asked by another door, which completes once answered."""
 
+    def answered_by(self, message: llm.ChatMessage) -> bool:
+        """Only a turn that started after the question was asked answers it."""
+        # a transcript is stamped when its turn started
+        return self.asked and message.created_at >= self.asked_at
+
     @property
     def relays(self) -> bool:
         """A delegate's question: the answer goes back through the tool that asked."""
@@ -2015,7 +2020,12 @@ class AgentActivity(RecognitionHooks):
         # no model step; on a realtime model a tool that claimed the turn is called by the model
         if is_given(user_message) and user_message is not None:
             front = next((q for q in self._questions if q.asked), None)
-            if front is not None and front.relays and not isinstance(self.llm, llm.RealtimeModel):
+            if (
+                front is not None
+                and front.answered_by(user_message)
+                and front.relays
+                and not isinstance(self.llm, llm.RealtimeModel)
+            ):
                 return self._relay_answer(front, user_message)
             claimed = self._consume_next_turn()
             if claimed is not None and not is_given(tool_choice):
@@ -2510,19 +2520,18 @@ class AgentActivity(RecognitionHooks):
             self._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
-    async def _user_said(self, since: float) -> str | None:
-        """What the person said after ``since``: the spoken turn whose transcript is pending,
-        once it arrives, else their last message; None when they have said nothing since."""
+    async def _user_said(self, question: _Question) -> str | None:
+        """What the person said that answers ``question``: the spoken turn whose transcript is
+        pending, once it arrives, else their last message; None when they have said nothing
+        since it was asked."""
         pending = self._turn_transcript
         if pending is not None and not pending.done():
             msg = await asyncio.shield(pending)
             if msg is not None:
-                # a transcript is stamped when its turn started
-                return msg.text_content if msg.created_at >= since else None
+                return msg.text_content if question.answered_by(msg) else None
         for item in reversed(self._chat_ctx.items):
             if item.type == "message" and item.role == "user":
-                # a transcript is stamped when its turn started
-                return item.text_content if item.created_at >= since else None
+                return item.text_content if question.answered_by(item) else None
         return None
 
     def _claim_next_turn(self, tool_name: str, question: _Question) -> None:
@@ -2560,7 +2569,7 @@ class AgentActivity(RecognitionHooks):
         if self._answering is None or tool.info.name != self._answering[0]:
             return raw_arguments
         question = self._answering[1]
-        said = await self._user_said(question.asked_at)
+        said = await self._user_said(question)
         if not said or self._answering is None or self._answering[1] is not question:
             # the person has said nothing since the question, or another call took the
             # answer: this call is the model's own, and the claim waits for their turn
@@ -3407,11 +3416,13 @@ class AgentActivity(RecognitionHooks):
             run_state._watch_handle(handle)
 
     def _answer_pending_input(self, message: llm.ChatMessage) -> None:
-        """The person's message answers the question in front of them: it is the output of the
-        call that asked. The next one is asked unless an answer goes to a delegate's tool, whose
-        task holds the floor until the tool returns."""
-        self._turn_after_question.set()
+        """The person's message, said after the question in front of them was asked, answers it:
+        it is the output of the call that asked. The next one is asked unless an answer goes to
+        a delegate's tool, whose task holds the floor until the tool returns."""
         front = next((q for q in self._questions if q.asked), None)
+        if front is not None and not front.answered_by(message):
+            return  # a turn of its own, as when nothing is asked
+        self._turn_after_question.set()
         if front is None:
             return
         self._questions.remove(front)

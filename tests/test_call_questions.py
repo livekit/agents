@@ -5,6 +5,7 @@ door asked. Seen in what reaches the models, in what the call says and on the A2
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -310,3 +311,29 @@ async def test_an_empty_transcript_after_a_question_is_nothing_said_at_once(
         await asyncio.wait_for(soon(lambda: len(heard) > 1, "the model's call"), 1.0)
 
     assert heard[1][1] == "the patient confirms yes"
+
+
+@pytest.mark.rule("B98")
+async def test_a_transcript_of_a_turn_before_the_question_does_not_answer_it(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="book sunday")], when=answering("book sunday")),
+        Reply("", [call("ask", "a2", request="yes")], when=answering("yes")),
+    )
+    delegate = expert(asking("Sunday at 14:00?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        rt = model.active_session
+        before = time.time()
+        rt.hear("book sunday")
+        await soon(lambda: "Sunday at 14:00?" in spoken(session), "the question")
+        rt.hear("ok, let me tell you", started_at=before)  # a turn from before the question
+        await asyncio.sleep(0.2)
+        rt.hear("yes")
+        await soon(lambda: len(heard) > 1, "the answer")
+
+    (asked, _), (answered, text) = heard
+    assert answered == asked and text == "yes"
+    assert "ok, let me tell you" not in outputs(session.history)

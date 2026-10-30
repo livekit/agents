@@ -245,16 +245,18 @@ class ScriptedRealtimeSession(FakeRealtimeSession):
         fut.set_result(_generation(text, [], user_initiated=True, hold=None))
         return fut
 
-    def hear(self, transcript: str) -> None:
-        """The person says ``transcript``: the provider transcribes it and, a moment later,
-        replies on its own."""
+    def hear(self, transcript: str, *, started_at: float | None = None) -> None:
+        """The person says ``transcript``: the provider transcribes it, stamped with the turn's
+        start when given, and, a moment later, replies on its own."""
         self.emit("input_speech_started", InputSpeechStartedEvent())
         self.emit("input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=True))
         item_id = utils.shortuuid("item_")
         self._chat_ctx.add_message(role="user", content=transcript, id=item_id)
         self.emit(
             "input_audio_transcription_completed",
-            InputTranscriptionCompleted(item_id=item_id, transcript=transcript, is_final=True),
+            InputTranscriptionCompleted(
+                item_id=item_id, transcript=transcript, is_final=True, turn_started_at=started_at
+            ),
         )
         self._reply_later()
 
