@@ -9,9 +9,10 @@ use lk_agents_abi::voice::rtc::{
 type Result<T> = std::result::Result<T, RtcError>;
 use super::FakeRemoteParticipant;
 use lk_agents_abi::AudioFrame;
+use lk_agents_abi::StreamSource;
 use lk_agents_abi::voice::rtc::AudioInputStream;
 use lk_agents_abi::voice::rtc::RoomEventSink;
-use lk_agents_abi::{BoundedLossy, LossyTx, Pushed, StreamSource};
+use lk_agents_runtime::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;

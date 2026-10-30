@@ -135,7 +135,7 @@ pub use utils::frame::FrameId;
 pub use utils::maybe::Maybe;
 pub use utils::timer::{TimerId, TimerSet};
 
-pub use utils::bounded_lossy::{AUDIO_QUEUE_FRAMES, BoundedLossy, LossyTx, Pushed};
+pub use voice::rtc::AUDIO_QUEUE_FRAMES;
 pub use utils::spawner::{
     BoxFuture, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError, TaskOutcome,
     TaskOutput,

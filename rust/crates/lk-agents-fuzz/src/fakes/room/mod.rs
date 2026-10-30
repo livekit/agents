@@ -11,8 +11,9 @@ use lk_agents_abi::voice::rtc::{
     Receiver, RoomEvent, RpcCallback, RtcError, StreamInfo, StreamTextOptions, TextStreamIngress,
     TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
-use lk_agents_abi::{AudioFrame, BoundedLossy, Closed, StreamSource, Ts};
+use lk_agents_abi::{AudioFrame, Closed, StreamSource, Ts};
 use lk_agents_abi::{Clock, VirtualClock};
+use lk_agents_runtime::room_io::bounded_lossy::BoundedLossy;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};

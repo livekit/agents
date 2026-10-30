@@ -66,7 +66,7 @@ impl Default for SttCapabilities {
     }
 }
 
-/// May drop: the driver feeds it from a `BoundedLossy`.
+/// May drop: the driver feeds it from a drop-oldest queue.
 pub type SttSink = Box<dyn StreamSink<AudioFrame>>;
 /// What a recognition stream yields: its speech events.
 pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;

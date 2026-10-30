@@ -339,7 +339,7 @@ impl Default for AudioStreamOptions {
             noise_cancellation: None,
             session: None,
             auto_gain_control: true,
-            queue_capacity: crate::utils::bounded_lossy::AUDIO_QUEUE_FRAMES,
+            queue_capacity: AUDIO_QUEUE_FRAMES,
         }
     }
 }
@@ -365,6 +365,9 @@ pub struct VideoFrameRef {
 /// video stream is opened with the same capacity, so both sides drop the oldest alike.
 #[crate::host(export)]
 pub const VIDEO_QUEUE_FRAMES: usize = 4;
+
+/// How many frames an audio-in queue holds before it evicts the oldest: one second at 20 ms.
+pub const AUDIO_QUEUE_FRAMES: usize = 50;
 
 /// `LocalParticipant.stream_text(...)`'s keyword arguments.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

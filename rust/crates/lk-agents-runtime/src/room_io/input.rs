@@ -1,24 +1,22 @@
 //! Executes a participant input's track selection: opens the tracks voice selects, pumps their
 //! frames into the bounded queue the session reads, and retires the streams voice retires.
 
+use crate::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioStreamOptions, AudioTrackFeature, ParticipantIdentity,
     RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid, VideoFrameRef,
 };
-use lk_agents_abi::{
-    AudioFrame, BoundedLossy, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LossyTx, Pushed, Spawner,
-    StreamSource, Ts,
-};
+use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamSource, Ts};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::input_state::{
     AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, Publication, TrackReaders, VIDEO_SOURCES,
     end_of_track, replayed_head,
 };
+use parking_lot::Mutex;
 use std::future::Future;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use super::pre_connect_audio::PreConnectAudioHandler;
@@ -456,7 +454,7 @@ impl Reader for ParticipantAudioInput {
             session: self.config.session.clone(),
             auto_gain_control: self.config.auto_gain_control,
             participant_identity: participant.identity().clone(),
-            queue_capacity: lk_agents_abi::utils::bounded_lossy::AUDIO_QUEUE_FRAMES,
+            queue_capacity: lk_agents_abi::AUDIO_QUEUE_FRAMES,
         })?;
         let stream = input_stream.frames()?;
         let owner = Owner { identity: participant.identity(), sid: participant.sid() };

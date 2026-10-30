@@ -17,13 +17,14 @@ use lk_agents_abi::voice::rtc::{
     TrackSource, Transcription, VideoFrameRef, silence_frame,
 };
 use lk_agents_abi::{
-    ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, BoundedLossy,
-    Closed, HOST_TEARDOWN_TIMEOUT, LossyTx, Pushed, StreamSource, TOPIC_CHAT, Ts, VirtualClock,
+    ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
+    HOST_TEARDOWN_TIMEOUT, StreamSource, TOPIC_CHAT, Ts, VirtualClock,
 };
 use lk_agents_fuzz::fakes::room::{FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication};
 use lk_agents_runtime::net::clock::RealClock;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
+use lk_agents_runtime::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use lk_agents_runtime::room_io::input::ParticipantAudioInput;
 use lk_agents_runtime::room_io::output::ParticipantAudioOutput;
 use lk_agents_runtime::room_io::output::transcription::{

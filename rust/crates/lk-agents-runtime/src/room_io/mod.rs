@@ -1,5 +1,6 @@
 //! Runtime room performers and their supplied session capability.
 
+pub mod bounded_lossy;
 pub mod input;
 pub mod output;
 mod owner;

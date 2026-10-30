@@ -1,6 +1,5 @@
 //! The runtime utilities every crate above the purity line shares. Nothing here performs I/O.
 pub mod audio;
-pub mod bounded_lossy;
 pub mod byte_stream;
 pub mod clock;
 pub mod connection_pool;

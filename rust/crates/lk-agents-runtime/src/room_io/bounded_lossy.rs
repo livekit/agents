@@ -1,16 +1,13 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::Mutex;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::atomic::{AtomicU64, Ordering};
+//! The audio-in legs' drop-oldest queue between a synchronous producer and the runtime.
 
+use lk_agents_abi::AUDIO_QUEUE_FRAMES;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
-
-/// One second at 20 ms.
-pub const AUDIO_QUEUE_FRAMES: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pushed {
@@ -22,9 +19,7 @@ pub enum Pushed {
 }
 
 struct Shared<T> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     q: Mutex<Queue<T>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     dropped: AtomicU64,
 }
 
@@ -38,8 +33,8 @@ struct Queue<T> {
 impl<T> Shared<T> {
     fn push(&self, v: T) -> Pushed {
         let (outcome, receiver) = {
-            // A std `Mutex`, never held across an await: the host push is a synchronous method.
-            let mut q = self.q.lock().unwrap();
+            // Never held across an await: the host push is a synchronous method.
+            let mut q = self.q.lock();
             if q.closed {
                 return Pushed::Closed;
             }
@@ -62,7 +57,7 @@ impl<T> Shared<T> {
 
     fn close(&self) {
         let receiver = {
-            let mut q = self.q.lock().unwrap();
+            let mut q = self.q.lock();
             q.closed = true;
             q.receiver.take()
         };
@@ -85,7 +80,6 @@ pub struct LossyTx<T> {
 }
 
 impl<T> BoundedLossy<T> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// No separate sender, for a Rust producer; a host producer uses [`channel`](Self::channel).
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "a zero-capacity lossy queue would drop everything");
@@ -129,7 +123,7 @@ impl<T> BoundedLossy<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.shared.q.lock().unwrap().items.len()
+        self.shared.q.lock().items.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -151,7 +145,7 @@ impl<T> Future for Receive<'_, T> {
     type Output = Option<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut q = self.shared.q.lock().unwrap();
+        let mut q = self.shared.q.lock();
         if let Some(item) = q.items.pop_front() {
             Poll::Ready(Some(item))
         } else if q.closed {
@@ -165,7 +159,7 @@ impl<T> Future for Receive<'_, T> {
 
 impl<T> Drop for Receive<'_, T> {
     fn drop(&mut self) {
-        self.shared.q.lock().unwrap().receiver = None;
+        self.shared.q.lock().receiver = None;
     }
 }
 
@@ -192,7 +186,7 @@ impl<T> Drop for LossyTx<T> {
 impl<T> Drop for BoundedLossy<T> {
     fn drop(&mut self) {
         // Receiver gone: stop accepting and free what is queued.
-        let mut q = self.shared.q.lock().unwrap();
+        let mut q = self.shared.q.lock();
         q.closed = true;
         q.items.clear();
     }
@@ -268,7 +262,6 @@ mod tests {
 
     // Catches a lost wakeup: checking before registering for notification. Real OS thread: the
     // push side is synchronous host code.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_push_racing_the_receiver_still_wakes_it() {
         let (tx, mut rx) = BoundedLossy::audio();
