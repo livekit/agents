@@ -8,7 +8,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import AfterValidator
@@ -94,7 +94,7 @@ def normalize_date_of_birth(year: int, month: int, day: int) -> date:
     return _core.normalize_date_of_birth(year, month, day, date.today())
 
 
-class DtmfEvent(str, Enum):
+class DtmfEvent(StrEnum):
     ONE = "1"
     TWO = "2"
     THREE = "3"

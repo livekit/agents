@@ -30,9 +30,7 @@ class _Phase(enum.Enum):
 class _Turn:
     turn_id: int
     input_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created: datetime.datetime = field(
-        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
-    )
+    created: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
     transcript: list[str] = field(default_factory=list[str])
 
     phase: _Phase = _Phase.IDLE

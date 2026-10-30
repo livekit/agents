@@ -27,7 +27,6 @@ import platform
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from enum import Enum
 from typing import Literal
 from urllib.parse import urlencode
 
@@ -90,7 +89,7 @@ def _warn_if_sunset_stt_model(model: str) -> None:
 ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 
 
-class SpeechToTextLanguage(str, Enum):
+class SpeechToTextLanguage(enum.StrEnum):
     """Languages supported for STT."""
 
     UNKNOWN = "unknown"
@@ -660,7 +659,7 @@ class STT(stt.STT):
                     alternatives=alternatives,
                 )
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             self._logger.error(f"Sarvam API timeout: {e}")
             raise APITimeoutError("Sarvam API request timed out") from e
         except aiohttp.ClientError as e:
@@ -1108,7 +1107,7 @@ class SpeechStream(stt.RecognizeStream):
         self._server_request_id = None
         try:
             await self._run_connection()
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError) as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
             self._logger.error(f"Connection failed: {e}", extra=self._build_log_context())

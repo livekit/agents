@@ -114,7 +114,7 @@ class _ResponsesWebsocket:
             )
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to OpenAI Responses WebSocket") from e
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APIConnectionError("timed out connecting to OpenAI Responses WebSocket") from e
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:

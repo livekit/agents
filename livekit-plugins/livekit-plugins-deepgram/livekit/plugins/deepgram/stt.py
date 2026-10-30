@@ -298,7 +298,7 @@ class STT(stt.STT):
                     use_punctuated_word=config.punctuate or config.smart_format,
                 )
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -811,7 +811,7 @@ class SpeechStream(stt.RecognizeStream):
                 heartbeat=30.0,
                 conn_options=self._conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or

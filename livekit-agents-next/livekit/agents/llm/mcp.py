@@ -8,9 +8,7 @@ import contextvars
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Literal
-
-from typing_extensions import Self
+from typing import Any, Literal, Self
 
 from .. import _core
 from .._generated.mcp import MCPToolOptions

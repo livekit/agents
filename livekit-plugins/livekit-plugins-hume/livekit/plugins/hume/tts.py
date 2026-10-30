@@ -14,13 +14,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal, TypedDict
 
 import aiohttp
@@ -59,14 +58,14 @@ class Utterance(TypedDict, total=False):
     trailing_silence: float | None
 
 
-class VoiceProvider(str, Enum):
+class VoiceProvider(StrEnum):
     """Voice provider for the voice library."""
 
     hume = "HUME_AI"
     custom = "CUSTOM_VOICE"
 
 
-class AudioFormat(str, Enum):
+class AudioFormat(StrEnum):
     """Audio format for the synthesized speech."""
 
     mp3 = "mp3"
@@ -316,7 +315,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except Exception as e:
             raise APIConnectionError() from e

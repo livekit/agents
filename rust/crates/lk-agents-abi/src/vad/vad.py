@@ -7,9 +7,9 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from types import TracebackType
-from typing import Generic, Literal, Never
+from typing import Generic, Literal, Never, Self
 
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from livekit import rtc
 

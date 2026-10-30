@@ -246,7 +246,7 @@ class AsyncStreamingTTSSession:
 
         try:
             await asyncio.wait_for(_connect_and_configure(), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             await self.close()
             raise APITimeoutError("Vakyam TTS WebSocket connection timed out") from exc
         except (APIStatusError, APIConnectionError):
@@ -300,7 +300,7 @@ class AsyncStreamingTTSSession:
         except asyncio.CancelledError:
             await asyncio.shield(self._abort_and_drain(timeout=timeout))
             raise
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket receive timed out") from exc
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -322,7 +322,7 @@ class AsyncStreamingTTSSession:
             await asyncio.wait_for(
                 self._connection.send(json.dumps(cancel_message())), timeout=timeout
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
         if not drain:
             return None
@@ -338,7 +338,7 @@ class AsyncStreamingTTSSession:
             response = _decode_message(
                 await asyncio.wait_for(self._connection.recv(), timeout=timeout)
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket ping timed out") from exc
         except (APIConnectionError, APIStatusError):
             raise
@@ -387,7 +387,7 @@ class AsyncStreamingTTSSession:
         while True:
             try:
                 message = await asyncio.wait_for(self._connection.recv(), timeout=timeout)
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
             if isinstance(message, bytes):
                 continue

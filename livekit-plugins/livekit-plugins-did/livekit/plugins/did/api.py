@@ -92,7 +92,7 @@ class DIDAPI:
                 ) from exc
             except APIStatusError:
                 raise
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            except (TimeoutError, aiohttp.ClientError) as e:
                 logger.warning(
                     f"D-ID API request failed (attempt {attempt + 1}/{num_attempts})",
                     extra={"error": str(e)},

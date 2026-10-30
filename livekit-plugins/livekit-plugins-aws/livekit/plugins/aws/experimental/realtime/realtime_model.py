@@ -765,7 +765,7 @@ class RealtimeSession(  # noqa: F811
                 try:
                     await asyncio.wait_for(self._current_generation.done_fut, timeout=2.0)
                     logger.debug("[SESSION] Generation completed (completionEnd received)")
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("[SESSION] Timeout waiting for completionEnd, proceeding anyway")
                     self._close_current_generation()
 
@@ -804,7 +804,7 @@ class RealtimeSession(  # noqa: F811
                 # TODO: Even waiting for 30 seconds this never just happens.
                 # See if we can figure out how to make this more graceful
                 await asyncio.wait_for(self._response_task, timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.debug("[SESSION] Response task timeout, cancelling...")
                 self._response_task.cancel()
                 try:
@@ -987,7 +987,7 @@ class RealtimeSession(  # noqa: F811
                 try:
                     if pending_events:
                         await asyncio.wait_for(asyncio.gather(*pending_events), timeout=0.5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if self._tools_ready and not self._tools_ready.done():
                         logger.warning("Tools not ready after 500ms, continuing without them")
 
@@ -2414,7 +2414,7 @@ class RealtimeSession(  # noqa: F811
         if self._response_task:
             try:
                 await asyncio.wait_for(self._response_task, timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("shutdown of output event loop timed out-- cancelling")
                 self._response_task.cancel()
             tasks.append(self._response_task)

@@ -405,7 +405,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS HTTP stream timed out") from exc
         except aiohttp.ClientError as exc:
             raise APIConnectionError(f"Vakyam TTS HTTP stream connection error: {exc}") from exc

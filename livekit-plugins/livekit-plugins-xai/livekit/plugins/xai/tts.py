@@ -155,7 +155,7 @@ class TTS(tts.TTS):
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 conn_options=conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APIConnectionError("failed to connect to xAI") from None
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or
@@ -315,7 +315,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

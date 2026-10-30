@@ -18,7 +18,7 @@ import asyncio
 import dataclasses
 import os
 from collections.abc import Sequence
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import SupportsFloat, TypeVar, cast
 from urllib.parse import urlparse
 
@@ -95,7 +95,7 @@ _EOU_REMOVED = "end-of-utterance timing is the service's own and is not configur
 _LEGACY_ARG = "the argument predates Agent STT and was already unused"
 
 
-class TurnDetectionMode(str, Enum):
+class TurnDetectionMode(StrEnum):
     """How turn boundaries (end of speech) are detected.
 
     `VAD`: the STT service runs its own VAD and closes turns itself.
@@ -582,7 +582,7 @@ class SpeechStream(stt.RecognizeStream):
         await self._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
         try:
             await asyncio.wait_for(self._speaker_result_event.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"GetSpeakers timed-out for stream {self._id}")
             return []
         if self._speaker_error is not None:

@@ -1,8 +1,8 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 
-class Precision(str, Enum):
+class Precision(StrEnum):
     PCM_16 = "PCM_16"
 
 

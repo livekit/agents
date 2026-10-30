@@ -10,9 +10,7 @@ error appears.
 
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any
-
-from typing_extensions import assert_type
+from typing import Any, assert_type
 
 from livekit import rtc
 from livekit.agents import (

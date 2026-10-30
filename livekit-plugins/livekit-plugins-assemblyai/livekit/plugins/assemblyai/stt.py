@@ -746,7 +746,7 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                     consecutive_timeouts = 0
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if closing_ws:
                         break
                     consecutive_timeouts += 1

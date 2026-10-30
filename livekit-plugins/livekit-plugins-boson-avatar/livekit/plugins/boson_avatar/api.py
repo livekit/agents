@@ -19,7 +19,7 @@ import ipaddress
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
@@ -292,7 +292,7 @@ class BosonAvatarAPI:
                             body=payload,
                             retryable=not 200 <= response.status < 400,
                         )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     error_type = "timeout"
                 except aiohttp.ClientError:
                     error_type = "client_error"
@@ -419,8 +419,8 @@ def _parse_retry_after(value: str | None) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=timezone.utc)
-    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+        retry_at = retry_at.replace(tzinfo=UTC)
+    return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
 
 
 __all__ = ["AvatarInfo", "AvatarSessionInfo", "BosonAvatarAPI", "list_avatars"]

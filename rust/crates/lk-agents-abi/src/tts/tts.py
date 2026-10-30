@@ -8,10 +8,10 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from types import TracebackType
-from typing import Generic, Literal, Never
+from typing import Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from livekit import rtc
 

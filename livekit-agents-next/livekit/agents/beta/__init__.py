@@ -13,9 +13,7 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
-
-from typing_extensions import Self
+from typing import Any, Protocol, Self
 
 from .. import _core
 from .._generated.workflow_prompts import END_CALL_DESCRIPTION

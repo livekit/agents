@@ -134,7 +134,7 @@ class SynthesiaAPI:
                             "synthesia session request failed, retrying",
                             extra={"status": status},
                         )
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                except (TimeoutError, aiohttp.ClientError) as e:
                     # A 5xx whose body fails to arrive is still a 5xx, not a transport failure.
                     last_status = status if status is not None and status >= 500 else None
                     last_body, last_exc = None, e

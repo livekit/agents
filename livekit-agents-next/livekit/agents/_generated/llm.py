@@ -17,10 +17,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from livekit import rtc
 

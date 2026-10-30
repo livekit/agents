@@ -304,11 +304,7 @@ class SpeechStream(stt.RecognizeStream):
             return await utils.http_context.ws_connect(
                 self._session, self._opts.base_url, conn_options=self._conn_options
             )
-        except (
-            aiohttp.ClientConnectorError,
-            aiohttp.WSServerHandshakeError,
-            asyncio.TimeoutError,
-        ) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError) as e:
             raise APIConnectionError("failed to connect to nabrah STT") from e
 
     def _stream_failure(self, message: str) -> APIConnectionError:
@@ -357,7 +353,7 @@ class SpeechStream(stt.RecognizeStream):
 
             try:
                 await asyncio.wait_for(_await_ready(), self._conn_options.read_timeout)
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 raise APIConnectionError("nabrah STT never sent ready") from e
 
             watchdog_task = asyncio.create_task(self._eot_watchdog())

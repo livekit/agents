@@ -482,7 +482,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except APIError:
             raise
@@ -550,7 +550,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await asyncio.gather(*tasks)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except APIError:
             raise

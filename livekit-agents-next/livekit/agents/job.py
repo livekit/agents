@@ -26,7 +26,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field, replace
-from enum import Enum, unique
+from enum import Enum, StrEnum, unique
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -147,7 +147,7 @@ class JobExecutorType(Enum):
     THREAD = "thread"
 
 
-class AutoSubscribe(str, Enum):
+class AutoSubscribe(StrEnum):
     SUBSCRIBE_ALL = "subscribe_all"
     SUBSCRIBE_NONE = "subscribe_none"
     AUDIO_ONLY = "audio_only"

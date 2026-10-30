@@ -9,13 +9,13 @@ import re
 import secrets
 import sqlite3
 import time
+import tomllib
 from contextlib import asynccontextmanager, closing
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
-import tomllib
 import uvicorn
 from google.protobuf.json_format import MessageToDict, ParseDict
 from models import DatabaseDump, QueryResult

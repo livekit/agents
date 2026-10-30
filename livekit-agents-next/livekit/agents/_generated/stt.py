@@ -18,10 +18,10 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, Never, get_type_hints
+from typing import Generic, Literal, Never, Self, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from livekit import rtc
 

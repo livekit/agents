@@ -484,7 +484,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -527,7 +527,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async with self._pool.connection(conn_options=self._conn_options) as ws:
                 await self._run_ws(ws, output_emitter)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

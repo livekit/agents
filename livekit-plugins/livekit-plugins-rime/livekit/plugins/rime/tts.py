@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import os
 import weakref
@@ -691,7 +690,7 @@ class ChunkedStream(tts.ChunkedStream):
                 async for data, _ in resp.content.iter_chunks():
                     output_emitter.push(data)
 
-        except asyncio.TimeoutError as cause:
+        except TimeoutError as cause:
             raise APITimeoutError() from redacted_cause(cause)
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

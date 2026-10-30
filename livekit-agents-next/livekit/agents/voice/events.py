@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -17,7 +17,7 @@ from pydantic import (
     field_serializer,
     model_validator,
 )
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from .._generated.events import (
     AgentFalseInterruptionEvent,

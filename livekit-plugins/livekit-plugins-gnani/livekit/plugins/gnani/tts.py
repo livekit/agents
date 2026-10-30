@@ -320,7 +320,7 @@ class RESTChunkedStream(tts.ChunkedStream):
                 output_emitter.push(audio_bytes)
                 output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Gnani TTS REST request timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -426,7 +426,7 @@ class SSEChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Gnani TTS SSE request timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -525,7 +525,7 @@ class WebSocketChunkedStream(tts.ChunkedStream):
 
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -631,7 +631,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise

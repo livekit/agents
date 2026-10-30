@@ -76,7 +76,7 @@ _PHRASE_FLUSH_SUFFIXES = (".", "!", "?", ",", ";", ":")
 async def _close_ws(ws: aiohttp.ClientWebSocketResponse, *, context: str) -> None:
     try:
         await asyncio.wait_for(ws.close(), timeout=WS_CLOSE_TIMEOUT_S)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         logger.warning(
             "[TTS] websocket close timed out",
             extra={"context": context, "timeout_s": WS_CLOSE_TIMEOUT_S},
@@ -889,7 +889,7 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 else:
                     logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -1001,7 +1001,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

@@ -366,7 +366,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     async with asyncio.timeout(self._conn_options.write_timeout):
                         await session.cancel()
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except AuthError as e:
             raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None

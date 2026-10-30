@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import traceback
 from collections.abc import Callable
@@ -250,7 +249,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             logger.error("Simplismart TTS API timeout: %s", e)
             raise APITimeoutError("Simplismart TTS API request timed out") from e
         except aiohttp.ClientError as e:

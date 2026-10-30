@@ -37,9 +37,7 @@ from .constants import AUDIO_ENCODING
 from .log import logger
 
 if TYPE_CHECKING:
-    from typing import Literal
-
-    from typing_extensions import Never
+    from typing import Literal, Never
 
     from livekit.agents import APIConnectOptions
     from livekit.agents.types import NotGivenOr

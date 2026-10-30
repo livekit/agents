@@ -609,7 +609,7 @@ class GPTVoiceSession(
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except (TimeoutError, aiohttp.ClientError):
             raise APIConnectionError(f"{self._provider_label} connection error") from None
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -662,7 +662,7 @@ class GPTVoiceSession(
             while True:
                 try:
                     msg = await ws_conn.receive()
-                except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+                except (TimeoutError, aiohttp.ClientError, ConnectionError):
                     raise APIConnectionError("GPT-Live receive failed") from None
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -721,7 +721,7 @@ class GPTVoiceSession(
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
         try:
             await ws_conn.send_str(json.dumps(raw))
-        except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+        except (TimeoutError, aiohttp.ClientError, ConnectionError):
             raise APIConnectionError("GPT-Live send failed") from None
 
     # inbound events

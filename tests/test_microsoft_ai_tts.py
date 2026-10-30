@@ -200,7 +200,7 @@ async def test_interrupted_http_body_does_not_emit_stale_audio_on_retry() -> Non
 
 
 async def test_timeout_is_translated() -> None:
-    response = FakeResponse(error=asyncio.TimeoutError("do-not-log-this-endpoint"))
+    response = FakeResponse(error=TimeoutError("do-not-log-this-endpoint"))
     instance, _ = provider(response)
     async with instance, instance.synthesize("Hello.", conn_options=OPTIONS) as stream:
         with pytest.raises(APITimeoutError) as caught:

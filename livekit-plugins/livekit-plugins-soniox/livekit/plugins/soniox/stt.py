@@ -383,7 +383,7 @@ class SpeechStream(stt.RecognizeStream):
 
             except APIError:
                 raise
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
                 )

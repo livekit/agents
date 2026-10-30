@@ -1450,7 +1450,7 @@ class SpeechStream(stt.RecognizeStream):
             ws = await utils.http_context.ws_connect(
                 self._session, model_endpoint, headers=headers, conn_options=self._conn_options
             )
-        except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientConnectorError) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError) as e:
             raise APIConnectionError("failed to connect to SLNG STT") from e
 
         if connection.init is not None:
@@ -1486,7 +1486,7 @@ class SpeechStream(stt.RecognizeStream):
                     ws.receive(),
                     timeout=self._conn_options.read_timeout,
                 )
-            except (TimeoutError, asyncio.TimeoutError) as exc:
+            except TimeoutError as exc:
                 raise APIConnectionError("timed out waiting for SLNG STT ready") from exc
 
             if msg.type in (

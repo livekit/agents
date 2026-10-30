@@ -617,7 +617,7 @@ class TTS(tts.TTS):
             while not ws.closed:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=_KEEPALIVE_INTERVAL)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # No incoming message within the interval -- send our
                     # app-level ping to reset Sarvam's idle timer.
                     if ws.closed:
@@ -924,7 +924,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if self._opts.output_audio_codec in _TELEPHONY_CODECS:
                         wav_bytes = _decode_telephony(self._opts.output_audio_codec, wav_bytes)
                     output_emitter.push(wav_bytes)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Sarvam TTS API request timed out") from e
         except aiohttp.ClientError as e:
             raise APIConnectionError(f"Sarvam TTS API connection error: {e}") from e
@@ -1022,7 +1022,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -1169,7 +1169,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.error(error_msg, extra=self._build_log_context())
                         raise APIConnectionError(error_msg)
 
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 logger.error("WebSocket received timeout", extra=self._build_log_context())
                 raise APITimeoutError("WebSocket receive timeout") from e
             except (APIStatusError, APIConnectionError, APITimeoutError):
@@ -1243,7 +1243,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # pool's next acquisition, which may not come, so close it now.
                 await self._return_ws(ws)
 
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError) as e:
             self._connection_state = ConnectionState.FAILED
             logger.error(f"Connection failed: {e}", extra=self._build_log_context())
             raise APIConnectionError(f"Failed to connect to TTS WebSocket: {e}") from e

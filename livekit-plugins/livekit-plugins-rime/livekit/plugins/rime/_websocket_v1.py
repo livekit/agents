@@ -354,7 +354,7 @@ async def connect(
             await ws.close()
             raise
         return connection
-    except asyncio.TimeoutError as cause:
+    except TimeoutError as cause:
         raise APITimeoutError("Timed out waiting for the Rime v1 ready event") from redacted_cause(
             cause
         )
@@ -402,7 +402,7 @@ async def run_context(
             await asyncio.wait_for(
                 _send_envelope(connection, context_id, payload, value), timeout=write_timeout
             )
-        except asyncio.TimeoutError as cause:
+        except TimeoutError as cause:
             raise APITimeoutError("Timed out writing to the Rime v1 WebSocket") from redacted_cause(
                 cause
             )
@@ -498,7 +498,7 @@ async def run_context(
             return
         try:
             await asyncio.wait_for(server_started.wait(), timeout=read_timeout)
-        except asyncio.TimeoutError as cause:
+        except TimeoutError as cause:
             raise APITimeoutError(
                 "Timed out waiting for the Rime v1 started event"
             ) from redacted_cause(cause)
@@ -515,7 +515,7 @@ async def run_context(
                 return
             try:
                 await asyncio.wait_for(server_activity.wait(), timeout=read_timeout)
-            except asyncio.TimeoutError as cause:
+            except TimeoutError as cause:
                 raise APITimeoutError(
                     "Timed out waiting for a Rime v1 event after end"
                 ) from redacted_cause(cause)
@@ -622,7 +622,7 @@ async def _receive_envelope(
             message = await websocket.receive()
         else:
             message = await websocket.receive(timeout=timeout)
-    except asyncio.TimeoutError as cause:
+    except TimeoutError as cause:
         raise APITimeoutError("Timed out waiting for a Rime v1 event") from redacted_cause(cause)
 
     if message.type in (

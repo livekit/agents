@@ -323,7 +323,7 @@ class ChunkedStream(tts.ChunkedStream):
                             output_emitter.push(base64.b64decode(audio))
 
                 output_emitter.flush()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from None
@@ -428,7 +428,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(

@@ -455,7 +455,7 @@ class SpeechStream(stt.RecognizeStream):
                 heartbeat=_WS_HEARTBEAT,
                 conn_options=self._conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError("Meta Muse realtime ASR connection timed out") from None
         except aiohttp.ClientResponseError as exc:
             raise APIStatusError(
@@ -481,7 +481,7 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.CancelledError:
             await _close_quietly(ws)
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await _close_quietly(ws)
             raise APITimeoutError("Meta Muse realtime ASR handshake timed out") from None
         except APIError:
@@ -536,7 +536,7 @@ class SpeechStream(stt.RecognizeStream):
             sender.result()
             try:
                 await asyncio.wait_for(receiver, timeout=self._conn_options.read_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise APITimeoutError(
                     "Meta Muse realtime ASR timed out while draining final events",
                     retryable=not self._audio_consumed,

@@ -423,7 +423,7 @@ class SpeechStream(stt.RecognizeStream):
                     # Wait for output stream to close cleanly
                     try:
                         await asyncio.wait_for(tasks[1], timeout=3.0)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                    except (TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
                     except BadRequestException:
                         # Already handled above (e.g. idle-timeout retry). Swallow so

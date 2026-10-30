@@ -245,7 +245,7 @@ class STT(stt.STT):
                 ],
             )
 
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
@@ -474,7 +474,7 @@ class SpeechStream(stt.RecognizeStream):
 
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(

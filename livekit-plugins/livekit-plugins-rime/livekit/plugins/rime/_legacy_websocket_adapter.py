@@ -113,7 +113,7 @@ class LegacyWebSocketAdapter:
             await websocket.send_str(json.dumps({"operation": "eos"}))
             try:
                 await asyncio.wait_for(websocket.receive(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
         except Exception as error:
             logger.warning(
@@ -277,7 +277,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     input_sent_event.set()
                     await sent_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
-        except asyncio.TimeoutError as cause:
+        except TimeoutError as cause:
             raise APITimeoutError() from redacted_cause(cause)
         except aiohttp.ClientResponseError as error:
             raise APIStatusError(

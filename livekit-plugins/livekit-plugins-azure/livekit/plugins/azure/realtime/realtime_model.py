@@ -529,7 +529,7 @@ class RealtimeSession(
                     ),
                     self._opts.conn_options.connect_timeout,
                 )
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 raise APIConnectionError("Azure Voice Live connection timed out") from e
             except Exception as e:
                 raise APIConnectionError("failed to connect to Azure Voice Live") from e
@@ -1569,7 +1569,7 @@ class RealtimeSession(
                     asyncio.gather(*futs, return_exceptions=True),
                     timeout=_UPDATE_CHAT_CTX_TIMEOUT,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
             finally:
                 for event_id in event_ids:

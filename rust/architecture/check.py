@@ -8,11 +8,10 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
-
-import tomllib
 
 CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media")}
 PURE = CORES | {"lk-agents-abi"}

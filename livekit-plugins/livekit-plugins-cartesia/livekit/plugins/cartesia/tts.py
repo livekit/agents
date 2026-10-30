@@ -228,7 +228,7 @@ class TTS(tts.TTS):
                 },
                 conn_options=conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             # authentication headers can appear in RequestInfo.
@@ -421,7 +421,7 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.push(data)
 
                 output_emitter.flush()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -598,7 +598,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

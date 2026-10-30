@@ -342,7 +342,7 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
             ),
             timeout=30,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
         await tts_v.aclose()
@@ -377,7 +377,7 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
                     ),
                     timeout=10,
                 )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("test timed out after 10 seconds")
 
         end_time = time.time()
@@ -718,7 +718,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
         # )
         # logger.info(f"1st segment metrics: {metrics_collected_events.events[0][0][0]}")
         # logger.info(f"2nd segment metrics: {metrics_collected_events.events[1][0][0]}")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
         await tts_v.aclose()
@@ -743,7 +743,7 @@ async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
             ),
             timeout=30,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
         await tts_v.aclose()
@@ -773,7 +773,7 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
                     ),
                     timeout=10,
                 )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("test timed out after 10 seconds")
 
         end_time = time.time()

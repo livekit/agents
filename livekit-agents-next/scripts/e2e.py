@@ -694,7 +694,7 @@ class Call:
                 while True:
                     try:
                         item = await asyncio.wait_for(self.q.get(), 1 / fps)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         yield self._video(0)
                         continue
                     if isinstance(item, AudioSegmentEnd):

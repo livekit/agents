@@ -361,7 +361,7 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.push(data)
 
                 output_emitter.flush()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except APIStatusError:
             raise
@@ -585,7 +585,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.gracefully_cancel(*tasks)
             if cancelled is not None:
                 raise cancelled
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except APIError:
             raise

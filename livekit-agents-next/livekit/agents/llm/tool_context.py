@@ -15,13 +15,15 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
+    Required,
+    Self,
     TypeGuard,
     get_type_hints,
     overload,
 )
 
 from pydantic import Field, JsonValue
-from typing_extensions import ParamSpec, Required, Self, TypedDict, TypeVar
+from typing_extensions import ParamSpec, TypedDict, TypeVar
 
 from .. import _core
 from .._generated.tool_context import (

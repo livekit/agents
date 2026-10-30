@@ -351,7 +351,7 @@ class STT(stt.STT):
                     start_time = min(word.start for word in words)
                     end_time = max(word.end for word in words)
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -770,7 +770,7 @@ class SpeechStream(stt.RecognizeStream):
                 status_code=e.status,
                 request_id=trace_id_from_headers(e.headers),
             ) from e
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError) as e:
             raise APIConnectionError("Failed to connect to ElevenLabs") from e
 
         return ws

@@ -488,7 +488,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -547,7 +547,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection = await self._get_connection()
         except APIError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.WSServerHandshakeError as e:
             raise APIStatusError(
@@ -627,7 +627,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await waiter
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
             if isinstance(e, APIStatusError):
@@ -1179,7 +1179,7 @@ class _DialogueConnection(_Connection):
                     msg = await asyncio.wait_for(
                         self._input_queue.recv(), timeout=self._next_keep_alive_delay()
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if not self._ws or self._ws.closed:
                         break
                     await self._send_due_keep_alives()

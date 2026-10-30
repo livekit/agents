@@ -160,7 +160,7 @@ class ProtofaceAPI:
                             status_code=response.status,
                             body=payload,
                         )
-                except asyncio.TimeoutError as exc:
+                except TimeoutError as exc:
                     error = APITimeoutError()
                     error.__cause__ = exc
                 except aiohttp.ClientError as exc:

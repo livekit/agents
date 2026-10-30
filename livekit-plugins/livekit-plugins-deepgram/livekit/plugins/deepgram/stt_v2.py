@@ -628,7 +628,7 @@ class SpeechStreamv2(stt.RecognizeStream):
                 heartbeat=30.0,
                 conn_options=self._conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or

@@ -332,7 +332,7 @@ class _JobProc:
         self, span: trace.Span, error: BaseException | None, timed_out: bool
     ) -> None:
         if error is not None or timed_out:
-            trace_utils.record_exception(span, error or asyncio.TimeoutError())
+            trace_utils.record_exception(span, error or TimeoutError())
         span.end()
 
     async def _core_close_session(self) -> None:

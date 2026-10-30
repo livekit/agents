@@ -295,7 +295,7 @@ class SpeechStream(stt.RecognizeStream):
             )
             logger.debug("Established Telnyx STT WebSocket connection")
             return ws
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError) as e:
             raise APIConnectionError("Failed to connect to Telnyx STT") from e
 
     def _process_stream_event(self, data: _Transcript) -> None:

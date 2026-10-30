@@ -368,7 +368,7 @@ class STT(stt.STT):
                 data = _Transcript.model_validate(await resp.json())
                 return _batch_transcription_to_speech_event(config.language, data)
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -789,7 +789,7 @@ class SpeechStream(stt.RecognizeStream):
                 heartbeat=30.0,
                 conn_options=self._conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APIConnectionError("failed to connect to Smallest AI STT") from None
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or

@@ -344,7 +344,7 @@ class SpeechStream(stt.RecognizeStream):
                     tasks_group.cancel()
                     tasks_group.exception()
 
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 logger.error(f"Timeout during Inworld STT connection: {e}")
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
             except aiohttp.ClientResponseError as e:

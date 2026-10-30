@@ -575,7 +575,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except APIError:
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError(
                 f"WebSocket TTS synthesis timed out (trace_id: {trace_id})"
             ) from None
@@ -710,7 +710,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         except APIError:
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError("TTS synthesis timed out") from None
         except aiohttp.ClientResponseError as e:
             logger.error(f"HTTP error: status={e.status}, message={e.message}", exc_info=True)

@@ -192,7 +192,7 @@ class TTSv2(tts.TTS):
             # proper cleanup, avoiding 429 Too Many Requests errors from lingering sessions
             try:
                 await asyncio.wait_for(ws.receive(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
         except Exception as e:
             logger.warning(f"Error during WebSocket close sequence: {e}")
@@ -323,7 +323,7 @@ class ChunkedStreamv2(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -392,7 +392,7 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except APIError:
             raise

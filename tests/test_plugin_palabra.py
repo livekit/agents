@@ -54,7 +54,7 @@ async def mock_palabra_ws(monkeypatch):
         while True:
             try:
                 msg = await asyncio.wait_for(send_queue.get(), timeout=0.1)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if close_event.is_set():
                     for ws in set(connections.values()):
                         await ws.close()
@@ -359,7 +359,7 @@ async def mock_palabra_stt_ws(monkeypatch):
             while not ws.closed:
                 try:
                     msg = await asyncio.wait_for(send_queue.get(), timeout=0.1)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 await ws.send_json(msg)
 

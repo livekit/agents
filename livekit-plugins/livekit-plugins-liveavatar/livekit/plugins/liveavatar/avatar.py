@@ -8,11 +8,11 @@ import uuid
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Required
 
 import aiohttp
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import Required, TypedDict
+from typing_extensions import TypedDict
 
 import livekit.rtc as rtc
 from livekit import api

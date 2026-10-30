@@ -339,7 +339,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from None
@@ -433,7 +433,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             # reconnect off now, in the background, so it's already warm
                             # by the time the next segment needs a connection.
                             self._pool.prewarm()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -556,7 +556,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         while True:
             try:
                 msg = await self._recv_one(ws, timeout=_CONTINUATIONS_IDLE_TIMEOUT)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if ctx_state["finalized"] and received_chunk:
                     return False
                 if inactivity_deadline is not None and event_loop.time() >= inactivity_deadline:

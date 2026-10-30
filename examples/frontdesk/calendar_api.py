@@ -146,8 +146,8 @@ class CalComCalendar:
         query = urlencode(
             {
                 "eventTypeId": await self._event(),
-                "start": start.astimezone(datetime.timezone.utc).isoformat(),
-                "end": end.astimezone(datetime.timezone.utc).isoformat(),
+                "start": start.astimezone(datetime.UTC).isoformat(),
+                "end": end.astimezone(datetime.UTC).isoformat(),
             }
         )
         async with self._http.get(
@@ -166,7 +166,7 @@ class CalComCalendar:
             CAL_COM + "bookings",
             headers=self._headers("2024-08-13"),
             json={
-                "start": slot.start.astimezone(datetime.timezone.utc).isoformat(),
+                "start": slot.start.astimezone(datetime.UTC).isoformat(),
                 "attendee": {"name": email, "email": email, "timeZone": str(TIMEZONE)},
                 "eventTypeId": await self._event(),
             },

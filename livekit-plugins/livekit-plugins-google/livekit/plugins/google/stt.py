@@ -1092,7 +1092,7 @@ class SpeechStream(stt.RecognizeStream):
                             # try to gracefully stop the process_stream_task
                             try:
                                 await asyncio.wait_for(process_stream_task, timeout=1.0)
-                            except asyncio.TimeoutError:
+                            except TimeoutError:
                                 pass
 
                         await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)

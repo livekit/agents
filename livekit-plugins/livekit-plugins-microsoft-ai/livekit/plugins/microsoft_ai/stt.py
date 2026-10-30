@@ -358,7 +358,7 @@ class SpeechStream(stt.RecognizeStream):
                 raise APIConnectionError("Microsoft AI STT receiver stopped unexpectedly")
         except aiohttp.WSServerHandshakeError as error:
             raise status_error("STT", error.status) from None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError("Microsoft AI STT operation timed out") from None
         except (aiohttp.ClientError, ConnectionError, OSError):
             raise APIConnectionError("Microsoft AI STT transport failed") from None
@@ -370,7 +370,7 @@ class SpeechStream(stt.RecognizeStream):
             if self._ws is not None:
                 try:
                     await asyncio.wait_for(self._ws.close(), self._conn_options.total_timeout)
-                except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError):
+                except (TimeoutError, aiohttp.ClientError, ConnectionError):
                     logger.warning("Microsoft AI STT socket cleanup failed")
                 self._ws = None
 

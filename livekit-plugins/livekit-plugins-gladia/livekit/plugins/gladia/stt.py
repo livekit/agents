@@ -432,7 +432,7 @@ class STT(stt.STT):
                             )
                             break
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(
                         f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
                     )
@@ -446,7 +446,7 @@ class STT(stt.STT):
                     utterances, session_id, config.language_config.languages
                 )
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             # Catch timeout during connection or initial phase
             logger.error(f"Timeout during Gladia connection/initialization: {e}")
             raise APITimeoutError("Timeout connecting to or initializing Gladia session") from e

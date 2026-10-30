@@ -279,7 +279,7 @@ class SpeechStream(stt.RecognizeStream):
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if closing_ws:
                         break
                     continue

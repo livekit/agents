@@ -217,7 +217,7 @@ class AvatarSession(BaseAvatarSession):
                 self._attach_audio_output(agent_session, audio_output)
 
                 await self.wait_for_join(timeout=self._config.join_timeout)
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 await self.aclose()
                 await self._discard_partial_start()
                 raise SynthesiaError(

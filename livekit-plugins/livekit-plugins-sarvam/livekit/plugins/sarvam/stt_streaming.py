@@ -788,7 +788,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -898,7 +898,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                 heartbeat=30.0,
                 conn_options=self._conn_options,
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (TimeoutError, aiohttp.ClientConnectorError) as e:
             self._logger.error(
                 "Failed to connect to Sarvam realtime STT WebSocket",
                 extra={**self._build_log_context(), "error": str(e), "url": ws_url},

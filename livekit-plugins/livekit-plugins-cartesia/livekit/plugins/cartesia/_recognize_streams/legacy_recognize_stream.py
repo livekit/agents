@@ -42,9 +42,9 @@ from ..log import logger
 from .cartesia_recognize_stream import CartesiaRecognizeStream
 
 if TYPE_CHECKING:
-    from typing import Literal
+    from typing import Literal, NotRequired
 
-    from typing_extensions import NotRequired, TypedDict
+    from typing_extensions import TypedDict
 
     from livekit.agents import APIConnectOptions
     from livekit.agents.types import NotGivenOr
@@ -329,7 +329,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": self._request_id},
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APIConnectionError("failed to connect to cartesia") from None
         except aiohttp.ClientResponseError as e:
             # authentication headers can appear in RequestInfo.

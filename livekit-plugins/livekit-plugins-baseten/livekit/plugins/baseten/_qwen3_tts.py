@@ -509,7 +509,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             ws, applied_config = await self._backend.acquire(self._conn_options)
         except APIError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -637,7 +637,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             discard = False
         except APIError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

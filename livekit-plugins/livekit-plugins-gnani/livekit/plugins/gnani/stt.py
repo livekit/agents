@@ -251,7 +251,7 @@ class STT(stt.STT):
                     ],
                 )
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Gnani STT API request timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -369,7 +369,7 @@ class SpeechStream(stt.RecognizeStream):
 
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("Gnani STT WebSocket connection timed out") from e
         except (APIConnectionError, APIStatusError, APITimeoutError):
             raise

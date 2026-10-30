@@ -16,10 +16,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Generic, Literal, Never, get_type_hints
+from typing import Generic, Literal, Never, Self, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from livekit import rtc
 from livekit.rtc import AudioFrame

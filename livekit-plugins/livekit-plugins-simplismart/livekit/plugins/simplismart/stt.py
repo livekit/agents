@@ -267,7 +267,7 @@ class STT(stt.STT):
                     request_id=request_id,
                     alternatives=alternatives,
                 )
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             logger.error(f"Simplismart API timeout: {e}")
             raise APITimeoutError("Simplismart API request timed out") from e
         except aiohttp.ClientError as e:
@@ -461,7 +461,7 @@ class SpeechStream(stt.RecognizeStream):
                 heartbeat=30.0,
                 conn_options=self._conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APIConnectionError("failed to connect to simplismart") from None
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or

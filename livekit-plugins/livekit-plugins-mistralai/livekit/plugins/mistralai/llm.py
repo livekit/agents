@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
@@ -52,7 +51,7 @@ DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
 _CHAT_MESSAGES = TypeAdapter(list[ChatCompletionStreamRequestMessage])
 
 
-class ApiMode(str, Enum):
+class ApiMode(StrEnum):
     """Selects which Mistral API to use for chat requests.
 
     ``CONVERSATIONS`` uses the Conversations API (``/v1/conversations``),
@@ -325,7 +324,7 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(
@@ -427,7 +426,7 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(

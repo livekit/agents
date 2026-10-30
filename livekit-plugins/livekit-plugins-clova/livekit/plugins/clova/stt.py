@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import os
@@ -164,7 +163,7 @@ class STT(stt.STT):
                 logger.info("clova stt final event", extra={"lk.pii.data": response_data})
                 return self._transcription_to_speech_event(text=text, language=lang)
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

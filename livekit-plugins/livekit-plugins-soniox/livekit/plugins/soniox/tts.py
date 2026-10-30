@@ -481,7 +481,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection = await self._current_connection(self._conn_options)
         except APIError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

@@ -285,7 +285,7 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
                 headers={"Authorization": f"Api-Key {self._api_key}"},
                 conn_options=self._conn_options,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

@@ -18,7 +18,7 @@ import asyncio
 import json
 import math
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import livekit.rtc as rtc
 from livekit import api
@@ -250,7 +250,7 @@ class AvatarSession(BaseAvatarSession):
                 region=self._region,
                 console_endpoint_url=self._console_endpoint_url,
                 ingress_endpoint_url=self._ingress_endpoint_url,
-                expire_at=datetime.now(timezone.utc) + DEFAULT_SESSION_TTL,
+                expire_at=datetime.now(UTC) + DEFAULT_SESSION_TTL,
                 livekit_egress=livekit_egress,
                 sample_rate=sample_rate,
                 bitrate=self._bitrate,

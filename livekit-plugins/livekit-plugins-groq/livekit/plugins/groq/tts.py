@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -194,7 +193,7 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.push(data)
 
                 output_emitter.flush()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(

@@ -219,7 +219,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._params.use_punctuation,
             )
             return ws
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise APITimeoutError("WebSocket connection timeout") from e
         except RTZRStatusError as e:
             logger.error("RTZR API status error: %s", e)
@@ -305,7 +305,7 @@ class SpeechStream(stt.RecognizeStream):
         if self._recv_task:
             try:
                 await asyncio.wait_for(self._recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await utils.aio.gracefully_cancel(self._recv_task)
             finally:
                 self._recv_task = None

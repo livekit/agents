@@ -309,7 +309,7 @@ class ChunkedStream(tts.ChunkedStream):
                             "Microsoft AI TTS response exceeds max_audio_bytes", retryable=False
                         )
                 pcm = _decode_wav(bytes(data), self._tts.sample_rate)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError("Microsoft AI TTS request timed out") from None
         except (aiohttp.ClientError, ConnectionError, OSError):
             raise APIConnectionError("Microsoft AI TTS transport failed") from None

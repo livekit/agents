@@ -350,7 +350,7 @@ class _InworldConnection:
                 # Check closed state after waking
                 if self._closed:
                     raise APIConnectionError("Connection is closed")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise APITimeoutError() from None
 
     def send_text(self, context_id: str, text: str) -> None:
@@ -392,7 +392,7 @@ class _InworldConnection:
             while not self._closed and self._ws:
                 try:
                     msg = await asyncio.wait_for(self._outbound_queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 if self._closed or not self._ws:
@@ -460,7 +460,7 @@ class _InworldConnection:
             while not self._closed and self._ws:
                 try:
                     msg = await self._ws.receive()
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 if msg.type in (
@@ -799,7 +799,7 @@ class _ConnectionPool:
                 )
                 # Clear after wait returns to avoid lost-wakeup race
                 self._capacity_available.clear()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise APITimeoutError(
                     "Timed out waiting for available connection capacity"
                 ) from None
@@ -1316,7 +1316,7 @@ class ChunkedStream(tts.ChunkedStream):
                             request_id=x_request_id,
                             body=None,
                         )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -1388,7 +1388,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await waiter
-        except asyncio.TimeoutError:
+        except TimeoutError:
             connection.close_context(context_id)
             raise APITimeoutError() from None
         except asyncio.CancelledError:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import os
 import struct
@@ -204,7 +203,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
