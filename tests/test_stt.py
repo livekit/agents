@@ -32,6 +32,7 @@ from livekit.plugins import (
     reson8,
     rtzr,
     sarvam,
+    silero,
     soniox,
     speechmatics,
     xai,
@@ -56,6 +57,9 @@ UNTIMED_EOS_REASONS = {
     "livekit.plugins.fireworksai": "Fireworks emits an untimed EOS during connection cleanup",
     "livekit.agents.inference": "The gateway-selected model has no verified endpoint timing",
     "livekit.agents.inference.cartesia": "Cartesia gateway duration measures billed audio",
+    "livekit.plugins.mistralai.realtime_v3": (
+        "Voxtral 3 server turn timing includes the endpointing delay"
+    ),
     "livekit.plugins.sarvam": "Sarvam saaras:v4 sends no speech or word timestamps",
     "livekit.plugins.sarvam.realtime": "Sarvam can emit EOS before its timed final arrives",
     "livekit.plugins.nvidia": "NVIDIA EOS timing is deferred until live validation",
@@ -77,7 +81,6 @@ STTs: list[Callable[[], stt.STT]] = [
         fireworksai,
         gladia,
         fal,
-        mistralai,
         nvidia,
         openai,
         soniox,
@@ -92,6 +95,10 @@ STTs: list[Callable[[], stt.STT]] = [
         # spitch,
     ]
 ] + [
+    pytest.param(
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-3"),
+        id="livekit.plugins.mistralai.realtime_v3",
+    ),
     pytest.param(lambda: cartesia.STT(model="ink-2"), id="livekit.plugins.cartesia"),
     pytest.param(lambda: sarvam.STT(model="saaras:v4"), id="livekit.plugins.sarvam"),
     pytest.param(
@@ -123,8 +130,12 @@ STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
         id="livekit.plugins.elevenlabs.realtime",
     ),
     pytest.param(
-        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-2602"),
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-2602", vad=silero.VAD.load()),
         id="livekit.plugins.mistralai.realtime",
+    ),
+    pytest.param(
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-3", vad=silero.VAD.load()),
+        id="livekit.plugins.mistralai.realtime_v3_vad",
     ),
     pytest.param(
         lambda: sarvam.STTRealtime(language="en-IN"), id="livekit.plugins.sarvam.realtime"
@@ -300,7 +311,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                         language = event.alternatives[0].language
                         # Voxtral realtime can omit its detected language.
                         if stt.provider not in {"FireworksAI", "RTZR", "livekit"} and (
-                            language or plugin_id != "livekit.plugins.mistralai.realtime"
+                            language or stt.provider != "MistralAI"
                         ):
                             assert language is not None
                             assert language.lower().startswith("en")
