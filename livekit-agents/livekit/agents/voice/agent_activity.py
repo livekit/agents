@@ -43,6 +43,7 @@ from ..telemetry import (
     utils as trace_utils,
 )
 from ..tokenize.basic import split_words
+from ..tokenize.tokenizer import is_punctuation
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
@@ -156,15 +157,22 @@ def _transcripts_equivalent(first: str, second: str | None) -> bool:
     if second is None:
         return False
 
-    first_words = [
-        word.casefold()
-        for word, _, _ in split_words(first, ignore_punctuation=True, split_character=True)
-    ]
-    second_words = [
-        word.casefold()
-        for word, _, _ in split_words(second, ignore_punctuation=True, split_character=True)
-    ]
-    return bool(first_words) and first_words == second_words
+    first_words = _formatting_free_words(first)
+    return bool(first_words) and first_words == _formatting_free_words(second)
+
+
+def _formatting_free_words(text: str) -> list[str]:
+    # punctuation inside a word carries meaning, e.g. "1.5" is not "15"
+    words = []
+    for word, _, _ in split_words(text, ignore_punctuation=False, split_character=True):
+        start, end = 0, len(word)
+        while start < end and is_punctuation(word[start]):
+            start += 1
+        while end > start and is_punctuation(word[end - 1]):
+            end -= 1
+        if start < end:
+            words.append(word[start:end].casefold())
+    return words
 
 
 class ActivityClosedError(Exception):
@@ -2630,6 +2638,16 @@ class AgentActivity(RecognitionHooks):
         ):
             return
 
+        # end of turn reuses an attempt whose transcript differs only in formatting
+        if (
+            self._preemptive_generation is not None
+            and self._preemptive_generation.speech_handle._error is None
+            and _transcripts_equivalent(
+                self._preemptive_generation.info.new_transcript, info.new_transcript
+            )
+        ):
+            return
+
         # a newer attempt supersedes the current one; if one is created below it continues the
         # discarded attempt's agent_turn (the cancelled speech only ends once the loop runs)
         discarded = (
@@ -2930,7 +2948,8 @@ class AgentActivity(RecognitionHooks):
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
             if (
-                _transcripts_equivalent(
+                preemptive.speech_handle._error is None
+                and _transcripts_equivalent(
                     preemptive.info.new_transcript, user_message.raw_text_content
                 )
                 and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
@@ -2953,7 +2972,7 @@ class AgentActivity(RecognitionHooks):
             else:
                 logger.warning(
                     "preemptive generation invalidated after `on_user_turn_completed` because "
-                    "the transcript, chat context, tools, or tool choice changed",
+                    "it failed, or the transcript, chat context, tools, or tool choice changed",
                 )
                 discarded_preemptive = preemptive.speech_handle
                 preemptive.speech_handle._cancel()
