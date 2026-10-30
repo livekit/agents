@@ -181,8 +181,35 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
             true => records.iter().filter(|r| !r.name.contains('.')).collect(),
             false => classes.into_iter().chain(aliases).collect(),
         };
+        let mut dataclasses = Vec::new();
         for r in order {
-            body.push_str(&model_tree(r, &records, module, &own, &mut runtime, &mut typing));
+            let text = model_tree(r, &records, module, &own, &mut runtime, &mut typing);
+            if r.dataclass.is_some() && r.path.is_some() {
+                dataclasses.push((r, text.clone()));
+            }
+            body.push_str(&text);
+        }
+        // A public dataclass's annotations are resolved at import (`public_paths`): a name only
+        // the type checker imports would fail the import.
+        for (r, text) in dataclasses {
+            let annotations = text.lines().filter_map(|l| {
+                let l = l.strip_prefix("    ")?;
+                l.split_once(": ").filter(|(name, _)| !name.contains(' ')).map(|(_, ann)| ann)
+            });
+            for ann in annotations {
+                for (module, name) in typing.entries() {
+                    let runtime_too = runtime.entries().iter().any(|(_, n)| n == name);
+                    let used = ann
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .any(|word| word == name);
+                    if used && !runtime_too {
+                        return Err(format!(
+                            "{}: {}: `{name}` (from {module}) is imported for the type checker only, but a public dataclass resolves its annotations at import",
+                            r.source, r.name
+                        ));
+                    }
+                }
+            }
         }
         for r in records.iter().filter(|r| r.name.contains('.')) {
             let (owner, _) = r.name.rsplit_once('.').expect("nested");
@@ -569,7 +596,8 @@ fn model(
             let imports = if r.dataclass.is_some() { &mut *runtime } else { &mut *typing };
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested, imports);
             for h in r.dataclass.iter().flat_map(|d| &d.host_fields) {
-                s.push_str(&format!("    {}: {} = {}\n", h.name, h.annotation, h.default));
+                let ann = runtime.annotation(&h.annotation, &r.rust);
+                s.push_str(&format!("    {}: {ann} = {}\n", h.name, h.default));
                 s.push_str(&docstring(&h.doc.iter().cloned().collect::<Vec<_>>(), "    "));
             }
             if !r.constants.is_empty() {
