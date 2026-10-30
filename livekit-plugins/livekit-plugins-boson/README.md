@@ -48,7 +48,6 @@ python examples/agent.py console
 | `api_key` | Sent as an `Authorization: Bearer ...` header. Omit it to read `BOSON_API_KEY` from the environment; omitting both raises `ValueError`. Pass `None` explicitly to send no header, for a local dev server without auth. |
 | `model` | Sent as `session.model`. Defaults to `"higgs-realtime"`. |
 | `voice` | Sent as `session.audio.output.voice`. |
-| `instructions` | Sent as `session.instructions`. |
 | `output_modalities` | `["audio"]` by default. `["text"]` is also supported for text-only responses. |
 | `temperature` | Optional. Sent as `session.temperature` when set; otherwise the server default is used. |
 | `max_output_tokens` | Sent as `session.max_output_tokens`. |
@@ -59,6 +58,7 @@ python examples/agent.py console
 | `input_audio_noise_reduction` | Sent as `session.audio.input.noise_reduction`. |
 | `truncation` | `"auto"` (default) or `"disabled"`. Sent as `session.truncation`. `"auto"` enables background context summarization where the model supports it. Do not pass `None` — it is rejected and ends the session. |
 | `query_params` | Extra query parameters added to the WebSocket URL. |
+| `max_session_duration` | Seconds before the connection is recycled: the session reconnects and replays the conversation as text, after any reply in progress finishes. A user turn replays only if it has a transcript. Defaults to 1200 (20 minutes), as in the OpenAI plugin, when user transcription is on (`input_audio_transcription_model` set), and to `None` when it is off, since every recycle would then drop all of the user's turns. The default is chosen at construction; changing transcription later does not revisit it. `None` keeps one connection, which ends the session when the server's own limit is reached. Must be positive. |
 
 If `turn_detection` is omitted, the plugin sends a default server VAD config:
 
@@ -99,11 +99,10 @@ it even if present in a raw `input_audio_transcription` dict.
 
 ### `generate_reply()` overrides
 
-`generate_reply(instructions=...)` sends the instructions in `response.create`.
-The server applies them to that response alone: they replace the session
-instructions for the turn, which still answers from the conversation so far.
-Because it is a replacement rather than an addition, the event carries the
-session instructions and the per-response ones together.
+`generate_reply(instructions=...)` works as it does with the OpenAI plugin. The
+instructions go in `response.create`, which the server uses in place of the
+session instructions for that reply, so the event carries the session
+instructions followed by the per-response ones.
 
 `tools` and `tool_choice` are **not** applied per response — the server accepts
 and ignores them. `generate_reply()` therefore ignores them too (with a warning)
@@ -184,5 +183,5 @@ the item, which returns on a later sync once it has text again.
   drop, the model can repeat a tool call it had already made.
 - `system`/`developer`-role chat items are not supported (the server's
   conversation store only accepts `assistant`/`user` items); they're silently
-  dropped when syncing `update_chat_ctx()`. Use `instructions` for persistent
-  directives instead.
+  dropped when syncing `update_chat_ctx()`. Use the `Agent`'s `instructions` for
+  persistent directives instead.

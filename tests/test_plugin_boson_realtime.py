@@ -154,14 +154,15 @@ async def test_boson_realtime_session_sends_full_session_update(monkeypatch):
         api_key="test-key",
         model="test-model",
         voice="coral",
-        instructions="Be concise.",
     )
     session = model.session()
     try:
         event = await session._msg_ch.recv()
         assert event["type"] == "session.update"
         assert event["session"]["model"] == "test-model"
-        assert event["session"]["instructions"] == "Be concise."
+        # The framework sends the Agent's instructions once the session starts;
+        # until then the server keeps its own default.
+        assert "instructions" not in event["session"]
         assert event["session"]["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
         assert event["session"]["audio"]["output"]["voice"] == "coral"
         assert "transcription" not in event["session"]["audio"]["input"]
@@ -627,7 +628,6 @@ async def test_boson_realtime_session_updates_send_only_what_changed(monkeypatch
     model = realtime.RealtimeModel(
         url="ws://localhost:8000/v1/realtime/",
         api_key="test-key",
-        instructions="Be concise.",
     )
     session = model.session()
     try:
@@ -667,7 +667,6 @@ async def test_boson_realtime_reconnect_config_carries_every_partial_update(monk
     model = realtime.RealtimeModel(
         url="ws://localhost:8000/v1/realtime/",
         api_key="test-key",
-        instructions="Be concise.",
         input_audio_transcription={"model": "asr-v1", "language": "en"},
     )
     session = model.session()
@@ -993,28 +992,27 @@ async def test_boson_realtime_capabilities_disable_per_response_tool_choice(monk
 
 @pytest.mark.asyncio
 async def test_boson_realtime_generate_reply_instructions_ride_in_response_create(monkeypatch):
-    # The server applies a per-response `instructions` to that turn alone: it
-    # replaces the system prompt for the turn while the turn still answers from
-    # the real conversation. So the override goes in response.create, and the
-    # session config around it is left untouched — no scoping session.update
-    # before it, none after.
+    # A per-response `instructions` goes in response.create, and the session
+    # config around it is left untouched — no scoping session.update before it,
+    # none after.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
     model = realtime.RealtimeModel(
         url="ws://localhost:8000/v1/realtime/",
         api_key="test-key",
-        instructions="Base instructions.",
     )
     session = model.session()
     try:
         await session._msg_ch.recv()  # initial session.update
+        await session.update_instructions("Base instructions.")
+        await session._msg_ch.recv()
 
         generation_fut = session.generate_reply(instructions="Greet the user.")
 
         response_create = await session._msg_ch.recv()
         assert response_create["type"] == "response.create"
-        # Since the server replaces the whole prompt, the event has to carry the
-        # session instructions too, not just the per-turn addition.
+        # As with OpenAI, the server uses this in place of the session
+        # instructions, so the event carries both.
         assert response_create["response"]["instructions"] == "Base instructions.\nGreet the user."
 
         _server_event(
@@ -1033,37 +1031,6 @@ async def test_boson_realtime_generate_reply_instructions_ride_in_response_creat
         # Nothing to restore: the session was never reconfigured.
         assert session._msg_ch.empty()
         assert session._instructions == "Base instructions."
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_instructions_carry_configured_prompt(monkeypatch):
-    # The base only prefixes the session instructions when its own
-    # `_instructions` is already set, which it leaves unset until the first
-    # update_instructions(). Unset here would send the per-turn text alone, and
-    # the server would replace the whole prompt with it — silently dropping the
-    # configured instructions for that turn.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        instructions="Configured at construction.",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        # No update_instructions() call anywhere before this.
-        session.generate_reply(instructions="Greet the user.")
-
-        response_create = await session._msg_ch.recv()
-        assert (
-            response_create["response"]["instructions"]
-            == "Configured at construction.\nGreet the user."
-        )
     finally:
         await session.aclose()
         await model.aclose()
@@ -3416,6 +3383,88 @@ async def test_boson_realtime_reconnects_and_replays_chat_ctx_after_ws_drop():
         assert errors[0].recoverable is True
         assert session._closed is False
         assert not session._msg_ch.closed
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize(
+    "transcription",
+    [
+        {"input_audio_transcription_model": "higgs-stt-3.1"},
+        {"input_audio_transcription": {"model": "higgs-stt-3.1"}},
+    ],
+)
+def test_boson_realtime_recycles_every_20_minutes_when_user_turns_have_text(transcription):
+    # As in the OpenAI plugin, well inside the server's own limit. The replay
+    # can put every user turn back, since each has a transcript.
+    model = realtime.RealtimeModel(api_key="test-key", **transcription)
+    assert model._opts.max_session_duration == 20 * 60
+
+
+def test_boson_realtime_keeps_one_connection_when_user_turns_have_no_text():
+    # Without transcripts a replay drops every user turn, so a recycle would
+    # make the model forget the user every 20 minutes.
+    model = realtime.RealtimeModel(api_key="test-key")
+    assert model._opts.max_session_duration is None
+
+
+def test_boson_realtime_explicit_max_session_duration_overrides_the_default():
+    with_text = realtime.RealtimeModel(
+        api_key="test-key",
+        input_audio_transcription_model="higgs-stt-3.1",
+        max_session_duration=None,
+    )
+    assert with_text._opts.max_session_duration is None
+    without_text = realtime.RealtimeModel(api_key="test-key", max_session_duration=600)
+    assert without_text._opts.max_session_duration == 600
+
+
+@pytest.mark.parametrize("max_session_duration", [0, -1.0, float("nan")])
+def test_boson_realtime_rejects_a_non_positive_max_session_duration(max_session_duration):
+    # The base would recycle at once, every time: a reconnect loop.
+    with pytest.raises(ValueError, match="max_session_duration"):
+        realtime.RealtimeModel(api_key="test-key", max_session_duration=max_session_duration)
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_recycles_the_connection_after_max_session_duration():
+    ws1 = _FakeWebSocket()  # stays open: only the timer ends it
+    ws2 = _FakeWebSocket()
+    client = _SequencedHTTPClient([ws1, ws2])
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        http_session=client,
+        max_session_duration=0.05,
+        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
+    )
+    session = model.session()
+    errors = []
+    reconnected = []
+
+    def on_reconnected(event):
+        # One recycle is enough; stop the timer before the new connection runs.
+        session._opts.max_session_duration = None
+        reconnected.append(event)
+
+    session.on("error", errors.append)
+    session.on("session_reconnected", on_reconnected)
+    try:
+        await session.update_instructions("Be thorough.")
+        for _ in range(200):
+            if reconnected:
+                break
+            await asyncio.sleep(0.01)
+        assert reconnected
+        assert ws1.closed
+        assert len(client.connect_urls) == 2
+        # A planned recycle, not a failure.
+        assert errors == []
+        # The new connection holds nothing, so it gets the whole config again.
+        reconnect_update = json.loads(ws2.sent[0])
+        assert reconnect_update["type"] == "session.update"
+        assert reconnect_update["session"]["instructions"] == "Be thorough."
     finally:
         await session.aclose()
         await model.aclose()
