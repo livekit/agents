@@ -28,6 +28,7 @@ from .. import _bindings, _core
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .chat_items import ChatRole, MetricsMetadata
+from .types import ProviderId
 from .usage import TokenUsage
 
 if TYPE_CHECKING:
@@ -240,7 +241,7 @@ class LLM(
     def _core_model(self) -> str:
         return self.model
 
-    def _core_id(self) -> dict[str, str]:
+    def _core_id(self) -> ProviderId:
         return {"label": self.label, "model": self.model, "provider": self.provider}
 
     def _core_prewarm(self) -> None:

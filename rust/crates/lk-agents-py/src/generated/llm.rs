@@ -1740,7 +1740,7 @@ impl LlmProxy {
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
-            v.extract::<::lk_agents_abi::ProviderId>()?
+            crate::generated::records::types::provider_id_from_py(&v)?
         };
         Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, model, id, conn: None })
     }
@@ -2073,7 +2073,7 @@ impl HostRealtimeProxy {
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
-            v.extract::<::lk_agents_abi::ProviderId>()?
+            crate::generated::records::types::provider_id_from_py(&v)?
         };
         Ok(HostRealtimeProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, instance_id, label, capabilities, id })
     }

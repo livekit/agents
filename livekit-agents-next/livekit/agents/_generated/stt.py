@@ -36,6 +36,7 @@ from ..types import (
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
 from .language import LanguageCode
+from .types import ProviderId
 from .usage import TokenUsage
 
 # The declared records.
@@ -303,7 +304,7 @@ class STT(
     def _core_capabilities(self) -> STTCapabilities:
         return self.capabilities
 
-    def _core_id(self) -> dict[str, str]:
+    def _core_id(self) -> ProviderId:
         return {"label": self.label, "model": self.model, "provider": self.provider}
 
     def _core_prewarm(self) -> None:

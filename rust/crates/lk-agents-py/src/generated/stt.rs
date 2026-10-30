@@ -455,7 +455,7 @@ impl SttProxy {
         };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
-            v.extract::<::lk_agents_abi::ProviderId>()?
+            crate::generated::records::types::provider_id_from_py(&v)?
         };
         let conn_options = {
             let v = crate::host::read(obj, "_core_conn_options")?;

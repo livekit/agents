@@ -27,6 +27,7 @@ from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
 from .tts import MarkupInfo, SynthesizedAudio, TTSCapabilities
+from .types import ProviderId
 
 
 class TTSError(BaseModel):
@@ -206,7 +207,7 @@ class TTS(
     def _core_capabilities(self) -> TTSCapabilities:
         return self.capabilities
 
-    def _core_id(self) -> dict[str, str]:
+    def _core_id(self) -> ProviderId:
         return {"label": self.label, "model": self.model, "provider": self.provider}
 
     def _core_prewarm(self) -> None:

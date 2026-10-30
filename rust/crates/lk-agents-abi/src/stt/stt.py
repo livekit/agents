@@ -20,6 +20,7 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
 from .stt import SpeechEvent, STTCapabilities
+from .types import ProviderId
 
 
 class STTError(BaseModel):
@@ -171,7 +172,7 @@ class STT(
     def _core_capabilities(self) -> STTCapabilities:
         return self.capabilities
 
-    def _core_id(self) -> dict[str, str]:
+    def _core_id(self) -> ProviderId:
         return {"label": self.label, "model": self.model, "provider": self.provider}
 
     def _core_prewarm(self) -> None:

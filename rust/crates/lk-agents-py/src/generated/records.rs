@@ -6128,6 +6128,21 @@ pub mod turn_events {
     }
 }
 
+pub mod types {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/types/identity.rs.
+
+    pub fn provider_id_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::ProviderId> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::ProviderId {
+                label: { let v = &obj.get_item("label")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("ProviderId.label"))?; (v.extract::<::std::string::String>())? },
+                model: { let v = &obj.get_item("model")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("ProviderId.model"))?; (v.extract::<::std::string::String>())? },
+                provider: { let v = &obj.get_item("provider")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("ProviderId.provider"))?; (v.extract::<::std::string::String>())? },
+            })
+    }
+}
+
 pub mod usage {
     use pyo3::prelude::*;
 

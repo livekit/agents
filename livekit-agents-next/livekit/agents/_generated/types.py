@@ -1,7 +1,9 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
+# `#[host(record)]` declarations in:
 #     rust/crates/lk-agents-abi/src/telemetry/attributes.rs
+#     rust/crates/lk-agents-abi/src/types/identity.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -9,6 +11,27 @@
 from __future__ import annotations
 
 from typing import Final
+
+from typing_extensions import TypedDict
+
+# The declared records.
+
+
+class ProviderId(TypedDict):
+    """`label`, `model`, `provider`: the identity the reference's `Metadata` and `label` fields carry.
+
+    Read off a host provider's `_core_id()`, a dict with the base classes' `"unknown"` defaults.
+    """
+
+    label: str
+    """The name logs and metrics give a provider: a plugin's class path, whatever a native
+    provider calls itself.
+    """
+    model: str
+    """The model name; `"unknown"` until a plugin overrides it."""
+    provider: str
+    """The provider name; `"unknown"` until a plugin overrides it."""
+
 
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID: Final = "lk.segment_id"
 

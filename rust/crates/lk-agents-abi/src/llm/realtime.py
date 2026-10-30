@@ -22,6 +22,7 @@ from ..utils import is_given
 from . import realtime_wire as wire
 from .chat_items import MetricsMetadata
 from .realtime import RealtimeCapabilities
+from .types import ProviderId
 
 if TYPE_CHECKING:
     from ..llm.realtime import GenerationCreatedEvent
@@ -106,7 +107,7 @@ class RealtimeModel(ABC):
     def _core_capabilities(self) -> RealtimeCapabilities:
         return self.capabilities
 
-    def _core_id(self) -> dict[str, str]:
+    def _core_id(self) -> ProviderId:
         return {"label": self.label, "model": self.model, "provider": self.provider}
 
     async def _core_session(

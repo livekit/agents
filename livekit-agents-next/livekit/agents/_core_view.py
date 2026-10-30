@@ -22,6 +22,7 @@ from . import _core, llm
 from ._generated import duplex, realtime_wire, rtc_wire
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.turn_events import EotPrediction
+from ._generated.types import ProviderId
 from .llm.chat_context import ChatItem
 from .llm.tool_context import (
     ProviderTool,
@@ -251,7 +252,7 @@ class TurnDetector:
         self._detector = detector
         self._stream = detector.stream()
 
-    def _core_id(self) -> dict[str, str]:
+    def _core_id(self) -> ProviderId:
         cls = type(self._detector)
         label = f"{cls.__module__}.{cls.__name__}"
         return {"label": label, "model": self._detector.model, "provider": self._detector.provider}
