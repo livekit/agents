@@ -1439,13 +1439,11 @@ def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, l
         create_session(FakeActions()),
         hooks=_CommitRecordingHooks(),
         endpointing=BaseEndpointing(min_delay=min_delay, max_delay=min_delay),
-        stt=None,
+        stt=MagicMock(),
         vad=None,
         interruption_detection=None,
         turn_detection="stt",
     )
-    # with an STT attached, END_OF_SPEECH before any final skips EOU, as in a real session
-    recognition._stt = MagicMock()
     return recognition, committed
 
 

@@ -1265,7 +1265,11 @@ class AudioRecognition:
             # check user turn limit after accumulating transcript
             self._check_user_turn_limit(transcript)
 
-            if self._vad_base_turn_detection or self._user_turn_committed or self._stt_turn_ended:
+            if (
+                self._vad_base_turn_detection
+                or self._user_turn_committed
+                or (self._turn_detection_mode == "stt" and self._stt_turn_ended)
+            ):
                 if transcript_changed:
                     self._hooks.on_preemptive_generation(
                         _PreemptiveGenerationInfo(
