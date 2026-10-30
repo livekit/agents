@@ -102,6 +102,28 @@ fn a_plain_object_is_pymethods_on_the_type_itself() {
     assert!(!out.contains("__host_py_read ("), "an unmarked method is not bound: {out}");
 }
 
+// Catches: a mutable class's `&self` method releasing the GIL while it holds the instance's
+// borrow, so another thread's call is refused as already borrowed (codegen's rule), or a frozen
+// mutex cell's method keeping it.
+#[test]
+fn a_mutable_class_keeps_the_gil_and_a_frozen_cell_releases_it() {
+    let out = object(
+        quote!(object(name = "Filter")),
+        quote! { impl Filter {
+            #[host(method(name = "apply"))] pub fn apply(&mut self, x: f64) -> f64 { x }
+            #[host(getter(name = "value"))] pub fn value(&self) -> f64 { 0.0 }
+        } },
+    )
+    .unwrap();
+    assert!(!out.contains("detach"), "{out}");
+    let out = object(
+        quote!(object(name = "AudioDecoder", cell = "mutex")),
+        quote! { impl Decoder { #[host(method(name = "push"))] pub fn push_bytes(&mut self) -> Vec<u8> { todo!() } } },
+    )
+    .unwrap();
+    assert!(out.contains("py . detach"), "{out}");
+}
+
 // Catches: a `mutex` object emitting a non-frozen class (two threads would race the borrow flag),
 // a `&mut self` core method bound as `&mut self` on the frozen class (does not compile), the lock
 // not being taken for the call, or the constructor not wrapping the core value.

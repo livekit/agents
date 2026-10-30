@@ -646,7 +646,7 @@ enum Call<'a> {
 
 fn method(o: &Object, m: &Method) -> TokenStream {
     // In a cell's class, `Self` is the class; the core's `Self` is the value it holds.
-    let sig = match &o.cell {
+    let mut sig = match &o.cell {
         Cell::Plain => m.sig.clone(),
         _ => {
             let mut sig = m.sig.clone();
@@ -666,6 +666,13 @@ fn method(o: &Object, m: &Method) -> TokenStream {
             sig
         }
     };
+    // A mutable class's state is behind PyO3's borrow flag, which the GIL serializes: released,
+    // another thread's call would be refused as already borrowed. A mutex or arc cell is frozen.
+    let mutable = matches!(o.cell, Cell::Plain | Cell::Value { .. })
+        && o.methods.iter().any(|m| m.sig.receiver == Receiver::Mut);
+    if mutable && sig.receiver != Receiver::None {
+        sig.attached = true;
+    }
     let s = &sig;
     let wrapper = match m.kind {
         MethodKind::Setter => format_ident!("__host_py_set_{}", s.rust),
@@ -813,10 +820,9 @@ fn output(s: &Sig) -> Option<crate::shape::Out> {
 }
 
 /// A synchronous entry runs the core without the GIL: a Rust task holding a lock it waits for
-/// may itself be waiting for the GIL. `&mut self` keeps it: the GIL serializes its exclusive
-/// borrow, which a second thread would otherwise find taken.
+/// may itself be waiting for the GIL.
 fn detaches(s: &Sig) -> bool {
-    !s.attached && !s.is_async && s.receiver != Receiver::Mut
+    !s.attached && !s.is_async
 }
 
 /// To release the GIL, to return an awaitable, or because a conversion needs it.
