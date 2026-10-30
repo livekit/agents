@@ -31,8 +31,22 @@ pytestmark = pytest.mark.unit
 ARGON = "gemini-4-argon"
 
 
+_llms: list[LLM] = []
+
+
+@pytest.fixture(autouse=True)
+async def _close_llms():
+    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
+    yield
+    for model in _llms:
+        await model.aclose()
+    _llms.clear()
+
+
 def _llm(model: str = ARGON, **kwargs: Any) -> LLM:
-    return LLM(model=model, api_key="test-key", **kwargs)
+    instance = LLM(model=model, api_key="test-key", **kwargs)
+    _llms.append(instance)
+    return instance
 
 
 def _response(
