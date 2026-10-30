@@ -328,6 +328,8 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
       let reply: string | null = null;
       let artifactText = "";
       let taskId: string | null = null;
+      /* a text sent during a call is the call's to say, even when the call ends before its task does */
+      const duringCall = inCall?.current === true;
       setBusy(true);
       try {
         for await (const frame of frames) {
@@ -358,7 +360,7 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
                 break;
               case "artifact":
                 /* During a call the answer waits for the end: the call may have spoken it. */
-                if (inCall?.current && !reply) {
+                if ((duringCall || inCall?.current) && !reply) {
                   artifactText = event.append ? artifactText + event.text : event.text || artifactText;
                   break;
                 }
@@ -378,7 +380,7 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
                 setEntries((list) => list.map((entry) => (entry.kind === "delegation" && entry.endedAt === undefined ? { ...entry, endedAt: Date.now() } : entry)));
                 /* The plan's spelling of the A2A states: input-required, not INPUT_REQUIRED. */
                 const state = event.state.replace("TASK_STATE_", "").toLowerCase().replace(/_/g, "-");
-                const spoken = event.meta.answeredByVoice === true && inCall?.current;
+                const spoken = event.meta.answeredByVoice === true && (duringCall || inCall?.current);
                 if (artifactText && !reply && !spoken) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
                 if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
                 const meta = Object.entries(event.meta)
