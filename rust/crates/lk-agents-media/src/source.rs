@@ -3,13 +3,12 @@
 //! shaping of its PCM into frames. The caller runs it on a thread that may block in its reader.
 
 use std::io::Read;
-use std::sync::Arc;
 
 use lk_agents_abi::AudioFrame;
 
 use crate::decoder::{DecodeLimits, remix};
 use crate::error::CodecError;
-use crate::{AudioFormat, Decoder, StreamBuffer};
+use crate::{AudioFormat, Decoder};
 
 /// Encoded or raw input of one decode job.
 pub enum Source {
@@ -19,8 +18,9 @@ pub enum Source {
     Container { mime: String, data: Vec<u8> },
     /// Interleaved little-endian PCM in `format`.
     Pcm { data: Vec<u8>, format: AudioFormat },
-    /// Written as it arrives; each write is a WAV stream's restart boundary.
-    Stream { mime: String, input: Arc<StreamBuffer> },
+    /// Written as it arrives: `read` blocks for the next write, `None` at the end of input. Each
+    /// write is a WAV stream's restart boundary.
+    Stream { mime: String, read: Box<dyn FnMut() -> Option<Vec<u8>> + Send> },
 }
 
 /// Where decoded PCM goes, already at the requested format. An error stops the job.
@@ -52,7 +52,7 @@ pub fn decode<E: From<CodecError>>(
             format.decode(&mime, &mut Blocks(std::io::Cursor::new(data)), output).map(drop)
         }
         Source::Pcm { data, format: source } => format.pcm(&data, source, output),
-        Source::Stream { mime, input } => format.decode(&mime, &mut &*input, output).map(drop),
+        Source::Stream { mime, mut read } => format.decode(&mime, &mut read, output).map(drop),
     }
 }
 
@@ -233,10 +233,9 @@ impl<R: Read> Chunks for Blocks<R> {
     }
 }
 
-/// Blocks until a write arrives or input ends.
-impl Chunks for &StreamBuffer {
+impl Chunks for Box<dyn FnMut() -> Option<Vec<u8>> + Send> {
     fn next_chunk(&mut self) -> std::io::Result<Option<Vec<u8>>> {
-        Ok(self.read_chunk())
+        Ok(self())
     }
 }
 

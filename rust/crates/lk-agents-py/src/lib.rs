@@ -74,7 +74,7 @@ impl generated::Implementations for Selected {
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::media::blingfire::MediaTokenization;
     type AudioDecoder = lk_agents_runtime::inference::codecs::StreamDecoder;
-    type StreamBuffer = lk_agents_runtime::media::StreamBuffer;
+    type StreamBuffer = lk_agents_runtime::inference::codecs::StreamBuffer;
     type AudioEmitter = lk_agents_runtime::inference::tts::emitter::AudioEmitter;
     type DataStreamAudioReceiver = lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
     type AvatarRunner = lk_agents_runtime::avatar::runner::AvatarRunner;

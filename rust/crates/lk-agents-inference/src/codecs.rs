@@ -12,11 +12,14 @@ use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
-use lk_agents_media::{AudioFormat, CodecError, StreamBuffer};
+use lk_agents_media::{AudioFormat, CodecError};
 use lk_agents_net::lock::Mutex;
 use tokio::sync::Notify;
 
 use lk_agents_net::env::ProcessEnv;
+
+mod stream_buffer;
+pub use stream_buffer::StreamBuffer;
 
 /// Streamed bytes the native decoder has not read yet; a push beyond it is refused, not queued.
 const MAX_PENDING_INPUT: usize = 8 * 1024 * 1024;
@@ -176,7 +179,7 @@ impl AudioDecoder {
         limits: DecoderLimits,
     ) -> Result<Self, DecoderError> {
         let source = Source::File { path, looping };
-        Self::start(media_pool, source, Some(sample_rate), num_channels, limits)
+        Self::start(media_pool, source, None, Some(sample_rate), num_channels, limits)
     }
 
     /// Bytes pushed as they arrive through the returned input, decoded by one admitted native
@@ -191,8 +194,17 @@ impl AudioDecoder {
     ) -> Result<(Self, DecoderInput), DecoderError> {
         source::check_stream(mime)?;
         let input = Arc::new(StreamBuffer::new());
-        let source = Source::Stream { mime: mime.to_owned(), input: input.clone() };
-        let decoder = Self::start(media_pool, source, sample_rate, num_channels, limits)?;
+        let pipe = input.clone();
+        let source =
+            Source::Stream { mime: mime.to_owned(), read: Box::new(move || pipe.read_chunk()) };
+        let decoder = Self::start(
+            media_pool,
+            source,
+            Some(input.clone()),
+            sample_rate,
+            num_channels,
+            limits,
+        )?;
         let shared = decoder.shared.clone();
         let input = DecoderInput { shared, pipe: input, ended: AtomicBool::new(false) };
         Ok((decoder, input))
@@ -201,6 +213,7 @@ impl AudioDecoder {
     fn start(
         media_pool: &MediaPool,
         source: Source,
+        input: Option<Arc<StreamBuffer>>,
         sample_rate: Option<u32>,
         num_channels: u16,
         limits: DecoderLimits,
@@ -218,10 +231,6 @@ impl AudioDecoder {
         {
             return Err(DecoderError::InvalidLimits);
         }
-        let input = match &source {
-            Source::Stream { input, .. } => Some(input.clone()),
-            _ => None,
-        };
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 output: VecDeque::new(),

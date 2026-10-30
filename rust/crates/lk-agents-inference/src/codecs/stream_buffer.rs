@@ -1,10 +1,11 @@
 //! `StreamBuffer` (`utils/codecs/decoder.py:65-142`), public via `utils.codecs.__all__`: a blocking
-//! pipe giving ffmpeg's AVIO a blocking `read`. `end_input` drains then EOFs; `close` EOFs at once
-//! even with bytes unread, which is how the decode thread tells a teardown from a failure.
+//! pipe giving a decode job a blocking `read`. `end_input` drains then EOFs; `close` EOFs at once
+//! even with bytes unread, which is how the decode job tells a teardown from a failure.
 
 use std::collections::VecDeque;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Condvar, Mutex};
+use std::thread::Thread;
+
+use lk_agents_net::lock::Mutex;
 
 /// Writes are kept whole, so a reader can take them as the writer made them.
 #[derive(Default)]
@@ -15,6 +16,8 @@ struct Inner {
     len: usize,
     eof: bool,
     closed: bool,
+    /// Readers parked until a write or the end of input.
+    readers: Vec<Thread>,
 }
 
 /// A thread-safe buffer that behaves like an IO stream.
@@ -23,9 +26,7 @@ struct Inner {
 /// `__doc__`, and the same sentence heads the impl's doc, which the `.pyi` is written from.
 #[derive(Default)]
 pub struct StreamBuffer {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<Inner>,
-    ready: Condvar,
 }
 
 /// A thread-safe buffer that behaves like an IO stream.
@@ -42,13 +43,13 @@ impl StreamBuffer {
     /// A write after `end_input` is dropped rather than reordered behind the EOF the reader has
     /// already been promised.
     pub fn write(&self, data: &[u8]) {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.inner.lock();
         if g.closed || g.eof || data.is_empty() {
             return;
         }
         g.len += data.len();
         g.chunks.push_back(data.to_vec());
-        self.ready.notify_all();
+        g.wake_readers();
     }
 
     /// Blocking read of at most `buf.len()` bytes. Returns 0 only at EOF or after `close`.
@@ -79,33 +80,42 @@ impl StreamBuffer {
 
     /// Runs `read` once there is data, or none will come (no chunks then).
     fn when_readable<T>(&self, read: impl FnOnce(&mut Inner) -> T) -> T {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        while !g.closed && !g.eof && g.chunks.is_empty() {
-            g = self.ready.wait(g).unwrap_or_else(|e| e.into_inner());
+        loop {
+            {
+                let mut g = self.inner.lock();
+                if g.closed || g.eof || !g.chunks.is_empty() {
+                    return read(&mut g);
+                }
+                let me = std::thread::current();
+                if !g.readers.iter().any(|r| r.id() == me.id()) {
+                    g.readers.push(me);
+                }
+            }
+            // An unpark between the unlock and here makes this return at once.
+            std::thread::park();
         }
-        read(&mut g)
     }
 
     /// No more bytes are coming. The reader drains what is buffered, then sees EOF.
     pub fn end_input(&self) {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.inner.lock();
         g.eof = true;
-        self.ready.notify_all();
+        g.wake_readers();
     }
 
     /// Stop now. The reader sees EOF immediately, buffered bytes and all.
     pub fn close(&self) {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.inner.lock();
         g.closed = true;
         g.chunks.clear();
         g.offset = 0;
         g.len = 0;
-        self.ready.notify_all();
+        g.wake_readers();
     }
 
     /// Bytes written but not yet read.
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len
+        self.inner.lock().len
     }
 
     /// `read(size=-1)`: blocks (the binding releases the GIL) until data is available, EOF is
@@ -126,6 +136,12 @@ impl StreamBuffer {
 }
 
 impl Inner {
+    fn wake_readers(&mut self) {
+        for reader in self.readers.drain(..) {
+            reader.unpark();
+        }
+    }
+
     fn consume(&mut self, n: usize) {
         self.offset += n;
         self.len -= n;
@@ -202,18 +218,15 @@ mod tests {
     fn a_read_on_an_empty_open_buffer_waits_for_the_writer() {
         let b = Arc::new(StreamBuffer::new());
         let w = b.clone();
-        let media_pool = crate::pool::MediaPool::new(Default::default()).unwrap();
-        let h = media_pool
-            .try_spawn(crate::pool::JobClass::Decoder, move || {
-                let mut buf = [0u8; 4];
-                let n = w.read(&mut buf);
-                (n, buf)
-            })
-            .unwrap();
+        let h = std::thread::spawn(move || {
+            let mut buf = [0u8; 4];
+            let n = w.read(&mut buf);
+            (n, buf)
+        });
         // No sleep: the reader either blocks (and this write wakes it) or it already returned 0,
         // which is the failure this test is for. Either way `join` decides it.
         b.write(b"abcd");
-        let (n, buf) = h.wait().unwrap();
+        let (n, buf) = h.join().unwrap();
         assert_eq!(n, 4);
         assert_eq!(&buf, b"abcd");
     }

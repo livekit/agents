@@ -24,7 +24,6 @@ pub mod resample;
 pub mod source;
 #[cfg(feature = "resample")]
 pub mod soxr;
-pub mod stream_buffer;
 pub mod wav;
 
 pub use byte_stream::{AudioByteStream, Frame};
@@ -37,7 +36,6 @@ pub use mime::{AudioDecoding, UnknownMime, audio_decoding, mime_to_av_format};
 pub use resample::LinearResampler;
 #[cfg(feature = "resample")]
 pub use soxr::SoxrResampler;
-pub use stream_buffer::StreamBuffer;
 pub use wav::{WavDecoder, WavSegment};
 
 /// The one place a resampler is chosen: libsoxr under `resample`, [`LinearResampler`] otherwise.
