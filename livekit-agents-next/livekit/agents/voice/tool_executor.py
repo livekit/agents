@@ -4,12 +4,10 @@ an ``AsyncToolset`` for its own tools. Calls themselves run through the agent's 
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from typing_extensions import TypedDict
-
-from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
 
 if TYPE_CHECKING:
     from ..llm.tool_context import Tool, Toolset
@@ -40,6 +38,47 @@ class ReplyPromptArgs(TypedDict):
     """Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates."""
 
     call_ids: list[str]
+
+
+class AsyncToolOptions(TypedDict, total=False):
+    """System-message templates injected around async tool dispatch.
+
+    Each field is either a ``str.format()`` template or a callable returning a string,
+    with the args typed as ``UpdatePromptArgs`` / ``DuplicatePromptArgs`` /
+    ``ReplyPromptArgs``. Unmentioned keys keep their defaults.
+    """
+
+    update_template: str | Callable[[UpdatePromptArgs], str]
+    """Wraps a user-provided ``ctx.update(message)`` string before it lands in chat_ctx."""
+    duplicate_reject_template: str | Callable[[DuplicatePromptArgs], str]
+    """Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call."""
+    duplicate_confirm_template: str | Callable[[DuplicatePromptArgs], str]
+    """Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation."""
+    reply_at_tail_template: str | Callable[[ReplyPromptArgs], str]
+    """Instruction for the deferred reply when the pending update is still the tail of chat_ctx."""
+    reply_maybe_covered_template: str | Callable[[ReplyPromptArgs], str]
+    """Instruction for the deferred reply when newer items came after the pending update."""
+
+
+class ToolHandlingOptions(TypedDict, total=False):
+    """Configuration for the tool handling system.
+
+    Can be passed as a plain dict::
+
+        Agent(
+            instructions="...",
+            tool_handling={
+                "async_options": {"update_template": "..."},
+            },
+        )
+
+    Set on ``Agent``, or on an ``AsyncToolset`` for its own tools (most specific wins).
+    """
+
+    async_options: AsyncToolOptions
+    """Templates injected around async tool dispatch (``ctx.update()``, duplicate
+    handling, coalesced replies). Unmentioned keys keep their defaults.
+    """
 
 
 def render_template(
