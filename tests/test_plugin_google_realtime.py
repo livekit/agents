@@ -50,6 +50,15 @@ def test_model_api_compatibility(
     assert not caplog.records
 
 
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_default_model_is_gemini_3_8_live_on_both_apis(vertexai: bool) -> None:
+    """Neither default may be a model Google retires: the Vertex native-audio model goes on 2026-12-13."""
+    model = RealtimeModel(
+        vertexai=vertexai, api_key="fake-key", project="test-project", location="us-central1"
+    )
+    assert model.model == "gemini-3.8-live"
+
+
 @pytest.mark.parametrize(
     ("model", "vertexai"),
     [
@@ -623,6 +632,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
     It is sent anyway, since unblocking the turn matters more, and every one is reported.
     """
     async with _make_connected_session(monkeypatch) as session:
+        session._opts.tool_behavior = types.Behavior.BLOCKING
         session._start_new_generation()
         session._handle_tool_calls(
             types.LiveServerToolCall(
