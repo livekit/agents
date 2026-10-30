@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from livekit.agents import Agent, function_tool, inference
+from livekit.agents import Agent, RunContext, function_tool
 from livekit.agents.llm import ToolError
 
 from bank import (
@@ -21,14 +21,12 @@ from bank import (
     birth_date,
     card_digits,
 )
+from conversation import caller_spoke_last, heard
 
 BANK_TZ = ZoneInfo("America/New_York")
 
 # What an inbound caller asked for, which the identity check takes care of once they're verified.
 Request = Literal["charge", "lock", "travel", "other"]
-
-VOICE_MODEL = "gpt-live-1"
-BACKEND_MODEL = "gpt-5.6-luna"
 
 DIGIT_WORDS = (
     "zero",
@@ -75,31 +73,50 @@ Play the bank agent. Step out of the role only briefly, starting with something 
 Never claim to see a real account or anyone's real details.
 """.strip()
 
-GOODBYE = """
-When they're all set, ask if there's anything else. Once they say that's all, or answer with a no or a thank-you, say a short goodbye that thanks them for trying the demo, and delegate ending the call.
-Saying goodbye and delegating ending the call always go together, in the same turn: never say goodbye without delegating the end of the call, and don't say goodbye until they've had a chance to say they're done.
+VOICE_RULES = """
+You're on a phone call, so talk like a person, not a document:
+- Brisk and warm. One or two short sentences at a time, and one question at a time. No lists, markdown, or symbols.
+- Never say you've done something, or that you're about to, without calling its tool in that same reply.
+- You know nothing about the caller, the card, or the bank except what a tool returned on this call. Never say whether they're verified, describe a charge, give a case number, or say the card is locked or a notice is set until a tool's result says so. Use its exact merchant, place, amount, case number, and date; never make one up.
+- When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them.
 """.strip()
 
-# The backend model sometimes answered a delegation ("verify Dana and lock the card") without
-# calling any tool, and the agent then told the caller it was done.
-TOOLS_ONLY = """
-Every result you hand back comes from a tool you called for this request. You can't verify anyone, look anything up, or change the card yourself, so never report a check, a charge, a lock, or a notice unless its tool's result says so. When asked to verify someone, call verify_identity, every time, even with the same details as before or when you think you know the answer. Never answer a request without first calling its tool on this request.
+GOODBYE = """
+When they're all set, ask if there's anything else. Once they say that's all, or answer with a no or a thank-you, say a short goodbye that thanks them for trying the demo, and call end_call in that same reply. Never say goodbye before they've had a chance to say they're done.
 """.strip()
 
 
 class _CardDesk(Agent):
     """What both calls can do on the card once the caller is verified."""
 
-    def __init__(
-        self, bank: Bank, *, instructions: str, backend_instructions: str
-    ) -> None:
+    def __init__(self, bank: Bank, *, instructions: str) -> None:
         self._bank = bank
-        super().__init__(
-            instructions=instructions, llm=_voice_model(backend_instructions)
-        )
+        self._must_hear: dict[str, str] = {}
+        super().__init__(instructions=instructions)
+
+    def _must_tell(self, ctx: RunContext, what: str) -> None:
+        self._must_hear[what] = ctx.function_call.call_id
 
     @function_tool
-    async def report_purchase(self, made_by_cardholder: bool) -> str:
+    async def end_call(self, ctx: RunContext) -> None:
+        """Hang up. Only once the caller has nothing else, and after a short goodbye in this
+        same reply."""
+        await ctx.wait_for_playout()
+        items = ctx.session.history.items
+        if unheard := [
+            w for w, token in self._must_hear.items() if not heard(items, token)
+        ]:
+            self._must_hear[unheard[0]] = ctx.function_call.call_id
+            raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
+        if caller_spoke_last(items):
+            raise ToolError(
+                "Not hung up yet. Answer what they just said with a short goodbye, and call "
+                "end_call again in that same reply."
+            )
+        ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
+
+    @function_tool
+    async def report_purchase(self, ctx: RunContext, made_by_cardholder: bool) -> str:
         """Record whether the cardholder made the flagged purchase. If they didn't, the card is locked and the case goes to loss prevention.
 
         Args:
@@ -112,6 +129,7 @@ class _CardDesk(Agent):
                 "Marked as the cardholder's purchase. Ask whether they're traveling, "
                 "and if so until when."
             )
+        self._must_tell(ctx, "that the card is locked and the case number")
         return json.dumps(
             {
                 "card": "locked",
@@ -122,7 +140,9 @@ class _CardDesk(Agent):
         )
 
     @function_tool
-    async def set_travel_notice(self, destination: str, back_on: str) -> str:
+    async def set_travel_notice(
+        self, ctx: RunContext, destination: str, back_on: str
+    ) -> str:
         """Note that the cardholder is traveling, so purchases there don't trigger a call.
 
         Args:
@@ -137,6 +157,7 @@ class _CardDesk(Agent):
         with _as_tool_error():
             card = await self._bank.set_travel_notice(destination, until, today)
         assert card.travel is not None
+        self._must_tell(ctx, "the travel notice")
         return (
             f"Travel notice set for {card.travel.destination} through "
             f"{until:%A, %B} {until.day}, {(until - today).days} days from today. "
@@ -157,54 +178,37 @@ class CardServices(_CardDesk):
             instructions=f"""
 You are Avery, the voice agent in a LiveKit demo. You play a card services agent at {BANK_NAME}, a made-up bank, to show how a voice agent verifies a caller before it touches their account.
 Nothing on this call is real. The caller can give any name and birthday. The card decides the identity check: a card ending in {spoken(VERIFIED_CARD)} gets verified, and any other card, like {spoken(DECLINED_CARD)}, doesn't.
+Today is {today:%A, %B} {today.day}, {today.year}.
 You've already explained the demo and asked for their name.
 
 {demo_note}
 
-Keep the call brisk and warm. One or two short spoken sentences at a time, one question at a time.
+{VOICE_RULES}
 
 Verify them first, and only then ask what they need. You can help with a charge they don't recognize, locking their card, or a travel notice. Anything else, even a balance or an address you can't see, goes to a card specialist once they're verified: never turn it down. If they ask for something before they're verified, say you can help, and that first you'll need to verify them.
 
 To verify them, ask for their name, their date of birth, and the last four digits of their card, one at a time, skipping anything they've already given. Ask with these words:
 - Date of birth: "Hi [their name], usually I'd check your details against a database to make sure they match, but today we're just role-playing. Can I get a date of birth from you? It doesn't need to be a real one."
 - Card: "Okay, great. And what are the last four digits of your card? We can use four ones for a success, or four zeros for a failure."
-As soon as you have all three, delegate the identity check with them and what they asked for, if they've said, in that same turn. While it runs, keep talking like you're at the keyboard: "Okay ... pulling that up ... one sec". Never say you're pulling it up unless you've delegated the check.
-You know nothing about the caller, the card, or the bank except what a delegated step returned on this call:
-- Every time you have their name, date of birth, and card digits, delegate the check in that same turn, even when you think you know how it will come out, like with {spoken(DECLINED_CARD)}. Never decide the result yourself.
-- Never say whether they're verified, describe a charge, give a case number, or say the card is locked or a notice is set until a result on this call says so. Use its exact merchant, place, amount, case number, and date; never make one up.
-- Once you've said you're pulling something up, wait for its result before saying anything about it.
+As soon as you have all three, call verify_identity with them and what they asked for, if they've said. Call it every time you have all three, even when you think you know how it will come out, like with {spoken(DECLINED_CARD)}: never decide the result yourself.
 
-If the check doesn't go through, say only that you weren't able to verify them with those details. Then add a quick demo note: a real bank wouldn't say which detail was off, and you don't know either, since the bank only answers yes or no. For the demo, a card ending in {spoken(VERIFIED_CARD)} always gets through. Offer to try again. If they want to, ask for all three details again in one go, say them back in one sentence, and delegate the check.
-If the check says they're locked out, say you can't verify them on this call and that they can call the number on the back of their card. Then say goodbye and delegate ending the call.
+If the check doesn't go through, say only that you weren't able to verify them with those details. Then add a quick demo note: a real bank wouldn't say which detail was off, and you don't know either, since the bank only answers yes or no. For the demo, a card ending in {spoken(VERIFIED_CARD)} always gets through. Offer to try again. If they want to try again with the same details, call verify_identity again with them right away. If they'd rather give new ones, ask for all three again in one go, say them back in one sentence, and call verify_identity again.
+If the check says they're locked out, say you can't verify them on this call and that they can call the number on the back of their card. Then say goodbye and call end_call.
 
 Once they're verified, if they haven't said what they need yet, say exactly: "Great, you're all verified. I can look into a charge you don't recognize, lock your card, or set up a travel notice. What can I help you with?" Otherwise say "Great, you're all verified." Then help with what they asked:
-- A charge they don't recognize: the check also returns their recent charge. Describe it right away: where, which city and country, and the amount. Ask whether they made it, and delegate their answer as soon as they say. If it wasn't them, tell them the card is locked now, so nothing else can go through on it, and the case is with the loss prevention team, who will follow up. Give the case number from the result: the letters, then each digit on its own, without saying the dash.
-- Locking their card: the check also locks it once they're verified. If the result says it's locked, tell them nothing new can go through on it.
-- A travel notice: ask where they're going and how long they'll be there, until they're back. Delegate the travel notice, then tell them they won't get a call about purchases there until then. If they add to or change the dates, delegate it again.
+- A charge they don't recognize: verify_identity returns it when that's what they asked for; otherwise call look_up_recent_charges. Describe it right away: where, which city and country, and the amount. Ask whether they made it, and call report_purchase as soon as they say. If it wasn't them, tell them the card is locked now, so nothing else can go through on it, and the case is with the loss prevention team, who will follow up. Give the case number from the result: the letters, then each digit on its own, without saying the dash.
+- Locking their card: verify_identity locks it when that's what they asked for; otherwise call lock_card. Once it's locked, tell them nothing new can go through on it.
+- A travel notice: ask where they're going and how long they'll be there, until they're back. Call set_travel_notice with the day they're back, counting a length like "two weeks" from today, then tell them they won't get a call about purchases there until then. If they add to or change the dates, call it again.
 - Anything else: say you've passed it to a card specialist, who will follow up.
-If they ask for one of these later in the call, delegate it: looking up their recent charges, locking the card, or the travel notice.
-While a delegated step runs, keep talking like you're at the keyboard. Never say a step is done unless it came back done.
 
 {GOODBYE}
-""".strip(),
-            backend_instructions=f"""
-You run {BANK_NAME}'s card systems for the agent on the phone, in a demo.
-Today is {today:%A, %B} {today.day}, {today.year}.
-{TOOLS_ONLY}
-Call verify_identity with the caller's full name, date of birth, and the card's last four digits, whatever card they gave, and what they asked for, or other if they haven't said yet. Report whether they were verified and whether they're now locked out, and once they're verified, the recent charge or the lock the result includes. The result never says which detail didn't match, and neither do you.
-For anything they ask once they're verified:
-- Call look_up_recent_charges when they're asking about a charge they don't recognize, and report the charge it returns.
-- Call report_purchase as soon as they say whether they made that charge.
-- Call lock_card when they want their card locked.
-- Call set_travel_notice with where they're going and the day they're back; turn a length like "two weeks" into the date they're back, counting from today.
-When asked to end the call, call end_call.
-Hand back short, plain results the agent can say out loud.
 """.strip(),
         )
 
     @function_tool
     async def verify_identity(
         self,
+        ctx: RunContext,
         full_name: str,
         date_of_birth: str,
         card_last_four: str,
@@ -228,12 +232,11 @@ Hand back short, plain results the agent can say out loud.
                 last_four=card_digits(card_last_four),
             )
             result["verified"] = await self._bank.authenticate(claimed)
-            # Done here rather than in a second delegation, so the agent can't say the card is
-            # locked, or stall on a lookup it said it was doing, before the bank has done it.
             if result["verified"] and request == "charge":
                 result["recent_charge"] = _charge(await self._bank.recent_charges())
             elif result["verified"] and request == "lock":
                 card = await self._bank.lock_card()
+                self._must_tell(ctx, "that the card is locked")
                 result["card"] = (
                     f"locked: nothing new can go through on the card ending in {card.last_four}"
                 )
@@ -249,10 +252,11 @@ Hand back short, plain results the agent can say out loud.
         return json.dumps({"recent_charge": _charge(alert)})
 
     @function_tool
-    async def lock_card(self) -> str:
+    async def lock_card(self, ctx: RunContext) -> str:
         """Lock the verified caller's card, so nothing new can go through on it."""
         with _as_tool_error():
             card = await self._bank.lock_card()
+        self._must_tell(ctx, "that the card is locked")
         return f"The card ending in {card.last_four} is locked. Nothing new can go through on it."
 
 
@@ -267,31 +271,20 @@ class FraudAlert(_CardDesk):
             instructions=f"""
 You are Avery, the voice agent in a LiveKit demo. You placed this call to show how a voice agent handles a fraud alert: you play {BANK_NAME}'s fraud prevention team, calling about a purchase the bank flagged on their card ending in {spoken(VERIFIED_CARD)}.
 Nothing on this call is real. Any name and birthday they give is fine.
+Today is {today:%A, %B} {today.day}, {today.year}.
 You've already explained the demo and asked who you're speaking with.
 
 {demo_note}
 
-Keep the call brisk and warm. One or two short spoken sentences at a time, one question at a time.
+{VOICE_RULES}
 
-If it's not a good time, say you'll try again later, say goodbye, and delegate ending the call.
-Once they've said their name, ask for their date of birth to confirm it's them. Say it back, and delegate the check with their name and date of birth in that same turn. Never say anything about the purchase until the check comes back verified. If it says the date can't be right, ask for it once more.
-Once verified, describe the flagged purchase exactly as the check returned it: where, which city and country, and the amount. Ask whether they made it.
-Delegate their answer as soon as they give it.
+If it's not a good time, say you'll try again later, then say goodbye and call end_call.
+Once they've said their name, ask for their date of birth to confirm it's them. Say it back, and call verify_identity with their name and date of birth in that same reply. Never say anything about the purchase until it comes back verified. If it says the date can't be right, ask for it once more.
+Once verified, describe the flagged purchase exactly as it came back: where, which city and country, and the amount. Ask whether they made it, and call report_purchase as soon as they answer.
 - If they didn't make it: say the card is locked now, so nothing else can go through on it, and that you're forwarding their case to the loss prevention team, who will follow up with them. Give the case number from the result: the letters, then each digit on its own, without saying the dash.
-- If they did: ask whether they're traveling, and if so, how long they'll be there, until they're back. Delegate the travel notice with where they are and the day they're back, then tell them they won't get another call about purchases there until then. If they aren't traveling, just thank them for confirming.
-While a delegated step runs, keep talking like you're at the keyboard: "Okay ... one sec ... pulling that up". Never say a step is done unless it came back done.
+- If they did: ask whether they're traveling, and if so, how long they'll be there, until they're back. Call set_travel_notice with where they are and the day they're back, counting a length like "two weeks" from today, then tell them they won't get another call about purchases there until then. If they aren't traveling, just thank them for confirming.
 
 {GOODBYE}
-""".strip(),
-            backend_instructions=f"""
-You keep the records for {BANK_NAME}'s fraud prevention team on behalf of the agent on the phone, who called the cardholder about a flagged purchase, in a demo.
-Today is {today:%A, %B} {today.day}, {today.year}.
-{TOOLS_ONLY}
-Call verify_identity with the name and date of birth the caller gave, before anything else. Report only whether they were confirmed, and the flagged purchase once they are.
-Call report_purchase as soon as the caller says whether they made the purchase.
-Call set_travel_notice once a caller who made the purchase says where they are and when they're back; turn a length like "two weeks" into the date they're back, counting from today.
-When asked to end the call, call end_call.
-Hand back short, plain results the agent can say out loud.
 """.strip(),
         )
 
@@ -335,19 +328,6 @@ def _as_tool_error() -> Iterator[None]:
 
 def _today() -> date:
     return datetime.now(BANK_TZ).date()
-
-
-def _voice_model(backend_instructions: str) -> inference.DuplexModel:
-    return inference.DuplexModel(
-        model=f"openai/{VOICE_MODEL}",
-        voice="ripple",
-        extra_kwargs={
-            "responses_options": {
-                "model": BACKEND_MODEL,
-                "instructions": backend_instructions,
-            },
-        },
-    )
 
 
 def _sample_caller(bank_line: str) -> str:

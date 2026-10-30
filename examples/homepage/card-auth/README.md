@@ -35,10 +35,10 @@ room.
   for the page's "try saying" line.
 - `src/phone.py` rings a real phone for an outbound call.
 
-Avery talks through OpenAI GPT-Live (`openai/gpt-live-1`) on LiveKit Inference. GPT-Live hands
-every tool call to a backend model (`openai/gpt-5.6-luna`), so the bank only changes when the
-backend calls a tool. Suggested replies use Gemma 4 31B, and ai-coustics cleans up the caller's
-audio.
+The voice pipeline runs on LiveKit Inference: `assemblyai/universal-3-6-pro` for speech to text,
+Gemma 4 31B (`google/gemma-4-31b-it`) as the LLM, Rime Coda (`rime/coda`) for the voice, and the
+LiveKit turn detector. Suggested replies also use Gemma 4 31B, and ai-coustics cleans up the
+caller's audio.
 
 The demo page reads the `auth.*` attributes, so changing their shape needs a matching change to the
 page.
@@ -52,19 +52,25 @@ lk agent dev
 ```
 
 Then talk to it in the [Agent Console](https://docs.livekit.io/testing/agent-console/), or run
-`lk agent console` to talk to it in your terminal. GPT-Live only takes audio, so start the
-[agent debugger](https://docs.livekit.io/testing/debugger/) with `lk agent debugger start --audio`.
+`lk agent console` to talk to it in your terminal. To try it one text turn at a time, use the
+[agent debugger](https://docs.livekit.io/testing/debugger/):
+
+```console
+lk agent debugger start
+lk agent debugger say "Hi, I need to lock my card."
+lk agent debugger stop
+```
 
 ## Tests and simulations
 
 ```console
 uv run pytest
-lk agent simulate audio --scenarios scenarios.yaml
+lk agent simulate text --scenarios scenarios.yaml
 ```
 
-Run the simulations in audio: GPT-Live doesn't work in text simulations. Each scenario's
-`expected` userdata says what the bank should end up with, and `src/simulation.py` fails the run
-if it doesn't.
+Each scenario's `expected` userdata says what the bank should end up with, and
+`src/simulation.py` fails the run if it doesn't. The quiet-caller scenario needs real silence, so
+it's in `scenarios-audio.yaml` and runs with `lk agent simulate audio --scenarios scenarios-audio.yaml`.
 
 ## Deploy
 

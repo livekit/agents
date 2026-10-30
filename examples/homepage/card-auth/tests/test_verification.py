@@ -1,7 +1,9 @@
 import json
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
+from livekit.agents import llm
 from livekit.agents.llm import ToolError
 
 from bank import FLAGGED, LOSS_PREVENTION_CASE, MAX_ATTEMPTS, Bank
@@ -14,6 +16,8 @@ SAM = {
     "request": "other",
 }
 
+CTX = SimpleNamespace(function_call=SimpleNamespace(call_id="call_tool"))
+
 
 @pytest.fixture
 def published() -> dict:
@@ -21,9 +25,7 @@ def published() -> dict:
 
 
 @pytest.fixture
-def agent(monkeypatch: pytest.MonkeyPatch, published: dict) -> CardServices:
-    monkeypatch.setenv("LIVEKIT_API_KEY", "unused")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "unused")
+def agent(published: dict) -> CardServices:
 
     async def publish(key, value):
         published.setdefault(f"{key}_history", []).append(value)
@@ -33,7 +35,7 @@ def agent(monkeypatch: pytest.MonkeyPatch, published: dict) -> CardServices:
 
 
 async def verify(agent, **overrides) -> dict:
-    return json.loads(await agent.verify_identity(**{**SAM, **overrides}))
+    return json.loads(await agent.verify_identity(CTX, **{**SAM, **overrides}))
 
 
 def in_days(days: int) -> str:
@@ -108,9 +110,9 @@ async def test_nothing_happens_on_the_card_before_verification(agent, published)
     with pytest.raises(ToolError):
         await agent.look_up_recent_charges()
     with pytest.raises(ToolError):
-        await agent.lock_card()
+        await agent.lock_card(CTX)
     with pytest.raises(ToolError):
-        await agent.set_travel_notice("Japan", in_days(10))
+        await agent.set_travel_notice(CTX, "Japan", in_days(10))
     assert "card" not in published
 
 
@@ -142,7 +144,7 @@ async def test_a_charge_they_do_not_recognize_locks_the_card(agent, published):
     assert charge["where"] == FLAGGED.place
     assert published["alert"]["madeByCardholder"] is None
 
-    result = json.loads(await agent.report_purchase(made_by_cardholder=False))
+    result = json.loads(await agent.report_purchase(CTX, made_by_cardholder=False))
     assert result["loss_prevention_case"] == LOSS_PREVENTION_CASE
     assert published["alert"]["madeByCardholder"] is False
     assert published["card"]["state"] == "locked"
@@ -151,23 +153,54 @@ async def test_a_charge_they_do_not_recognize_locks_the_card(agent, published):
 
 async def test_a_lost_card_gets_locked(agent, published):
     await verify(agent)
-    said = await agent.lock_card()
+    said = await agent.lock_card(CTX)
     assert "1111" in said
     assert published["card"]["state"] == "locked"
     assert published["card"]["caseId"] is None
     with pytest.raises(ToolError):
-        await agent.set_travel_notice("Japan", in_days(10))
+        await agent.set_travel_notice(CTX, "Japan", in_days(10))
 
 
 async def test_a_travel_notice_needs_no_flagged_purchase(agent, published):
     await verify(agent)
-    said = await agent.set_travel_notice("Japan", in_days(10))
+    said = await agent.set_travel_notice(CTX, "Japan", in_days(10))
     assert "Japan" in said
     assert published["card"]["travel"] == {
         "destination": "Japan",
         "until": in_days(10),
     }
     assert "alert" not in published
+
+
+class HangUp:
+    def __init__(self, call_id: str, items: list[llm.ChatItem]) -> None:
+        self.function_call = llm.FunctionCall(
+            call_id=call_id, name="end_call", arguments="{}"
+        )
+        self.session = SimpleNamespace(history=SimpleNamespace(items=items))
+        self.speech_handle = SimpleNamespace(add_done_callback=lambda cb: None)
+
+    async def wait_for_playout(self) -> None:
+        pass
+
+
+async def test_hanging_up_waits_until_the_lock_is_heard(agent):
+    await verify(agent)
+    await agent.lock_card(CTX)
+    items: list[llm.ChatItem] = [
+        llm.FunctionCallOutput(
+            call_id="call_tool", name="lock_card", output="", is_error=False
+        )
+    ]
+    with pytest.raises(ToolError, match="first tell them that the card is locked"):
+        await agent.end_call(HangUp("call_end", items))
+    items += [
+        llm.FunctionCallOutput(
+            call_id="call_end", name="end_call", output="", is_error=True
+        ),
+        llm.ChatMessage(role="assistant", content=["It's locked. Thanks, bye!"]),
+    ]
+    await agent.end_call(HangUp("call_end_again", items))
 
 
 def test_the_card_question_explains_the_demo_cards(agent):

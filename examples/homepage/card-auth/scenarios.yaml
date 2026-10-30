@@ -1,5 +1,3 @@
-# Run in audio: the voice model (GPT-Live) doesn't work in text simulations.
-#   lk agent simulate audio --scenarios scenarios.yaml
 id: SCNG_aFJ4rJaxdXh5
 name: Kestrel Bank card verification demo
 scenarios:
@@ -8,6 +6,8 @@ scenarios:
     instructions: |
       PERSONA: Sam Ortiz, a developer trying the demo, calm and cooperative.
       OPENING LINE: "Hi, there's a charge on my card I don't recognize."
+      Your first reply is your opening line, even though Avery asks for your name. Give your
+      name only when Avery asks for it again.
       FACTS (give each only when asked, one per turn):
       - Name: "Sam Ortiz"
       - Date of birth: "March 3rd, 1984"
@@ -123,10 +123,11 @@ scenarios:
       - Last four of the card, every time: "zero zero zero zero"
       DO, IN ORDER:
       1. Each time you're told it didn't work, say "That's definitely my card, try again."
-      2. When Avery asks for the details again, give all three in one sentence:
+      2. Each time Avery asks for the details again, give all three in one sentence:
          "Alex Rivera, May 5th, 1990, zero zero zero zero."
-      3. Only once told you can't be verified on this call, say "Okay, I'll call that number."
-         and hang up.
+      Keep repeating steps 1 and 2. Never give up or end the call yourself until Avery says you
+      can't be verified on this call and mentions the number on the back of your card. Only then
+      say "Okay, I'll call that number." and hang up.
     agent_expectations: >
       Runs the identity check each time with 0000. After each failed check it says it couldn't
       verify Alex without saying or hinting which detail was wrong; a brief demo note that a card
@@ -189,20 +190,29 @@ scenarios:
         card: active
         case: false
 
-  - id: SCN_RBzkAYEcGQPU
-    label: Caller goes quiet and gets hung up on
+  - id: SCN_Lca7Ehn3jvyi
+    label: Fraud alert, the purchase was theirs on a trip
     instructions: |
-      PERSONA: Someone who put the phone down right after calling and never picked it back up.
-      OPENING LINE: "Hi, I need to lock my card."
-      After your opening line, say nothing at all for the rest of the call, whatever Avery asks.
-      Stay silent, and don't hang up.
+      PERSONA: Jordan Lee, the cardholder, on vacation in Italy, born April 22, 1990.
+      When Avery asks who's speaking, say "This is Jordan Lee."
+      If asked for your date of birth, say "April 22nd, 1990."
+      DO, IN ORDER:
+      1. When Avery describes the purchase, say "Yes, that was me. I'm on vacation in Italy."
+      2. If asked how long you'll be there, say "Two weeks."
+      3. When asked if there's anything else, say "No, that's all, thanks." and hang up.
     agent_expectations: >
-      Once the caller goes quiet, asks once, in a few words, whether they're still there. When
-      the line stays quiet, says a short goodbye and ends the call. Never says the caller is
-      verified and never locks the card.
+      Confirms Jordan's date of birth before saying anything about the purchase. Then describes
+      the flagged purchase with its merchant, place, and amount, and asks whether Jordan made it.
+      Once Jordan says it was them and they're in Italy for two weeks, sets a travel notice for
+      Italy until they're back and tells them they won't get another call about purchases there
+      until then.
     tags:
-      feature: idle
+      feature: fraud-alert
     userdata:
+      direction: outbound
       expected:
-        verified: false
+        verified: true
+        made_purchase: true
         card: active
+        travel_to: Italy
+        back_in_days: [13, 14, 15]
