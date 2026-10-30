@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import threading
 from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,7 +15,7 @@ import pytest
 from livekit.agents import Agent, RunContext, StopResponse, VoiceSession, persisted
 from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall, LLMStream
-from livekit.agents.storage import Storage
+from livekit.agents.storage import SQLiteStorage, Storage
 from livekit.agents.storage._protocol import item_to_payload
 from livekit.agents.storage.context_store import ContextStore
 from livekit.agents.storage.resolve import Thread
@@ -274,3 +278,64 @@ async def test_failed_voice_generation_abandons_saved_fields_before_the_next_tur
         result = await session._run(user_input="hello")
         assert result.output == "recovered"
     assert texts(await thread.chat_history()) == ["hello", "recovered"]
+
+
+async def test_a_lost_voice_lease_while_the_host_interrupts_completes_the_call(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The lane's lease is lost while the host keeps calling ``interrupt()`` from another thread:
+    the core logs the loss while it steps the host's requests, and the call still completes
+    (a log forwarded to the host under that step's lock once deadlocked the session)."""
+    storage = SQLiteStorage(
+        directory=tmp_path,
+        lease_ttl=timedelta(seconds=2),
+        renew_interval=timedelta(milliseconds=100),
+    )
+    thread_id = await new_session(storage, "desk")
+    thread = Thread(storage, thread_id, agent_name="desk")
+    agent = Agent(instructions="desk", name="desk")
+
+    @agent.tool
+    async def hold(ctx: RunContext) -> str:
+        """Hold the line."""
+        handle = ctx.speech_handle
+        # another holder takes the lane while this turn holds it
+        with sqlite3.connect(tmp_path / "threads" / f"{thread_id}.sqlite") as db:
+            db.execute("UPDATE lanes SET lease_token = 'stolen', lease_holder = 'other'")
+        stop = threading.Event()
+
+        def interrupt_until_stopped() -> None:
+            while not stop.is_set():
+                handle.interrupt(force=True)
+
+        host = threading.Thread(target=interrupt_until_stopped)
+        host.start()
+        try:
+            async with asyncio.timeout(10):
+                while "the voice lane lease was lost" not in caplog.text:
+                    await asyncio.sleep(0.01)
+        finally:
+            stop.set()
+            await asyncio.to_thread(host.join)
+        return "held"
+
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hold",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="hold", arguments="{}", call_id="hold-call")],
+            ),
+            FakeLLMResponse(input="held", content="still here", ttft=0, duration=0),
+            FakeLLMResponse(input="again", content="hello again", ttft=0, duration=0),
+        ]
+    )
+    async with VoiceSession(llm=model, thread=thread) as session:
+        await session.start(agent)
+        await asyncio.wait_for(session._run(user_input="hold"), 20)
+        assert "the voice lane lease was lost" in caplog.text
+        result = await asyncio.wait_for(session._run(user_input="again"), 20)
+        assert result.output == "hello again"
