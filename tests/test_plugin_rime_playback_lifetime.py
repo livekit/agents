@@ -103,3 +103,55 @@ async def test_queued_interruptions_keep_holds_past_cleanup_deadline():
                 playback.close()
                 reader.cancel()
                 await asyncio.gather(reader, *tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("application_segments", [129, 257])
+async def test_segment_overflow_recovers_only_after_old_callbacks_drain(application_segments):
+    from .test_plugin_rime import peer_model
+    from .test_plugin_rime_reliability import ControlledOutput
+
+    async with peer_model() as (peer, model, _):
+        sink = ControlledOutput()
+        wrapper = model.wrap_audio_output(sink)
+        forwarded = []
+        wrapper.on("playback_finished", forwarded.append)
+        provider = model.session()
+        await provider.update_instructions("test")
+        for _ in range(application_segments):
+            await wrapper.capture_frame(rtc.AudioFrame(b"\0\0" * 480, 24000, 1, 480))
+            wrapper.flush()
+
+        async def capture_rime_response():
+            pending = provider.generate_reply()
+            response = await peer.start(await peer.next())
+            generation = await pending
+            await peer.message(response)
+            await peer.end(response)
+            message = await anext(generation.message_stream)
+            async for frame in message.audio_stream:
+                await wrapper.capture_frame(frame)
+            wrapper.flush()
+            return response
+
+        await capture_rime_response()
+        # Old callbacks must consume the dropped count, not the newly queued
+        # Rime output. A response captured during ambiguity keeps estimates.
+        for _ in range(application_segments):
+            sink.finish()
+        await asyncio.sleep(0.01)
+        assert peer.receipts.empty()
+        sink.finish()
+        await asyncio.sleep(0.01)
+        assert peer.receipts.empty()
+
+        # All earlier callbacks have drained. A fresh identified segment can
+        # now prove completion, but only when its own callback arrives.
+        fresh = await capture_rime_response()
+        await asyncio.sleep(0.01)
+        assert peer.receipts.empty()
+        sink.finish()
+        receipt = await asyncio.wait_for(peer.receipts.get(), 3)
+        assert receipt["response_id"] == fresh
+        assert receipt["played_ms"] == pytest.approx(20)
+        assert len(forwarded) == application_segments + 2
+        assert peer.receipts.empty()

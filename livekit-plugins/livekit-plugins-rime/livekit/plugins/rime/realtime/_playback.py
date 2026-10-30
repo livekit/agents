@@ -229,7 +229,9 @@ class PrismAudioOutput(AudioOutput):
         self._segment: _Segment | None = None
         self._resampler: rtc.AudioResampler | None = None
         self._format: tuple[int, int] | None = None
-        self._unproven = False
+        # Keep one count for retired segment records. Their callbacks must drain
+        # before a callback can be associated with a retained segment.
+        self._dropped_segments = 0
         self._flush_task: asyncio.Task[None] | None = None
         output.on("playback_finished", self._finished)
         output.on("playback_started", lambda ev: self.on_playback_started(created_at=ev.created_at))
@@ -262,14 +264,14 @@ class PrismAudioOutput(AudioOutput):
         if self._segment is None:
             self._segment = _Segment(token)
             if len(self._segments) >= 128:
-                self._unproven = True
+                self._dropped_segments += len(self._segments)
                 for segment in self._segments:
                     if segment.token is not None:
                         segment.token.invalid = True
                 self._segments.clear()
             self._segments.append(self._segment)
         segment = self._segment
-        if token is not segment.token or self._unproven:
+        if token is not segment.token or self._dropped_segments:
             segment.invalid = True
             if token is not None:
                 token.invalid = True
@@ -342,12 +344,15 @@ class PrismAudioOutput(AudioOutput):
         self._output.clear_buffer()
 
     def _finished(self, event: PlaybackFinishedEvent) -> None:
-        segment = self._segments.popleft() if self._segments else None
+        if self._dropped_segments:
+            self._dropped_segments -= 1
+            segment = None
+        else:
+            segment = self._segments.popleft() if self._segments else None
         if segment is not None and segment.token is not None:
             token = segment.token
             if (
-                self._unproven
-                or segment.invalid
+                segment.invalid
                 or not segment.sealed
                 or event.interrupted
                 or not math.isfinite(event.playback_position)

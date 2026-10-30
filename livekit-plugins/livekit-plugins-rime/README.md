@@ -362,6 +362,9 @@ Error codes are `history_update_rejected`, `history_update_partial`, and
 content. The plugin records each accepted write before the next write. A known
 partial edit keeps the connection open. An acknowledgment timeout or unknown
 write outcome retains the SDK's terminal failure behavior. No mutation is retried.
+If new history items arrive during a write, the plugin makes at most one history
+read to establish their order. If active-item omissions prevent confirmed order,
+the outcome is uncertain. Missing items are never treated as deletions.
 
 The explicit helper attempts local repair after a known failure, then raises the
 original error. Check `needs_reconciliation`; an event that races with repair can
@@ -394,8 +397,9 @@ except PrismHistoryUpdateError as error:
 
 Until reconciliation succeeds, dependent client replies and ordinary edits are
 blocked. Results for already-live calls can still settle. Accepted results retain
-their continuation ownership; they are not executed again. Reconciliation resumes a blocked tool continuation once. Other client replies
-need a new request through the session. A refused typed input cannot silently
+their continuation ownership; they are not executed again. Reconciliation resumes
+a blocked tool continuation once. Other client replies need a new request through
+the session. A refused typed input cannot silently
 start a reply without that input. Provider-initiated speech remains under Prism's
 control. The helpers do not rewrite the session's past event log.
 

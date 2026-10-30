@@ -100,6 +100,16 @@ def main() -> int:
     if args.sdk_source:
         assert Path(rimelabs_sdk.__file__).resolve().is_relative_to(args.sdk_source.resolve())
     print(f"Rime SDK source: {rimelabs_sdk.__file__}")
+    from rimelabs_sdk import realtime
+
+    print(
+        "Reference lifetime checks: "
+        + (
+            "extended (>128 responses)"
+            if hasattr(realtime.RealtimeSession, "hold_response")
+            else "alpha26 cache window only; extended holds are unavailable"
+        )
+    )
     files = [
         ROOT / "tests/test_plugin_rime.py",
         ROOT / "tests/test_plugin_rime_reliability.py",
