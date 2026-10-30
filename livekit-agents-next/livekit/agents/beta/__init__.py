@@ -101,7 +101,7 @@ class EndCallTool(Toolset):
         session = ctx.live_session
         if session is None:
             raise RuntimeError("end_call ends a call; this tool runs outside one")
-        session._core.end_call(ctx.speech_handle.id)
+        ctx.speech_handle._core.end_call()
         session.once("close", self._on_session_close)
 
         if self._on_tool_called:

@@ -603,11 +603,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(await)]
     fn drain(&self) -> Result<BoxFuture<'static, Option<String>>, SessionRefused>;
 
-    /// `EndCallTool`: close the session once the tool's speech (`speech_id`) is done, or once a
-    /// realtime model's own reply to the tool result is.
-    #[host(call)]
-    fn end_call(&self, speech_id: String) -> Result<(), CommandRefused>;
-
     /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(await)]
     fn wait_for_idle(

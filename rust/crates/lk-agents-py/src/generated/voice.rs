@@ -817,6 +817,14 @@ impl SpeechHandle {
         Ok(())
     }
 
+    /// `EndCallTool`: close the session once this speech is done, or once a realtime model's own
+    /// reply to the tool result is. Sent to this speech's own session.
+    fn end_call(&self, py: Python<'_>) -> PyResult<()> {
+        crate::host::check_pid()?;
+        py.detach(|| <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::end_call(&self.0)).map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
     /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
     /// when the speech is already interrupted, without counting the attempt.
     fn hold_interruptions(&self, py: Python<'_>) -> PyResult<()> {
@@ -1693,15 +1701,6 @@ impl VoiceSession {
             let out = call.await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
-    }
-
-    /// `EndCallTool`: close the session once the tool's speech (`speech_id`) is done, or once a
-    /// realtime model's own reply to the tool result is.
-    #[pyo3(signature = (speech_id))]
-    fn end_call(&self, py: Python<'_>, speech_id: ::std::string::String) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::end_call(&self.0, speech_id)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(())
     }
 
     /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).

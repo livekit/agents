@@ -299,6 +299,10 @@ class SpeechHandle:
         """`interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
         command is sent when the loop creates it.
         """
+    def end_call(self) -> None:
+        """`EndCallTool`: close the session once this speech is done, or once a realtime model's own
+        reply to the tool result is. Sent to this speech's own session.
+        """
     def hold_interruptions(self) -> None:
         """`_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
         when the speech is already interrupted, without counting the attempt.
@@ -631,10 +635,6 @@ class VoiceSession:
     async def drain(self) -> str | None:
         """`AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
         speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
-        """
-    def end_call(self, speech_id: str) -> None:
-        """`EndCallTool`: close the session once the tool's speech (`speech_id`) is done, or once a
-        realtime model's own reply to the tool result is.
         """
     async def wait_for_idle(self, *, hold: int | None = None) -> None:
         """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""

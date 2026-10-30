@@ -706,16 +706,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }))
     }
 
-    fn end_call(&self, speech_id: String) -> Result<(), CommandRefused> {
-        // A handle constructed with no id names no speech: nothing to end.
-        if speech_id.is_empty() {
-            return Ok(());
-        }
-        let speech =
-            speech_id.parse::<SpeechId>().map_err(|e| CommandRefused::Invalid(e.to_string()))?;
-        Ok(self.send(SpeechCommand::EndCall { speech })?)
-    }
-
     fn wait_for_idle(
         &self,
         hold: Option<u64>,

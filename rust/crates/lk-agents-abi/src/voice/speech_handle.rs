@@ -76,6 +76,11 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     #[host(call)]
     fn interrupt(&self, #[host(kw, default = false)] force: bool) -> Result<(), SpeechRefused>;
 
+    /// `EndCallTool`: close the session once this speech is done, or once a realtime model's own
+    /// reply to the tool result is. Sent to this speech's own session.
+    #[host(call)]
+    fn end_call(&self) -> Result<(), SpeechRefused>;
+
     /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
     /// when the speech is already interrupted, without counting the attempt.
     #[host(call)]

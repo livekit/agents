@@ -634,6 +634,12 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         Ok(())
     }
 
+    fn end_call(&self) -> Result<(), HostRefused> {
+        let speech = self.attached().map_err(refused)?;
+        self.request(SpeechCommand::EndCall { speech });
+        Ok(())
+    }
+
     fn hold_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached().map_err(refused)?;
         self.inner.lock().view.host_hold_interruptions().map_err(refused)?;
