@@ -50,6 +50,7 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
     "claude-opus-5",
     "claude-sonnet-5",
     "claude-fable-5",
+    "claude-haiku-5-5",
     # OpenAI GPT-5.6/GPT-6: "This model doesn't support the temperature field. Remove
     # temperature and try again." gpt-oss still accepts both, so it stays off this list.
     "gpt-5.6",
@@ -198,7 +199,10 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         opts: dict[str, Any] = {}
-        extra_kwargs = extra_kwargs if is_given(extra_kwargs) else {}
+        extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        # The evals judges pass temperature this way (evals/judge.py, RunResult.judge), but
+        # Converse only accepts it inside inferenceConfig, behind the check below.
+        temperature = extra_kwargs.pop("temperature", temperature)
 
         if is_given(self._opts.model):
             opts["modelId"] = self._opts.model

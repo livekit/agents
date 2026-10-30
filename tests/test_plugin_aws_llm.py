@@ -29,6 +29,7 @@ async def test_extra_kwargs_reach_the_converse_request() -> None:
         extra_kwargs={
             "guardrailConfig": guardrail,
             "requestMetadata": {"session": "s1"},
+            "temperature": 0.0,
         },
     )
     opts = stream._opts
@@ -36,6 +37,9 @@ async def test_extra_kwargs_reach_the_converse_request() -> None:
 
     assert opts["guardrailConfig"] == guardrail
     assert opts["requestMetadata"] == {"session": "s1"}
+    # temperature is only valid inside inferenceConfig, so it must not reach the top level
+    assert "temperature" not in opts
+    assert opts["inferenceConfig"]["temperature"] == 0.0
 
 
 async def test_temperature_sent_for_supporting_models() -> None:
@@ -109,6 +113,7 @@ async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
         "anthropic.claude-opus-4-8",
         "eu.anthropic.claude-opus-4-7",
         "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
+        "us.anthropic.claude-haiku-5-5",
     ):
         config = await _inference_config(model, temperature=0.5)
         assert "temperature" not in config
