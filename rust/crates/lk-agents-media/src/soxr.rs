@@ -3,14 +3,20 @@
 //! error check is dead code (we check a real out-param); its quality ordinal is passed straight as
 //! the recipe, one notch low for HIGH/VERY_HIGH, and we reproduce that to match the SDK.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+#[allow(
+    clippy::disallowed_types,
+    reason = "guards libsoxr's process-global FFT cache across pool and host threads"
+)]
 use std::{
     ffi::{CStr, c_char},
     os::raw::{c_ulong, c_void},
     sync::RwLock,
 };
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+#[allow(
+    clippy::disallowed_types,
+    reason = "guards libsoxr's process-global FFT cache across pool and host threads"
+)]
 /// libsoxr's FFT coefficient cache is process-global and unlocked without OpenMP; growing it under
 /// a running transform crashes or silently corrupts output. Only `soxr_create` grows it, so `new`
 /// takes this for writing and `push`/`flush` (`soxr_clear`) for reading.
