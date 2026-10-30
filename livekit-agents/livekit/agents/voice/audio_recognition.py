@@ -537,7 +537,7 @@ class AudioRecognition:
 
     # endregion
 
-    def _on_start_of_agent_speech(self, started_at: float) -> None:
+    def _on_start_of_agent_speech(self, started_at: float, *, resumed: bool = False) -> None:
         """Mark the start of active agent speech.
 
         This lifecycle follows audible playout, not the generation. Resuming paused playout
@@ -546,7 +546,7 @@ class AudioRecognition:
         self._transcript_gate_active = False
         self._agent_speaking = True
         self._agent_speech_started_at = started_at
-        self._endpointing.on_start_of_agent_speech(started_at=started_at)
+        self._endpointing.on_start_of_agent_speech(started_at=started_at, resumed=resumed)
 
         # reset user turn tracker when agent starts speaking
         self._turn_tracker = _UserTurnTracker()
@@ -566,7 +566,7 @@ class AudioRecognition:
                 user_speaking_span=self._session._user_speaking_span,
             )
 
-    def _on_end_of_agent_speech(self, *, ended_at: float) -> None:
+    def _on_end_of_agent_speech(self, *, ended_at: float, paused: bool = False) -> None:
         """Mark the end of active agent speech.
 
         This can occur while the generation remains active, such as when playout is paused.
@@ -575,7 +575,7 @@ class AudioRecognition:
         agent_was_speaking = self._agent_speaking
 
         if agent_was_speaking:
-            self._endpointing.on_end_of_agent_speech(ended_at=ended_at)
+            self._endpointing.on_end_of_agent_speech(ended_at=ended_at, paused=paused)
         # Replayed STT events must observe the post-playout state.
         self._agent_speaking = False
 
@@ -599,6 +599,9 @@ class AudioRecognition:
         )
 
         self._agent_speech_started_at = None
+
+    def _on_pause_resolved(self, *, interrupted: bool) -> None:
+        self._endpointing.on_pause_resolved(interrupted=interrupted)
 
     def _on_start_of_speech(
         self,
