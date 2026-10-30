@@ -518,8 +518,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => {
             crate::adapter::from_object(v, ty, &format!("{path:?}"), path)?
         }
+        // A list, or a tuple (a frozen model's collection).
         Ty::List(t) => format!(
-            "{v}.cast::<::pyo3::types::PyList>()?.iter().map(|item| {{ let item = &item; {} }}).collect::<PyResult<Vec<_>>>()",
+            "{v}.try_iter()?.map(|item| {{ let item = &item?; {} }}).collect::<PyResult<Vec<_>>>()",
             read(t, "item", path)?
         ),
         Ty::Map(k, t) => format!(

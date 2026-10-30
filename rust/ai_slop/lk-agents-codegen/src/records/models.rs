@@ -405,6 +405,12 @@ fn model(
             }
         };
         s.push_str(&docstring(doc, "    "));
+        if pydantic.is_some_and(|p| p.frozen) {
+            if !doc.is_empty() {
+                s.push('\n');
+            }
+            s.push_str("    model_config = ConfigDict(frozen=True)\n");
+        }
         if !nested.is_empty() {
             if !doc.is_empty() {
                 s.push('\n');
@@ -487,6 +493,9 @@ fn model(
         RecordBody::Struct(fields) if let Some(p) = pydantic => {
             if p.base.is_none() {
                 runtime.add("pydantic", "BaseModel");
+            }
+            if p.frozen {
+                runtime.add("pydantic", "ConfigDict");
             }
             if !r.constants.is_empty() {
                 runtime.add("typing", "Literal");

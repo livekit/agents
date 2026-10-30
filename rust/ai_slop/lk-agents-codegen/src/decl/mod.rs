@@ -85,6 +85,8 @@ pub struct Pydantic {
     pub validator: Option<String>,
     /// `constants_after = "id"`: the constants follow that field instead of leading.
     pub constants_after: Option<String>,
+    /// `frozen`: an immutable model (`model_config = ConfigDict(frozen=True)`).
+    pub frozen: bool,
     /// `private(_cache = "dict[object, object]")`: host-only private attributes no Rust field
     /// holds, each defaulting to an empty value of its annotation's container.
     pub private: Vec<(String, String)>,

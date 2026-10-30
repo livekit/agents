@@ -37,6 +37,7 @@ impl Resolver<'_> {
                 repr: voc::text(at, &record.nested, "repr")?,
                 validator: voc::text(at, &record.nested, "validator")?,
                 constants_after: voc::text(at, &record.nested, "constants_after")?,
+                frozen: voc::find(&record.nested, "frozen").is_some(),
                 private: match voc::find(&record.nested, "private") {
                     None => Vec::new(),
                     Some(p) => p
@@ -468,6 +469,7 @@ pub(super) fn record_target(
             "repr",
             "validator",
             "constants_after",
+            "frozen",
             "private",
             "discriminator",
             // Rust's own: the record marker expands `ModelDump` (`model_dump(mode="json")`).

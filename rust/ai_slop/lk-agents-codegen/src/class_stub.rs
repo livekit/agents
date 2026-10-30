@@ -296,6 +296,10 @@ pub(crate) fn annotation_names(text: &str) -> Vec<(std::ops::Range<usize>, &str)
             while i < chars.len() && chars[i].1 == '.' {
                 i += 1;
             }
+            // `...` (a variadic tuple) names nothing.
+            if ch == '.' && !chars.get(i).is_some_and(|c| c.1.is_alphabetic() || c.1 == '_') {
+                continue;
+            }
             while i < chars.len()
                 && (chars[i].1.is_alphanumeric() || matches!(chars[i].1, '_' | '.'))
             {
