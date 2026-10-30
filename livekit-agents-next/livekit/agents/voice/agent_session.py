@@ -986,9 +986,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 del self._model_layers[held]
                 try:
                     self._install_models({leg: self._effective_model(leg) for leg in models})
-                except RuntimeError as refused:
-                    # the core refuses an update only once it is closed (or never started), with
-                    # nothing left to restore; the block's own error is the one to raise
+                except _core.SessionClosing as refused:
+                    # a closed session has nothing left to restore; the block's own error is the
+                    # one to raise
                     if failure is not None:
                         failure.add_note(f"restoring the overridden providers: {refused}")
 

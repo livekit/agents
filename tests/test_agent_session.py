@@ -142,10 +142,11 @@ async def test_an_override_on_a_session_closed_inside_it_raises_the_block_error(
     base, specialist = FakeTTS(fake_audio_duration=0.1), FakeTTS(fake_audio_duration=0.1)
     async with _voiced_session(base) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
-        with pytest.raises(RuntimeError, match="interaction failed"):
+        with pytest.raises(RuntimeError, match="interaction failed") as raised:
             async with session.override_options(tts=specialist, turn_detection="vad"):
                 await session.aclose()
                 raise RuntimeError("interaction failed")
+        assert any("restoring the overridden providers" in n for n in raised.value.__notes__)
 
 
 async def test_an_override_ending_on_a_session_closed_inside_it_ends_quietly() -> None:

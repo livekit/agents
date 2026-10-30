@@ -18,9 +18,11 @@ pub enum SessionRefused {
     #[error("the session has not been started")]
     NotStarted,
     #[error("the session is closed")]
+    #[host(kind = "livekit.agents._core.SessionClosing")]
     Closed,
     /// The loop dropped its receiver: the command went nowhere.
     #[error("the session loop has ended")]
+    #[host(kind = "livekit.agents._core.SessionClosing")]
     LoopEnded,
 }
 
