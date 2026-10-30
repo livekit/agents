@@ -444,6 +444,14 @@ impl Run {
                 };
                 api.tool_update(call_id, outcome.into()).is_ok()
             }
+            Input::EndCall { tool } => {
+                let Some(Detail::Tool { speech, .. }) =
+                    self.record.resource(Kind::Tool, tool.nth).map(|r| r.detail())
+                else {
+                    return false;
+                };
+                self.handles.get(speech).is_some_and(|speech| HostSpeech::end_call(&**speech).is_ok())
+            }
             Input::FillerStart { tool, speech, delay, interval, text } => {
                 let (Some(call_id), Some(speech)) =
                     (self.tool_call_id(*tool), self.speech_id(*speech))

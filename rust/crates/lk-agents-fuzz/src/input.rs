@@ -643,6 +643,8 @@ inputs! {
     /// A background tool speaking again after its first `ctx.update()`.
     /// `progress: None` is its end, answered as `end`.
     ToolUpdate { tool: Ref<Tool>, progress: Option<AgentText>, end: ToolAnswer } leaf speech::ToolUpdate;
+    /// `EndCallTool`'s body: close the session once this tool's speech is done.
+    EndCall { tool: Ref<Tool> } leaf speech::EndCall;
     /// `with_filler()` entered: the filler speaks while the tool runs.
     FillerStart { tool: Ref<Tool>, speech: Ref<Speech>, delay: Millis, interval: Option<Millis>, text: Option<AgentText> }
         opens [Filler] leaf speech::FillerStart;
