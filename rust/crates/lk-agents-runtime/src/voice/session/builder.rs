@@ -3,7 +3,7 @@
 //! that feed them.
 
 use super::calls::Calls;
-use super::shared::{PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
+use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
 use crate::voice::resources::Resources;
 use crate::voice::session::Tx;
@@ -18,7 +18,6 @@ use lk_agents_voice::agent_session::{
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand};
 use lk_agents_voice::generation::Instructions;
-use lk_agents_voice::trace::Journal;
 use std::sync::Arc;
 use std::time::Duration;
 

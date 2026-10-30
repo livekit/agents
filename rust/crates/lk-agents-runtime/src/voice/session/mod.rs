@@ -237,14 +237,14 @@ impl VoiceSession {
     #[cfg(any(test, feature = "dst"))]
     pub fn observe(&self, observer: impl FnMut(&Step) + Send + 'static) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
-            ready.builder.journal = lk_agents_voice::trace::Journal::observed(observer);
+            ready.builder.journal = shared::Journal::observed(observer);
         }
     }
 
     #[cfg(feature = "dst")]
     pub fn probe(&self, Probe { step, host_event }: Probe) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
-            ready.builder.journal = lk_agents_voice::trace::Journal::observed(step);
+            ready.builder.journal = shared::Journal::observed(step);
             ready.probe = Some(host_event);
         }
     }

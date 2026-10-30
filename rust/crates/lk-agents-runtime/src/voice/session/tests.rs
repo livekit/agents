@@ -196,7 +196,7 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
 }
 
 /// The production executor, keeping the journal of the cores it takes over.
-struct Observing(Executor, Arc<Mutex<Option<lk_agents_voice::trace::Journal>>>);
+struct Observing(Executor, Arc<Mutex<Option<super::shared::Journal>>>);
 
 impl SessionExecutor for Observing {
     fn tts_adapter(&self) -> crate::voice::session::TtsAdapter {

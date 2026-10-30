@@ -12,9 +12,37 @@ use lk_agents_voice::agent_session::{
 };
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::GenEvent;
-use lk_agents_voice::trace::{Journal, Step};
+use lk_agents_voice::trace::Step;
 use parking_lot::Mutex;
 use std::sync::Arc;
+
+/// Where the driver's steps go: to the observer the simulation or a test installed, or nowhere.
+/// Production installs none, so a session keeps no record of its steps.
+#[derive(Clone, Default)]
+pub struct Journal(Option<Arc<Mutex<dyn FnMut(&Step) + Send>>>);
+
+impl std::fmt::Debug for Journal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Journal").field(&self.is_on()).finish()
+    }
+}
+
+impl Journal {
+    pub fn observed(observer: impl FnMut(&Step) + Send + 'static) -> Self {
+        Journal(Some(Arc::new(Mutex::new(observer))))
+    }
+
+    /// Whether anyone reads the steps: a step that is costly to build is built only then.
+    pub fn is_on(&self) -> bool {
+        self.0.is_some()
+    }
+
+    pub fn record(&self, step: impl Into<Step>) {
+        if let Some(observer) = &self.0 {
+            (observer.lock())(&step.into());
+        }
+    }
+}
 
 /// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
@@ -222,7 +250,7 @@ pub struct SessionShared {
     /// `session.keyterms`: the last list pushed to the recogniser.
     pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
-    pub journal: lk_agents_voice::trace::Journal,
+    pub journal: Journal,
 }
 
 impl SessionShared {

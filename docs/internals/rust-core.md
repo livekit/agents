@@ -2176,7 +2176,9 @@ violations down.
 ### Observations and replay
 
 Rules read journal observations and public outcomes, not private state. The
-voice trace vocabulary is [trace.rs](../../rust/crates/lk-agents-voice/src/trace.rs).
+voice trace vocabulary is [trace.rs](../../rust/crates/lk-agents-voice/src/trace.rs): the
+voice core emits each step as an effect in its output, and the runtime hands it to the
+observer a test or the DST installed (production installs none).
 Cover raw argument validation, pending answers, time ordering, bursts, resource
 lifecycle and host-view consistency. Normalize only differences irrelevant to
 the asserted contract; preserve the identities, ordering, timing and errors

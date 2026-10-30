@@ -1,9 +1,9 @@
 //! Voice execution contracts: core effects, correlated failures, queue priority and accepted views.
 
 use super::*;
-use crate::voice::session::{DriverBuilder, SessionExecutor, SessionHandle, Timebase};
+use crate::voice::session::{DriverBuilder, Journal, SessionExecutor, SessionHandle, Timebase};
 use lk_agents_voice::agent_session::*;
-use lk_agents_voice::trace::{Journal, Step};
+use lk_agents_voice::trace::Step;
 use parking_lot::Mutex;
 use std::future::Future as _;
 use std::time::Duration;

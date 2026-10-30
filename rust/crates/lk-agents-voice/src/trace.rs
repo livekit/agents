@@ -5,8 +5,6 @@ pub use crate::agent_session::effects::{GateCause, GateOp};
 use crate::audio_recognition::CommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Arc, Mutex};
 
 /// The exhaustive match in `Step::speech` makes a new variant say whether it names a speech.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -1058,34 +1056,4 @@ pub fn folded(steps: &[Step]) -> Vec<Step> {
         out.push(step.clone());
     }
     out
-}
-
-/// Where the driver's decisions go: to the observer the simulation or a test installed, or nowhere.
-/// Production installs none, so a session keeps no record of its steps.
-#[derive(Clone, Default)]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-pub struct Journal(Option<Arc<Mutex<dyn FnMut(&Step) + Send>>>);
-
-impl std::fmt::Debug for Journal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Journal").field(&self.is_on()).finish()
-    }
-}
-
-impl Journal {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn observed(observer: impl FnMut(&Step) + Send + 'static) -> Self {
-        Journal(Some(Arc::new(Mutex::new(observer))))
-    }
-
-    /// Whether anyone reads the steps: a step that is costly to build is built only then.
-    pub fn is_on(&self) -> bool {
-        self.0.is_some()
-    }
-
-    pub fn record(&self, step: impl Into<Step>) {
-        if let Some(observer) = &self.0 {
-            (observer.lock().unwrap_or_else(|p| p.into_inner()))(&step.into());
-        }
-    }
 }
