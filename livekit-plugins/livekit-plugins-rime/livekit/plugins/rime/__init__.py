@@ -18,10 +18,11 @@ See https://docs.livekit.io/agents/integrations/tts/rime/ for more information.
 """
 
 from .models import CustomLexiconEntry
+from .stt import STT
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "CustomLexiconEntry", "__version__"]
+__all__ = ["STT", "TTS", "ChunkedStream", "CustomLexiconEntry", "__version__"]
 
 from livekit.agents import Plugin
 

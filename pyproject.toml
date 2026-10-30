@@ -104,6 +104,7 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "livekit-plugins-rime[stt]",
     "python-dotenv>=1.0.1",
     "mypy",
     "scikit-learn",
