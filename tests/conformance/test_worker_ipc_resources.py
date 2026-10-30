@@ -56,16 +56,11 @@ class _ChildHost:
         Path(fields.metadata).write_text("entered")
         time.sleep(60)
 
-    async def _core_dump_stacks(self) -> None:
-        pass
-
     async def _core_ping(self) -> None:
         pass
 
 
 def _ipc_child(endpoint: socket.socket, behavior: str) -> None:
-    if hasattr(signal, "SIGUSR1"):
-        signal.signal(signal.SIGUSR1, lambda *_: None)
     if behavior.startswith("wire_"):
         # The parent's channel preamble, which a child of the same version echoes, then the
         # length of its Hello: the parent admitted Initialize.
@@ -255,55 +250,11 @@ async def test_blocked_python_health_kill(
         await executor.launch_job(job)
     await _assert_reaped(executor)
     assert entered.exists(), "the real host loop must enter the blocking callback"
-    # The configured 200 ms health deadline, 500 ms signal grace and bounded receipt wait
+    # The configured 200 ms health deadline and bounded receipt wait
     # must finish well before the intentionally blocked 60-second host callback.
     assert time.monotonic() - started < 3
     assert executor.killed
     assert executor.exitcode != 0
-
-
-async def test_stack_dump_off_loop(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    import tempfile
-    import threading
-    from concurrent.futures import ThreadPoolExecutor
-
-    from livekit.agents.ipc import child
-
-    entered = threading.Event()
-    release = threading.Event()
-    watchdog_fired = threading.Event()
-    original_file = tempfile.NamedTemporaryFile
-
-    def stalled_file(*args: Any, **kwargs: Any) -> Any:
-        entered.set()
-        if not release.wait(timeout=2):
-            watchdog_fired.set()
-        return original_file(*args, **kwargs)
-
-    # The bounded writer is already warm when production creates the job loop.
-    writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stack-dump-fixture")
-    writer.submit(lambda: None).result()
-    monkeypatch.setenv("LK_DUMP_STACK_TRACES", "1")
-    monkeypatch.setenv("LK_DUMP_DIR", str(tmp_path))
-    monkeypatch.setattr(child, "_stack_dump_worker", writer, raising=False)
-    monkeypatch.setattr(child, "_stack_dump_busy", threading.Lock(), raising=False)
-    monkeypatch.setattr(tempfile, "NamedTemporaryFile", stalled_file)
-    try:
-        child._dump_stack_traces()
-
-        async def filesystem_entered() -> None:
-            while not entered.is_set():
-                await asyncio.sleep(0)
-
-        await asyncio.wait_for(filesystem_entered(), timeout=3)
-        # A tick must run while the actual writer's file-open remains blocked.
-        await asyncio.sleep(0)
-        assert not watchdog_fired.is_set(), "the dump's filesystem wait blocked the job loop"
-        assert not release.is_set()
-    finally:
-        release.set()
-        await asyncio.to_thread(writer.shutdown, wait=True)
-    assert list(tmp_path.glob("*.stacktrace"))
 
 
 @pytest.mark.parametrize("method", _METHODS)

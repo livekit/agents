@@ -22,8 +22,6 @@ pub enum ToChild {
     /// Acked with `ShutdownAck`; the job then shuts down with `reason` (the process exits at once
     /// without one).
     Shutdown { reason: String },
-    /// The child writes its stacks (where SIGUSR1 does not exist, Windows).
-    DumpStacks,
 }
 
 /// A job process's messages to the worker.

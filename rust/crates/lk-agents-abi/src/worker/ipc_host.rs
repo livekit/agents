@@ -184,8 +184,6 @@ pub trait JobProcess: Send + Sync {
         &self,
         fields: StartJobFields,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>>;
-    #[host(await, name = "_core_dump_stacks")]
-    fn dump_stacks(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// The entrypoint's task.
     #[host(await, name = "_core_start_entrypoint")]

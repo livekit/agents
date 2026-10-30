@@ -129,17 +129,6 @@ impl ProcessControl {
         if rc == 0 { Ok(true) } else { Err(io::Error::last_os_error()) }
     }
 
-    pub fn request_stack_dump(&self) -> io::Result<bool> {
-        #[cfg(unix)]
-        {
-            self.signal(libc::SIGUSR1)
-        }
-        #[cfg(windows)]
-        {
-            Ok(false)
-        }
-    }
-
     pub fn kill(&self) -> io::Result<()> {
         #[cfg(unix)]
         {

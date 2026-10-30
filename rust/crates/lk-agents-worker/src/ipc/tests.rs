@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::time::Instant;
 
 use super::supervisor::{
-    CleanupObservation, Extra, KILL_GRACE, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB,
+    CleanupObservation, Extra, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB,
     SignalFailure, WarnGate,
 };
 use super::channel::{MAGIC, VERSION, memory};
@@ -59,8 +59,6 @@ struct FakeHost {
     /// The child's end, dropped by a kill as the process's death would close it.
     child: Mutex<Option<Child>>,
     released: AtomicBool,
-    /// The stack dump request went out (a grace before the kill).
-    dumps: AtomicBool,
     /// The kill fails with this cause.
     kill_error: Mutex<Option<String>>,
     incomplete: Mutex<Vec<CleanupObservation>>,
@@ -89,10 +87,6 @@ impl ProcessCallbacks for Arc<FakeHost> {
         self.alive.store(false, Ordering::SeqCst);
         self.child.lock().unwrap().take();
         Ok(())
-    }
-
-    fn request_stack_dump(&self) -> Result<bool, String> {
-        Ok(self.dumps.load(Ordering::SeqCst))
     }
 
     fn sample_memory(&self) -> Sample {
@@ -457,53 +451,6 @@ async fn a_native_memory_sample_enforces_the_process_limit() {
     .expect("native sampler reports the memory limit");
     assert_eq!(level, Level::Error);
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
-}
-
-// Catches: the kill skipping SIGUSR1 (the child's stack dump) or killing an already dead child.
-
-#[cfg(unix)]
-#[tokio::test]
-async fn kill_sends_sigusr1_then_kills() {
-    struct ChildHost(Mutex<std::process::Child>, AtomicUsize);
-    impl ProcessCallbacks for Arc<ChildHost> {
-        fn log(&self, _: Level, _: &str, _: Extra) {}
-        fn log_exception(&self, _: &str, _: HostError) {}
-        fn is_alive(&self) -> bool {
-            matches!(self.0.lock().unwrap().try_wait(), Ok(None))
-        }
-        fn kill(&self) -> Result<(), String> {
-            self.1.fetch_add(1, Ordering::SeqCst);
-            self.0.lock().unwrap().kill().map_err(|e| e.to_string())
-        }
-        fn request_stack_dump(&self) -> Result<bool, String> {
-            let pid = self.0.lock().unwrap().id();
-            // SAFETY: the Child remains owned and unreaped while this signal is submitted.
-            let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1) };
-            if sent == 0 { Ok(true) } else { Err(std::io::Error::last_os_error().to_string()) }
-        }
-        fn sample_memory(&self) -> Result<(f64, String), MemoryError> {
-            Err(MemoryError::Unavailable(String::new()))
-        }
-    }
-    let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-    let pid = child.id();
-    let host = Arc::new(ChildHost(Mutex::new(child), AtomicUsize::new(0)));
-    let (parent, _peer) = memory::<ToChild, ToParent>();
-    let sup = ProcSupervisor::new(
-        parent,
-        host.clone(),
-        SupervisorOptions { pid, ..opts() },
-        crate::test_support::blocking_io(),
-    );
-    let start = std::time::Instant::now();
-    sup.kill().await;
-    assert!(start.elapsed() >= KILL_GRACE, "the grace before the kill");
-    assert!(sup.killed());
-    // SIGUSR1's default action ends `sleep` within the grace: no SIGKILL needed
-    assert_eq!(host.1.load(Ordering::SeqCst), 0);
-    assert!(!host.is_alive());
-    sup.kill().await;
-    assert_eq!(host.1.load(Ordering::SeqCst), 0);
 }
 
 // ------------------------------------------------------------------------------------- child

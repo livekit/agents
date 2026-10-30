@@ -14,9 +14,6 @@ if current_process().name == "job_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    if hasattr(signal, "SIGUSR1"):
-        signal.signal(signal.SIGUSR1, lambda *_: _dump_stack_traces())
-
 import asyncio
 import contextlib
 import contextvars
@@ -28,9 +25,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from types import FrameType
 from typing import Any, TypeVar, cast
 from unittest.mock import AsyncMock, create_autospec
 
@@ -95,8 +90,6 @@ def job_main(args: JobArgs) -> None:
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
     serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)
 
-    import sys
-    import threading
     import traceback
 
     for t in threading.enumerate():
@@ -204,9 +197,6 @@ class _JobProc:
                     launched_at=fields.launched_at,
                 )
             )
-
-    async def _core_dump_stacks(self) -> None:
-        _dump_stack_traces()
 
     async def _core_ping(self) -> None:
         """Answered once the loop ran it: the pong measures the loop's responsiveness."""
@@ -440,7 +430,6 @@ def log_to_stdout(
     line style), to the stdout it inherits; each record stamped with ``fields``, the process's
     (its pid, the job's ids once one runs). A worker that set up no logging (``server._run()``
     from the user's code) has its processes log at its root level, colored on a terminal."""
-    import sys
 
     from ..cli import setup_logging
 
@@ -504,7 +493,6 @@ def serve_parent(mp_cch: socket.socket | PipeEnd, host: Any) -> None:
     (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
     hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
     initialization raises after notifying the parent."""
-    _initialize_stack_dump_worker()
     client = _core.IpcClient(
         mp_cch.detach(), host.initialize, process=host._executor_type == JobExecutorType.PROCESS
     )
@@ -543,86 +531,6 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
     finally:
         await host.aclose()
         await client.aclose()
-
-
-_stack_dump_worker: ThreadPoolExecutor | None = None
-_stack_dump_busy = threading.Lock()
-
-
-def _initialize_stack_dump_worker() -> None:
-    global _stack_dump_worker
-    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
-        return
-    if _stack_dump_worker is None:
-        # Warm the single writer before the job event loop exists.
-        _stack_dump_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stack-dump")
-        _stack_dump_worker.submit(lambda: None).result()
-
-
-def _dump_stack_traces() -> None:
-    """Take loop-affine references; the bounded writer does all rendering and filesystem I/O."""
-    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
-        return
-    worker = _stack_dump_worker
-    if worker is None or not _stack_dump_busy.acquire(blocking=False):
-        return
-    try:
-        frames = tuple(sys._current_frames().items())
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            tasks: tuple[tuple[str, bool, bool, tuple[FrameType, ...]], ...] = ()
-        else:
-            tasks = tuple(
-                (task.get_name(), task.done(), task.cancelled(), tuple(task.get_stack(limit=64)))
-                for task in asyncio.all_tasks(loop)
-            )
-        worker.submit(_write_stack_dump, frames, tasks)
-    except BaseException:
-        _stack_dump_busy.release()
-        raise
-
-
-def _write_stack_dump(
-    frames: tuple[tuple[int, FrameType], ...],
-    tasks: tuple[tuple[str, bool, bool, tuple[FrameType, ...]], ...],
-) -> None:
-    import tempfile
-    import traceback
-    from pathlib import Path
-
-    import psutil
-
-    try:
-        directory = os.getenv("LK_DUMP_DIR", tempfile.gettempdir())
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=directory,
-            delete=False,
-            prefix=f"livekit-agents-pid-{os.getpid()}-{time.time_ns()}-",
-            suffix=".stacktrace",
-        ) as output:
-            print(f"Process {current_process().name} (pid {os.getpid()})", file=output)
-            for thread_id, frame in frames:
-                print(f"\nThread {thread_id}", file=output)
-                traceback.print_stack(frame, limit=64, file=output)
-            print(f"\nASYNCIO TASKS ({len(tasks)})", file=output)
-            for name, done, cancelled, stack in tasks:
-                print(f"\nTask {name}: done={done}, cancelled={cancelled}", file=output)
-                for frame in stack:
-                    traceback.print_stack(frame, limit=1, file=output)
-            try:
-                process = psutil.Process()
-                print(f"\nMemory: {process.memory_info()}", file=output)
-                print(f"Threads: {process.num_threads()}", file=output)
-            except psutil.Error as error:
-                print(f"Memory sample unavailable: {error}", file=output)
-        logger.info("wrote stack trace dump", extra={"path": output.name})
-    except Exception:
-        logger.exception("could not write stack trace dump")
-    finally:
-        _stack_dump_busy.release()
 
 
 def _mock_room() -> Any:

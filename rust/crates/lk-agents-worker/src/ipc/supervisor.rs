@@ -28,9 +28,6 @@ pub trait ProcessCallbacks: Send + Sync + 'static {
     fn is_alive(&self) -> bool;
     /// SIGKILL (`Process.kill`; a terminate on Windows).
     fn kill(&self) -> Result<(), String>;
-    fn request_stack_dump(&self) -> Result<bool, String> {
-        Ok(false)
-    }
     /// The process's footprint in MB and the metric it reflects (pss, uss or rss). Blocking: the
     /// supervisor calls it off the runtime.
     fn sample_memory(&self) -> Result<(f64, String), MemoryError>;
@@ -126,8 +123,6 @@ impl ProcSupervisor {
             baseline_mb: None,
             gate: WarnGate::default(),
             close: Close::None,
-            killing: false,
-            kill_at: None,
             acked: false,
             shutting_down: false,
             closing: false,
@@ -282,8 +277,6 @@ struct Driver {
     baseline_mb: Option<f64>,
     gate: WarnGate,
     close: Close,
-    killing: bool,
-    kill_at: Option<Duration>,
     acked: bool,
     shutting_down: bool,
     closing: bool,
@@ -461,7 +454,7 @@ impl Driver {
 
     /// Closing or killed: the memory monitor's failures are no longer worth a log.
     fn stopping(&self) -> bool {
-        self.closing || self.killing || self.killed || self.exited
+        self.closing || self.killed || self.exited
     }
 
     fn cleaned(&self) -> bool {
@@ -489,7 +482,6 @@ impl Driver {
             self.pong_deadline,
             sample,
             close,
-            self.kill_at,
             self.cleanup_at,
         ]
         .into_iter()
@@ -661,8 +653,7 @@ impl Driver {
         if self.reaped {
             self.cleanup_at = None;
         }
-        (self.next_ping, self.pong_deadline, self.next_sample, self.kill_at) =
-            (None, None, None, None);
+        (self.next_ping, self.pong_deadline, self.next_sample) = (None, None, None);
         self.close = Close::None;
         self.observe_exitcode(code);
     }
@@ -770,12 +761,6 @@ impl Driver {
                 self.close = Close::Waiting;
             }
             _ => {}
-        }
-        if let Some(at) = self.kill_at
-            && at <= now
-        {
-            self.kill_at = None;
-            self.finish_kill();
         }
     }
 
@@ -927,7 +912,7 @@ impl Driver {
             self.reply_job(request_id, Err(StartJobError::Closed));
         }
         self.send(ToChild::Shutdown { reason: String::new() });
-        self.cleanup_at = Some(now + secs(self.opts.close_timeout) * 3 + self.kill_grace());
+        self.cleanup_at = Some(now + secs(self.opts.close_timeout) * 3);
         self.close = Close::Ack(now + secs(self.opts.close_timeout));
         self.advance_close();
     }
@@ -942,39 +927,17 @@ impl Driver {
         }
     }
 
-    /// Unless already dead: SIGUSR1 (the child dumps its stacks; on Windows a `DumpStacks`),
-    /// then SIGKILL after [`KILL_GRACE`] when the dump went out, else at once.
+    /// Kills the process unless it is already dead; a failed kill can be retried.
     fn begin_kill(&mut self) {
-        if !self.opts.killable || self.killing || self.killed || self.exited {
+        if !self.opts.killable || self.killed || self.exited {
             return;
         }
-        self.killing = true;
         if !self.host.is_alive() {
-            self.killing = false;
             self.kill_ended = true;
             return;
         }
         self.log(Level::Info, "killing process");
-        let signalled = match self.host.request_stack_dump() {
-            Ok(signalled) => signalled,
-            Err(cause) => {
-                self.host.signal_failed(SignalFailure { pid: self.opts.pid, cause });
-                false
-            }
-        };
-        let now = self.now();
-        if signalled {
-            self.kill_at = Some(now + KILL_GRACE);
-        } else {
-            self.finish_kill();
-        }
-        self.cleanup_at.get_or_insert(now + self.termination_timeout());
-    }
-
-    fn finish_kill(&mut self) {
-        let result = if self.host.is_alive() { self.host.kill() } else { Ok(()) };
-        self.killing = false;
-        match result {
+        match self.host.kill() {
             Ok(()) => {
                 self.killed = true;
                 self.kill_ended = true;
@@ -984,6 +947,7 @@ impl Driver {
                 self.host.signal_failed(SignalFailure { pid: self.opts.pid, cause });
             }
         }
+        self.cleanup_at.get_or_insert(self.now() + self.termination_timeout());
     }
 
     fn observe_exitcode(&mut self, code: Option<i64>) {
@@ -997,12 +961,8 @@ impl Driver {
         }
     }
 
-    fn kill_grace(&self) -> Duration {
-        if self.opts.killable { KILL_GRACE } else { Duration::ZERO }
-    }
-
     fn termination_timeout(&self) -> Duration {
-        self.kill_grace() + secs(self.opts.close_timeout)
+        secs(self.opts.close_timeout)
     }
 
     fn send(&mut self, message: ToChild) {

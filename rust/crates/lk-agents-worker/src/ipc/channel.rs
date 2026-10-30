@@ -22,7 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 /// The first bytes either side writes.
 pub const MAGIC: [u8; 4] = *b"LKAJ";
 /// The protocol both sides must speak; a change to a message is a new version.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 /// The largest message: a job's `Job` protobuf is a few kilobytes.
 pub const MAX_FRAME: usize = 4 << 20;
 /// Frames queued in each direction.

@@ -415,13 +415,6 @@ impl ProcessCallbacks for ProcessDiagnostics {
         self.process.borrow().is_some()
     }
 
-    fn request_stack_dump(&self) -> Result<bool, String> {
-        let process = self.process.borrow();
-        process.as_ref().map_or(Ok(false), |process| {
-            process.request_stack_dump().map_err(|error| error.to_string())
-        })
-    }
-
     fn kill(&self) -> Result<(), String> {
         let process = self.process.borrow();
         process.as_ref().map_or(Ok(()), |process| process.kill().map_err(|error| error.to_string()))

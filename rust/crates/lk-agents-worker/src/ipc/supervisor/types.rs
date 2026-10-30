@@ -12,8 +12,6 @@ pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
 pub const MEMORY_WARN_COOLDOWN: Duration = Duration::from_secs(120);
 /// Warn again before the cooldown when usage grew this much since the last warning.
 pub const MEMORY_WARN_RESET_DELTA_MB: f64 = 50.0;
-/// Between SIGUSR1 (the child dumps its stacks) and SIGKILL.
-pub const KILL_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {

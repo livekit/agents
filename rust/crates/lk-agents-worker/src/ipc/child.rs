@@ -112,10 +112,6 @@ impl ChildChannel {
                 run.end(reason, false);
                 Ok(true)
             }
-            ToChild::DumpStacks => {
-                host.dump_stacks().await?;
-                Ok(true)
-            }
             ToChild::Hello(_) => Ok(true),
         }
     }

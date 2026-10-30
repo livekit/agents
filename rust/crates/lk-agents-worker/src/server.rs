@@ -232,7 +232,7 @@ impl ServerRuntime {
         let receiver = self.receiver.lock().await.take().ok_or("worker is already running")?;
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
-        let process_cleanup = timeout * 3 + crate::ipc::supervisor::KILL_GRACE;
+        let process_cleanup = timeout * 3;
         let connection_cleanup =
             if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
         let cleanup_timeout = process_cleanup.max(connection_cleanup);

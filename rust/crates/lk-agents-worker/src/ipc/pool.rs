@@ -284,7 +284,7 @@ impl ProcPool {
         Self(Arc::new(Inner {
             host,
             opts,
-            cleanup_timeout: opts.close_timeout * 3 + super::supervisor::KILL_GRACE,
+            cleanup_timeout: opts.close_timeout * 3,
             state: Mutex::new(State {
                 target_idle: opts.num_idle_processes,
                 started: false,

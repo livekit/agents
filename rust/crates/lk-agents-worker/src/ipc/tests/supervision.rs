@@ -113,11 +113,8 @@ async fn a_thread_transport_failure_or_startup_timeout_never_requests_an_os_kill
 #[tokio::test(start_paused = true)]
 async fn post_spawn_launch_failure_keeps_termination_and_reaping_obligations() {
     let (sup, host, _child) = setup(short(1.0));
-    host.dumps.store(true, Ordering::SeqCst);
     sup.launched(43).await;
     sup.launch_failed("bootstrap pipe broke".into()).await;
-    settle().await;
-    tokio::time::sleep(KILL_GRACE).await;
     settle().await;
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -134,22 +131,6 @@ async fn launch_rejection_without_a_process_is_not_reported_as_os_exit_or_reapin
     assert!(!sup.wait_exit().await, "no OS exit");
     assert!(!sup.wait_cleaned().await, "no reaping");
     assert!(host.released.load(Ordering::SeqCst));
-}
-
-// Catches: the reaping deadline expiring inside the kill's stack-dump grace.
-#[tokio::test(start_paused = true)]
-async fn kill_grace_is_included_before_the_reaping_deadline() {
-    let (sup, host, _child) = setup(short(0.01));
-    host.dumps.store(true, Ordering::SeqCst);
-    let killing = sup.clone();
-    tokio::spawn(async move { killing.kill().await });
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    settle().await;
-    assert!(host.incomplete.lock().unwrap().is_empty(), "inside the grace");
-    tokio::time::sleep(KILL_GRACE - Duration::from_millis(20)).await;
-    settle().await;
-    assert_eq!(host.kills.load(Ordering::SeqCst), 1);
-    assert!(host.incomplete.lock().unwrap().is_empty());
 }
 
 // Catches: an unknown exit status logged as a failure before the start method's receipt told it.
