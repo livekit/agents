@@ -2,7 +2,7 @@
 
 use super::testfix::{RealtimeMachine, Step};
 use super::wire;
-use crate::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, XAI};
+use crate::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, TurnDetection, XAI};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
 use crate::realtime::openai::testfix::{machine, msg};
 use lk_agents_abi::RealtimeCommand as Command;
@@ -754,6 +754,45 @@ fn the_session_carries_every_option_as_the_reference_sends_it() {
     assert_eq!(s["reasoning"], json!({"effort": "low"}));
     assert!(s.get("truncation").is_none());
     assert_eq!(s["max_output_tokens"], json!("inf"));
+}
+
+// Catches: a reasoning change at runtime left off the update, or lost when a reconnection
+// rebuilds the session from the machine's options.
+#[test]
+fn an_options_update_changes_reasoning_for_the_next_session_too() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    let step = m.update_options(OptionsPatch {
+        reasoning: Maybe::Given(Some(json!({"effort": "high"}))),
+        ..Default::default()
+    });
+    assert_eq!(step.frames[0]["session"]["reasoning"], json!({"effort": "high"}));
+    let reopened = m.reconnect(at(1));
+    assert_eq!(reopened.frames[0]["session"]["reasoning"], json!({"effort": "high"}));
+}
+
+// Catches: the legacy Azure deployment (its own transcription and server VAD defaults, beta
+// event names) dropping reasoning from the session it opens.
+#[test]
+fn the_legacy_azure_session_carries_reasoning() {
+    let mut opts = SessionOptions::from_dialect(&OPENAI, false);
+    opts.transcription = Some(json!({"model": "whisper-1"}));
+    opts.turn_detection = Some(TurnDetection::Raw(json!({
+        "type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300,
+        "silence_duration_ms": 200, "create_response": true,
+    })));
+    opts.reasoning = Some(json!({"effort": "medium"}));
+    let caps = OPENAI.capabilities(opts.turn_detection.as_ref(), false, true, true);
+    let mut m = RealtimeMachine::new(
+        OPENAI,
+        opts,
+        caps,
+        Arc::new(wire::SeqIds::default()),
+        Arc::new(crate::testkit::NoImages),
+    );
+    let mut frame = m.open(at(0)).frames.remove(0);
+    wire::WireShape { azure: true, drop_model: false }.outbound(&mut frame);
+    assert_eq!(frame["session"]["reasoning"], json!({"effort": "medium"}));
 }
 
 // Catches: turning transcription off at runtime without the capability following it, or an
