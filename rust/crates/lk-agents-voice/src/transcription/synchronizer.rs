@@ -179,6 +179,9 @@ struct Segment {
     /// The sink cut this segment's playout while its audio was still coming. It owes no finish
     /// until a reset starts the rest of its audio as a playout of its own.
     cut_below: bool,
+    /// A clear closed its words before any of its audio and before its audio leg ended: the
+    /// leg's late end is its, not a new segment's. Gone at the next audio.
+    cleared: bool,
 }
 
 /// `_SegmentSynchronizerImpl`s in order. Each leg is an ordered stream of segments delimited by
@@ -222,6 +225,7 @@ impl SyncSegments {
                 }
             }
             SyncInput::Audio { secs } => {
+                self.segments.retain(|s| !s.cleared);
                 let i = self.next(|s| !s.audio_ended);
                 self.segments[i].audio = true;
                 self.apply(i, PaceEvent::Audio { secs }, &mut out);
@@ -233,6 +237,12 @@ impl SyncSegments {
                     return out;
                 }
                 let i = self.next(|s| !s.audio_ended);
+                if self.segments[i].cleared {
+                    // The cut speech's leg ended after its clear (seed 19354): a new segment
+                    // here would pair the next speech's words with no audio.
+                    self.segments.remove(i);
+                    return out;
+                }
                 self.segments[i].audio_ended = true;
                 self.apply(i, PaceEvent::AudioEnd, &mut out);
                 if self.segments[i].cut_below {
@@ -247,7 +257,12 @@ impl SyncSegments {
                 if self.segments.back().is_some_and(|s| !s.audio) {
                     let i = self.segments.len() - 1;
                     self.apply(i, PaceEvent::Close, &mut out);
-                    self.segments.pop_back();
+                    let segment = &mut self.segments[i];
+                    if segment.audio_ended {
+                        self.segments.pop_back();
+                    } else {
+                        (segment.pacer, segment.text_ended, segment.cleared) = (None, true, true);
+                    }
                 }
             }
             SyncInput::Started => {
@@ -346,6 +361,7 @@ impl SyncSegments {
             audio_ended: false,
             started: false,
             cut_below: false,
+            cleared: false,
         };
         self.segments.push_back(segment);
         self.segments.len() - 1

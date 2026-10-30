@@ -120,11 +120,9 @@ impl RealtimePlayout {
         self.has_audio_output
     }
 
-    /// As the pipeline's: never for an interrupted speech, whose cut closed its words.
-    pub fn end_unvoiced(&self, heard: &Heard, has_text_output: bool, interrupted: bool) -> bool {
+    pub fn end_unvoiced(&self, heard: &Heard, has_text_output: bool) -> bool {
         heard.frames == 0
             && heard.complete
-            && !interrupted
             && has_text_output
             && self.carried_message()
             && self.has_audio_output

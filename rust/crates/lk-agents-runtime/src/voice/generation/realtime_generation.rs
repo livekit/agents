@@ -139,8 +139,7 @@ pub(crate) async fn realtime_generation_task(
                 return Err(heard_until(&mut generation, wake, handle, failed.error));
             }
         };
-        if generation.state.end_unvoiced(&part, generation.text_out.is_some(), handle.interrupted())
-        {
+        if generation.state.end_unvoiced(&part, generation.text_out.is_some()) {
             let output = audio_out.as_deref().expect("the binding has an audio output");
             end_unvoiced(shared, handle.id(), output);
         }

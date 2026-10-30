@@ -225,20 +225,16 @@ impl SegmentPlan {
     }
 
     /// A transcript-only segment still ends the bound audio leg when all its text was forwarded.
-    /// Not once its speech is interrupted: the cut already closed its words, and an audio end
-    /// past that would pair the next speech's words with no audio (seed 19354).
     pub fn end_unvoiced(
         &self,
         heard: &crate::transcription::Heard,
         leg: Option<TextLegState>,
-        interrupted: bool,
     ) -> bool {
         self.audio_output
             && self.text_output
             && leg.is_some_and(|leg| leg.forwarded)
             && heard.frames == 0
             && heard.complete
-            && !interrupted
     }
 }
 
