@@ -120,7 +120,9 @@ impl Turn {
         let caller_history = caller_history_of(&message)?;
         let epoch = self.clock.now();
         let elapsed = || self.clock.now().saturating_duration_since(epoch);
-        let wall = lk_agents_net::clock::unix_now();
+        // the run's clock, as every time the machine reads: the DST's is virtual
+        let wall = self.clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let wall = wall.as_secs_f64();
         let msg = Message::from_a2a(&message, wall, None)?;
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut machine = TaskMachine::new(
