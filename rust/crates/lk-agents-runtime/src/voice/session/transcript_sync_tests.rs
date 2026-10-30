@@ -60,7 +60,7 @@ impl Chain {
     fn new() -> Chain {
         let output = Arc::new(KeyedPlayback::default());
         let leaf = output.tracker().clone();
-        let sync = TranscriptSynchronizer::new(SyncConfig {
+        let sync = TranscriptSynchronizer::new(TranscriptSyncConfig {
             audio_next: output.clone() as Arc<dyn AudioOutput>,
             text_next: None,
             speed: 1.0,

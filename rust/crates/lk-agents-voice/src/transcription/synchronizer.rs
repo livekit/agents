@@ -135,7 +135,7 @@ impl Hyphenator for Liang {
 
 /// What the two legs and the sink below tell the synchroniser.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SyncInput {
+pub enum TranscriptSyncInput {
     Text {
         raw: String,
         start_time: Option<f64>,
@@ -189,15 +189,15 @@ struct Segment {
 /// its flushes: a segment's text is the next text not yet ended, its audio the next audio, so a
 /// segment the producer ended with no audio is one by construction even when its words arrive
 /// later (through a `transcription_node`). The sink's playback moves the oldest segment it owes.
-pub struct SyncSegments {
+pub struct TranscriptSyncSegments {
     opts: PacerOptions,
     enabled: bool,
     segments: VecDeque<Segment>,
 }
 
-impl SyncSegments {
-    pub fn new(opts: PacerOptions) -> SyncSegments {
-        SyncSegments { opts, enabled: false, segments: VecDeque::new() }
+impl TranscriptSyncSegments {
+    pub fn new(opts: PacerOptions) -> TranscriptSyncSegments {
+        TranscriptSyncSegments { opts, enabled: false, segments: VecDeque::new() }
     }
 
     pub fn enabled(&self) -> bool {
@@ -206,10 +206,10 @@ impl SyncSegments {
 
     /// One input in, the words to show out. A `Heard` is kept only for a `Finished` segment that
     /// had text: its synchronised transcript.
-    pub fn step(&mut self, input: SyncInput) -> Vec<PaceEffect> {
+    pub fn step(&mut self, input: TranscriptSyncInput) -> Vec<PaceEffect> {
         let mut out = Vec::new();
         match input {
-            SyncInput::Text { raw, start_time, end_time } => {
+            TranscriptSyncInput::Text { raw, start_time, end_time } => {
                 self.segments.retain(|s| !s.cleared);
                 let i = self.next(|s| !s.text_ended);
                 if self.segments[i].pacer.is_none() {
@@ -219,20 +219,20 @@ impl SyncSegments {
                     self.apply(i, PaceEvent::Text { raw, start_time, end_time }, &mut out);
                 }
             }
-            SyncInput::TextEnd => {
+            TranscriptSyncInput::TextEnd => {
                 if let Some(i) = self.segments.iter().position(|s| !s.text_ended) {
                     self.segments[i].text_ended = true;
                     self.apply(i, PaceEvent::TextEnd, &mut out);
                     self.settle(i);
                 }
             }
-            SyncInput::Audio { secs } => {
+            TranscriptSyncInput::Audio { secs } => {
                 self.segments.retain(|s| !s.cleared);
                 let i = self.next(|s| !s.audio_ended);
                 self.segments[i].audio = true;
                 self.apply(i, PaceEvent::Audio { secs }, &mut out);
             }
-            SyncInput::AudioEnd => {
+            TranscriptSyncInput::AudioEnd => {
                 // Ended before any of its words arrived: a segment with no audio, unless its
                 // words will pass unpaced.
                 if !self.enabled && self.segments.iter().all(|s| s.audio_ended) {
@@ -255,7 +255,7 @@ impl SyncSegments {
                     self.settle(i);
                 }
             }
-            SyncInput::Clear => {
+            TranscriptSyncInput::Clear => {
                 if self.segments.back().is_some_and(|s| !s.audio) {
                     let i = self.segments.len() - 1;
                     self.apply(i, PaceEvent::Close, &mut out);
@@ -267,7 +267,7 @@ impl SyncSegments {
                     }
                 }
             }
-            SyncInput::Started => {
+            TranscriptSyncInput::Started => {
                 // A sink plays its segments in order: one starting while an older one it had
                 // started is still owed means that one's finish was lost. It ends where it stood.
                 if let Some(i) = self.playing()
@@ -285,17 +285,17 @@ impl SyncSegments {
                     }
                 }
             }
-            SyncInput::Progressed(at) => {
+            TranscriptSyncInput::Progressed(at) => {
                 if let Some(i) = self.playing() {
                     self.apply(i, PaceEvent::Position(at), &mut out);
                 }
             }
-            SyncInput::Paused => {
+            TranscriptSyncInput::Paused => {
                 if let Some(i) = self.playing() {
                     self.apply(i, PaceEvent::Paused, &mut out);
                 }
             }
-            SyncInput::Finished { position, interrupted } => {
+            TranscriptSyncInput::Finished { position, interrupted } => {
                 let Some(i) = self.playing() else { return out };
                 let segment = &self.segments[i];
                 if interrupted && !segment.audio_ended && segment.pacer.as_ref().is_some_and(live) {
@@ -317,7 +317,7 @@ impl SyncSegments {
                     return out;
                 }
             }
-            SyncInput::Reset => {
+            TranscriptSyncInput::Reset => {
                 for i in 0..self.segments.len() {
                     let segment = &mut self.segments[i];
                     if segment.audio
@@ -338,13 +338,13 @@ impl SyncSegments {
                 }
                 self.segments.retain(|s| !s.audio);
             }
-            SyncInput::Enabled(enabled) => {
+            TranscriptSyncInput::Enabled(enabled) => {
                 if self.enabled != enabled {
                     self.enabled = enabled;
                     self.rotate(&mut out);
                 }
             }
-            SyncInput::Rotate => self.rotate(&mut out),
+            TranscriptSyncInput::Rotate => self.rotate(&mut out),
         }
         out.retain(|e| !matches!(e, PaceEffect::Heard(_)));
         out

@@ -2,7 +2,7 @@
 //! and every other method one command to the loop.
 
 use super::*;
-use crate::voice::session::transcript_sync::{SyncConfig, TranscriptSynchronizer};
+use crate::voice::session::transcript_sync::{TranscriptSyncConfig, TranscriptSynchronizer};
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
@@ -119,7 +119,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             (Some(audio), Some(text))
                 if room_io.wants_transcript_sync(has_external_audio_output) =>
             {
-                let sync = TranscriptSynchronizer::new(SyncConfig {
+                let sync = TranscriptSynchronizer::new(TranscriptSyncConfig {
                     audio_next: audio,
                     text_next: Some(text),
                     speed: sync_speed.unwrap_or(1.0),

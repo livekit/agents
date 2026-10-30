@@ -1,7 +1,7 @@
 //! Transcript synchronization lifecycle decisions, with physical outcomes supplied as events.
 
 use super::pacer::{PaceEffect, PacerOptions};
-use super::synchronizer::{SyncInput, SyncSegments};
+use super::synchronizer::{TranscriptSyncInput, TranscriptSyncSegments};
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::{TimedString, Ts};
 
@@ -11,8 +11,8 @@ pub enum TranscriptOutput {
     Detached,
 }
 
-pub enum SyncEvent {
-    Input(SyncInput),
+pub enum TranscriptSyncEvent {
+    Input(TranscriptSyncInput),
     Capture { text: TimedString, aligned: bool },
     FlushText,
     AttachText,
@@ -27,7 +27,7 @@ pub enum SyncEvent {
 }
 
 /// Physical operations and pacing effects, in their required order.
-pub enum SyncEffect {
+pub enum TranscriptSyncEffect {
     Pace(PaceEffect),
     Capture { text: TimedString, aligned: bool },
     FlushText,
@@ -50,8 +50,8 @@ enum ClosePhase {
 /// One owner for the transcript gate and its segment pacing state. Both legs start detached: a
 /// session attaches an output when a segment first activates on it, and the gate opens only with
 /// both attached, so words with no synchronised audio pass straight through.
-pub struct SyncLifecycle {
-    pub segments: SyncSegments,
+pub struct TranscriptSync {
+    pub segments: TranscriptSyncSegments,
     audio_attached: bool,
     text_attached: bool,
     text_attachments: usize,
@@ -59,10 +59,10 @@ pub struct SyncLifecycle {
     close: ClosePhase,
 }
 
-impl SyncLifecycle {
+impl TranscriptSync {
     pub fn new(options: PacerOptions) -> Self {
         Self {
-            segments: SyncSegments::new(options),
+            segments: TranscriptSyncSegments::new(options),
             audio_attached: false,
             text_attached: false,
             text_attachments: 0,
@@ -71,96 +71,97 @@ impl SyncLifecycle {
         }
     }
 
-    pub fn handle(&mut self, event: SyncEvent) -> Vec<SyncEffect> {
+    pub fn handle(&mut self, event: TranscriptSyncEvent) -> Vec<TranscriptSyncEffect> {
         match event {
-            SyncEvent::Input(input) => self.step(input),
-            SyncEvent::Capture { text, aligned } => {
+            TranscriptSyncEvent::Input(input) => self.step(input),
+            TranscriptSyncEvent::Capture { text, aligned } => {
                 if !self.segments.enabled() {
-                    return vec![SyncEffect::Capture { text, aligned }];
+                    return vec![TranscriptSyncEffect::Capture { text, aligned }];
                 }
                 self.capturing_text = true;
                 let (start_time, end_time) =
                     if aligned { (text.start_time, text.end_time) } else { (None, None) };
-                self.step(SyncInput::Text { raw: text.text, start_time, end_time })
+                self.step(TranscriptSyncInput::Text { raw: text.text, start_time, end_time })
             }
-            SyncEvent::FlushText => {
+            TranscriptSyncEvent::FlushText => {
                 if !self.segments.enabled() {
-                    vec![SyncEffect::FlushText]
+                    vec![TranscriptSyncEffect::FlushText]
                 } else if std::mem::take(&mut self.capturing_text) {
-                    self.step(SyncInput::TextEnd)
+                    self.step(TranscriptSyncInput::TextEnd)
                 } else {
                     Vec::new()
                 }
             }
-            SyncEvent::AttachText => {
+            TranscriptSyncEvent::AttachText => {
                 self.text_attachments += 1;
-                vec![SyncEffect::AttachText]
+                vec![TranscriptSyncEffect::AttachText]
             }
-            SyncEvent::AttachmentChanged { audio, text } => {
+            TranscriptSyncEvent::AttachmentChanged { audio, text } => {
                 self.audio_attached = audio.unwrap_or(self.audio_attached);
                 self.text_attached = text.unwrap_or(self.text_attached);
-                self.step(SyncInput::Enabled(self.audio_attached && self.text_attached))
+                self.step(TranscriptSyncInput::Enabled(self.audio_attached && self.text_attached))
             }
-            SyncEvent::DetachText => {
+            TranscriptSyncEvent::DetachText => {
                 let attachments = self.text_attachments;
                 let mut effects = Vec::new();
                 if attachments <= 1 {
                     self.text_attached = false;
-                    effects.extend(self.step(SyncInput::Enabled(false)));
+                    effects.extend(self.step(TranscriptSyncInput::Enabled(false)));
                 }
                 // The final rotation still belongs to its admitted physical attachment.
-                effects.push(SyncEffect::RetireText { admitted: attachments > 0 });
+                effects.push(TranscriptSyncEffect::RetireText { admitted: attachments > 0 });
                 effects
             }
-            SyncEvent::TextRetired { admitted } => {
+            TranscriptSyncEvent::TextRetired { admitted } => {
                 if admitted {
                     self.text_attachments -= 1;
-                    vec![SyncEffect::Queue(TranscriptOutput::Detached)]
+                    vec![TranscriptSyncEffect::Queue(TranscriptOutput::Detached)]
                 } else {
                     Vec::new()
                 }
             }
-            SyncEvent::Output(output) => {
+            TranscriptSyncEvent::Output(output) => {
                 if matches!(output, TranscriptOutput::Word(_) | TranscriptOutput::Flush)
                     && self.text_attachments == 0
                 {
                     Vec::new()
                 } else {
-                    vec![SyncEffect::Queue(output)]
+                    vec![TranscriptSyncEffect::Queue(output)]
                 }
             }
-            SyncEvent::Rotate => match self.close {
-                ClosePhase::Open => self.step(SyncInput::Rotate),
+            TranscriptSyncEvent::Rotate => match self.close {
+                ClosePhase::Open => self.step(TranscriptSyncInput::Rotate),
                 _ => Vec::new(),
             },
-            SyncEvent::Close => {
+            TranscriptSyncEvent::Close => {
                 if !matches!(self.close, ClosePhase::Open) {
                     return Vec::new();
                 }
                 self.close = ClosePhase::Closing;
                 let mut effects = if self.text_attachments > 0 {
-                    self.step(SyncInput::Rotate)
+                    self.step(TranscriptSyncInput::Rotate)
                 } else {
                     Vec::new()
                 };
-                effects.extend([SyncEffect::CloseSender, SyncEffect::BeginWait]);
+                effects
+                    .extend([TranscriptSyncEffect::CloseSender, TranscriptSyncEffect::BeginWait]);
                 effects
             }
-            SyncEvent::WaitStarted(at) => {
+            TranscriptSyncEvent::WaitStarted(at) => {
                 if !matches!(self.close, ClosePhase::Closing) {
                     return Vec::new();
                 }
                 self.close = ClosePhase::Waiting;
-                vec![SyncEffect::WaitUntil(at.saturating_add(HOST_TEARDOWN_TIMEOUT))]
+                vec![TranscriptSyncEffect::WaitUntil(at.saturating_add(HOST_TEARDOWN_TIMEOUT))]
             }
-            SyncEvent::WaitFinished => {
+            TranscriptSyncEvent::WaitFinished => {
                 self.close = ClosePhase::Closed;
                 Vec::new()
             }
         }
     }
 
-    fn step(&mut self, input: SyncInput) -> Vec<SyncEffect> {
-        self.segments.step(input).into_iter().map(SyncEffect::Pace).collect()
+    fn step(&mut self, input: TranscriptSyncInput) -> Vec<TranscriptSyncEffect> {
+        self.segments.step(input).into_iter().map(TranscriptSyncEffect::Pace).collect()
     }
 }
