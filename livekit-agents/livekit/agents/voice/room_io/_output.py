@@ -313,8 +313,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     self._report_run(offset=self._source_pushed_duration, ended_at=self._dry_at)
 
                 self._source_pushed_duration += frame.duration
+                # dated at submission: the source plays on through the await, so a stalled
+                # event loop can return from it after the source has drained
+                dry_at = time.time() + self._audio_source.queued_duration + frame.duration
                 await self._audio_source.capture_frame(frame)
-                self._dry_at = time.time() + self._audio_source.queued_duration
+                self._dry_at = dry_at
             finally:
                 self._forwarding_idle.set()
 
