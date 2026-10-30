@@ -140,8 +140,11 @@ async with session.override_options(tts=specialist_voice):
 ```
 
 Each setting takes its value from the topmost override that sets it, else from
-the base. Base changes made during an override persist and show through once the
-override is removed. The layer belongs to the block that opened it and is
+the base; each key of `endpointing_opts` and `interruption` is a setting on its
+own. Overrides sit above the active agent's settings, including an agent or
+`VoiceTask` that takes over inside the block. Base changes made during an
+override persist: they show through at once on the settings no override sets,
+and on the others once the override is removed. The layer belongs to the block that opened it and is
 released when that block ends, on success, failure or cancellation. Transfer,
 DTMF and `VoiceTask` interactions use the same mechanism; a task opens its
 overrides inside its own code and they are released when the task ends.

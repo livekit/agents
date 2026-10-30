@@ -100,3 +100,37 @@ fn the_server_keeps_turn_detection_unless_a_local_vad_takes_it() {
     assert!(rt(true, true, Some("realtime_llm"), true));
     assert!(!rt(false, true, None, false));
 }
+
+// Catches: an override resolving under the agent layer, a base change to a leaf no layer sets
+// hidden until the release, or a release taking out a layer other than its own.
+#[test]
+fn an_override_wins_leaf_by_leaf_until_its_own_release() {
+    use crate::agent_activity::DriverConfig;
+    use std::time::Duration;
+    let ms = Duration::from_millis;
+    let endpointing = |min: Option<u64>, max: Option<u64>| {
+        let mut options = AgentSessionOptions::default();
+        options.turn.endpointing.min_delay = min.map(ms);
+        options.turn.endpointing.max_delay = max.map(ms);
+        options
+    };
+    let stack = ConfigStack {
+        session: endpointing(Some(300), Some(2000)),
+        agent: Some(endpointing(Some(500), None)),
+        overrides: Vec::new(),
+    };
+    let mut config = DriverConfig::new(stack, LegSet::from(SessionLegs::none()));
+    let delays = |config: &DriverConfig| {
+        let e = config.effective.turn.endpointing;
+        (e.min_delay, e.max_delay)
+    };
+    config.push_override(OverrideLayer { id: 1, options: endpointing(Some(900), None) });
+    config.push_override(OverrideLayer { id: 2, options: endpointing(Some(700), None) });
+    assert_eq!(delays(&config), (Some(ms(700)), Some(ms(2000))), "the topmost layer wins");
+    config.configure(&endpointing(None, Some(4000)));
+    assert_eq!(delays(&config), (Some(ms(700)), Some(ms(4000))), "the base shows through");
+    config.release_override(1);
+    assert_eq!(delays(&config), (Some(ms(700)), Some(ms(4000))), "the inner layer stays");
+    config.release_override(2);
+    assert_eq!(delays(&config), (Some(ms(500)), Some(ms(4000))), "the agent layer is back");
+}
