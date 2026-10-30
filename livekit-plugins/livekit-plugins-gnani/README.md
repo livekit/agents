@@ -121,10 +121,30 @@ from livekit.plugins.gnani import TTS
 
 tts = TTS(
     voice="Pranav",
-    model="timbre-v2.0",
+    model="timbre-v2.5",
     synthesize_method="rest",
 )
 ```
+
+### Text-to-Speech (Timbre v3.0)
+
+Timbre v3.0 has 13 voices that each speak all supported languages, and supports
+[audio tags](https://docs.gnani.ai/api/TTS/tts-audio-tags) for expressive delivery.
+Voices belong to a model, so pass a Timbre v3.0 voice (or omit `voice` to get `Avinash`).
+
+```python
+from livekit.plugins.gnani import TTS
+
+tts = TTS(
+    model="timbre-v3.0",
+    voice="Shivani",
+    language="hi-IN",  # optional; "auto" detects the language from the text
+    speed=1.0,  # optional; 0.85 – 1.15
+)
+```
+
+Audio tags are plain inline text, e.g. `"Haha <laugh> sach mein?"`. Tags are billed as
+characters, and models other than Timbre v3.0 strip them before synthesis.
 
 ### Text-to-Speech (SSE Streaming)
 
@@ -192,12 +212,12 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 from livekit.plugins.gnani import STT
 
 stt = STT(
-    language="en-IN",              # Default: "en-IN"
-    sample_rate=16000,             # Default: 16000 (also: 8000, 44100, 48000)
-    format="verbatim",             # Default: "verbatim" (also: "transcribe" for ITN)
-    itn_native_numerals=False,     # Default: False
-    use_streaming=True,            # Default: True (WebSocket); False = REST + VAD
-    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    language="en-IN",  # Default: "en-IN"
+    sample_rate=16000,  # Default: 16000 (also: 8000, 44100, 48000)
+    format="verbatim",  # Default: "verbatim" (also: "transcribe" for ITN)
+    itn_native_numerals=False,  # Default: False
+    use_streaming=True,  # Default: True (WebSocket); False = REST + VAD
+    api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
 ```
@@ -208,16 +228,17 @@ stt = STT(
 from livekit.plugins.gnani import TTS
 
 tts = TTS(
-    voice="Pranav",                # Default: "Pranav" (timbre-v2.0: Kaveri, Shubhra, Deepak)
-    model="timbre-v2.0",           # Default: "timbre-v2.0" (also: "timbre-v2.5" with 42 voices)
-    language=None,                 # timbre-v2.5 only — e.g. "hi-IN", "en-IN"
-    sample_rate=16000,             # Default: 16000 (also: 8000, 22050, 44100)
-    encoding="linear_pcm",         # Default: "linear_pcm" (also: "oggopus")
-    container="wav",               # Default: "wav" (also: "raw", "mp3", "ogg")
-    num_channels=1,                # Default: 1
-    bitrate=None,                  # Default: None (also: "96k", "128k", "192k")
-    synthesize_method="rest",      # Default: "rest" (also: "sse", "websocket")
-    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    model="timbre-v2.5",  # Default: "timbre-v2.5" (also: "timbre-v3.0")
+    voice="Pranav",  # Default depends on model: "Pranav" (v2.5), "Avinash" (v3.0)
+    language=None,  # e.g. "hi-IN", "en-IN", "hi-en", "auto"
+    speed=None,  # 0.85 – 1.15; omitted from the request when unset
+    sample_rate=16000,  # Default: 16000 (also: 8000, 22050, 24000, 44100, 48000)
+    encoding="linear_pcm",  # Default: "linear_pcm" (also: "oggopus")
+    container="wav",  # Default: "wav" (also: "raw", "mp3", "ogg")
+    num_channels=1,  # Default: 1
+    bitrate=None,  # Default: None (also: "96k", "128k", "192k")
+    synthesize_method="rest",  # Default: "rest" (also: "sse", "websocket")
+    api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
 ```
@@ -235,32 +256,31 @@ For the full list of supported languages, see:
 
 ### TTS Languages (Timbre)
 
-The optional `language` parameter is supported for **`timbre-v2.5` only**. For the full list, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
+The optional `language` parameter is supported by **`timbre-v2.5`** and **`timbre-v3.0`**. For the full list, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
 
-> **Migration:** The former model name `vachana-voice-v3` has been renamed to **`timbre-v2.0`**. Update any `model="vachana-voice-v3"` calls to `model="timbre-v2.0"` (or omit `model` to use the default).
+> **Migration:** `timbre-v2.0` has been **retired by the Gnani API** (requests fail with `400 ... is no longer available`) and is rejected with a `ValueError` as soon as you construct `TTS(model="timbre-v2.0")`. The default model is now `timbre-v2.5`. Voices are model-specific, so if you used a `timbre-v2.0`-only voice such as `Shubhra`, choose one from the [voice list](https://docs.gnani.ai/api/TTS/available-voices).
 
 ## Available Voices
 
 See the [official voice list](https://docs.gnani.ai/api/TTS/tts-sse#available-voices) for the latest supported voices.
 
-### timbre-v2.0 (4 voices)
+### timbre-v2.5
 
-| Voice   | ID        | Gender | Description              |
-|---------|-----------|--------|--------------------------|
-| Pranav  | `Pranav`  | Male   | Bold, Trustworthy        |
-| Kaveri  | `Kaveri`  | Female | Confident, Bright        |
-| Shubhra | `Shubhra` | Female | Gentle, Expressive       |
-| Deepak  | `Deepak`  | Male   | Grounded, Conversational |
-
-### timbre-v2.5 (42 voices)
-
-The expanded catalog includes voices across Hindi, English, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, and Hinglish. Use `model="timbre-v2.5"` with an optional `language` parameter (e.g. `language="hi-IN"`).
+The expanded catalog covers Hindi, English, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, and Hinglish — for example `Pranav` (default), `Kaveri`, `Deepak`, `Nalini`, `Poorvi`. Use `model="timbre-v2.5"` with an optional `language` parameter (e.g. `language="hi-IN"`).
 
 ```python
 from livekit.plugins.gnani import TTS
 
 tts = TTS(model="timbre-v2.5", voice="Nalini", language="hi-IN")
 ```
+
+### timbre-v3.0 (13 voices)
+
+`Avinash` (default), `Chetana`, `Devansh`, `Harshad`, `Kalpana`, `Lakshmi`, `Prakash`, `Riyaa`, `Shivani`, `Shubham`, `Tarika`, `Vasudha`, `Yashraj`. Every voice speaks all supported languages and supports audio tags.
+
+### Voice validation
+
+Voices are bound to a model. The plugin raises `ValueError` at construction (or in `update_options`) when a voice is known to belong to a *different* model — for example `TTS(model="timbre-v3.0", voice="Pranav")` — instead of failing on the first synthesis with an API `400`. Voice names the plugin does not know are passed through unchanged, so newly added voices work without a plugin update; the API remains the source of truth. When only `model` changes in `update_options()` and you never chose a voice, the voice follows the new model's default.
 
 ## Architecture
 

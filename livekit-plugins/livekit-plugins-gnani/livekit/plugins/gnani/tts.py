@@ -44,10 +44,19 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils.misc import is_given
 
 from .log import logger
 from .models import (
     DEFAULT_MODEL,
+    DEFAULT_VOICE,
+    DEFAULT_VOICES,
+    MAX_SPEED,
+    MIN_SPEED,
+    RETIRED_MODELS,
+    TIMBRE_V25_VOICES,
+    TIMBRE_V30_VOICES,
     GnaniTTSBitrates,
     GnaniTTSContainers,
     GnaniTTSEncodings,
@@ -60,7 +69,7 @@ GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
-SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
+SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 
 _DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
@@ -79,12 +88,53 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
         )
 
 
+# Voices known to belong to exactly one model. Used only to fail fast on a
+# cross-model mismatch (which the API rejects with a 400); voices outside these
+# sets are passed through untouched so newly added voices keep working.
+_MODEL_VOICES: dict[str, frozenset[str]] = {
+    "timbre-v2.5": frozenset(TIMBRE_V25_VOICES),
+    "timbre-v3.0": frozenset(TIMBRE_V30_VOICES),
+}
+
+
+def _validate_model(model: str) -> None:
+    if model in RETIRED_MODELS:
+        raise ValueError(
+            f"Gnani TTS model {model!r} has been retired by the API and is no longer "
+            f"available. Use model='timbre-v2.5' or model='timbre-v3.0' instead "
+            "(voices are model-specific, see https://docs.gnani.ai/api/TTS/available-voices)."
+        )
+
+
+def _validate_voice(model: str, voice: str) -> None:
+    """Raise if ``voice`` is known to belong to a *different* model than ``model``."""
+    own = _MODEL_VOICES.get(model)
+    if own is None or voice in own:
+        return
+    for other_model, other_voices in _MODEL_VOICES.items():
+        if other_model != model and voice in other_voices:
+            raise ValueError(
+                f"Voice {voice!r} belongs to model {other_model!r} and is not supported by "
+                f"model {model!r}. Pass a {model} voice, e.g. voice={DEFAULT_VOICES[model]!r}."
+            )
+
+
+def _validate_speed(speed: float | None) -> None:
+    if speed is not None and not (MIN_SPEED <= speed <= MAX_SPEED):
+        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, got {speed}")
+
+
+def _default_voice(model: str) -> str:
+    return DEFAULT_VOICES.get(model, DEFAULT_VOICE)
+
+
 @dataclass
 class GnaniTTSOptions:
     api_key: str
-    voice: str = "Pranav"
+    voice: str = DEFAULT_VOICE
     model: str = DEFAULT_MODEL
     language: str | None = None
+    speed: float | None = None
     sample_rate: int = 16000
     encoding: str = "linear_pcm"
     container: str = "wav"
@@ -102,11 +152,16 @@ class TTS(tts.TTS):
     Supports REST, SSE, and WebSocket synthesis modes.
 
     Args:
-        voice: Voice to use for synthesis
-            (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
-        model: TTS model name (default: timbre-v2.0; also: timbre-v2.5).
-        language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
-        sample_rate: Audio output sample rate (8000-44100).
+        voice: Voice to use for synthesis. Voices belong to a model; when omitted
+            the model's default is used (Pranav for timbre-v2.5, Avinash for
+            timbre-v3.0). See https://docs.gnani.ai/api/TTS/available-voices.
+        model: TTS model name: "timbre-v2.5" (default) or "timbre-v3.0".
+            "timbre-v2.0" has been retired by the API and raises ``ValueError``.
+        language: Language code (e.g. "hi-IN", "auto") for timbre-v2.5 and
+            timbre-v3.0. timbre-v3.0 voices speak every supported language.
+        speed: Speaking rate multiplier between 0.85 and 1.15. Omitted from the
+            request when not set (the API default is 1.0).
+        sample_rate: Audio output sample rate (8000, 16000, 22050, 24000, 44100, 48000).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
@@ -117,9 +172,10 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: GnaniTTSVoices | str = "Pranav",
+        voice: NotGivenOr[GnaniTTSVoices | str] = NOT_GIVEN,
         model: GnaniTTSModels | str = DEFAULT_MODEL,
         language: GnaniTTSLanguages | str | None = None,
+        speed: float | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
@@ -131,6 +187,12 @@ class TTS(tts.TTS):
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs)
+
+        _validate_model(model)
+        _validate_speed(speed)
+        voice_is_default = not is_given(voice)
+        resolved_voice = _default_voice(model) if not is_given(voice) else voice
+        _validate_voice(model, resolved_voice)
 
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
@@ -152,9 +214,10 @@ class TTS(tts.TTS):
 
         self._opts = GnaniTTSOptions(
             api_key=self._api_key,
-            voice=voice,
+            voice=resolved_voice,
             model=model,
             language=language,
+            speed=speed,
             sample_rate=sample_rate,
             encoding=encoding,
             container=container,
@@ -163,6 +226,7 @@ class TTS(tts.TTS):
             base_url=base_url,
             synthesize_method=synthesize_method,
         )
+        self._voice_is_default = voice_is_default
         self._session: aiohttp.ClientSession | None = None
 
     @property
@@ -198,16 +262,34 @@ class TTS(tts.TTS):
         voice: GnaniTTSVoices | str | None = None,
         model: GnaniTTSModels | str | None = None,
         language: GnaniTTSLanguages | str | None = None,
+        speed: float | None = None,
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
 
+        new_model = model if model is not None else self._opts.model
+        _validate_model(new_model)
+        _validate_speed(speed)
+
+        # Voices are model-specific: when only the model changes and the voice was
+        # never chosen explicitly, move to the new model's default voice.
+        new_voice = self._opts.voice
+        voice_is_default = self._voice_is_default
         if voice is not None:
-            self._opts.voice = voice
-        if model is not None:
-            self._opts.model = model
+            new_voice = voice
+            voice_is_default = False
+        elif voice_is_default and model is not None:
+            new_voice = _default_voice(new_model)
+        _validate_voice(new_model, new_voice)
+
+        # Apply only after everything validated, so a rejected call changes nothing.
+        self._opts.model = new_model
+        self._opts.voice = new_voice
+        self._voice_is_default = voice_is_default
         if language is not None:
             self._opts.language = language
+        if speed is not None:
+            self._opts.speed = speed
 
     async def aclose(self) -> None:
         pass
@@ -234,8 +316,10 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
         "model": opts.model,
         "audio_config": audio_config,
     }
-    if opts.model == "timbre-v2.5" and opts.language is not None:
+    if opts.language is not None:
         payload["language"] = opts.language
+    if opts.speed is not None:
+        payload["speed"] = opts.speed
     return payload
 
 
