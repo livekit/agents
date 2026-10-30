@@ -893,6 +893,7 @@ async def _execute_tools_task(
                     "received a tool call with tool_choice set to 'none', ignoring",
                     extra={
                         "function": fnc_call.name,
+                        "call_id": fnc_call.call_id,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -905,6 +906,7 @@ async def _execute_tools_task(
                     f"unknown AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
+                        "call_id": fnc_call.call_id,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -926,6 +928,7 @@ async def _execute_tools_task(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
                         "function": fnc_call.name,
+                        "call_id": fnc_call.call_id,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -950,6 +953,7 @@ async def _execute_tools_task(
                     f"invalid arguments for AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
+                        "call_id": fnc_call.call_id,
                         "lk.pii.arguments": fnc_call.arguments,
                         "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
@@ -995,6 +999,7 @@ async def _execute_tools_task(
                     "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
+                        "call_id": fnc_call.call_id,
                         "lk.pii.arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
@@ -1053,6 +1058,7 @@ async def _execute_tools_task(
                                 "ToolError while executing tool",
                                 extra={
                                     "function": fnc_call.name,
+                                    "call_id": fnc_call.call_id,
                                     "speech_id": speech_handle.id,
                                     "lk.pii.error": e.message,
                                 },
@@ -1060,7 +1066,11 @@ async def _execute_tools_task(
                         elif not isinstance(e, StopResponse):
                             logger.exception(
                                 "exception occurred while executing tool",
-                                extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                                extra={
+                                    "function": fnc_call.name,
+                                    "call_id": fnc_call.call_id,
+                                    "speech_id": speech_handle.id,
+                                },
                             )
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
@@ -1108,6 +1118,7 @@ async def _execute_tools_task(
                     "exception occurred while executing tool",
                     extra={
                         "function": fnc_call.name,
+                        "call_id": fnc_call.call_id,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -1251,13 +1262,22 @@ def make_tool_output(
     )
 
 
-def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
+def _interrupted_tool_output(out: ToolExecutionOutput, *, speech_id: str) -> llm.FunctionCallOutput:
     """The output to record for a tool that finished on an interrupted turn.
 
     A handoff answers as a failure, since the interruption left it unapplied.
     """
     fnc_call_out = out.fnc_call_out
     if out.agent_task is not None:
+        logger.warning(
+            "agent handoff cancelled: speech was interrupted",
+            extra={
+                "function": out.fnc_call.name,
+                "call_id": out.fnc_call.call_id,
+                "speech_id": speech_id,
+                "target_agent": out.agent_task.id,
+            },
+        )
         fnc_call_out.output = "the agent handoff was interrupted and did not happen"
         fnc_call_out.is_error = True
 

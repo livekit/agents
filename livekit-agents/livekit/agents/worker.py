@@ -1528,6 +1528,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if not proc:
             # safe to ignore
             return
+        logger.info("job terminated by server", extra={"job_id": msg.job_id})
         await proc.aclose()
 
     async def _update_worker_status(self) -> None:
