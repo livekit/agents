@@ -393,6 +393,7 @@ class AudioStreamDecoder:
                 pass
 
     def _write_wav_header(self, chunk: bytes) -> None:
+        """Buffer a WAV header chunk for fallback decoding when storage permits."""
         if self._wav_header is not None:
             try:
                 self._wav_header.write(chunk)
