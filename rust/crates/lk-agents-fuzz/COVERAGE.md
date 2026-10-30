@@ -181,7 +181,8 @@ was a driver bug).
 | P3 | `forwarded_while_enabled` | every mic frame reaches every open STT/VAD while input is on, none while off | 91 / 135 / 91 |
 | P3 | `dtmf_reports_what_was_pressed` | DTMF answers with the keys pressed | 0 / 0 / 0 |
 | P4 | `speech_done_once` | one `SpeechDone` per speech, after its creation, matching its handle | 67 / 207 / 150 |
-| P4 | `tool_call_reaches_runner` | a hosted tool call reaches the runner, an unhosted one does not | 0 / 2 / 1 |
+| P4 | `tool_call_reaches_runner` | a hosted tool call reaches the runner and ends before its step finishes, an unhosted one does not run | 0 / 2 / 1 |
+| P4 | `speech_keeps_the_hosts_setting` | a speech handle reads the `allow_interruptions` the host last set, on a running or an ended speech | 0 / 0 / 0 (new 2026-10-29) |
 | P4 | `tool_lifecycle` | each tool call starts once, ends once, settles before its speech is done | 0 / 7 / 4 |
 | P4 | `on_exit_once_per_frame` | each agent's `on_exit` runs at most once | 0 / 0 / 0 |
 | P4 | `output_replacement_is_clean` | a replaced output receives no further calls but a running step's and a synchroniser's closing flushes | 80 / 174 / 249 |
