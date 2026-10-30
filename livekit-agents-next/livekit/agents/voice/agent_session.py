@@ -1122,7 +1122,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             handler(self, wire)
 
     def _on_speech_created(self, wire: SpeechCreatedWire) -> None:
-        handle = SpeechHandle._of(cast(_core.SpeechHandle, wire.speech_handle))
+        handle = SpeechHandle._of(cast(_core.SpeechHandle, wire.speech_handle), reported=False)
         self._speech_handles[handle.id] = handle
         self.emit(
             "speech_created",

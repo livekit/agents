@@ -36,19 +36,22 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = speech_defaults.SPEECH_PRIORITY_HIGH
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, core: _core.SpeechHandle) -> None:
+    def __init__(self, core: _core.SpeechHandle, *, host_done: bool = False) -> None:
         self._core = core
         self._done_callbacks: list[Callable[[SpeechHandle], None]] = []
-        # The session's `speech_done` reached this handle; a handle made for a speech already
-        # over (its earlier handle gone, so nothing will report it again) starts done.
-        self._host_done = core.done()
+        # The session's `speech_done` reached this handle. Never inferred from the core's
+        # `done()`, which turns true before `speech_done` reaches the host loop.
+        self._host_done = host_done
         core.host = weakref.ref(self)
 
     @staticmethod
-    def _of(core: _core.SpeechHandle) -> SpeechHandle:
-        """The handle over ``core``: the one already made, else a new one."""
+    def _of(core: _core.SpeechHandle, *, reported: bool = True) -> SpeechHandle:
+        """The handle over ``core``: the one already made, else a new one. The session holds a
+        speech's handle from ``speech_created`` to ``speech_done``, so a new one for an ended
+        speech starts done; ``speech_created`` itself passes ``reported=False``."""
         ref = core.host
-        return (ref() if ref is not None else None) or SpeechHandle(core)
+        handle = ref() if ref is not None else None
+        return handle or SpeechHandle(core, host_done=reported and core.done())
 
     @property
     def id(self) -> str:

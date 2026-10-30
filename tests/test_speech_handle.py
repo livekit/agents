@@ -48,6 +48,22 @@ async def test_a_callback_added_after_the_core_ended_waits_for_speech_done() -> 
     assert calls == ["late"]
 
 
+async def test_a_say_the_core_finished_before_returning_still_honours_a_removal() -> None:
+    # `say()` releases the GIL: with no audio output the core can end the speech before `say()`
+    # wraps it, while its `speech_done` still waits for the host loop.
+    core = _Core()
+    core.is_done = True
+    handle = SpeechHandle(core)  # type: ignore[arg-type]
+    calls: list[str] = []
+    handle.add_done_callback(dropped := lambda _: calls.append("dropped"))
+    handle.add_done_callback(lambda _: calls.append("kept"))
+    handle.remove_done_callback(dropped)
+    await asyncio.sleep(0)
+    assert calls == [], "ran before the session reported the speech done"
+    handle._mark_done()
+    assert calls == ["kept"]
+
+
 async def test_a_speech_cut_by_the_session_close_runs_its_done_callbacks() -> None:
     from livekit.agents import Agent, VoiceSession
 
