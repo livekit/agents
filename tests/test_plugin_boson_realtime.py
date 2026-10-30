@@ -3388,6 +3388,84 @@ async def test_boson_realtime_reconnects_and_replays_chat_ctx_after_ws_drop():
         await model.aclose()
 
 
+@pytest.mark.asyncio
+async def test_boson_realtime_reconnect_replays_tool_calls_and_results():
+    # A replay without them would let the model repeat a call it already made.
+    def item_added(item: dict, previous_item_id: str | None) -> aiohttp.WSMessage:
+        event = {
+            "type": "conversation.item.added",
+            "previous_item_id": previous_item_id,
+            "item": {"object": "realtime.item", "status": "completed", **item},
+        }
+        return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), None)
+
+    ws1 = _ScriptedFakeWebSocket(
+        messages=[
+            item_added(
+                {
+                    "id": "user_1",
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "weather in Paris?"}],
+                },
+                None,
+            ),
+            item_added(
+                {
+                    "id": "call_item_1",
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup_weather",
+                    "arguments": '{"location": "Paris"}',
+                },
+                "user_1",
+            ),
+            item_added(
+                {
+                    "id": "output_item_1",
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "sunny",
+                },
+                "call_item_1",
+            ),
+        ]
+    )
+    ws1.close_event.set()
+    ws2 = _FakeWebSocket()
+    client = _SequencedHTTPClient([ws1, ws2])
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        http_session=client,
+        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
+    )
+    session = model.session()
+    reconnected = []
+    session.on("session_reconnected", reconnected.append)
+    try:
+        for _ in range(200):
+            if reconnected:
+                break
+            await asyncio.sleep(0.01)
+        assert reconnected
+
+        replayed = [
+            json.loads(sent)["item"]
+            for sent in ws2.sent
+            if json.loads(sent)["type"] == "conversation.item.create"
+        ]
+        assert [item["id"] for item in replayed] == ["user_1", "call_item_1", "output_item_1"]
+        assert replayed[1]["type"] == "function_call"
+        assert replayed[1]["name"] == "lookup_weather"
+        assert replayed[1]["arguments"] == '{"location": "Paris"}'
+        assert replayed[2]["type"] == "function_call_output"
+        assert replayed[2]["output"] == "sunny"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize(
     "transcription",
     [

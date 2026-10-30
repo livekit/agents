@@ -476,10 +476,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
     dropped socket, and each time the chat context is replayed from the client
     as text. A user audio turn with no transcript has nothing to replay and is
     lost: with user transcription off that is every user turn, otherwise at most
-    the last one, if its transcript had not arrived yet. Completed tool
-    calls and their results are dropped from that replay too: the base builds it
-    with ``exclude_function_call=True``, from a ``_reconnect`` local to its
-    ``_main_task`` that this plugin does not reach.
+    the last one, if its transcript had not arrived yet. Completed tool calls
+    and their results are replayed along with the messages.
     """
 
     def __init__(self, realtime_model: RealtimeModel) -> None:
