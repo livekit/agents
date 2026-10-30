@@ -137,54 +137,50 @@ fn resolve_owned(
 
 #[cfg(test)]
 mod tests {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, OnceLock};
 
     use super::*;
 
-    /// Stand-in for the binding's table: records what it was asked to forget.
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    struct Table(Arc<Mutex<Vec<u64>>>);
+    /// Stand-in for the binding's table: records the one id it was asked to forget.
+    struct Table(Arc<OnceLock<u64>>);
 
     impl RefRegistry for Table {
         fn release(&self, id: u64) {
-            self.0.lock().unwrap().push(id);
+            assert!(self.0.set(id).is_ok(), "released twice");
         }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn table() -> (Arc<dyn RefRegistry>, Arc<Mutex<Vec<u64>>>) {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        (Arc::new(Table(log.clone())), log)
+    fn table() -> (Arc<dyn RefRegistry>, Arc<OnceLock<u64>>) {
+        let released = Arc::new(OnceLock::new());
+        (Arc::new(Table(released.clone())), released)
     }
 
     // Catches: releasing per clone, or never releasing.
     #[test]
     fn release_fires_once_when_the_last_clone_drops() {
-        let (registry, log) = table();
+        let (registry, released) = table();
         let a = HostRef::new(7, &registry);
         let b = a.clone();
         let c = a.clone();
 
         drop(a);
         drop(b);
-        assert!(log.lock().unwrap().is_empty(), "released while a clone was still live");
+        assert!(released.get().is_none(), "released while a clone was still live");
 
         drop(c);
-        assert_eq!(*log.lock().unwrap(), vec![7]);
+        assert_eq!(released.get(), Some(&7));
     }
 
     // Catches: holding the registry by `Arc` (keeps host objects alive past shutdown), or
     // unwrapping the upgrade inside `Drop`.
     #[test]
     fn release_after_the_registry_is_gone_is_a_no_op() {
-        let (registry, log) = table();
+        let (registry, released) = table();
         let r = HostRef::new(9, &registry);
 
         drop(registry);
         drop(r);
 
-        assert!(log.lock().unwrap().is_empty());
+        assert!(released.get().is_none());
     }
-
 }
