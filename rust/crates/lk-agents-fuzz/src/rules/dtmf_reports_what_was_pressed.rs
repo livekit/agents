@@ -10,6 +10,7 @@
 //! them, space-separated, when there are `num_digits` of them; `Incomplete` when there are not;
 //! `Stopped` only once the collection was ended -- a `Stop`, a newer `Start`, or a close (the
 //! host's, or the session's own).
+use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{CloseStep, RoomLinkStep, RoomStep, Step};
 use lk_agents_voice::workflows::dtmf::{DtmfEvent, DtmfOutcome, GetDtmfResult};
 
@@ -55,17 +56,20 @@ impl Rule for DtmfReportsWhatWasPressed {
                 _ => None,
             })
             .collect();
-        // The person's presses the room took, and how many came before the session began closing:
-        // when it began, and whether it drains (room I/O stays up while it does).
-        let host_close = inputs.sent().iter().find_map(|a| match a.input {
-            Input::Close { drain } if a.accepted => Some((a.at, drain)),
-            _ => None,
-        });
-        let own_close = r.journal_where(|step| match step {
-            Step::Close(CloseStep::Requested { drain, .. }) => Some(*drain),
-            _ => None,
-        });
-        let closing = host_close.into_iter().chain(own_close.into_iter().take(1)).min();
+        // The person's presses the room took, and how many came before the session began closing.
+        let closing = inputs
+            .close_asked_at()
+            .into_iter()
+            .chain(internal.close_requested().map(|(at, _)| at))
+            .min();
+        // When the session finished closing: room I/O is torn down with it.
+        let closed = r
+            .journal_where(|step| match step {
+                Step::Emitted(SessionEvent::Close { .. }) => Some(()),
+                _ => None,
+            })
+            .map(|(at, ())| at)
+            .next();
         let presses: Vec<_> = inputs
             .sent()
             .iter()
@@ -73,20 +77,19 @@ impl Rule for DtmfReportsWhatWasPressed {
                 a.accepted && matches!(a.input, Input::Dtmf { input: DtmfInput::Digit, .. })
             })
             .collect();
-        // The room link forwards a press on its own task: a close that tears room I/O down, begun
-        // in the driver's first turn after the press, may beat it, as the room's events and a
-        // failing provider race in a real call. A draining close keeps room I/O up, so a press
-        // before it is owed; so is one the driver had a whole turn to take.
+        // The room link forwards a press on its own task: a close that tore room I/O down in the
+        // driver's first turn after the press may beat it, as the room's events and a failing
+        // provider race in a real call. A press the driver had a whole turn to take before the
+        // session finished closing is owed, a close that is still draining included.
         let owed = presses
             .iter()
             .filter(|a| {
-                closing.is_none_or(|(c, drain)| {
-                    a.at < c
-                        && (drain
-                            || inputs
-                                .driver_turn_after(a.at)
-                                .is_some_and(|t| t.ended.is_some_and(|e| e < c)))
-                })
+                closing.is_none_or(|c| a.at < c)
+                    && closed.is_none_or(|d| {
+                        inputs
+                            .driver_turn_after(a.at)
+                            .is_some_and(|t| t.ended.is_some_and(|e| e < d))
+                    })
             })
             .count();
         let heard: Vec<_> = journaled.iter().map(|(_, key)| *key).collect();
@@ -306,12 +309,13 @@ fn a_press_dropped() -> Recording {
     collecting(0).sent(key(DtmfKey::One)).done()
 }
 
-/// The session's own close began in the driver's turn that would have taken the press.
+/// The session closed, room I/O with it, in the driver's turn that would have taken the press.
 fn a_press_racing_the_close() -> Recording {
     collecting(0)
         .sent(key(DtmfKey::One))
         .sent(Input::Advance { ms: Millis(20) })
         .journal(error_close())
+        .journal(closed())
         .sent(Input::Advance { ms: Millis(20) })
         .done()
 }
@@ -323,10 +327,11 @@ fn a_press_dropped_before_the_close() -> Recording {
         .sent(Input::Advance { ms: Millis(20) })
         .sent(Input::Advance { ms: Millis(20) })
         .journal(error_close())
+        .journal(closed())
         .done()
 }
 
-/// A draining close keeps room I/O up: the press it began right after is still owed.
+/// A draining close keeps room I/O up until it is done: a press right before it is still owed.
 fn a_press_dropped_before_a_draining_close() -> Recording {
     let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
     collecting(0)
@@ -335,6 +340,11 @@ fn a_press_dropped_before_a_draining_close() -> Recording {
         .journal(Step::Close(CloseStep::Requested { reason, drain: true }))
         .sent(Input::Advance { ms: Millis(20) })
         .done()
+}
+
+fn closed() -> Step {
+    let reason = lk_agents_abi::voice::events::CloseReason::Error;
+    Step::Emitted(SessionEvent::Close { reason, error: None })
 }
 
 fn error_close() -> Step {
