@@ -27,9 +27,6 @@ impl EotRequestId {
     }
 }
 
-#[cfg(feature = "python")]
-crate::python::into_host_str!(EotRequestId, |v| v.as_str());
-
 // --- the actions ------------------------------------------------------------------------------
 
 /// A resolved request and its prediction measurements.

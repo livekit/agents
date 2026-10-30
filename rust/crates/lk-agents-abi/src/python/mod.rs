@@ -130,31 +130,6 @@ mod tests {
     }
 }
 
-// For a hand-written type that keeps its own `as_str`.
-
-macro_rules! into_host_str {
-    ($t:ty, $to:expr) => {
-        impl<'py> ::pyo3::IntoPyObject<'py> for $t {
-            type Target = ::pyo3::types::PyString;
-            type Output = ::pyo3::Bound<'py, ::pyo3::types::PyString>;
-            type Error = ::std::convert::Infallible;
-            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> Result<::pyo3::Bound<'py, ::pyo3::types::PyString>, ::std::convert::Infallible> {
-                (&self).into_pyobject(py)
-            }
-        }
-        impl<'py> ::pyo3::IntoPyObject<'py> for &$t {
-            type Target = ::pyo3::types::PyString;
-            type Output = ::pyo3::Bound<'py, ::pyo3::types::PyString>;
-            type Error = ::std::convert::Infallible;
-            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> Result<::pyo3::Bound<'py, ::pyo3::types::PyString>, ::std::convert::Infallible> {
-                let to: fn(&$t) -> &str = $to;
-                Ok(::pyo3::types::PyString::new(py, to(self)))
-            }
-        }
-    };
-}
-pub(crate) use into_host_str;
-
 /// `register_host!(class T)`, `register_host!(fn f)`, `register_host!(exception E)`: hand-written
 /// pyo3 items on `_core`, behind the caller's `python` feature.
 #[macro_export]
