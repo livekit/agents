@@ -6,8 +6,7 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime::{
-    OpenAIRealtimeConfig, OpenAIRealtimeModel, RealtimeConfigurationError, RealtimeJsonOption,
-    RealtimeOptions,
+    OpenAIRealtimeConfig, OpenAIRealtimeModel, RealtimeConfigurationError, RealtimeOptions,
 };
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
@@ -18,38 +17,29 @@ use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
 use lk_agents_net::env::ProcessEnv;
 
-fn json_option(value: Option<RealtimeJsonOption>) -> Maybe<Option<Value>> {
-    match value {
-        None => Maybe::NotGiven,
-        Some(value) => Maybe::Given((!value.value.is_null()).then_some(value.value)),
-    }
-}
-
 fn patch(options: RealtimeOptions) -> OptionsPatch {
-    let noise_reduction = options.input_audio_noise_reduction.map(|mut option| {
-        if let Value::String(name) = option.value {
-            option.value = json!({"type": name});
-        }
-        option
-    });
+    // A bare noise-reduction name is its type.
+    let noise_reduction = match options.input_audio_noise_reduction {
+        Maybe::Given(Some(Value::String(name))) => Maybe::Given(Some(json!({"type": name}))),
+        other => other,
+    };
     OptionsPatch {
-        voice: options.voice.map_or(Maybe::NotGiven, Maybe::Given),
-        tool_choice: options
-            .tool_choice
-            .map_or(Maybe::NotGiven, |option| Maybe::Given(option.value)),
-        turn_detection: match json_option(options.turn_detection) {
+        voice: options.voice,
+        tool_choice: options.tool_choice,
+        turn_detection: match options.turn_detection {
             Maybe::NotGiven => Maybe::NotGiven,
             Maybe::Given(value) => Maybe::Given(value.map(TurnDetection::Raw)),
         },
-        max_output_tokens: options
-            .max_response_output_tokens
-            .map_or(Maybe::NotGiven, |option| Maybe::Given(option.value)),
-        transcription: json_option(options.input_audio_transcription),
-        noise_reduction: json_option(noise_reduction),
-        speed: options.speed.map_or(Maybe::NotGiven, Maybe::Given),
-        tracing: json_option(options.tracing),
-        truncation: json_option(options.truncation),
-        reasoning: json_option(options.reasoning),
+        max_output_tokens: match options.max_response_output_tokens {
+            Maybe::NotGiven => Maybe::NotGiven,
+            Maybe::Given(value) => Maybe::Given(value.unwrap_or(Value::Null)),
+        },
+        transcription: options.input_audio_transcription,
+        noise_reduction,
+        speed: options.speed,
+        tracing: options.tracing,
+        truncation: options.truncation,
+        reasoning: options.reasoning,
     }
 }
 
@@ -97,14 +87,14 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
                 "silence_duration_ms": 200, "create_response": true,
             })));
         }
-        let turn_detection_given = config.options.turn_detection.is_some();
-        let max_session_duration = config.options.max_session_duration.clone();
+        let turn_detection_given = config.options.turn_detection.is_given();
+        let max_session_duration = config.options.max_session_duration;
         let options = patch(config.options);
         super::session::warn_on_half_disabled_turn_taking(&options.turn_detection);
         opts.apply(&options);
-        if let Some(option) = max_session_duration {
+        if let Maybe::Given(seconds) = max_session_duration {
             opts.max_session_duration =
-                option.value.map(Duration::try_from_secs_f64).transpose().map_err(|error| {
+                seconds.map(Duration::try_from_secs_f64).transpose().map_err(|error| {
                     RealtimeConfigurationError::Invalid(format!(
                         "invalid max_session_duration: {error}"
                     ))
@@ -166,5 +156,28 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
     }
     fn bind_identification(&self, headers: Vec<(String, String)>) {
         self.bind_identification(headers.into_iter().collect());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: an omitted option and an explicit `None` collapsing into one another, which either
+    // clears a setting the caller left alone or keeps one the caller cleared.
+    #[test]
+    fn an_omitted_option_is_left_out_of_the_update_and_an_explicit_none_clears_it() {
+        let options = RealtimeOptions {
+            tracing: Maybe::Given(None),
+            turn_detection: Maybe::Given(None),
+            ..RealtimeOptions::default()
+        };
+        let update =
+            super::super::encode::options_update("e", patch(options), &crate::realtime::OPENAI);
+        let session = &update["session"];
+        assert_eq!(session["tracing"], Value::Null);
+        assert!(session.get("truncation").is_none() && session.get("reasoning").is_none());
+        assert_eq!(session["audio"]["input"]["turn_detection"], Value::Null);
+        assert!(session["audio"]["input"].get("transcription").is_none());
     }
 }

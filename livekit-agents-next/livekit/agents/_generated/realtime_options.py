@@ -12,43 +12,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..types import NOT_GIVEN
+
 if TYPE_CHECKING:
     from livekit.agents.llm.tool_context import ToolChoice
     from livekit.agents.types import APIConnectOptions
 
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class RealtimeJsonOption:
-    """A supplied JSON option, including explicit null. An absent wrapper means omitted."""
-
-    value: object
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class RealtimeToolChoice:
-    value: ToolChoice | None
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class RealtimeDurationOption:
-    value: float | None
+    from ..types import NotGivenOr
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RealtimeOptions:
-    """Omission preserves a setting; a supplied nullable wrapper clears it explicitly."""
+    """A session update: an omitted option (`NOT_GIVEN`) keeps its setting, an explicit `None`
+    clears it.
+    """
 
-    input_audio_transcription: RealtimeJsonOption | None = None
-    input_audio_noise_reduction: RealtimeJsonOption | None = None
-    turn_detection: RealtimeJsonOption | None = None
-    tool_choice: RealtimeToolChoice | None = None
-    speed: float | None = None
-    tracing: RealtimeJsonOption | None = None
-    truncation: RealtimeJsonOption | None = None
-    reasoning: RealtimeJsonOption | None = None
-    max_session_duration: RealtimeDurationOption | None = None
-    voice: str | None = None
-    max_response_output_tokens: RealtimeJsonOption | None = None
+    input_audio_transcription: NotGivenOr[object | None] = NOT_GIVEN
+    input_audio_noise_reduction: NotGivenOr[object | None] = NOT_GIVEN
+    turn_detection: NotGivenOr[object | None] = NOT_GIVEN
+    tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
+    speed: NotGivenOr[float] = NOT_GIVEN
+    tracing: NotGivenOr[object | None] = NOT_GIVEN
+    truncation: NotGivenOr[object | None] = NOT_GIVEN
+    reasoning: NotGivenOr[object | None] = NOT_GIVEN
+    max_session_duration: NotGivenOr[float | None] = NOT_GIVEN
+    voice: NotGivenOr[str] = NOT_GIVEN
+    max_response_output_tokens: NotGivenOr[object | None] = NOT_GIVEN
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

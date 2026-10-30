@@ -1,25 +1,19 @@
-"""SDK values converted to the generated realtime option records."""
+"""SDK values converted to the generated realtime option record."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .._generated.realtime_options import (
-    RealtimeDurationOption,
-    RealtimeJsonOption,
-    RealtimeOptions,
-    RealtimeToolChoice,
-)
+from .._generated.realtime_options import RealtimeOptions
 from ..types import NOT_GIVEN, NotGiven, NotGivenOr
 from .tool_context import ToolChoice
 
 
-def _json_option(value: object) -> RealtimeJsonOption | None:
-    if isinstance(value, NotGiven):
-        return None
+def _json(value: object) -> object:
+    """A provider's pydantic option as the JSON it sends; ``NOT_GIVEN`` and ``None`` as they are."""
     if isinstance(value, BaseModel):
-        value = value.model_dump(by_alias=True, exclude_unset=True)
-    return RealtimeJsonOption(value=value)
+        return value.model_dump(by_alias=True, exclude_unset=True)
+    return value
 
 
 def realtime_options(
@@ -37,19 +31,15 @@ def realtime_options(
     max_response_output_tokens: object = NOT_GIVEN,
 ) -> RealtimeOptions:
     return RealtimeOptions(
-        input_audio_transcription=_json_option(input_audio_transcription),
-        input_audio_noise_reduction=_json_option(input_audio_noise_reduction),
-        turn_detection=_json_option(turn_detection),
-        tool_choice=None
-        if isinstance(tool_choice, NotGiven)
-        else RealtimeToolChoice(value=tool_choice or None),
-        speed=None if isinstance(speed, NotGiven) else speed,
-        tracing=_json_option(tracing),
-        truncation=_json_option(truncation),
-        reasoning=_json_option(reasoning),
-        max_session_duration=None
-        if isinstance(max_session_duration, NotGiven)
-        else RealtimeDurationOption(value=max_session_duration),
-        voice=None if isinstance(voice, NotGiven) else voice,
-        max_response_output_tokens=_json_option(max_response_output_tokens),
+        input_audio_transcription=_json(input_audio_transcription),
+        input_audio_noise_reduction=_json(input_audio_noise_reduction),
+        turn_detection=_json(turn_detection),
+        tool_choice=tool_choice if isinstance(tool_choice, NotGiven) else tool_choice or None,
+        speed=speed,
+        tracing=_json(tracing),
+        truncation=_json(truncation),
+        reasoning=_json(reasoning),
+        max_session_duration=max_session_duration,
+        voice=voice,
+        max_response_output_tokens=_json(max_response_output_tokens),
     )

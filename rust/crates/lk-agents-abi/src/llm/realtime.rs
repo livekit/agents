@@ -2,7 +2,7 @@
 //! host reassembles; `generate_reply`'s future becomes a `req_id` correlated with the answer event.
 
 use crate::errors::{ApiError, HostError};
-use crate::{ApiConnectOptions, AudioFrame, HostRef, ToolChoice, ToolSpec, Ts};
+use crate::{ApiConnectOptions, AudioFrame, HostRef, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
 use lk_agents_host_derive::Host;
 
@@ -742,55 +742,26 @@ impl crate::python::FromHostErr for RealtimeError {
 // The OpenAI-protocol realtime client (OpenAI/Azure, xAI, LiveKit Inference) and its
 // presence-aware option boundary.
 
-/// A supplied JSON option, including explicit null. An absent wrapper means omitted.
-#[crate::host(record(module = "realtime_options", extract, emit))]
-#[derive(Debug, Clone)]
-pub struct RealtimeJsonOption {
-    pub value: serde_json::Value,
-}
-
-#[crate::host(record(module = "realtime_options", extract, emit))]
-#[derive(Debug, Clone)]
-pub struct RealtimeToolChoice {
-    pub value: Option<ToolChoice>,
-}
-
-#[crate::host(record(module = "realtime_options", extract, emit))]
-#[derive(Debug, Clone)]
-pub struct RealtimeDurationOption {
-    pub value: Option<f64>,
-}
-
-/// Omission preserves a setting; a supplied nullable wrapper clears it explicitly.
-#[crate::host(record(module = "realtime_options", extract, emit))]
-#[derive(Debug, Clone, Default)]
+/// A session update: an omitted option (`NOT_GIVEN`) keeps its setting, an explicit `None`
+/// clears it.
+#[crate::host(record(module = "realtime_options", extract))]
+#[derive(Clone, Default)]
 pub struct RealtimeOptions {
-    #[host(default = None)]
-    pub input_audio_transcription: Option<RealtimeJsonOption>,
-    #[host(default = None)]
-    pub input_audio_noise_reduction: Option<RealtimeJsonOption>,
-    #[host(default = None)]
-    pub turn_detection: Option<RealtimeJsonOption>,
-    #[host(default = None)]
-    pub tool_choice: Option<RealtimeToolChoice>,
-    #[host(default = None)]
-    pub speed: Option<f64>,
-    #[host(default = None)]
-    pub tracing: Option<RealtimeJsonOption>,
-    #[host(default = None)]
-    pub truncation: Option<RealtimeJsonOption>,
-    #[host(default = None)]
-    pub reasoning: Option<RealtimeJsonOption>,
-    #[host(default = None)]
-    pub max_session_duration: Option<RealtimeDurationOption>,
-    #[host(default = None)]
-    pub voice: Option<String>,
-    #[host(default = None)]
-    pub max_response_output_tokens: Option<RealtimeJsonOption>,
+    pub input_audio_transcription: Maybe<Option<serde_json::Value>>,
+    pub input_audio_noise_reduction: Maybe<Option<serde_json::Value>>,
+    pub turn_detection: Maybe<Option<serde_json::Value>>,
+    pub tool_choice: Maybe<Option<ToolChoice>>,
+    pub speed: Maybe<f64>,
+    pub tracing: Maybe<Option<serde_json::Value>>,
+    pub truncation: Maybe<Option<serde_json::Value>>,
+    pub reasoning: Maybe<Option<serde_json::Value>>,
+    pub max_session_duration: Maybe<Option<f64>>,
+    pub voice: Maybe<String>,
+    pub max_response_output_tokens: Maybe<Option<serde_json::Value>>,
 }
 
-#[crate::host(record(module = "realtime_options", extract, emit))]
-#[derive(Debug, Clone)]
+#[crate::host(record(module = "realtime_options", extract))]
+#[derive(Clone)]
 pub struct OpenAIRealtimeConfig {
     pub api_key: Option<String>,
     pub base_url: String,

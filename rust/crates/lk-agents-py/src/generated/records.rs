@@ -2865,69 +2865,6 @@ pub mod realtime_options {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
-    static REALTIME_JSON_OPTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn realtime_json_option_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeJsonOption> {
-        let py = obj.py();
-            if !obj.is_instance(REALTIME_JSON_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeJsonOption")?)? {
-                return Err(super::not_a(obj, "RealtimeJsonOption"));
-            }
-            Ok(::lk_agents_abi::llm::realtime::RealtimeJsonOption {
-                value: ::lk_agents_abi::python::attr_with(obj, "RealtimeJsonOption", "value", |v| ::lk_agents_abi::python::value_from_py(v, "RealtimeJsonOption.value"))?,
-            })
-    }
-
-    pub fn realtime_json_option_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeJsonOption) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime::RealtimeJsonOption { value } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
-            crate::host::construct(REALTIME_JSON_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeJsonOption")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
-    static REALTIME_TOOL_CHOICE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn realtime_tool_choice_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeToolChoice> {
-        let py = obj.py();
-            if !obj.is_instance(REALTIME_TOOL_CHOICE.import(py, "livekit.agents._generated.realtime_options", "RealtimeToolChoice")?)? {
-                return Err(super::not_a(obj, "RealtimeToolChoice"));
-            }
-            Ok(::lk_agents_abi::llm::realtime::RealtimeToolChoice {
-                value: ::lk_agents_abi::python::attr_with(obj, "RealtimeToolChoice", "value", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ToolChoice>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
-            })
-    }
-
-    pub fn realtime_tool_choice_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeToolChoice) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime::RealtimeToolChoice { value } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("value", match value { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            crate::host::construct(REALTIME_TOOL_CHOICE.import(py, "livekit.agents._generated.realtime_options", "RealtimeToolChoice")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
-    static REALTIME_DURATION_OPTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn realtime_duration_option_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeDurationOption> {
-        let py = obj.py();
-            if !obj.is_instance(REALTIME_DURATION_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeDurationOption")?)? {
-                return Err(super::not_a(obj, "RealtimeDurationOption"));
-            }
-            Ok(::lk_agents_abi::llm::realtime::RealtimeDurationOption {
-                value: ::lk_agents_abi::python::attr_with(obj, "RealtimeDurationOption", "value", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeDurationOption.value")).map(Some) })?,
-            })
-    }
-
-    pub fn realtime_duration_option_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeDurationOption) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime::RealtimeDurationOption { value } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("value", match value { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            crate::host::construct(REALTIME_DURATION_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeDurationOption")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
     static REALTIME_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2937,35 +2874,18 @@ pub mod realtime_options {
                 return Err(super::not_a(obj, "RealtimeOptions"));
             }
             Ok(::lk_agents_abi::llm::realtime::RealtimeOptions {
-                input_audio_transcription: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_transcription", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
-                input_audio_noise_reduction: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_noise_reduction", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
-                turn_detection: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "turn_detection", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
-                tool_choice: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tool_choice", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_tool_choice_from_py(v)).map(Some) })?,
-                speed: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "speed", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeOptions.speed")).map(Some) })?,
-                tracing: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tracing", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
-                truncation: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "truncation", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
-                reasoning: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "reasoning", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
-                max_session_duration: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "max_session_duration", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_duration_option_from_py(v)).map(Some) })?,
-                voice: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "voice", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                max_response_output_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "max_response_output_tokens", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
+                input_audio_transcription: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_transcription", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.input_audio_transcription")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                input_audio_noise_reduction: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_noise_reduction", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.input_audio_noise_reduction")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                turn_detection: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "turn_detection", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.turn_detection")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                tool_choice: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tool_choice", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ToolChoice>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                speed: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "speed", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeOptions.speed")).map(::lk_agents_abi::Maybe::Given) })?,
+                tracing: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "tracing", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.tracing")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                truncation: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "truncation", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.truncation")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                reasoning: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "reasoning", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.reasoning")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                max_session_duration: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "max_session_duration", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeOptions.max_session_duration")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                voice: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "voice", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                max_response_output_tokens: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "max_response_output_tokens", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "RealtimeOptions.max_response_output_tokens")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
             })
-    }
-
-    pub fn realtime_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeOptions) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime::RealtimeOptions { input_audio_transcription, input_audio_noise_reduction, turn_detection, tool_choice, speed, tracing, truncation, reasoning, max_session_duration, voice, max_response_output_tokens } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("input_audio_transcription", match input_audio_transcription { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            kwargs.set_item("input_audio_noise_reduction", match input_audio_noise_reduction { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            kwargs.set_item("turn_detection", match turn_detection { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            kwargs.set_item("tool_choice", match tool_choice { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_tool_choice_to_py(py, x)? })?;
-            kwargs.set_item("speed", match speed { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("tracing", match tracing { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            kwargs.set_item("truncation", match truncation { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            kwargs.set_item("reasoning", match reasoning { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            kwargs.set_item("max_session_duration", match max_session_duration { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_duration_option_to_py(py, x)? })?;
-            kwargs.set_item("voice", match voice { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("max_response_output_tokens", match max_response_output_tokens { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            crate::host::construct(REALTIME_OPTIONS.import(py, "livekit.agents._generated.realtime_options", "RealtimeOptions")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
@@ -2994,27 +2914,6 @@ pub mod realtime_options {
                 inference_class: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "inference_class", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 label: ::lk_agents_abi::python::attr_with(obj, "OpenAIRealtimeConfig", "label", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
             })
-    }
-
-    pub fn open_ai_realtime_config_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime::OpenAIRealtimeConfig { api_key, base_url, conn_options, options, dialect, model, voice, modalities, azure_deployment, entra_token, azure_defaults, api_secret, inference_provider, inference_class, label } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("api_key", match api_key { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("base_url", ::pyo3::IntoPyObjectExt::into_bound_py_any(base_url, py)?)?;
-            kwargs.set_item("conn_options", ::pyo3::IntoPyObjectExt::into_bound_py_any(conn_options, py)?)?;
-            kwargs.set_item("options", crate::generated::records::realtime_options::realtime_options_to_py(py, options)?)?;
-            kwargs.set_item("dialect", match dialect { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("model", match model { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("voice", match voice { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("modalities", match modalities { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
-            kwargs.set_item("azure_deployment", match azure_deployment { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("entra_token", match entra_token { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("azure_defaults", ::pyo3::IntoPyObjectExt::into_bound_py_any(azure_defaults, py)?)?;
-            kwargs.set_item("api_secret", match api_secret { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("inference_provider", match inference_provider { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("inference_class", match inference_class { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("label", match label { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            crate::host::construct(OPEN_AI_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "OpenAIRealtimeConfig")?.as_any(), (), Some(&kwargs))
     }
 }
 
