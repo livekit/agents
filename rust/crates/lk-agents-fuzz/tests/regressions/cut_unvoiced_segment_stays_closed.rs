@@ -26,10 +26,14 @@ fn the_next_speech_words_wait_for_their_audio() {
             return None;
         };
         let rest = &journal[i..];
-        let pushed = rest.iter().any(|s| matches!(s, Step::Playout(PlayoutStep::SinkCalled {
-            speech: Some(p), call: SinkCall::Push { .. } }) if p == speech));
-        let cut = rest.iter().position(|s| matches!(s,
-            Step::Interrupt(InterruptStep::Interrupted { speech: c, .. }) if c == speech));
+        let pushed = rest.iter().any(|s| {
+            matches!(s, Step::Playout(PlayoutStep::SinkCalled {
+            speech: Some(p), call: SinkCall::Push { .. } }) if p == speech)
+        });
+        let cut = rest.iter().position(|s| {
+            matches!(s,
+            Step::Interrupt(InterruptStep::Interrupted { speech: c, .. }) if c == speech)
+        });
         cut.filter(|_| !pushed).map(|at| (*speech, i + at))
     });
     let (cut, at) = cut_unvoiced.expect("the scenario: a speech cut with its words but no audio");

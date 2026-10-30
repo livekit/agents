@@ -33,8 +33,10 @@ fn the_session_closes_with_its_room() {
             .position(|s| matches!(s, Step::Room(RoomStep::Event(RoomEventKind::Close))))
             .expect("the session hears the room close");
         assert!(
-            journal[closed..].iter().any(|s| matches!(s,
-                Step::Close(CloseStep::Requested { reason: CloseReason::JobShutdown, .. }))),
+            journal[closed..].iter().any(|s| matches!(
+                s,
+                Step::Close(CloseStep::Requested { reason: CloseReason::JobShutdown, .. })
+            )),
             "the room's close ends the session"
         );
         let outcome = finish(run, Outcome::default()).await;
