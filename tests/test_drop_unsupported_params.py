@@ -179,6 +179,14 @@ def test_gpt_5_6_responses_shape_keeps_temperature_at_effort_none() -> None:
     assert _responses_effort(params) == "none"
 
 
+def test_reasoning_dict_effort_none_keeps_temperature() -> None:
+    params = drop_unsupported_params(
+        "gpt-5.6-luna",
+        {"temperature": 0.2, "reasoning": {"effort": "none", "summary": "auto"}},
+    )
+    assert params == {"temperature": 0.2, "reasoning": {"effort": "none", "summary": "auto"}}
+
+
 def test_gpt_5_6_responses_shape_strips_temperature_at_effort_low() -> None:
     params = drop_unsupported_params(
         "gpt-5.6-luna",
