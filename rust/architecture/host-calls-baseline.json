@@ -4,8 +4,6 @@
   "host-call:rust/crates/lk-agents-abi/src/python/conversion_tests.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/host_errors.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/values.rs",
-  "host-call:rust/crates/lk-agents-abi/src/tts/timed.rs",
-  "host-call:rust/crates/lk-agents-abi/src/tts/tts.rs",
   "host-call:rust/crates/lk-agents-abi/src/utils/audio.rs",
   "host-call:rust/crates/lk-agents-abi/src/utils/video.rs",
   "host-call:rust/crates/lk-agents-py/src/storage.rs"
