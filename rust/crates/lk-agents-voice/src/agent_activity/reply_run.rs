@@ -273,6 +273,12 @@ impl Driver {
                 }
                 RunEffect::ToolCancel { call } => self.reply_cancels(speech, call, out),
                 RunEffect::Finished(result) => self.reply_finished(speech, result, out),
+                // As a text run reports it: the work is still owned and named, the reply goes on.
+                RunEffect::IncompleteCleanup { pending } => log::error!(
+                    target: "livekit.agents",
+                    "a reply's cleanup missed its deadline: {}",
+                    pending.join(", ")
+                ),
                 // The voice lifecycle tells the calls' progress; prepared arguments are the call
                 // tasks', released when told they will not run; the session renders instructions
                 // and streams the requests.
@@ -280,7 +286,6 @@ impl Driver {
                 | RunEffect::OutputValidateCancel { .. }
                 | RunEffect::Emit(_)
                 | RunEffect::ArgumentsRepaired { .. }
-                | RunEffect::IncompleteCleanup { .. }
                 | RunEffect::HostCheckpoint { .. }
                 | RunEffect::HostCheckpointCancel { .. }
                 | RunEffect::InstructionsRender { .. }
