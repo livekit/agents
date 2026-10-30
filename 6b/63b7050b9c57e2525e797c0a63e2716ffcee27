@@ -1,0 +1,19 @@
+livekit-plugins/livekit-plugins-slng/livekit/plugins/slng/stt.py
+  s_bcd3e70328118e::t_de09031e6fd35b 571,713,793,847,874,1120-1121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b63b7050b9c57e2525e797c0a63e2716ffcee27",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
