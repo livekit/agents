@@ -121,9 +121,10 @@ impl Ledger {
         let tokens = Measurement::from;
         let (kind, requests, measurement) = match metrics {
             AgentMetrics::Llm(m) => (ModelKind::Llm, 1, tokens(&m.tokens)),
+            // A response is one request; a connection's acquired or held-open time is none.
             AgentMetrics::RealtimeModel(m) => (
                 ModelKind::Llm,
-                1,
+                u64::from(!m.request_id.is_empty() && m.connection_duration.is_none()),
                 Measurement { connection_duration: m.connection_duration, ..tokens(&m.tokens) },
             ),
             AgentMetrics::Stt(m) => (

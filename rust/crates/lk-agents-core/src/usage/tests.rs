@@ -90,6 +90,7 @@ fn identities_are_normalized_and_shared_across_llm_sources() {
     l.start(1, ModelKind::Llm, "", "");
     l.finish(1, false);
     let mut rt = lk_agents_abi::metrics::testkit::realtime();
+    rt.request_id = "resp_1".into();
     rt.metadata = Some(Metadata { model_name: Some(String::new()), model_provider: None });
     l.observe(&AgentMetrics::RealtimeModel(rt));
     let u = {
@@ -98,4 +99,21 @@ fn identities_are_normalized_and_shared_across_llm_sources() {
     };
     let [ModelUsage::Llm(llm)] = u.models.as_slice() else { panic!("{:?}", u.models) };
     assert_eq!((llm.provider.as_deref(), llm.model.as_deref(), llm.requests), (None, None, 2));
+}
+
+// Catches: a realtime connection's acquired record (no response) and a gpt_live connection-time
+// row each counted as one LLM request; only a response is one.
+#[test]
+fn a_realtime_connection_record_is_no_request() {
+    let record = |request_id: &str, connection_duration| {
+        let mut rt = lk_agents_abi::metrics::testkit::realtime();
+        rt.request_id = request_id.into();
+        rt.connection_duration = connection_duration;
+        AgentMetrics::RealtimeModel(rt)
+    };
+    let mut l = Ledger::default();
+    l.observe(&record("", None));
+    l.observe(&record("session_1", Some(30.0)));
+    l.observe(&record("resp_1", None));
+    assert_eq!(l.snapshot().requests, 1);
 }
