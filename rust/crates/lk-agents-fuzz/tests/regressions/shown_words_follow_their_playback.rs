@@ -29,10 +29,10 @@ fn the_rest_after_a_sink_reset_is_the_speechs_playback() {
 // Catches: a speech whose playback report was lost gave up on it; the report arriving later still
 // released its words, which the next speech's playout, the one listening by then, journalled as
 // its own with nothing of its audio played (`transcript_follows_audio`, campaign seed 15283; seed
-// 4 draws the scenario since the fakes' delays are hand-set).
+// 0 draws the scenario since the fakes' delays are hand-set).
 #[test]
 fn a_late_report_shows_no_words_for_the_next_speech() {
-    let (outcome, journal) = explored(4);
+    let (outcome, journal) = explored(0);
     assert!(
         journal.iter().any(|step| matches!(step, Step::Playout(PlayoutStep::FinishLost { .. }))),
         "the scenario: a playback report lost, then delivered late"
