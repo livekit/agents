@@ -136,16 +136,17 @@ not presented as complete totals.
 ### `ModelUsage`
 
 `ModelUsage` is a discriminated union with explicit variants for `llm`, `stt`,
-`tts`, `eot`, and `interruption`. Every variant carries `type`, `provider`,
-`model`, `requests`, `unmeasured_requests`, and `tokens: TokenUsage`.
+`tts`, `eot`, and `interruption`, each exported from `livekit.agents`. Every
+variant carries `type`, `provider`, `model`, `requests`, `unmeasured_requests`,
+and `tokens: TokenUsage`.
 
 | Variant | Additional billing measurements |
 | --- | --- |
-| LLM, including realtime | `connection_duration`: metered session-connection seconds |
-| STT | `audio_duration`: processed input audio seconds |
-| TTS | `audio_duration`: synthesized output audio seconds; `characters_count`: synthesized characters |
-| EOT | Request count |
-| Interruption detection | Request count |
+| `LLMUsage`, including realtime | `connection_duration`: metered session-connection seconds |
+| `STTUsage` | `audio_duration`: processed input audio seconds |
+| `TTSUsage` | `audio_duration`: synthesized output audio seconds; `characters_count`: synthesized characters |
+| `EOTUsage` | Request count |
+| `InterruptionUsage` | Request count |
 
 Optional billing measurements distinguish an unavailable measurement from a
 measured zero. Connection duration, processed audio duration, and synthesized
@@ -248,6 +249,24 @@ Keep specialized request measurements for LLM, realtime, STT, TTS, VAD, turn
 detection, interruption, and avatars. Request metrics embed normalized usage
 rather than redeclaring token fields. Timing and connection fields remain specific
 to the operation being measured.
+
+The records are exported from `livekit.agents.metrics`; `AgentMetrics` is their
+union. Each carries `metadata`, the model and provider that produced it when known.
+
+| Record | Measures | Emitted as `metrics_collected` by |
+| --- | --- | --- |
+| `LLMMetrics` | One LLM request: time to first token, duration, tokens, tokens per second | the LLM |
+| `RealtimeModelMetrics` | One realtime response: time to first audio, duration, connection duration, tokens | the realtime model |
+| `STTMetrics` | One recognition request or a stream's audio: duration, connection acquisition | the STT |
+| `TTSMetrics` | One synthesis: time to first audio, audio duration, characters, tokens, connection acquisition | the TTS |
+| `VADMetrics` | Inference count, total inference time and idle time since the last record | the VAD |
+| `EOUMetrics` | One user turn's end: end-of-utterance, transcription and turn-callback delays | the session's turn telemetry |
+| `EOTInferenceMetrics` | One end-of-turn model prediction: request timing and server inference time | the turn detector |
+| `InterruptionMetrics` | Adaptive interruption detection: inference timing and detection counts | the session's telemetry |
+| `AvatarMetrics` | Avatar startup: playback latency and join times | the avatar |
+
+`log_metrics(metrics, logger=None)` logs a record at info level with its fields as
+`extra`; VAD and end-of-turn inference records are not logged.
 
 Unavailable timings use `None`, including time to first token/audio when none
 arrived. A measured zero is zero. Timestamps specify their clock domain and unit;

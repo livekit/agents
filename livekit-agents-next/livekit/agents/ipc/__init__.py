@@ -30,7 +30,7 @@ from ..utils import shortuuid
 from . import child
 from .launch import ProcessReceipt, preload_module_names, start_process, validate_setup_fnc
 
-__all__ = ["JobExecutor", "JobStatus", "ProcPool"]
+__all__ = ["JobExecutor"]
 
 
 class JobStatus(Enum):
