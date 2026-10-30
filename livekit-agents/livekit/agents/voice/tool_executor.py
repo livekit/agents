@@ -76,14 +76,14 @@ DUPLICATE_NOT_CANCELLABLE = (
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.
 REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {call_ids}).
-Summarize the results naturally. Do NOT repeat information you have already told the user."""
+Tell each call's newest result naturally. Do NOT repeat what you already told the user."""
 
 # used when newer items have been appended after the pending update — the agent
 # may have already verbalized the result in its most recent turn.
 REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
 You may have already mentioned them in your most recent replies.
 If you already told the user everything in these results, reply with an empty response (no text at all).
-Otherwise, summarize only what you have not said yet, with a natural transition.
+Otherwise, tell what each call's newest result adds, with a natural transition.
 Never repeat information you have already told the user."""
 
 
@@ -843,6 +843,8 @@ class _CallSink:
                 result=result,
             )
         )
+        # the turn that let the call run in the background makes no reply to its older state
+        ctx.speech_handle._superseded_tool_replies.add(ctx.function_call.call_id)
         self._schedule_delivery(ctx.session)
 
     def _schedule_delivery(self, session: LiveSession) -> None:
@@ -860,11 +862,18 @@ class _CallSink:
 
         target_activity: AgentActivity
         try:
-            if self._owning_activity is not None:
-                await self._owning_activity.wait_for_idle()
-                target_activity = self._owning_activity
-            else:
-                target_activity = await session.wait_for_idle()
+            while True:
+                # an update waits for the turn that let its call run in the background, that
+                # turn's tool reply included, so it is never told before or over it
+                for update in self._pending_updates[:]:
+                    await update.ctx.speech_handle
+                if self._owning_activity is not None:
+                    await self._owning_activity.wait_for_idle()
+                    target_activity = self._owning_activity
+                else:
+                    target_activity = await session.wait_for_idle()
+                if all(u.ctx.speech_handle.done() for u in self._pending_updates):
+                    break
         except ActivityClosedError:
             logger.debug("dropping tool reply — owning activity closed")
             for update in self._pending_updates:

@@ -61,6 +61,8 @@ class SpeechHandle:
         # what was said in reply to each tool this speech let run in the background, keyed by the
         # tool's call id
         self._background_tool_replies: dict[str, asyncio.Future[list[llm.ChatMessage]]] = {}
+        # the calls among them whose newer state is told after this speech instead of a reply here
+        self._superseded_tool_replies: set[str] = set()
         # one agent_turn span for the whole speech, however many generations (LLM steps) it
         # takes; opened by the first reply task, ended with the speech in _mark_done
         self._agent_turn_span: trace.Span | None = None

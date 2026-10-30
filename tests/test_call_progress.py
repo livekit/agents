@@ -19,6 +19,7 @@ from livekit.agents.voice.tool_executor import REPLY_INSTRUCTIONS_AT_TAIL
 
 from .a2a_driver import Door, Reply, ScriptedLLM, call, no_project_env  # noqa: F401
 from .fake_realtime import ScriptedRealtimeModel
+from .test_verbatim_speech import call_desk, last_text
 
 pytestmark = [pytest.mark.unit]
 
@@ -214,3 +215,70 @@ async def test_a_barge_in_stops_the_speech_and_never_the_experts_task(
     interrupted = [i.interrupted for i in session.history.items if i.type == "message"]
     assert interrupted == [False, True, False, False], "only the reply that made the call stopped"
     assert ended == ["slots"]
+
+
+@pytest.mark.rule("B71")
+async def test_a_result_before_the_turn_ends_is_told_once_after_it_with_no_acknowledgement(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate, ended, speaking = asyncio.Event(), list[str](), asyncio.Event()
+    gate.set()
+    model = ScriptedRealtimeModel(
+        Reply("Let me check.", [call("ask", "a1", request="slots")], hold=speaking),
+        Reply("We have 10 slots.", when=told("a1_final")),
+    )
+    desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended))])
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        model.active_session.hear("any slots?")
+        await soon(lambda: "There are 10 slots." in outputs(session.history), "the answer")
+        speaking.set()
+        await soon(lambda: len(spoken(session)) > 1, "the answer told")
+
+    assert spoken(session) == ["Let me check.", "We have 10 slots."]
+    assert len(model.requests) == 2, "the acknowledgement asked no reply"
+
+
+@pytest.mark.rule("B71")
+async def test_a_result_after_the_acknowledgement_started_follows_it(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate, ended, acking = asyncio.Event(), list[str](), asyncio.Event()
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="slots")]),
+        Reply(
+            "Checking now.", hold=acking, when=lambda c: any(DISPATCHED in o for o in outputs(c))
+        ),
+        Reply("We have 10 slots.", when=told("a1_final")),
+    )
+    desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended))])
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        model.active_session.hear("any slots?")
+        await soon(lambda: len(model.requests) == 2, "the acknowledgement")
+        gate.set()
+        await soon(lambda: "There are 10 slots." in outputs(session.history), "the answer")
+        acking.set()
+        await soon(lambda: len(spoken(session)) > 1, "the answer told")
+
+    assert spoken(session) == ["Checking now.", "We have 10 slots."]
+
+
+@pytest.mark.rule("B71")
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_on_the_pipeline_a_result_before_the_turn_ends_is_told_after_it() -> None:
+    model = ScriptedLLM(
+        Reply("Let me check.", [call("book", "1")], when=last_text("Book me in")),
+        Reply("It is booked.", when=last_text("1_final")),
+    )
+
+    async def book(ctx: RunContext) -> str:
+        """Book."""
+        await ctx.update("checking")
+        return "booked Tuesday"
+
+    spoken = await call_desk(model, book, [("Let me check.", 1.0), ("It is booked.", 1.0)])
+
+    assert spoken == ["Let me check.", "It is booked."]
+    assert len(model.requests) == 2, "the acknowledgement asked no reply"

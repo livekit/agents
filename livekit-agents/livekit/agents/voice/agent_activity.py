@@ -4502,6 +4502,10 @@ class AgentActivity(RecognitionHooks):
                 function_calls=[], function_call_outputs=[]
             )
             for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call.call_id in speech_handle._superseded_tool_replies:
+                    # its newer state is told after this speech, so it asks no reply now
+                    sanitized_out.fnc_call_out.reply_required = False
+
                 new_calls.append(sanitized_out.fnc_call)
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
@@ -5260,6 +5264,10 @@ class AgentActivity(RecognitionHooks):
             ignore_task_switch = False
 
             for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call.call_id in speech_handle._superseded_tool_replies:
+                    # its newer state is told after this speech, so it asks no reply now
+                    sanitized_out.fnc_call_out.reply_required = False
+
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 

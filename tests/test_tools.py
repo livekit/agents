@@ -2174,12 +2174,13 @@ def _make_fake_speech():
     """A SpeechHandle stand-in that lets tests fire the done callbacks manually."""
     from unittest.mock import MagicMock
 
+    from livekit.agents.llm import ChatMessage
     from livekit.agents.voice import SpeechHandle
 
     speech = MagicMock(spec=SpeechHandle)
     speech.id = "speech_1"
     speech.interrupted = False
-    speech.chat_items = ["said something"]
+    speech.chat_items = [ChatMessage(role="assistant", content=["said something"])]
     callbacks: list[Any] = []
     speech.add_done_callback.side_effect = callbacks.append
     speech.fire_done = lambda: [cb(speech) for cb in list(callbacks)]
@@ -2211,14 +2212,12 @@ def _make_reply_session(speech: Any) -> Any:
 
 
 def _make_run_context_with_session(session: Any, call_id: str, name: str):
-    from unittest.mock import MagicMock
-
     from livekit.agents.llm import FunctionCall
+    from livekit.agents.voice import SpeechHandle
     from livekit.agents.voice.events import RunContext
 
-    speech_handle = MagicMock()
-    speech_handle.num_steps = 1
-    speech_handle.allow_interruptions = True
+    speech_handle = SpeechHandle.create()
+    speech_handle._mark_done()  # the turn that let the tool run on has ended
     return RunContext(
         session=session,
         speech_handle=speech_handle,
@@ -2496,6 +2495,7 @@ class TestToolCallEvents:
 
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):
+        from livekit.agents.llm import ChatMessage
         from livekit.agents.voice.events import RunContext, ToolReplyUpdated
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
@@ -2506,7 +2506,7 @@ class TestToolCallEvents:
             return "done"
 
         for interrupted, chat_items, expected in [
-            (True, ["partial"], "interrupted"),
+            (True, [ChatMessage(role="assistant", content=["partial"])], "interrupted"),
             (False, [], "skipped"),
         ]:
             speech = _make_fake_speech()
