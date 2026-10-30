@@ -156,7 +156,8 @@ impl ServerSettings {
             next.port = EnvOption::Fixed(value);
         }
         if let Given(value) = options.load_threshold {
-            next.load_threshold = EnvOption::Fixed(value);
+            // The host's float; the load arithmetic is single precision.
+            next.load_threshold = EnvOption::Fixed(value as f32);
         }
         if let Given(value) = options.num_idle_processes {
             next.num_idle_processes = Some(EnvOption::Fixed(value));

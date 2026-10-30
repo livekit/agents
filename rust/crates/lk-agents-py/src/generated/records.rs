@@ -6575,6 +6575,64 @@ pub mod worker_ipc {
     }
 }
 
+pub mod worker_options {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+    static WORKER_PERMISSIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn worker_permissions_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::worker::WorkerPermissions> {
+        let py = obj.py();
+            if !obj.is_instance(WORKER_PERMISSIONS.import(py, "livekit.agents._generated.worker_options", "WorkerPermissions")?)? {
+                return Err(super::not_a(obj, "WorkerPermissions"));
+            }
+            Ok(::lk_agents_abi::worker::worker::WorkerPermissions {
+                can_publish: ::lk_agents_abi::python::attr_with(obj, "WorkerPermissions", "can_publish", |v| v.extract::<bool>())?,
+                can_subscribe: ::lk_agents_abi::python::attr_with(obj, "WorkerPermissions", "can_subscribe", |v| v.extract::<bool>())?,
+                can_publish_data: ::lk_agents_abi::python::attr_with(obj, "WorkerPermissions", "can_publish_data", |v| v.extract::<bool>())?,
+                can_update_metadata: ::lk_agents_abi::python::attr_with(obj, "WorkerPermissions", "can_update_metadata", |v| v.extract::<bool>())?,
+                can_publish_sources: ::lk_agents_abi::python::attr_with(obj, "WorkerPermissions", "can_publish_sources", |v| if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; ::lk_agents_abi::python::number_from_py::<i32>(item, "WorkerPermissions.can_publish_sources") }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("WorkerPermissions.can_publish_sources: expected a list or tuple")) })?,
+                hidden: ::lk_agents_abi::python::attr_with(obj, "WorkerPermissions", "hidden", |v| v.extract::<bool>())?,
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+    static SERVER_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn server_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::worker::ServerOptions> {
+        let py = obj.py();
+            if !obj.is_instance(SERVER_OPTIONS.import(py, "livekit.agents._generated.worker_options", "ServerOptions")?)? {
+                return Err(super::not_a(obj, "ServerOptions"));
+            }
+            Ok(::lk_agents_abi::worker::worker::ServerOptions {
+                ws_url: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "ws_url", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                api_key: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "api_key", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                api_secret: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "api_secret", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                agent_name: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "agent_name", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                host: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "host", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                port: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "port", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<u16>(v, "ServerOptions.port")).map(::lk_agents_abi::Maybe::Given) })?,
+                load_threshold: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "load_threshold", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.load_threshold")).map(::lk_agents_abi::Maybe::Given) })?,
+                num_idle_processes: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "num_idle_processes", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "ServerOptions.num_idle_processes")).map(::lk_agents_abi::Maybe::Given) })?,
+                drain_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "drain_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.drain_timeout")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                max_retry: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "max_retry", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "ServerOptions.max_retry")).map(::lk_agents_abi::Maybe::Given) })?,
+                permissions: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "permissions", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::generated::records::worker_options::worker_permissions_from_py(v)).map(::lk_agents_abi::Maybe::Given) })?,
+                http_proxy: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "http_proxy", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                prometheus_port: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "prometheus_port", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u16>(v, "ServerOptions.prometheus_port")).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                prometheus_multiproc_dir: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "prometheus_multiproc_dir", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                version: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "version", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                job_executor_type: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "job_executor_type", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                multiprocessing_context: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "multiprocessing_context", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                job_memory_warn_mb: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "job_memory_warn_mb", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.job_memory_warn_mb")).map(::lk_agents_abi::Maybe::Given) })?,
+                job_memory_limit_mb: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "job_memory_limit_mb", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.job_memory_limit_mb")).map(::lk_agents_abi::Maybe::Given) })?,
+                shutdown_process_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "shutdown_process_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.shutdown_process_timeout")).map(::lk_agents_abi::Maybe::Given) })?,
+                session_end_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "session_end_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.session_end_timeout")).map(::lk_agents_abi::Maybe::Given) })?,
+                initialize_process_timeout: ::lk_agents_abi::python::attr_with(obj, "ServerOptions", "initialize_process_timeout", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "ServerOptions.initialize_process_timeout")).map(::lk_agents_abi::Maybe::Given) })?,
+            })
+    }
+}
+
 pub mod worker_server {
     use pyo3::prelude::*;
 

@@ -1,7 +1,5 @@
 //! Worker host contracts. Runtime behavior belongs to `lk-agents-worker`.
 
-use lk_agents_host_derive::Host;
-
 /// Current worker state, available independently of lifecycle notification consumption.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -18,26 +16,21 @@ pub struct Snapshot {
 }
 
 /// `WorkerPermissions`, field-for-field, including the defaults.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "worker_options")]
-#[binding(extract)]
+#[crate::host(record(module = "worker_options", dataclass, extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerPermissions {
-    #[python(default = "True")]
-    #[binding(default = true)]
+    #[host(default = true)]
     pub can_publish: bool,
-    #[python(default = "True")]
-    #[binding(default = true)]
+    #[host(default = true)]
     pub can_subscribe: bool,
-    #[python(default = "True")]
-    #[binding(default = true)]
+    #[host(default = true)]
     pub can_publish_data: bool,
-    #[python(default = "True")]
-    #[binding(default = true)]
+    #[host(default = true)]
     pub can_update_metadata: bool,
     /// `models.TrackSource` values, as raw enum numbers.
-    #[python(default_factory = "list")]
+    #[host(default_factory = "list")]
     pub can_publish_sources: Vec<i32>,
-    #[python(default = "False")]
+    #[host(default = false)]
     pub hidden: bool,
 }
 
@@ -185,57 +178,30 @@ pub struct ProcessStartOptions {
 }
 
 /// A sparse update to the server configuration; omission and an explicit null remain distinct.
-#[derive(Clone, Default, Host)]
-#[python(dataclass, module = "worker_options")]
-#[binding(extract)]
+#[crate::host(record(module = "worker_options", dataclass, extract))]
+#[derive(Clone, Default)]
 pub struct ServerOptions {
-    #[python(
-        ty = "NotGivenOr[str]",
-        default = "NOT_GIVEN",
-        import = "..types:NOT_GIVEN, NotGivenOr"
-    )]
     pub ws_url: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub api_key: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub api_secret: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub agent_name: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub host: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[int]", default = "NOT_GIVEN")]
     pub port: crate::Maybe<u16>,
-    #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
-    pub load_threshold: crate::Maybe<f32>,
-    #[python(ty = "NotGivenOr[int]", default = "NOT_GIVEN")]
+    pub load_threshold: crate::Maybe<f64>,
     pub num_idle_processes: crate::Maybe<u32>,
-    #[python(ty = "NotGivenOr[float | None]", default = "NOT_GIVEN")]
     pub drain_timeout: crate::Maybe<Option<f64>>,
-    #[python(ty = "NotGivenOr[int]", default = "NOT_GIVEN")]
     pub max_retry: crate::Maybe<u32>,
-    #[python(ty = "NotGivenOr[WorkerPermissions]", default = "NOT_GIVEN")]
     pub permissions: crate::Maybe<WorkerPermissions>,
-    #[python(ty = "NotGivenOr[str | None]", default = "NOT_GIVEN")]
     pub http_proxy: crate::Maybe<Option<String>>,
-    #[python(ty = "NotGivenOr[int | None]", default = "NOT_GIVEN")]
     pub prometheus_port: crate::Maybe<Option<u16>>,
-    #[python(ty = "NotGivenOr[str | None]", default = "NOT_GIVEN")]
     pub prometheus_multiproc_dir: crate::Maybe<Option<String>>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub version: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub job_executor_type: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[str]", default = "NOT_GIVEN")]
     pub multiprocessing_context: crate::Maybe<String>,
-    #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
     pub job_memory_warn_mb: crate::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
     pub job_memory_limit_mb: crate::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
     pub shutdown_process_timeout: crate::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
     pub session_end_timeout: crate::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
     pub initialize_process_timeout: crate::Maybe<f64>,
 }
 

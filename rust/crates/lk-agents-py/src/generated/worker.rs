@@ -939,16 +939,18 @@ impl ServerConfig {
     /// `HTTP_PROXY`).
     #[new]
     #[pyo3(signature = (options))]
-    fn new(options: ::lk_agents_abi::worker::worker::ServerOptions) -> PyResult<ServerConfig> {
+    fn new(options: Bound<'_, PyAny>) -> PyResult<ServerConfig> {
         crate::host::check_pid()?;
+        let options = crate::generated::records::worker_options::server_options_from_py(&options)?;
         let out = <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::new(options).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(ServerConfig(::std::sync::Arc::new(out)))
     }
 
     /// Before the server starts only.
     #[pyo3(signature = (options))]
-    fn update(&self, options: ::lk_agents_abi::worker::worker::ServerOptions) -> PyResult<()> {
+    fn update(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let options = crate::generated::records::worker_options::server_options_from_py(&options)?;
         <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::update(&self.0, options).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
