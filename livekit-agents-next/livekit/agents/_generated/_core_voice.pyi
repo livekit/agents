@@ -10,6 +10,7 @@ from typing import Any, Self
 
 from datetime import date
 
+from livekit import rtc
 from livekit.agents import VAD
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.llm import LLM
@@ -32,7 +33,6 @@ from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .metrics import AvatarMetrics
-from .room_io import _StreamInfo
 from .session_options import (
     InterruptionGateVerdict,
     ResolvedSessionOptions,
@@ -383,13 +383,18 @@ class PlayoutLedger:
 class ByteStreamSender:
     def open(
         self,
-        info: _StreamInfo,
+        info: rtc.TextStreamInfo | rtc.ByteStreamInfo,
         sender: str,
         chunks: AsyncIterable[bytes | bytearray | memoryview | list[int]],
     ) -> bool: ...
 
 class TextStreamSender:
-    def open(self, info: _StreamInfo, sender: str, chunks: AsyncIterable[str]) -> bool: ...
+    def open(
+        self,
+        info: rtc.TextStreamInfo | rtc.ByteStreamInfo,
+        sender: str,
+        chunks: AsyncIterable[str],
+    ) -> bool: ...
 
 class RpcHandler:
     def call(self, caller_identity: str, payload: str) -> str: ...

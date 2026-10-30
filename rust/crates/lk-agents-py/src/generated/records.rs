@@ -3881,7 +3881,7 @@ pub mod session_wire {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
             kwargs.set_item("participant", ::pyo3::IntoPyObjectExt::into_bound_py_any(participant, py)?)?;
-            kwargs.set_item("info", ::pyo3::IntoPyObjectExt::into_bound_py_any(info, py)?)?;
+            kwargs.set_item("info", crate::conversions::stream_info_to_py(py, info)?)?;
             crate::host::construct(TEXT_INPUT_WIRE.import(py, "livekit.agents._generated.session_wire", "TextInputWire")?.as_any(), (), Some(&kwargs))
     }
 
@@ -6277,7 +6277,7 @@ pub mod voice_session {
                 turn_detector: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "turn_detector", |v| if v.is_none() { Ok(None) } else { (crate::generated::turn::EotDetectorProxy::from_host(&v)).map(Some) })?,
                 interruption_detector: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "interruption_detector", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.interruption_detector", ": interruption_detector must be an `inference.AdaptiveInterruptionDetector`")))).map(Some) })?,
                 text_output: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "text_output", |v| v.extract::<bool>())?,
-                room_io_config: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "room_io_config", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::voice::room_io::RoomIoConfig>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+                room_io_config: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "room_io_config", |v| if v.is_none() { Ok(None) } else { (crate::conversions::room_io_config_from_py(v)).map(Some) })?,
                 tools: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "tools", |v| if v.is_none() { Ok(None) } else { (if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; crate::generated::records::agent_run::function_tool_info_from_py(item) }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("VoiceSessionArgs.tools: expected a list or tuple")) }).map(Some) })?,
                 tools_host: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "tools_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
                 voice_agent: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "voice_agent", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).map(Some) })?,

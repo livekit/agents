@@ -8,6 +8,11 @@ use lk_agents_abi::voice::session_options::{
     TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
 };
 use lk_agents_abi::tts::tts::AudioEncoding;
+use lk_agents_abi::voice::room_io::{
+    AudioInputConfig, AudioOutputConfig, ParticipantIdentity, ParticipantKind, RoomIoConfig,
+    StreamInfo, TextOutputConfig, TrackPublishOptions, TrackSource,
+};
+use std::time::Duration;
 use lk_agents_abi::{
     AlignedTranscript, ApiConnectOptions, ImageSource, MediaRef, SynthesizedAudio, TimedString,
     VadEvent, VadEventType,
@@ -409,6 +414,122 @@ pub fn vad_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<VadEvent> {
         raw_accumulated_silence: number("raw_accumulated_silence")?,
         raw_accumulated_speech: number("raw_accumulated_speech")?,
     })
+}
+
+/// `RoomOptions._to_core()`'s dict. A malformed `participant_kinds` raises: an empty list would read
+/// as "use the defaults" and widen the auto-link accept list.
+pub fn room_io_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<RoomIoConfig> {
+    let get = |key: &str| obj.get_item(key);
+    let leg = |key: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
+        let v = get(key)?;
+        Ok((!v.is_none()).then_some(v))
+    };
+    let audio_input = match leg("audio_input")? {
+        None => None,
+        Some(a) => Some(AudioInputConfig {
+            sample_rate: a.get_item("sample_rate")?.extract()?,
+            num_channels: a.get_item("num_channels")?.extract()?,
+            frame_size_ms: a.get_item("frame_size_ms")?.extract()?,
+            noise_cancellation: a.get_item("noise_cancellation")?.extract()?,
+            auto_gain_control: a.get_item("auto_gain_control")?.extract()?,
+            pre_connect_audio: a.get_item("pre_connect_audio")?.extract()?,
+            pre_connect_audio_timeout: Duration::from_secs_f64(
+                a.get_item("pre_connect_audio_timeout")?.extract::<f64>()?.max(0.0),
+            ),
+        }),
+    };
+    let audio_output = match leg("audio_output")? {
+        None => None,
+        Some(a) => {
+            let source = TrackSource::try_from(a.get_item("track_source")?.extract::<i32>()?)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let default = TrackPublishOptions::default();
+            Some(AudioOutputConfig {
+                publish: TrackPublishOptions {
+                    name: match a.get_item("track_name") {
+                        Ok(name) => name.extract()?,
+                        Err(_) => default.name.clone(),
+                    },
+                    source,
+                    sample_rate: a.get_item("sample_rate")?.extract()?,
+                    num_channels: a.get_item("num_channels")?.extract()?,
+                    ..default
+                },
+            })
+        }
+    };
+    let text_output = match leg("text_output")? {
+        None => None,
+        Some(t) => Some(TextOutputConfig {
+            sync_transcription: t.get_item("sync_transcription")?.extract()?,
+            transcription_speed_factor: t.get_item("transcription_speed_factor")?.extract()?,
+            json_format: t.get_item("json_format")?.extract()?,
+        }),
+    };
+    Ok(RoomIoConfig {
+        participant_identity: get("participant_identity")?
+            .extract::<Option<String>>()?
+            .map(ParticipantIdentity),
+        participant_kinds: get("participant_kinds")?
+            .extract::<Vec<i32>>()?
+            .into_iter()
+            .map(|k| {
+                ParticipantKind::try_from(k).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "{e}: it would widen the auto-link accept list to the default rather than \
+                         narrow it, so it is refused instead"
+                    ))
+                })
+            })
+            .collect::<PyResult<_>>()?,
+        close_on_disconnect: get("close_on_disconnect")?.extract()?,
+        delete_room_on_close: get("delete_room_on_close")?.extract()?,
+        text_input: get("text_input")?.extract()?,
+        video_input: get("video_input")?.extract()?,
+        audio_input,
+        audio_output,
+        text_output,
+    })
+}
+
+/// An SDK `rtc.TextStreamInfo` or `rtc.ByteStreamInfo`: only a byte stream has a `name`, only a
+/// text stream `attachments`; `None` attributes read as none.
+pub fn stream_info_from_py(obj: &Bound<'_, PyAny>) -> PyResult<StreamInfo> {
+    let optional = |key: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
+        Ok(obj.getattr(key).ok().filter(|v| !v.is_none()))
+    };
+    Ok(StreamInfo {
+        name: optional("name")?.map(|v| v.extract()).transpose()?,
+        id: obj.getattr("stream_id")?.extract()?,
+        topic: obj.getattr("topic")?.extract()?,
+        mime_type: obj.getattr("mime_type")?.extract()?,
+        total_length: optional("size")?.map(|v| v.extract()).transpose()?,
+        attributes: optional("attributes")?.map(|v| v.extract()).transpose()?.unwrap_or_default(),
+        timestamp: obj.getattr("timestamp")?.extract()?,
+        attachments: optional("attachments")?.map(|v| v.extract()).transpose()?.unwrap_or_default(),
+    })
+}
+
+/// The SDK's header again: a `ByteStreamInfo` when it names a file, else a `TextStreamInfo`.
+pub fn stream_info_to_py<'py>(py: Python<'py>, value: StreamInfo) -> PyResult<Bound<'py, PyAny>> {
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("stream_id", value.id)?;
+    kwargs.set_item("mime_type", value.mime_type)?;
+    kwargs.set_item("topic", value.topic)?;
+    kwargs.set_item("timestamp", value.timestamp)?;
+    kwargs.set_item("size", value.total_length)?;
+    kwargs.set_item("attributes", value.attributes)?;
+    let class = match value.name {
+        Some(name) => {
+            kwargs.set_item("name", name)?;
+            "ByteStreamInfo"
+        }
+        None => {
+            kwargs.set_item("attachments", value.attachments)?;
+            "TextStreamInfo"
+        }
+    };
+    crate::host::construct(&py.import("livekit.rtc")?.getattr(class)?, (), Some(&kwargs))
 }
 
 #[cfg(test)]

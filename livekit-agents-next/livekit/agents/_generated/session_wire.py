@@ -30,6 +30,7 @@ from .events import (
 )
 
 if TYPE_CHECKING:
+    from livekit import rtc
     from livekit.agents._core import SpeechHandle
 
     from .agent_run import RunError
@@ -345,7 +346,7 @@ class TextInputWire:
 
     text: str
     participant: str
-    info: dict[str, object]
+    info: rtc.TextStreamInfo | rtc.ByteStreamInfo
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

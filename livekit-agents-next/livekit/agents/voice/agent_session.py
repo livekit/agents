@@ -1258,18 +1258,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
             return
         room = self._room
         participants = room.remote_participants if isinstance(room, rtc.Room) else {}
-        info = cast("dict[str, Any]", wire.info)
         ev = TextInputEvent(
             text=wire.text,
-            info=rtc.TextStreamInfo(
-                stream_id=info["stream_id"],
-                mime_type=info["mime_type"],
-                topic=info["topic"],
-                timestamp=info["timestamp"],
-                size=info["size"],
-                attributes=info["attributes"],
-                attachments=info["attachments"],
-            ),
+            info=wire.info if isinstance(wire.info, rtc.TextStreamInfo) else None,
             participant=participants.get(wire.participant),
         )
 

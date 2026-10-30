@@ -1060,8 +1060,9 @@ pub struct ByteStreamSender(pub(crate) ::std::sync::Arc<ByteStreamSenderImpl>);
 #[pymethods]
 impl ByteStreamSender {
     #[pyo3(signature = (info, sender, chunks))]
-    fn open(&self, info: ::lk_agents_abi::voice::room_io::StreamInfo, sender: ::lk_agents_abi::voice::room_io::ParticipantIdentity, chunks: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn open(&self, info: Bound<'_, PyAny>, sender: ::lk_agents_abi::voice::room_io::ParticipantIdentity, chunks: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
+        let info = crate::conversions::stream_info_from_py(&info)?;
         let chunks = crate::host::capture_context(chunks.py()).and_then(|context| crate::host::stream::HostStream::open(chunks.py(), &chunks, &context, |o| Ok({ if o.is_instance_of::<::pyo3::types::PyBytes>() || o.is_instance_of::<::pyo3::types::PyByteArray>() || o.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&o, "chunks") } else { o.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "chunks") }).collect::<PyResult<Vec<_>>>()) } }?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::vec::Vec<u8>>>)?;
         let out = <ByteStreamSenderImpl as ::lk_agents_abi::voice::rtc::ports::ByteStreamSender>::open(&self.0, info, sender, chunks);
         Ok(out)
@@ -1089,8 +1090,9 @@ pub struct TextStreamSender(pub(crate) ::std::sync::Arc<TextStreamSenderImpl>);
 #[pymethods]
 impl TextStreamSender {
     #[pyo3(signature = (info, sender, chunks))]
-    fn open(&self, info: ::lk_agents_abi::voice::room_io::StreamInfo, sender: ::lk_agents_abi::voice::room_io::ParticipantIdentity, chunks: Bound<'_, PyAny>) -> PyResult<bool> {
+    fn open(&self, info: Bound<'_, PyAny>, sender: ::lk_agents_abi::voice::room_io::ParticipantIdentity, chunks: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
+        let info = crate::conversions::stream_info_from_py(&info)?;
         let chunks = crate::host::capture_context(chunks.py()).and_then(|context| crate::host::stream::HostStream::open(chunks.py(), &chunks, &context, |o| Ok(o.extract::<::std::string::String>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::string::String>>)?;
         let out = <TextStreamSenderImpl as ::lk_agents_abi::voice::rtc::ports::TextStreamSender>::open(&self.0, info, sender, chunks);
         Ok(out)

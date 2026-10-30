@@ -7,52 +7,31 @@ pub use crate::voice::rtc::{
     DisconnectReason, ParticipantIdentity, ParticipantKind, StreamInfo, TrackPublishOptions,
     TrackSource,
 };
-use lk_agents_host_derive::Host;
 use std::time::Duration;
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "room_io", path = "livekit.agents.voice.room_io"))]
 const _: () = ();
 
-// `voice/room_io/types.py`'s option dataclasses; a `///` is the reference's docstring verbatim,
-// Rust notes are `//`. `RoomOptions` itself stays hand-written: its resolvers are behaviour.
+// The legs of `RoomOptions._to_core()`'s dict, read by `lk-agents-py`'s
+// `conversions::room_io_config_from_py`. The public option dataclasses are hand-written in
+// `voice/room_io.py`: their resolvers are behaviour.
 
-// `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_core()`,
-// writes them all, and a silent default once turned AGC off.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, name = "AudioInputOptions")]
-#[binding(extract, from_items)]
+/// `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_core()`,
+/// writes them all, and a silent default once turned AGC off.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioInputConfig {
-    // 24 kHz, as in the reference; the host's stream converts once.
-    #[python(default = "24000")]
+    /// 24 kHz, as in the reference; the host's stream converts once.
     pub sample_rate: u32,
-    #[python(default = "1")]
     pub num_channels: u16,
-    /// The frame size in milliseconds for the audio input.
-    #[python(default = "50")]
     pub frame_size_ms: u32,
-    // A [`HostRef`](lk_agents_abi::HostRef) so the side-table entry lives as long as the config.
-    #[python(
-        ty = "rtc.NoiseCancellationOptions | NoiseCancellationSelector | rtc.FrameProcessor[rtc.AudioFrame] | None",
-        import = "livekit:rtc",
-        type_import = "..voice.room_io:NoiseCancellationSelector",
-        default = "None"
-    )]
+    /// A [`HostRef`](lk_agents_abi::HostRef) so the side-table entry lives as long as the config.
     pub noise_cancellation: Option<lk_agents_abi::HostRef>,
-    /// Enable automatic gain control (AGC) on the input audio. If not given, disabled when noise
-    /// cancellation is configured directly.
-    //
-    // Resolved by `_to_core`, applied host-side (`rtc.AudioProcessingModule`), forwarded as
-    // [`AudioStreamOptions::auto_gain_control`](crate::voice::rtc::AudioStreamOptions).
-    #[python(default = "True")]
+    /// Resolved by `_to_core`, applied host-side (`rtc.AudioProcessingModule`), forwarded as
+    /// [`AudioStreamOptions::auto_gain_control`](crate::voice::rtc::AudioStreamOptions).
     pub auto_gain_control: bool,
-    /// Pre-connect audio enabled or not.
-    #[python(default = "True")]
     pub pre_connect_audio: bool,
-    /// The pre-connect audio will be ignored if it doesn't arrive within this time.
-    //
-    // Seconds on the wire, clamped at zero by the converter.
-    #[python(ty = "float", default = "3.0")]
+    /// Seconds on the wire, clamped at zero.
     pub pre_connect_audio_timeout: std::time::Duration,
 }
 
@@ -70,78 +49,21 @@ impl Default for AudioInputConfig {
     }
 }
 
-/// The host's flat dict over `TrackPublishOptions`. Default: 24 kHz mono `roomio_audio` on the
-/// microphone source, with the 200 ms queue.
+/// The host's flat dict over `TrackPublishOptions`: `track_source` is the protobuf int of
+/// `rtc.TrackSource`, an absent `track_name` keeps the default, and the queue bound is not on the
+/// wire. Default: 24 kHz mono `roomio_audio` on the microphone source, with the 200 ms queue.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioOutputConfig {
     pub publish: TrackPublishOptions,
 }
 
-/// `track_source` is the protobuf int of `rtc.TrackSource`; absent `track_name` keeps the default.
-/// The queue bound is not on the wire: it keeps `TrackPublishOptions`' own default.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioOutputConfig {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{field_error, item, item_with};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "AudioOutputConfigFromPy";
-        let obj = &*obj;
-        let name = match obj.get_item("track_name") {
-            Ok(v) => {
-                v.extract::<String>().map_err(|e| field_error(obj.py(), e, OWNER, "track_name"))?
-            }
-            Err(_) => TrackPublishOptions::default().name,
-        };
-        Ok(AudioOutputConfig {
-            publish: TrackPublishOptions {
-                name,
-                source: item_with(obj, OWNER, "track_source", |v| {
-                    TrackSource::try_from(v.extract::<i32>()?)
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-                })?,
-                sample_rate: item(obj, OWNER, "sample_rate")?,
-                num_channels: item(obj, OWNER, "num_channels")?,
-                ..TrackPublishOptions::default()
-            },
-        })
-    }
-}
-
-// `next_in_chain` is the host's own `TextOutput`, a `host_field`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    dataclass,
-    name = "TextOutputOptions",
-    host_field(
-        name = "next_in_chain",
-        ty = "TextOutput | None",
-        type_import = "..voice.io:TextOutput",
-        default = "None",
-        doc = "The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."
-    ),
-    order = "sync_transcription, transcription_speed_factor, next_in_chain, json_format"
-)]
-#[binding(extract, from_items)]
+/// `TextOutputOptions` as the core reads it; `next_in_chain` is the host's alone.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextOutputConfig {
-    /// False to disable transcription synchronization with audio output.
-    /// Otherwise, transcription is emitted as quickly as available.
-    //
-    // `None` is `NOT_GIVEN`: synchronise if there is an audio output. `Some(false)` disables it.
-    #[python(
-        ty = "NotGivenOr[bool]",
-        import = "..types:NOT_GIVEN",
-        type_import = "..types:NotGivenOr",
-        default = "NOT_GIVEN"
-    )]
+    /// `None` is `NOT_GIVEN`: synchronise if there is an audio output. `Some(false)` disables it.
     pub sync_transcription: Option<bool>,
-    /// Speed factor of transcription synchronization with audio output.
-    /// Only effective if `sync_transcription` is True.
-    #[python(default = "1.0")]
     pub transcription_speed_factor: f64,
-    /// Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TimedString.
-    #[python(default = "False")]
+    /// JSON per chunk, with start and end timestamps for a `TimedString`.
     pub json_format: bool,
 }
 
@@ -155,8 +77,9 @@ impl Default for TextOutputConfig {
     }
 }
 
-/// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+/// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off. Read by
+/// `lk-agents-py`'s `conversions::room_io_config_from_py`.
+#[crate::host(handwritten(extract, host = "dict[str, object]", py))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoomIoConfig {
     /// `None` links to the first acceptable one.
@@ -171,45 +94,6 @@ pub struct RoomIoConfig {
     pub audio_input: Option<AudioInputConfig>,
     pub audio_output: Option<AudioOutputConfig>,
     pub text_output: Option<TextOutputConfig>,
-}
-
-/// A malformed `participant_kinds` raises: an empty list would read as "use the defaults" and
-/// widen the accept list.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RoomIoConfig {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{item, item_with};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "RoomIoConfigFromPy";
-        let obj = &*obj;
-        Ok(RoomIoConfig {
-            participant_identity: item_with(obj, OWNER, "participant_identity", |v| {
-                Ok(v.extract::<Option<String>>()?.map(ParticipantIdentity))
-            })?,
-            participant_kinds: item_with(obj, OWNER, "participant_kinds", |v| {
-                v.extract::<Vec<i32>>()?
-                    .into_iter()
-                    .map(|k| {
-                        ParticipantKind::try_from(k).map_err(|e| {
-                            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                                "{e}: it would widen the auto-link accept list to the default rather than narrow it, \
-                                 so it is refused instead"
-                            ))
-                        })
-                    })
-                    .collect()
-            })?,
-            close_on_disconnect: item(obj, OWNER, "close_on_disconnect")?,
-            delete_room_on_close: item(obj, OWNER, "delete_room_on_close")?,
-            text_input: item(obj, OWNER, "text_input")?,
-            video_input: item(obj, OWNER, "video_input")?,
-            audio_input: item(obj, OWNER, "audio_input")?,
-            audio_output: item(obj, OWNER, "audio_output")?,
-            text_output: item(obj, OWNER, "text_output")?,
-        })
-    }
 }
 
 impl Default for RoomIoConfig {

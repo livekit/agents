@@ -569,28 +569,25 @@ impl PlaybackInfo {
     }
 }
 
-/// Header of an incoming byte or text stream: read from `rtc.ByteStreamInfo` /
-/// `rtc.TextStreamInfo`, handed back as a dict of these fields (`TextInputWire.info`).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
-#[python(dataclass, module = "room_io", name = "_StreamInfo")]
-#[binding(extract, emit)]
+/// Header of an incoming byte or text stream: the SDK's own `rtc.TextStreamInfo` /
+/// `rtc.ByteStreamInfo` both ways, crossing by `lk-agents-py`'s `conversions::stream_info_*`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[crate::host(handwritten(extract, emit, host = "rtc.TextStreamInfo | rtc.ByteStreamInfo", py))]
 pub struct StreamInfo {
-    #[binding(default)]
+    /// A byte stream's file name; a text stream has none.
     pub name: Option<String>,
-    #[host(rename = "stream_id")]
+    /// `stream_id`.
     pub id: String,
     pub topic: String,
     pub mime_type: String,
-    // A text stream has no `size`; the host adapter reads it as `None` when absent.
-    #[host(rename = "size")]
+    /// `size`: a text stream may have none.
     pub total_length: Option<u64>,
-    // `_pre_connect_audio.py` fails on a missing `trackId`, `sampleRate` or `channels`; the host
-    // adapter hands `None` over as an empty map.
+    /// `_pre_connect_audio.py` fails on a missing `trackId`, `sampleRate` or `channels`; a `None`
+    /// is read as an empty map.
     pub attributes: BTreeMap<String, String>,
-    // Carried whole so the host can rebuild its `TextStreamInfo` for `TextInputEvent.info`.
+    /// Carried whole so the host can rebuild its `TextStreamInfo` for `TextInputEvent.info`.
     pub timestamp: i64,
-    // Only a text stream has attachments: a byte stream's header reads as none.
-    #[binding(default)]
+    /// Only a text stream has attachments: a byte stream's header reads as none.
     pub attachments: Vec<String>,
 }
 
