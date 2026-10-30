@@ -4,22 +4,21 @@ use lk_agents_abi::telemetry::upload::PreparedTranscript as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-/// Every report gets its own admission, so tests run concurrently.
-fn isolated() -> ProcessEnv {
-    ProcessEnv {
-        report_admission: || Ok(ReportAdmission::default()),
-        ..ProcessEnv::current_runtime()
-    }
-}
-
 type Builder = TranscriptBuilder;
 
 fn transcript() -> Builder {
-    Builder::new(&isolated()).unwrap()
+    // Every report gets its own admission, so tests run concurrently.
+    Builder::with_admission(&ReportAdmission::default()).unwrap()
 }
 
 fn uploader() -> SessionReportUploader {
-    SessionReportUploader::new(&isolated(), "key".into(), "secret".into()).unwrap()
+    SessionReportUploader::with_admission(
+        "key".into(),
+        "secret".into(),
+        ReportAdmission::default(),
+        Arc::new(crate::clock::RealClock::new()),
+    )
+    .unwrap()
 }
 
 struct Request {
@@ -90,13 +89,13 @@ fn recording(base_url: String) -> RecordingUpload {
 async fn session_upload_streams_file_bytes_and_uses_the_runtime_token() {
     let audio: Vec<u8> = (0..200_000).map(|n| (n % 251) as u8).collect();
     let path = std::env::temp_dir().join(format!("lk-telemetry-{}.ogg", rand::random::<u64>()));
-    tokio::fs::write(&path, &audio).await.unwrap();
+    std::fs::write(&path, &audio).unwrap();
     let (url, peer) = peer(vec![(200, vec![])]).await;
     let uploader = uploader();
     let mut report = recording(url);
     report.audio_path = Some(path.to_str().unwrap().to_owned());
     let result = uploader.send(report).await;
-    tokio::fs::remove_file(path).await.unwrap();
+    std::fs::remove_file(path).unwrap();
     assert!(result.unwrap());
     let requests = peer.await.unwrap();
     assert_eq!(requests.len(), 1);

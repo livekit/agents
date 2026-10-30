@@ -27,7 +27,7 @@ async fn a_real_session_accepts_our_opening_update_and_answers() {
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(NoImages),
-        lk_agents_inference::testkit::media_pool,
+        lk_agents_media::pool::media_pool(),
     )
     .session(false)
     .await;

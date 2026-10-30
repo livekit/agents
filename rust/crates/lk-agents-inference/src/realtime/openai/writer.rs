@@ -95,13 +95,10 @@ pub(super) async fn run(
     conn: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
-    media_pool: lk_agents_net::env::MediaPoolSource,
+    media_pool: lk_agents_media::pool::MediaPool,
     generation: u64,
     receipts: mpsc::Sender<ResponseSent>,
 ) -> Result<(), ApiError> {
-    let media_pool = media_pool()
-        .map(lk_agents_media::pool::MediaPool::from)
-        .map_err(|error| ApiError::new(error).with_retryable(false))?;
     let mut encoder = Encoder::new();
     while let Some(batch) = effects.recv().await {
         let worker_images = images.clone();

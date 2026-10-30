@@ -17,7 +17,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
     type Env = ProcessEnv;
 
     async fn prepare_provider_format(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         format: String,
         items: Vec<ChatItem>,
         images: Option<BTreeMap<String, SerializedImage>>,
@@ -25,9 +25,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
     ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
-        (env.media_pool)()
-            .map(lk_agents_media::pool::MediaPool::from)
-            .map_err(LlmAlgorithmError)?
+        lk_agents_media::pool::media_pool()
             .try_spawn(lk_agents_media::pool::JobClass::Formatting, move || {
                 provider_format::host::to_provider_format(
                     &format,

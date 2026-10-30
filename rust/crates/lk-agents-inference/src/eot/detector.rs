@@ -53,7 +53,6 @@ impl AudioEot {
         let thresholds = Arc::clone(&self.thresholds);
         let local_model = Arc::clone(&self.local_model);
         let clock = self.env.clock.clone();
-        let media_pool = self.env.media_pool;
         Arc::new(move |model| {
             if model == TurnDetectorModel::V1 {
                 let (cloud, clock) = (cloud.clone(), clock.clone());
@@ -71,7 +70,8 @@ impl AudioEot {
             };
             MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| match local {
                 Ok(model) => {
-                    Arc::new(LocalTransport::new(model, sink, media_pool)) as Arc<dyn EotTransport>
+                    Arc::new(LocalTransport::new(model, sink, lk_agents_media::pool::media_pool()))
+                        as Arc<dyn EotTransport>
                 }
                 Err(e) => Arc::new(FailedTransport(e.to_string())) as Arc<dyn EotTransport>,
             })
@@ -168,7 +168,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
             session,
             self.sample_rate,
             make,
-            self.env.media_pool,
+            lk_agents_media::pool::media_pool(),
             on_metrics,
             spawner.as_ref(),
         ))

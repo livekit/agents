@@ -4,8 +4,8 @@ use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
 
-use std::sync::Arc;
 use lk_agents_net::lock::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -890,7 +890,7 @@ async fn worker_sampler_off_loop() {
     let blocking_io = worker.blocking_io.clone();
     let mut permits = Vec::new();
     for _ in 0..4 {
-        permits.push(blocking_io.try_admit().unwrap());
+        permits.push(blocking_io.try_admit(()).unwrap());
     }
     let run = worker.run();
     tokio::pin!(run);

@@ -17,7 +17,6 @@ use crate::eot::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
     EotWarning, MountedTransport, SinkEvent, TransportPrediction,
 };
-use lk_agents_net::env::MediaPoolSource;
 
 /// Mounts the transport for a model: the gateway for `turn-detector-v1`, the mini model otherwise.
 pub type TransportFactory = Arc<dyn Fn(TurnDetectorModel) -> Arc<MountedTransport> + Send + Sync>;
@@ -77,7 +76,7 @@ pub struct EotStream {
     rate: u32,
     make: TransportFactory,
     /// Where the local model is constructed.
-    media_pool: MediaPoolSource,
+    media_pool: lk_agents_media::pool::MediaPool,
     on_metrics: Option<MetricsCallback>,
     /// A swap or prediction wakes a driver whose local construction was refused.
     swaps: watch::Sender<u64>,
@@ -94,7 +93,7 @@ impl EotStream {
         session: EotSession,
         rate: u32,
         make: TransportFactory,
-        media_pool: MediaPoolSource,
+        media_pool: lk_agents_media::pool::MediaPool,
         on_metrics: Option<MetricsCallback>,
         spawner: &dyn lk_agents_abi::Spawner,
     ) -> DetectorStream {
@@ -250,14 +249,9 @@ impl EotStream {
             let Some(shell) = shell else {
                 let make = self.make.clone();
                 let (send, receive) = oneshot::channel();
-                let admitted = (self.media_pool)()
-                    .map(lk_agents_media::pool::MediaPool::from)
-                    .map_err(MediaPoolError::Unavailable)
-                    .and_then(|media_pool| {
-                        media_pool.try_spawn(JobClass::EotModel, move || {
-                            let _ = send.send(make(model));
-                        })
-                    });
+                let admitted = self.media_pool.try_spawn(JobClass::EotModel, move || {
+                    let _ = send.send(make(model));
+                });
                 let replacement = match admitted {
                     Ok(worker) => match worker.await {
                         Ok(()) => receive.await.map_err(|error| error.to_string()),

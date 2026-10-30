@@ -23,7 +23,6 @@ use lk_agents_abi::telemetry::report::UploadGate as UploadGateApi;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
-use tokio::io::AsyncReadExt;
 
 use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 use crate::env::ProcessEnv;
@@ -74,8 +73,7 @@ impl SessionReportUpload for SessionReportUploader {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, api_key: String, api_secret: String) -> Result<Self, UploadError> {
-        let admission = (env.report_admission)().map_err(UploadError)?;
-        Self::with_admission(api_key, api_secret, admission, env.clock.clone())
+        Self::with_admission(api_key, api_secret, ReportAdmission::process(), env.clock.clone())
     }
 
     fn bearer(&self) -> Result<String, UploadError> {
@@ -253,17 +251,34 @@ async fn multipart(recording: &RecordingUpload) -> Result<Form, UploadError> {
         form = form.part("chat_history", part);
     }
     if let Some(path) = &recording.audio_path {
-        let file = tokio::fs::File::open(path).await.map_err(upload_error)?;
-        let len = file.metadata().await.map_err(upload_error)?.len();
+        let io = crate::blocking_io::blocking_io();
+        let path = path.clone();
+        let (file, len) = io
+            .run((), move || {
+                let file = std::fs::File::open(path)?;
+                let len = file.metadata()?.len();
+                Ok::<_, std::io::Error>((file, len))
+            })
+            .await
+            .map_err(upload_error)?
+            .map_err(upload_error)?;
         if len > 0 {
-            let chunks = stream::try_unfold(file, |mut file| async move {
-                let mut bytes = vec![0; CHUNK_BYTES];
-                let read = file.read(&mut bytes).await?;
-                if read == 0 {
-                    return Ok::<_, std::io::Error>(None);
+            let chunks = stream::try_unfold(file, move |mut file| {
+                let io = io.clone();
+                async move {
+                    let (file, bytes) = io
+                        .run((), move || {
+                            let mut bytes = vec![0; CHUNK_BYTES];
+                            let read = std::io::Read::read(&mut file, &mut bytes)?;
+                            bytes.truncate(read);
+                            Ok::<_, std::io::Error>((file, bytes))
+                        })
+                        .await
+                        .map_err(std::io::Error::other)??;
+                    Ok::<_, std::io::Error>(
+                        (!bytes.is_empty()).then(|| (bytes::Bytes::from(bytes), file)),
+                    )
                 }
-                bytes.truncate(read);
-                Ok(Some((bytes::Bytes::from(bytes), file)))
             });
             let part = Part::stream_with_length(reqwest::Body::wrap_stream(chunks), len)
                 .file_name("recording.ogg")

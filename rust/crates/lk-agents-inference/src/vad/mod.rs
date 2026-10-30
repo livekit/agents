@@ -46,15 +46,12 @@ impl LocalVad {
         let unavailable = |error: String| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
-        let media_pool = (self.env.media_pool)()
-            .map(lk_agents_media::pool::MediaPool::from)
-            .map_err(unavailable)?;
         let runtime = self.env.caller_runtime().map_err(unavailable)?;
         let (sink, source) = stream::open(
             self.opts.subscribe(),
             self.models.clone(),
             self.env.clock.clone(),
-            media_pool,
+            lk_agents_media::pool::media_pool(),
             runtime,
         )?;
         Ok((VadInput { sink }, VadOutputSource { source }))

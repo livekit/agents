@@ -8,15 +8,14 @@ use std::time::Duration;
 
 use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::lock::Mutex;
+use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 use super::channel::{Channel, ChannelError};
 use super::job_run::JobRun;
 use super::wire::{ToChild, ToParent, bounded};
-use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
 
 /// The parent's messages the child holds while its loop is busy.
@@ -27,7 +26,7 @@ pub struct ChildChannel {
     /// The parent's messages, as [`watch_parent`] reads them.
     inbox: tokio::sync::Mutex<mpsc::Receiver<ToChild>>,
     watching: Mutex<Option<OwnedTask<Result<(), ChannelError>>>>,
-    io: BlockingIo,
+    spawner: TokioSpawner,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
     /// The job the parent started, once it did.
@@ -145,8 +144,8 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         initialize: Arc<dyn ChildInitialize>,
         process: bool,
     ) -> Result<Self, WorkerError> {
-        let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
-        let runtime = io.runtime_handle();
+        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
+        let runtime = spawner.handle().clone();
         let _runtime = runtime.enter();
         let channel = Arc::new(
             Channel::<ToParent, ToChild>::from_endpoint(fd)
@@ -157,7 +156,9 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             Ok(other) => {
                 return Err(WorkerError::Failed(format!("expected Hello first, got {other:?}")));
             }
-            Err(error) => return Err(WorkerError::Failed(format!("failed to initialize: {error}"))),
+            Err(error) => {
+                return Err(WorkerError::Failed(format!("failed to initialize: {error}")));
+            }
         };
         let health_timeout = hello.health_timeout_ms.map(Duration::from_millis);
         let (inbox, watching) = watch_parent(channel.clone(), health_timeout, move || {
@@ -183,7 +184,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             channel,
             inbox: tokio::sync::Mutex::new(inbox),
             watching: Mutex::new(Some(watching)),
-            io,
+            spawner,
             stop: watch::channel(false).0,
             run: OnceLock::new(),
             asyncio_debug: hello.asyncio_debug,
@@ -230,7 +231,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
     async fn aclose(&self) {
         let watching = self.watching.lock().take();
         let channel = self.channel.clone();
-        self.io
+        self.spawner
             .run(async move {
                 if let Some(watching) = watching {
                     watching.cancel();

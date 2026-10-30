@@ -35,7 +35,6 @@ fn player(time: &Timebase) -> BackgroundAudio {
         200,
         time.clock(),
         Arc::new(TokioSpawner::current()),
-        lk_agents_runtime::process::env().media_pool,
     )))
 }
 

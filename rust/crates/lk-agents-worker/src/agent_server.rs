@@ -26,8 +26,8 @@ use crate::{
     EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId, JobRequest, RunningJobInfo,
     TransportConfig, WorkerCommand, WorkerHost, protocol,
 };
-use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::TokioSpawner;
 
 pub struct Configuration {
     settings: Arc<Mutex<ServerSettings>>,
@@ -254,7 +254,7 @@ pub struct AgentServerRuntime {
     running: Arc<AtomicBool>,
     runtime: server::ServerRuntime,
     mounted: Mounted,
-    io: BlockingIo,
+    spawner: TokioSpawner,
 }
 
 impl AgentServerRuntime {
@@ -275,15 +275,15 @@ impl ServerRuntime for AgentServerRuntime {
         let config = config
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
-        let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
+        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
         let host = ServerCallbacks::new(host);
         let mounted = host.mounted.clone();
         Ok(Self {
             settings: config.settings.clone(),
             running: config.running.clone(),
-            runtime: server::ServerRuntime::new(host, Some(io.clone())),
+            runtime: server::ServerRuntime::new(host, None),
             mounted,
-            io,
+            spawner,
         })
     }
 
@@ -328,7 +328,7 @@ impl ServerRuntime for AgentServerRuntime {
         };
         self.running.store(true, Ordering::Release);
         let runtime = self.runtime.clone();
-        self.io.run(async move { runtime.run(start).await }).await.map_err(WorkerError::Failed)
+        self.spawner.run(async move { runtime.run(start).await }).await.map_err(WorkerError::Failed)
     }
 
     async fn drain(&self, timeout: Option<f64>) -> Result<(), WorkerError> {
@@ -340,7 +340,7 @@ impl ServerRuntime for AgentServerRuntime {
                 WorkerError::Invalid("drain timeout must be finite and nonnegative".into())
             })?;
         let runtime = self.runtime.clone();
-        self.io.run(async move { runtime.drain(timeout).await }).await.map_err(|error| {
+        self.spawner.run(async move { runtime.drain(timeout).await }).await.map_err(|error| {
             if error == "drain timed out" {
                 WorkerError::TimedOut(error)
             } else {
@@ -351,7 +351,7 @@ impl ServerRuntime for AgentServerRuntime {
 
     async fn aclose(&self) -> Result<(), WorkerError> {
         let runtime = self.runtime.clone();
-        self.io.run(async move { runtime.close().await }).await.map_err(WorkerError::Failed)
+        self.spawner.run(async move { runtime.close().await }).await.map_err(WorkerError::Failed)
     }
 
     fn job_status(&self, job_id: String, status: String) {
@@ -400,7 +400,7 @@ impl ServerRuntime for AgentServerRuntime {
         )
         .map_err(WorkerError::Invalid)?;
         let runtime = self.runtime.clone();
-        self.io
+        self.spawner
             .run(async move { runtime.simulate_job(info).await })
             .await
             .map_err(WorkerError::Failed)

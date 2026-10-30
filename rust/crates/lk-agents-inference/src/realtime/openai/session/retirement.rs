@@ -1,7 +1,6 @@
 //! One admitted disposal owner per realtime session, independent of socket/control dispatch.
 
 use super::{Pump, Shared};
-use lk_agents_abi::Clock;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use tokio::sync::{Notify, watch};
@@ -21,21 +20,10 @@ impl Pump {
         if let Some(settled) = start {
             let shared = Arc::downgrade(&self.shared);
             let wake = self.shared.retirement_wake.clone();
-            let clock = self.clock.clone();
             let label = self.label.clone();
-            let events = self.events.clone();
-            let media_pool = self.shared.media_pool;
+            let media_pool = self.shared.media_pool.clone();
             self.shared.disposal.spawn(self.spawner.as_ref(), "realtime retirement", async move {
-                run(
-                    shared,
-                    wake,
-                    clock,
-                    label,
-                    events,
-                    settled,
-                    media_pool().map(lk_agents_media::pool::MediaPool::from),
-                )
-                .await;
+                run(shared, wake, label, settled, media_pool).await;
             });
         }
         self.shared.retirement_wake.notify_one();
@@ -45,11 +33,9 @@ impl Pump {
 pub(super) async fn run(
     shared: Weak<Shared>,
     wake: Arc<Notify>,
-    clock: Arc<dyn Clock>,
     label: String,
-    events: super::super::queue::Delivery,
     settled: watch::Sender<bool>,
-    media_pool: Result<lk_agents_media::pool::MediaPool, String>,
+    media_pool: lk_agents_media::pool::MediaPool,
 ) {
     let mut retained = None;
     loop {
@@ -73,53 +59,6 @@ pub(super) async fn run(
             }
             continue;
         }
-        let media_pool = match &media_pool {
-            Ok(service) => service,
-            Err(error) => {
-                let (generation, step, retired) = {
-                    let mut machine = shared.machine.lock().await;
-                    let generation = machine.connection_generation();
-                    let step = machine.close(clock.now());
-                    let mut retired = Vec::new();
-                    while let Some(owner) = machine.take_context_retirement() {
-                        retired.push(owner);
-                    }
-                    (generation, step, retired)
-                };
-                shared.retirement_unavailable(generation, &label, error);
-                shared.retirement_closing.store(true, Ordering::Release);
-                for event in step.events {
-                    if let Err(error) = events.send(event) {
-                        events.fail(clock.now(), &label, error);
-                    }
-                }
-                let error = lk_agents_abi::errors::ApiError::new(format!(
-                    "realtime context cleanup service is unavailable: {error}"
-                ))
-                .with_retryable(false);
-                let event = lk_agents_abi::llm::realtime::Event::Error(
-                    lk_agents_abi::llm::realtime::RealtimeModelError {
-                        timestamp: clock.now(),
-                        label: label.clone(),
-                        message: error.message.clone(),
-                        recoverable: false,
-                        req_id: None,
-                        code: None,
-                        provider_error: Some(error),
-                    },
-                );
-                if let Err(error) = events.send(event) {
-                    events.fail(clock.now(), &label, error);
-                }
-                shared.closing.notify_one();
-                // Failed process startup cannot admit a replacement worker. Refuse this session
-                // and reclaim once outside its state lock instead of retaining and retrying.
-                drop(retired);
-                shared.context_ready.notify_one();
-                settled.send_replace(true);
-                return;
-            }
-        };
         let permit = match media_pool.try_admit(lk_agents_media::pool::JobClass::Formatting) {
             Ok(permit) => permit,
             Err(_) => {

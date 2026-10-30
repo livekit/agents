@@ -191,24 +191,7 @@ pub async fn arm_then_advance(clock: &lk_agents_abi::VirtualClock, by: std::time
 }
 pub mod fallback;
 
-/// A process-wide media worker pool for tests, lent as [`ProcessEnv::media_pool`] is.
-///
-/// [`ProcessEnv::media_pool`]: lk_agents_net::env::ProcessEnv::media_pool
-pub fn media_pool() -> Result<Arc<dyn lk_agents_abi::media::pool::MediaExecutor>, String> {
-    static MEDIA_POOL: std::sync::OnceLock<lk_agents_media::pool::MediaPool> =
-        std::sync::OnceLock::new();
-    Ok(MEDIA_POOL
-        .get_or_init(|| {
-            lk_agents_media::pool::MediaPool::new(Default::default())
-                .expect("the default media worker limits")
-        })
-        .executor())
-}
-
-/// The test's Tokio runtime and wall clock, with [`media_pool`] as its media pool.
+/// The test's Tokio runtime and wall clock.
 pub fn env() -> lk_agents_net::env::ProcessEnv {
-    lk_agents_net::env::ProcessEnv {
-        media_pool,
-        ..lk_agents_net::env::ProcessEnv::current_runtime()
-    }
+    lk_agents_net::env::ProcessEnv::current_runtime()
 }

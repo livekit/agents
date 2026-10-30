@@ -8,7 +8,6 @@ use lk_agents_net::lock::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
-use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
 use lk_agents_voice::tts::processing::SpeechText;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -24,9 +23,6 @@ pub enum ProcessError {
 
 struct Started {
     runtime: tokio::runtime::Runtime,
-    media_pool: MediaPool,
-    blocking_io: lk_agents_net::blocking_io::BlockingIo,
-    report_admission: lk_agents_net::session_report::ReportAdmission,
     http: Arc<lk_agents_net::http::GatewayHttp>,
 }
 
@@ -57,16 +53,6 @@ pub fn caller_handle() -> Result<tokio::runtime::Handle, ProcessError> {
     tokio::runtime::Handle::try_current().or_else(|_| handle())
 }
 
-/// Process-owned admission reserved for worker setup and health sampling.
-pub fn blocking_io() -> Result<lk_agents_net::blocking_io::BlockingIo, ProcessError> {
-    with_started(|started| started.blocking_io.clone())
-}
-
-/// The process-owned native admission pool. Clones share the same class and total capacity.
-pub fn media_pool() -> Result<MediaPool, ProcessError> {
-    with_started(|started| started.media_pool.clone())
-}
-
 fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> {
     let mut state = state();
     owned(&mut state)?;
@@ -82,13 +68,8 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .enable_all()
         .build()
         .map_err(|e| ProcessError::Start(e.to_string()))?;
-    let media_pool = MediaPool::new(MediaPoolLimits::default())
-        .map_err(|error| ProcessError::Start(error.to_string()))?;
-    let blocking_io = lk_agents_net::blocking_io::BlockingIo::new(runtime.handle().clone(), 4)
-        .map_err(|error| ProcessError::Start(error.to_string()))?;
-    let report_admission = Default::default();
     let http = Arc::new(lk_agents_net::http::GatewayHttp::new().map_err(ProcessError::Start)?);
-    let started = slot.insert(Started { runtime, media_pool, blocking_io, report_admission, http });
+    let started = slot.insert(Started { runtime, http });
     Ok(read(started))
 }
 
@@ -136,12 +117,6 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         spawner: host_spawner,
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
-        report_admission: || {
-            with_started(|started| started.report_admission.clone())
-                .map_err(|error| error.to_string())
-        },
-        blocking_io: || blocking_io().map_err(|error| error.to_string()),
-        media_pool: || media_pool().map(|pool| pool.executor()).map_err(|error| error.to_string()),
         images: images(),
         strip_assistant_markup: lk_agents_voice::tts::markup::strip_expr_markup,
         speech_text: SpeechText::PROCESSORS,

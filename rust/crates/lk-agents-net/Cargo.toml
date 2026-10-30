@@ -15,13 +15,15 @@ doctest = false
 [dependencies]
 parking_lot.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi" }
+# The worker pool primitive: the blocking I/O pool is one of its instances.
+lk-agents-media = { path = "../lk-agents-media" }
 # Ephemeral transport and worker operation identifiers.
 rand = "0.9"
 livekit-token.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "sync", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # TLS crypto provider: `ring` only (reqwest/tungstenite use `rustls-no-provider`-style builds).
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }

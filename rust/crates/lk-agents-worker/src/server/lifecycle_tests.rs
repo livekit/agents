@@ -239,7 +239,7 @@ async fn server_startup_waits_for_sampling_capacity() {
     let blocking_io = crate::test_support::blocking_io();
     let mut held = Vec::new();
     for _ in 0..4 {
-        held.push(blocking_io.try_admit().unwrap());
+        held.push(blocking_io.try_admit(()).unwrap());
     }
     let host = Host::new();
     host.release_close.add_permits(1);
@@ -261,7 +261,7 @@ async fn server_startup_waits_for_sampling_capacity() {
 #[tokio::test(start_paused = true)]
 async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
     let blocking_io = crate::test_support::blocking_io();
-    let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit().unwrap()).collect();
+    let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit(()).unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
     let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io));
@@ -279,7 +279,7 @@ async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
 #[tokio::test(start_paused = true)]
 async fn server_setup_capacity_timeout_keeps_close_successful() {
     let blocking_io = crate::test_support::blocking_io();
-    let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit().unwrap()).collect();
+    let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit(()).unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
     let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io));

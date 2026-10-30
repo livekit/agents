@@ -1,23 +1,23 @@
 //! The session transcript, prepared incrementally as bounded JSON, and the console report.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use lk_agents_abi::telemetry::upload::{PreparedTranscript, UploadError};
 use tokio::sync::OwnedSemaphorePermit;
 
-use super::{TRANSCRIPT_BYTES, upload_error};
+use super::{ReportAdmission, TRANSCRIPT_BYTES, upload_error};
 use crate::env::ProcessEnv;
+use crate::lock::Mutex;
 
 pub(super) const TRANSCRIPT_ITEMS: usize = 10_000;
 pub(super) const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;
 
 /// Retains only bounded JSON, rather than a second copy of every native chat item.
-/// Prepared under the process's preparation admission; the console report serializes on the
-/// caller's blocking pool.
+/// Prepared under the process's preparation admission; the console report serializes and is
+/// written on the blocking I/O pool.
 pub struct TranscriptBuilder {
     state: Mutex<TranscriptState>,
     permit: Arc<OwnedSemaphorePermit>,
-    env: ProcessEnv,
 }
 
 struct TranscriptState {
@@ -30,12 +30,9 @@ struct TranscriptState {
     finished: bool,
 }
 
-impl PreparedTranscript for TranscriptBuilder {
-    type Env = ProcessEnv;
-
-    fn new(env: &ProcessEnv) -> Result<Self, UploadError> {
-        let permit = (env.report_admission)()
-            .map_err(UploadError)?
+impl TranscriptBuilder {
+    pub(super) fn with_admission(admission: &ReportAdmission) -> Result<Self, UploadError> {
+        let permit = admission
             .preparation()
             .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
         let mut bytes = Vec::with_capacity(TRANSCRIPT_BYTES);
@@ -51,8 +48,15 @@ impl PreparedTranscript for TranscriptBuilder {
                 finished: false,
             }),
             permit: Arc::new(permit),
-            env: env.clone(),
         })
+    }
+}
+
+impl PreparedTranscript for TranscriptBuilder {
+    type Env = ProcessEnv;
+
+    fn new(_env: &ProcessEnv) -> Result<Self, UploadError> {
+        Self::with_admission(&ReportAdmission::process())
     }
 
     fn input_batch_size(&self) -> usize {
@@ -72,7 +76,7 @@ impl PreparedTranscript for TranscriptBuilder {
         } else {
             None
         };
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock();
         if state.finished {
             return Err(UploadError("session transcript is already finished".into()));
         }
@@ -84,7 +88,7 @@ impl PreparedTranscript for TranscriptBuilder {
     }
 
     fn append(&self, item: lk_agents_abi::ChatItem) -> Result<(), UploadError> {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock();
         if let Some(failure) = &state.failure {
             return Err(UploadError(failure.clone()));
         }
@@ -100,7 +104,7 @@ impl PreparedTranscript for TranscriptBuilder {
     }
 
     fn finish(&self) -> Result<String, UploadError> {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock();
         if let Some(failure) = &state.failure {
             return Err(UploadError(failure.clone()));
         }
@@ -113,7 +117,7 @@ impl PreparedTranscript for TranscriptBuilder {
 
     fn append_event(&self, event: serde_json::Value) -> Result<bool, UploadError> {
         use lk_agents_abi::telemetry::policy;
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock();
         if let Some(failure) = &state.failure {
             return Err(UploadError(failure.clone()));
         }
@@ -141,7 +145,7 @@ impl PreparedTranscript for TranscriptBuilder {
         path: String,
     ) -> Result<(), UploadError> {
         let (bytes, events) = {
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.state.lock();
             if let Some(failure) = &state.failure {
                 return Err(UploadError(failure.clone()));
             }
@@ -152,10 +156,8 @@ impl PreparedTranscript for TranscriptBuilder {
             (std::mem::take(&mut state.bytes), std::mem::take(&mut state.events))
         };
         let permit = self.permit.clone();
-        self.env
-            .caller_runtime()
-            .map_err(UploadError)?
-            .spawn_blocking(move || {
+        crate::blocking_io::blocking_io()
+            .run((), move || {
                 let _retained = permit;
                 report.events = events;
                 // Keep the existing bounded transcript bytes; a second parsed history would retain

@@ -99,6 +99,18 @@ impl TokioSpawner {
     pub fn handle(&self) -> &Handle {
         &self.handle
     }
+
+    /// Runs `work` on this runtime, wherever the caller polls: tasks it spawns land there too.
+    /// Dropping the returned future cancels the work; a panic reaches the caller.
+    pub async fn run<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = T> + Send + 'static,
+    ) -> T {
+        match lk_agents_abi::SpawnerExt::spawn(self, work).await {
+            Ok(value) => value,
+            Err(error) => std::panic::resume_unwind(Box::new(error.to_string())),
+        }
+    }
 }
 
 impl Spawner for TokioSpawner {

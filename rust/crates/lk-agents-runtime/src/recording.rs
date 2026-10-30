@@ -12,10 +12,10 @@ use std::time::Duration;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::AudioRecorder;
 #[cfg(any(test, feature = "media-ffmpeg"))]
+use lk_agents_media::pool::{JobClass, MediaPool};
+#[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
 use lk_agents_media::recorder::{RecordingCommand, RecordingLimits};
-#[cfg(any(test, feature = "media-ffmpeg"))]
-use lk_agents_media::pool::{JobClass, MediaPool};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
@@ -120,11 +120,17 @@ impl SessionRecorder {
         W: Write + Send + 'static,
     {
         let runtime = tokio::runtime::Handle::current();
-        let recorder =
-            Arc::new(Self::start_with(media_pool, runtime, sample_rate, t0, limits, move |file| {
+        let recorder = Arc::new(Self::start_with(
+            media_pool,
+            runtime,
+            sample_rate,
+            t0,
+            limits,
+            move |file| {
                 let (encoder, writer) = open()?;
                 Ok(RecordingFile::new(encoder, writer, sample_rate, t0, file))
-            })?);
+            },
+        )?);
         recorder.ready().await?;
         Ok(recorder)
     }
@@ -489,11 +495,9 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     ) -> Result<Self, RecordingFailure> {
         #[cfg(feature = "media-ffmpeg")]
         {
-            let media_pool =
-                (env.media_pool)().map(MediaPool::from).map_err(RecordingFailure::Worker)?;
             let runtime = env.caller_runtime().map_err(RecordingFailure::Worker)?;
             Self::start(
-                &media_pool,
+                &lk_agents_media::pool::media_pool(),
                 runtime,
                 path.into(),
                 sample_rate,

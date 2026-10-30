@@ -65,8 +65,9 @@ async fn prepare(
     input: ImageInput,
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, ImageError> {
-    let media_pool = (env.media_pool)().map(MediaPool::from).map_err(ImageError)?;
-    prepare_on(&media_pool, env.images.clone(), input, options).await.map_err(ImageError)
+    prepare_on(&lk_agents_media::pool::media_pool(), env.images.clone(), input, options)
+        .await
+        .map_err(ImageError)
 }
 
 /// Prepares `input` on an admitted image worker, keeping the caller's loop serviceable.

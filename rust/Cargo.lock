@@ -1509,6 +1509,7 @@ dependencies = [
  "livekit-token",
  "lk-agents-abi",
  "lk-agents-core",
+ "lk-agents-media",
  "log",
  "parking_lot",
  "pbjson-types",

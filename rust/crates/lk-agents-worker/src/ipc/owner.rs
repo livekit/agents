@@ -2,8 +2,8 @@
 //! launch the host performs, then initialization, supervision, exit observation and reaping,
 //! which continue whether or not the host still awaits them.
 
-use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::lock::Mutex;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +21,6 @@ use super::{
     Channel, Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, MemoryError,
     ProcSupervisor, ProcessCallbacks, SupervisorOptions, extra_fields, secs,
 };
-use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
 
 pub struct ProcessOwner {
@@ -32,7 +31,7 @@ pub struct ProcessOwner {
     host: Mutex<Option<Arc<dyn JobExecutor>>>,
     /// What the executor's steps run in: the constructor's caller.
     context: CallContext,
-    io: BlockingIo,
+    spawner: TokioSpawner,
     /// The child's health timeout, from the supervision's ping settings.
     health_timeout_ms: Option<u64>,
     /// Whether the process initialized, once that settled (answered, failed, timed out, killed).
@@ -79,7 +78,7 @@ impl ProcessSupervisor for ProcessOwner {
     ) -> Result<Self, WorkerError> {
         // Thread runners and direct supervisors need diagnostics before any OS launch.
         crate::diagnostics::initialize().map_err(WorkerError::Failed)?;
-        let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
+        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
         let opts = SupervisorOptions {
             pid,
             initialize_timeout,
@@ -97,19 +96,24 @@ impl ProcessSupervisor for ProcessOwner {
             .then(|| secs(ping_timeout + HEALTH_CHECK_GRACE).as_millis() as u64);
         let (process, native) = watch::channel(None);
         let sup = {
-            let _runtime = io.runtime_handle().enter();
+            let _runtime = spawner.handle().enter();
             let channel = Channel::from_endpoint(fd)
                 .map_err(|error| WorkerError::Invalid(error.to_string()))?;
             let diagnostics =
                 ProcessDiagnostics { host: Mutex::new(Some(host.clone())), process: native };
-            ProcSupervisor::new(channel, diagnostics, opts, io.clone())
+            ProcSupervisor::new(
+                channel,
+                diagnostics,
+                opts,
+                lk_agents_net::blocking_io::blocking_io(),
+            )
         };
         Ok(Self {
             launch: watch::channel(ProcessLaunch::Pending).0,
             sup,
             host: Mutex::new(Some(host)),
             context,
-            io,
+            spawner,
             health_timeout_ms,
             initialized: watch::channel(None).0,
             ran: watch::channel(None).0,
@@ -130,7 +134,7 @@ impl ProcessSupervisor for ProcessOwner {
             health_timeout_ms: self.health_timeout_ms,
         };
         let sup = self.sup.clone();
-        let outcome = self.io.run(async move { sup.initialize(hello).await }).await;
+        let outcome = self.spawner.run(async move { sup.initialize(hello).await }).await;
         self.initialized.send_if_modified(|v| {
             v.is_none() && v.replace(matches!(outcome, Ok(Some(_)))).is_none()
         });
@@ -168,7 +172,7 @@ impl ProcessSupervisor for ProcessOwner {
         let Some(host) = self.host.lock().take() else {
             return self.wait_ran().await;
         };
-        let spawner = TokioSpawner::new(self.io.runtime_handle());
+        let spawner = TokioSpawner::new(self.spawner.handle().clone());
         self.tasks.spawn(
             &spawner,
             "process launch",
@@ -192,7 +196,7 @@ impl ProcessSupervisor for ProcessOwner {
 
     async fn _core_wait_exit(&self) -> bool {
         let sup = self.sup.clone();
-        self.io.run(async move { sup.wait_exit().await }).await
+        self.spawner.run(async move { sup.wait_exit().await }).await
     }
 
     async fn _core_join(&self) -> bool {
@@ -203,7 +207,7 @@ impl ProcessSupervisor for ProcessOwner {
         let initialized = self.initialized();
         self.settle(false);
         let sup = self.sup.clone();
-        self.io
+        self.spawner
             .run(async move {
                 if initialized {
                     sup.shutdown().await;
@@ -218,7 +222,7 @@ impl ProcessSupervisor for ProcessOwner {
     async fn kill(&self) {
         self.settle(false);
         let sup = self.sup.clone();
-        self.io
+        self.spawner
             .run(async move {
                 sup.kill().await;
                 sup.wait_cleanup().await;
@@ -228,7 +232,7 @@ impl ProcessSupervisor for ProcessOwner {
 
     async fn start_job(&self, fields: StartJobFields) -> Result<(), WorkerError> {
         let sup = self.sup.clone();
-        self.io
+        self.spawner
             .run(async move { sup.start_job(fields).await })
             .await
             .map_err(|error| WorkerError::Failed(error.to_string()))

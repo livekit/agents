@@ -48,7 +48,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
-        media_pool: crate::testkit::media_pool,
+        media_pool: lk_agents_media::pool::media_pool(),
         disposal: Arc::default(),
     });
     let (events, receiver) = super::super::queue::events();
@@ -104,11 +104,9 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
     let cleanup = tokio::spawn(super::retirement::run(
         weak.clone(),
         shared.retirement_wake.clone(),
-        pump.clock.clone(),
         pump.label.clone(),
-        pump.events.clone(),
         settled,
-        Ok(media_pool),
+        media_pool,
     ));
     for _ in 0..16 {
         tokio::task::yield_now().await;
@@ -127,63 +125,6 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
         .unwrap();
     cleanup.await.unwrap();
     assert!(weak.upgrade().is_none(), "settled cleanup retained the session");
-}
-
-#[tokio::test]
-async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_session() {
-    let (pump, shared, mut receiver) = pump();
-    for _ in 0..2 {
-        shared.machine.lock().await.command(
-            pump.clock.now(),
-            Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: ChatContext::empty() }),
-        );
-    }
-    let weak = Arc::downgrade(&shared);
-    let (settled, mut done) = tokio::sync::watch::channel(false);
-    *shared.retirement.lock().unwrap() = Some(done.clone());
-    let cleanup = tokio::spawn(super::retirement::run(
-        weak.clone(),
-        shared.retirement_wake.clone(),
-        pump.clock.clone(),
-        pump.label.clone(),
-        pump.events.clone(),
-        settled,
-        Err("forked".to_owned()),
-    ));
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if shared.cleanup.lock().unwrap().is_some() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the owner did not observe the injected startup failure");
-    assert!(
-        matches!(tokio::time::timeout(Duration::from_secs(5), receiver.next()).await.unwrap(),
-        Some(Event::GenerateReplyFailed(failed)) if failed.req_id == "closing"),
-        "worker startup failure must refuse the session's pending caller"
-    );
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), receiver.next())
-            .await
-            .expect("terminal worker startup failure did not explain the session close"),
-        Some(Event::Error(error))
-            if !error.recoverable && error.message.contains("cleanup service is unavailable")
-    ));
-    drop(pump);
-    drop(shared);
-    if tokio::time::timeout(Duration::from_millis(250), done.wait_for(|settled| *settled))
-        .await
-        .is_err()
-    {
-        cleanup.abort();
-        let _ = cleanup.await;
-        panic!("permanent startup failure kept retrying cleanup instead of settling");
-    }
-    cleanup.await.unwrap();
-    assert!(weak.upgrade().is_none(), "permanent startup failure retained the session owner");
 }
 
 #[tokio::test]
@@ -208,11 +149,9 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     let cleanup = tokio::spawn(super::retirement::run(
         Arc::downgrade(&shared),
         shared.retirement_wake.clone(),
-        pump.clock.clone(),
         pump.label.clone(),
-        pump.events.clone(),
         settled,
-        Ok(media_pool.clone()),
+        media_pool.clone(),
     ));
     let (commands, incoming) = mpsc::channel(128);
     let running = tokio::spawn(pump.run(incoming));

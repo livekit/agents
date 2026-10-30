@@ -6,9 +6,8 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::media::pool::{JobClass, MediaPoolError};
+use lk_agents_media::pool::JobClass;
 use lk_agents_media::pool::MediaPool;
-use lk_agents_net::env::MediaPoolSource;
 use tokio::sync::mpsc;
 
 use lk_agents_abi::AudioFrame;
@@ -70,7 +69,7 @@ type Job = (EotRequestId, Vec<i16>);
 
 pub struct LocalTransport {
     model: std::sync::Arc<dyn LocalEotModel>,
-    media_pool: MediaPoolSource,
+    media_pool: MediaPool,
     sink: std::sync::Arc<dyn PredictionListener>,
     buf: Mutex<AudioRingBuffer>,
     /// `None` once the input has ended, which is what lets [`run`](EotTransport::run) return.
@@ -82,7 +81,7 @@ impl LocalTransport {
     pub fn new(
         model: std::sync::Arc<dyn LocalEotModel>,
         sink: std::sync::Arc<dyn PredictionListener>,
-        media_pool: MediaPoolSource,
+        media_pool: MediaPool,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         LocalTransport {
@@ -98,15 +97,11 @@ impl LocalTransport {
 
 impl LocalTransport {
     /// A slot on the media pool, waiting for one while the pool is full.
-    async fn admit(&self) -> Result<(MediaPool, lk_agents_media::pool::MediaPermit), MediaPoolError> {
-        let pool = MediaPool::from((self.media_pool)().map_err(MediaPoolError::Unavailable)?);
+    async fn admit(&self) -> lk_agents_media::pool::Permit<JobClass> {
         loop {
-            match pool.try_admit(JobClass::EotModel) {
-                Ok(permit) => return Ok((pool, permit)),
-                Err(MediaPoolError::Exhausted(_)) => {
-                    pool.wait_for_capacity(JobClass::EotModel).await
-                }
-                Err(error) => return Err(error),
+            match self.media_pool.try_admit(JobClass::EotModel) {
+                Ok(permit) => return permit,
+                Err(_) => self.media_pool.wait_for_capacity(JobClass::EotModel).await,
             }
         }
     }
@@ -151,13 +146,12 @@ impl EotTransport for LocalTransport {
             let model = self.model.clone();
             let started = Instant::now();
             // CPU-bound, on an admitted media worker; a full pool delays the prediction.
-            let result = match self.admit().await {
-                Ok((pool, permit)) => pool
-                    .spawn_admitted(permit, move || model.predict(&pcm))
-                    .await
-                    .unwrap_or_else(|panicked| Err(panicked.to_string())),
-                Err(error) => Err(error.to_string()),
-            };
+            let permit = self.admit().await;
+            let result = self
+                .media_pool
+                .spawn_admitted(permit, move || model.predict(&pcm))
+                .await
+                .unwrap_or_else(|panicked| Err(panicked.to_string()));
             let inference_duration = started.elapsed().as_secs_f64();
 
             // Any failure (panic included) scores 0.0 (`transports.py:421`): "no end of turn".

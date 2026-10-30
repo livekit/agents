@@ -1,21 +1,15 @@
 //! What the hosting process lends the async crates' clients: its Tokio runtime,
-//! the executor its host awaits on, the host's clock, its pools and admissions and the voice core's
-//! text algorithms, as one [`ProcessEnv`] value. Internal constructors take the handles they need;
+//! the executor its host awaits on, the host's clock, its connection pool, image preparation and
+//! the voice core's text algorithms, as one [`ProcessEnv`] value. Internal constructors take the handles they need;
 //! a class the host constructs receives the runtime's value from the generated bindings.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
-use lk_agents_abi::media::pool::MediaExecutor;
 use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{Clock, ImageContent, Spawner};
 
-use crate::blocking_io::BlockingIo;
 use crate::http::GatewayHttp;
-use crate::session_report::ReportAdmission;
-
-/// The media worker pool, read at use so a fork is checked before dispatching work.
-pub type MediaPoolSource = fn() -> Result<Arc<dyn MediaExecutor>, String>;
 
 /// What the hosting process lends a declared class: the generated bindings pass
 /// it to each declared constructor that takes it, and Rust callers and tests build their own.
@@ -31,12 +25,6 @@ pub struct ProcessEnv {
     pub clock: Arc<dyn Clock>,
     /// The process's shared connection pool.
     pub http: fn() -> Result<Arc<GatewayHttp>, String>,
-    /// The process's session report admission.
-    pub report_admission: fn() -> Result<ReportAdmission, String>,
-    /// The process's blocking I/O, on the runtime the worker's tasks and sockets run on.
-    pub blocking_io: fn() -> Result<BlockingIo, String>,
-    /// The process's media worker pool.
-    pub media_pool: MediaPoolSource,
     /// How a request's images are prepared for a provider.
     pub images: Arc<dyn ImageResolver + Send + Sync>,
     /// An assistant message as a judge reads it, without expressive markup.
@@ -53,8 +41,8 @@ impl ProcessEnv {
 
     /// A Rust caller with no host: the caller's Tokio runtime, the wall clock, a connection pool
     /// per client (a pool's connections belong to the runtime that opened them, and the
-    /// caller's runtime may not outlive the client), one report admission, no media worker pool
-    /// and no image preparation, and text spoken as given.
+    /// caller's runtime may not outlive the client), no image preparation, and text spoken as
+    /// given.
     pub fn current_runtime() -> Self {
         fn runtime() -> Result<tokio::runtime::Handle, String> {
             tokio::runtime::Handle::try_current().map_err(|error| error.to_string())
@@ -64,13 +52,6 @@ impl ProcessEnv {
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
             clock: Arc::new(crate::clock::RealClock::new()),
             http: || GatewayHttp::new().map(Arc::new),
-            report_admission: || {
-                static ADMISSION: LazyLock<ReportAdmission> =
-                    LazyLock::new(ReportAdmission::default);
-                Ok(ADMISSION.clone())
-            },
-            blocking_io: || BlockingIo::new(runtime()?, 4).map_err(|error| error.to_string()),
-            media_pool: || Err("no media worker pool in this process".into()),
             images: Arc::new(NoImagePreparation),
             strip_assistant_markup: str::to_owned,
             speech_text: SpeechTextProcessors::VERBATIM,

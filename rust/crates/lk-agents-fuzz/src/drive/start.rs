@@ -383,8 +383,6 @@ impl Run {
                 200,
                 run.time.clock(),
                 run.registry.world.clone(),
-                // The DST plays streamed sounds only; nothing decodes a file.
-                || Err("no media pool in the simulation".into()),
             )));
             let room = Arc::new(FixedRoom {
                 rtc: Some(run.room.clone()),

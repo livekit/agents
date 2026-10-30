@@ -462,39 +462,31 @@ impl ServerRuntime {
         let host = self.host.configured(start.has_rtc, start.has_load_fnc && !settings.cloud());
         let configured = settings.prometheus_multiproc_dir.clone();
         let discover_cpus = settings.num_idle_processes.is_none();
-        let blocking_io = match &self.blocking_io {
-            Some(blocking_io) => blocking_io.clone(),
-            None => {
-                lk_agents_net::blocking_io::BlockingIo::new(tokio::runtime::Handle::current(), 4)
-                    .map_err(|error| error.to_string())?
-            }
-        };
+        let blocking_io =
+            self.blocking_io.clone().unwrap_or_else(lk_agents_net::blocking_io::blocking_io);
         let admission_deadline =
             Duration::try_from_secs_f64(settings.initialize_process_timeout)
                 .map_err(|_| "initialization timeout must be finite and nonnegative")?;
         let prepare = async {
             loop {
-                match blocking_io.try_admit() {
+                match blocking_io.try_admit(()) {
                     Ok(permit) => {
-                        break Ok(blocking_io.spawn_admitted(permit, move || {
+                        break blocking_io.spawn_admitted(permit, move || {
                             crate::diagnostics::initialize()?;
                             Ok((
                                 prepare_prometheus_dir(configured.as_deref()),
                                 discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
                             ))
-                        }));
+                        });
                     }
-                    Err(lk_agents_net::blocking_io::BlockingIoError::Exhausted) => {
-                        tokio::time::sleep(crate::ipc::pool::REFILL_INTERVAL).await;
-                    }
-                    Err(error) => break Err(error.to_string()),
+                    Err(_) => blocking_io.wait_for_capacity(()).await,
                 }
             }
         };
         resources.setup = Some(
             tokio::time::timeout(admission_deadline, prepare)
                 .await
-                .map_err(|_| "server setup capacity wait timed out".to_owned())??,
+                .map_err(|_| "server setup capacity wait timed out".to_owned())?,
         );
         let setup = resources.setup.as_mut().expect("setup owned before awaiting").await;
         resources.setup.take();
@@ -659,9 +651,7 @@ async fn pending_worker(
 
 #[derive(Default)]
 struct Resources {
-    setup: Option<
-        lk_agents_net::blocking_io::BlockingIoTask<Result<(Option<String>, Option<f32>), String>>,
-    >,
+    setup: Option<lk_agents_net::blocking_io::Job<Result<(Option<String>, Option<f32>), String>>>,
     worker: Option<WorkerClient>,
     connection: Option<OwnedTask<Result<(), String>>>,
     load: Option<OwnedTask<Result<(), String>>>,

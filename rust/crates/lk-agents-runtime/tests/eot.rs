@@ -9,7 +9,6 @@ use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as _;
 
 use lk_agents_inference::eot::*;
-use lk_agents_runtime::process;
 
 struct CloudFailure(Arc<tokio::sync::Notify>);
 
@@ -68,7 +67,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             .build()
             .unwrap();
         let _runtime = runtime.enter();
-        let _workers = process::media_pool().unwrap();
+        let _workers = lk_agents_media::pool::media_pool();
         let failure = Arc::new(tokio::sync::Notify::new());
         let thresholds =
             Arc::new(Mutex::new(ThresholdOptions::new(TurnDetectorModel::V1, None, None)));
@@ -91,8 +90,11 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                 if model == TurnDetectorModel::V1 {
                     Arc::new(CloudFailure(trigger.clone())) as Arc<dyn EotTransport>
                 } else {
-                    Arc::new(LocalTransport::new(local_model.clone(), sink, process::env().media_pool))
-                        as Arc<dyn EotTransport>
+                    Arc::new(LocalTransport::new(
+                        local_model.clone(),
+                        sink,
+                        lk_agents_media::pool::media_pool(),
+                    )) as Arc<dyn EotTransport>
                 }
             })
         });
@@ -100,7 +102,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             session,
             16_000,
             make,
-            process::env().media_pool,
+            lk_agents_media::pool::media_pool(),
             None,
             &lk_agents_net::task::TokioSpawner::current(),
         );
@@ -208,7 +210,7 @@ impl EotTransport for DyingTransport {
 // run), the waiter left hanging, or a request the dead transport held never answered.
 #[tokio::test]
 async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_next_request() {
-    let _workers = process::media_pool().unwrap();
+    let _workers = lk_agents_media::pool::media_pool();
     let shared = Arc::new(Mutex::new(ThresholdOptions::new(TurnDetectorModel::V1, None, None)));
     let session = EotSession::new(TurnDetectorModel::V1, shared.clone(), true);
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -217,12 +219,13 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
         let model = Arc::clone(&model) as Arc<dyn LocalEotModel>;
         MountedTransport::mount(m.as_str(), Arc::clone(&shared), move |sink| match m {
             TurnDetectorModel::V1 => Arc::new(DyingTransport) as Arc<dyn EotTransport>,
-            _ => Arc::new(LocalTransport::new(model, sink, process::env().media_pool))
+            _ => Arc::new(LocalTransport::new(model, sink, lk_agents_media::pool::media_pool()))
                 as Arc<dyn EotTransport>,
         })
     });
     let spawner = lk_agents_net::task::TokioSpawner::current();
-    let stream = EotStream::open(session, 16_000, make, process::env().media_pool, None, &spawner);
+    let stream =
+        EotStream::open(session, 16_000, make, lk_agents_media::pool::media_pool(), None, &spawner);
     tokio::time::timeout(Duration::from_secs(5), async {
         while !stream.is_fallback() {
             tokio::task::yield_now().await;
@@ -261,7 +264,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
     runtime.block_on(async {
         use lk_agents_runtime::media::pool::JobClass;
 
-        let media_pool = process::media_pool().unwrap();
+        let media_pool = lk_agents_media::pool::media_pool();
         let (release, waiting) = std::sync::mpsc::channel();
         let blocker = media_pool
             .try_spawn(JobClass::EotModel, move || waiting.recv().unwrap())
@@ -277,7 +280,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
                 Arc::new(LocalTransport::new(
                     Arc::new(Model(Arc::default())),
                     sink,
-                    process::env().media_pool,
+                    lk_agents_media::pool::media_pool(),
                 ))
             })
         });
@@ -285,7 +288,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
             session,
             16_000,
             make,
-            process::env().media_pool,
+            lk_agents_media::pool::media_pool(),
             None,
             &lk_agents_net::task::TokioSpawner::current(),
         );

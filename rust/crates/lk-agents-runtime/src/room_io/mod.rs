@@ -103,12 +103,9 @@ impl room_owner::RoomRuntime for RoomFactory {
         wait::track_publication(room.as_ref(), identity, kinds, include_local, subscribed).await
     }
 
-    fn create_room_session(env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
+    fn create_room_session(_env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
         let time = crate::voice::session::Timebase::of_clock(Arc::new(RealClock::new()));
-        let pool = room
-            .as_ref()
-            .and_then(|_| (env.media_pool)().ok())
-            .map(lk_agents_media::pool::MediaPool::from);
+        let pool = room.as_ref().map(|_| lk_agents_media::pool::media_pool());
         FixedRoom { rtc: room, time, pool }
     }
 }

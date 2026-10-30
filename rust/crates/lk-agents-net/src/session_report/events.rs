@@ -96,8 +96,8 @@ impl EventRetention {
 impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
     type Env = ProcessEnv;
 
-    fn new(env: &ProcessEnv, capture_content: bool) -> Result<Self, UploadError> {
-        Ok(Self::with_admission(capture_content, &(env.report_admission)().map_err(UploadError)?))
+    fn new(_env: &ProcessEnv, capture_content: bool) -> Result<Self, UploadError> {
+        Ok(Self::with_admission(capture_content, &ReportAdmission::process()))
     }
 
     fn claim(&mut self, job_id: String) {

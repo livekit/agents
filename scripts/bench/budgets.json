@@ -155,7 +155,7 @@
       }
     },
     "worker_native_io": {
-      "service": "process-wide BlockingIo (lk_agents_net::blocking_io), on the process runtime",
+      "service": "process-wide blocking I/O pool (lk_agents_net::blocking_io), four plain threads",
       "limits": {
         "running_and_queued": 4,
         "shared_native_total": 64,
@@ -169,7 +169,7 @@
         "process memory sampler",
         "server diagnostics/Prometheus-directory/CPU setup"
       ],
-      "derivation": "BlockingIo has its own 4 permits, independent of the media pool and its payload classes, so payload saturation never blocks health sampling. CPU sampling runs at 500ms cadence; memory sampling at 5s cadence. Exact fleet throughput and CPU-quota calibration remain unmeasured.",
+      "derivation": "The blocking I/O pool has its own 4 threads, independent of the media pool and its payload classes, so payload saturation never blocks health sampling. CPU sampling runs at 500ms cadence; memory sampling at 5s cadence. Exact fleet throughput and CPU-quota calibration remain unmeasured.",
       "overload": {
         "cpu_sample": "retain cached load and retry at the next sample cadence",
         "process_memory_sample": "typed Sample::Failed and retry at the next cadence",

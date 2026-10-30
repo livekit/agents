@@ -244,7 +244,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 ## Rust architecture rules
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
-  `net -> core`, `py -> abi`, async I/O crates `-> net`, `fuzz` and
+  `net -> core`, `net -> media`, `py -> abi`, async I/O crates `-> net`, `fuzz` and
   `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
   executors over faked ports, the fake room among them) and `fuzz -> storage` (the A2A DST runs
   real storage) are allowed composition edges.
@@ -272,7 +272,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Rust has no telemetry exporter: observations are recorded synchronously and reach the host's
   OpenTelemetry SDK through HostInvoker. The LiveKit Cloud session report and recording upload
   is not user telemetry; it is async Rust in `lk-agents-net`.
-- The runtime owns the process Tokio runtime, fork guard and media pool and lends them as one
+- The runtime owns the process Tokio runtime and fork guard and lends them as one
   `lk_agents_net::env::ProcessEnv` value: a declared class declares `#[host(env)] type Env;` and
   the generated binding passes the runtime's value to it; no `Env` type parameters. Its only
   functions from another layer are the voice core's text algorithms, lent as plain functions.

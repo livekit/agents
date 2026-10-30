@@ -1,6 +1,5 @@
 //! The session report's process admission: transcripts in preparation, recordings
-//! in flight and the retained session events of every session. The hosting process owns one and
-//! lends it through [`ProcessEnv::report_admission`](crate::env::ProcessEnv::report_admission); clones share it.
+//! in flight and the retained session events of every session. One per process; clones share it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,6 +33,13 @@ impl Default for ReportAdmission {
 }
 
 impl ReportAdmission {
+    /// The process's admission.
+    pub fn process() -> Self {
+        static ADMISSION: lk_agents_media::pool::PerProcess<ReportAdmission> =
+            lk_agents_media::pool::PerProcess::new(ReportAdmission::default);
+        ADMISSION.get()
+    }
+
     pub(super) fn preparation(&self) -> Option<OwnedSemaphorePermit> {
         self.preparations.clone().try_acquire_owned().ok()
     }

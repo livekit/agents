@@ -129,7 +129,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_net::clock::RealClock::default()),
             env.images.clone(),
-            env.media_pool,
+            lk_agents_media::pool::media_pool(),
         )
         .with_options(opts, turn_detection_given)
         .with_connect(connect);

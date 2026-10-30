@@ -15,14 +15,13 @@ use lk_agents_abi::worker::ipc_host::{
 };
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::lock::Mutex;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{oneshot, watch};
 
 use super::channel::Channel;
 use super::wire::{ToChild, bounded};
 use super::{Extra, ExtraValue, Level, ToParent, extra_fields, secs};
-use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
@@ -74,7 +73,7 @@ struct Inner {
     host: OnceLock<(Arc<dyn JobProcess>, CallContext)>,
     /// The parent the job process reports its end to (none for a job run outside one).
     parent: OnceLock<Arc<Channel<ToParent, ToChild>>>,
-    io: BlockingIo,
+    spawner: TokioSpawner,
     fake: bool,
     session_end_timeout: f64,
     /// The name of the door's `on_session_end`, when it has one.
@@ -298,7 +297,7 @@ impl Inner {
 
         // The shutdown callbacks run together.
         let callbacks = std::mem::take(&mut self.state.lock().shutdown_callbacks);
-        let spawner = TokioSpawner::new(self.io.runtime_handle());
+        let spawner = TokioSpawner::new(self.spawner.handle().clone());
         let runs: Vec<_> = callbacks
             .into_iter()
             .map(|ShutdownCallback { callback, takes_reason, framework, name }| {
@@ -358,7 +357,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
                 parent: OnceLock::new(),
-                io: (env.blocking_io)().map_err(WorkerError::Failed)?,
+                spawner: TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?),
                 fake: fake_job,
                 session_end_timeout,
                 session_end,
@@ -417,7 +416,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     ) -> Result<(), WorkerError> {
         let inner = self.inner.clone();
         self.inner
-            .io
+            .spawner
             .run(async move {
                 let _connecting = inner.connecting.lock().await;
                 if inner.state.lock().connected {
@@ -469,7 +468,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         if overlapping {
             self.inner.log(Level::Warning, &format!("a participant has joined before a prior participant task matching the same identity has finished: '{identity}'"), None, Vec::new());
         }
-        let spawner = TokioSpawner::new(self.inner.io.runtime_handle());
+        let spawner = TokioSpawner::new(self.inner.spawner.handle().clone());
         for (key, run, entry, name) in starts {
             let inner = self.inner.clone();
             let (job, participant, context) = (job.clone(), participant.clone(), context.clone());
@@ -523,7 +522,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let (tx, rx) = oneshot::channel();
         let mut closed = self.inner.tasks_closed.subscribe();
         let inner = self.inner.clone();
-        let task = TokioSpawner::new(self.inner.io.runtime_handle()).spawn(async move {
+        let task = TokioSpawner::new(self.inner.spawner.handle().clone()).spawn(async move {
             let called = tokio::select! {
                 called = call.call(&context) => called.map_err(WorkerError::Host),
                 _ = closed.wait_for(|closed| *closed) => Err(WorkerError::Cancelled),
@@ -593,6 +592,6 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             return Err(WorkerError::Failed("the job already runs".into()));
         }
         let inner = self.inner.clone();
-        self.inner.io.run(inner.run()).await
+        self.inner.spawner.run(inner.run()).await
     }
 }

@@ -250,8 +250,7 @@ enum Sample {
     Interrupted,
 }
 
-type Sampling =
-    Option<lk_agents_net::blocking_io::BlockingIoTask<Result<(f64, String), MemoryError>>>;
+type Sampling = Option<lk_agents_net::blocking_io::Job<Result<(f64, String), MemoryError>>>;
 
 /// The supervisor's actor: the process's state and every deadline, changed only here.
 struct Driver {
@@ -607,7 +606,9 @@ impl Driver {
                 match self.channel.try_send(message) {
                     Err(SendError::TooLarge(size)) => self.reply_job(
                         request_id,
-                        Err(StartJobError::InvalidFields(format!("a {size}-byte job is too large"))),
+                        Err(StartJobError::InvalidFields(format!(
+                            "a {size}-byte job is too large"
+                        ))),
                     ),
                     sent => {
                         self.pending_job =
@@ -742,7 +743,7 @@ impl Driver {
             self.next_sample = None;
             let host = self.host.clone();
             // Admission before any task: a saturated sampler retries at its next cadence.
-            match self.blocking_io.try_spawn(move || host.sample_memory()) {
+            match self.blocking_io.try_spawn((), move || host.sample_memory()) {
                 Ok(receipt) => self.sampling = Some(receipt),
                 Err(_) => self.on_sample(Sample::Failed),
             }

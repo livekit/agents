@@ -44,11 +44,11 @@ tools and host RTC objects.
 | `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; telemetry destination policy and metric admission (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; speech tokenization, markup and pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
-| `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime, and a plain bounded thread pool only where a measured need exists |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks, the shared attempt machine and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the blocking I/O admission it lends |
-| `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the injected media pool; speech stream adapters; evaluation judge orchestration |
+| `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks, the shared attempt machine and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
+| `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, CLI and endpoint serving |
-| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard and media pool instance; wires the async I/O crates and re-exports the implementations generated bindings select |
+| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
@@ -64,6 +64,7 @@ lk-agents-voice -> lk-agents-media
 lk-agents-inference -> lk-agents-media
 lk-agents-inference -> lk-agents-core
 lk-agents-net -> lk-agents-core
+lk-agents-net -> lk-agents-media (the worker pool primitive)
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 fuzz, bench-steps -> sans-I/O crates + lk-agents-abi
@@ -93,18 +94,27 @@ adapters select. Async I/O crates depend on ABI and never on the runtime,
 `lk-agents-py` or pyo3; they reach host code only through ABI-declared proxies
 and HostInvoker's declared port.
 
-The runtime owns the process-wide Tokio runtime, the fork guard and the media
-pool instance, and lends them as one value, `lk_agents_net::env::ProcessEnv`,
-never through a dependency on the runtime. It is a plain struct:
+The runtime owns the process-wide Tokio runtime and the fork guard, and lends
+them as one value, `lk_agents_net::env::ProcessEnv`, never through a dependency
+on the runtime. It is a plain struct:
 
 | Field | Lends |
 | --- | --- |
 | `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
 | `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
-| `http`, `report_admission` | The shared HTTP pool and the session report admission |
-| `media_pool` | The media pool, as the ABI-declared `MediaExecutor` (`lk_agents_media::pool::MediaPool` is its typed face) |
-| `blocking_io` | The blocking I/O on the process runtime |
+| `http` | The shared HTTP pool |
 | `images`, `strip_assistant_markup`, `speech_text` | Image preparation and encoding, and the voice core's text algorithms providers and judges apply |
+
+Process-wide resources that need no runtime are owned by the crate whose work
+they bound, made on first use in each process (a forked child makes its own):
+the media pool (`lk_agents_media::pool::media_pool()`), the blocking I/O pool
+(`lk_agents_net::blocking_io::blocking_io()`) and the session report admission
+(`ReportAdmission::process()`). Both pools are instances of one primitive, media's
+`Pool`: plain threads that start on demand and exit when idle, with synchronous
+admission per class. The media pool runs codec, recording, image and model work;
+the blocking I/O pool (four threads) runs name resolution, file access and
+process sampling, so saturated payload work never blocks a lookup or a health
+sample.
 
 A declared class that needs the process declares `#[host(env)] type Env;` and
 takes `env: &Self::Env` in its constructor or function; the generated binding
@@ -206,7 +216,7 @@ crates.
 ```text
 lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
-  process.rs      process Tokio runtime, fork guard, media pool, the `ProcessEnv` it lends
+  process.rs      process Tokio runtime, fork guard, the `ProcessEnv` it lends
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
   agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
   text_session/   TextSession driver over agent_run's execution; the declared runner

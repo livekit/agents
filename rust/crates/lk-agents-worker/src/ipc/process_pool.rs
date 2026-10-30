@@ -12,8 +12,8 @@ use lk_agents_abi::worker::ipc_host::{JobExecutor, PoolCallbacks, WorkerError};
 use super::owner::{ProcessOwner, queue_diagnostic};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::{Level, ProcSupervisor, secs};
-use lk_agents_net::blocking_io::BlockingIo;
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::TokioSpawner;
 
 /// One executor and, once started, its native supervisor.
 #[derive(Clone)]
@@ -100,7 +100,7 @@ impl Executors for HostExecutors {
 
 pub struct ProcessPool {
     pool: ProcPool,
-    io: BlockingIo,
+    spawner: TokioSpawner,
 }
 
 impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
@@ -122,7 +122,7 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
         let executors = HostExecutors { host, context };
         Ok(Self {
             pool: ProcPool::new(Arc::new(executors), opts),
-            io: (env.blocking_io)().map_err(WorkerError::Failed)?,
+            spawner: TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?),
         })
     }
 
@@ -140,13 +140,13 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
 
     fn set_target_idle_processes(&self, n: usize) {
         // The pool's work for the new target runs on the injected runtime.
-        let _runtime = self.io.runtime_handle().enter();
+        let _runtime = self.spawner.handle().enter();
         self.pool.set_target_idle(n);
     }
 
     async fn start(&self) -> Result<(), WorkerError> {
         let pool = self.pool.clone();
-        self.io
+        self.spawner
             .run(async move { pool.start().await })
             .await
             .map_err(|error| WorkerError::Failed(error.to_string()))
@@ -154,8 +154,8 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
 
     async fn launch_job(&self, job_id: String, info: HostRef) -> Result<(), WorkerError> {
         let pool = self.pool.clone();
-        self.io.run(async move { pool.launch_job(&job_id, info).await }).await.map_err(|error| {
-            match error {
+        self.spawner.run(async move { pool.launch_job(&job_id, info).await }).await.map_err(
+            |error| match error {
                 LaunchError::Admission(reason) => WorkerError::Failed(reason.to_string()),
                 LaunchError::AcquireExhausted { attempts } => WorkerError::Failed(format!(
                     "no process became available after {attempts} attempts"
@@ -164,17 +164,17 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
                     WorkerError::Failed("no process became available after 3 attempts".into())
                 }
                 LaunchError::Launch(error) => WorkerError::Host(error),
-            }
-        })
+            },
+        )
     }
 
     async fn join_jobs(&self) {
         let pool = self.pool.clone();
-        self.io.run(async move { pool.join_jobs().await }).await;
+        self.spawner.run(async move { pool.join_jobs().await }).await;
     }
 
     async fn aclose(&self) {
         let pool = self.pool.clone();
-        self.io.run(async move { pool.aclose().await }).await;
+        self.spawner.run(async move { pool.aclose().await }).await;
     }
 }

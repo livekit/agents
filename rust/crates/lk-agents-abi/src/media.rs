@@ -4,6 +4,4 @@ pub mod images;
 
 pub mod emitter;
 
-pub mod pool;
-
 pub mod codecs;

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamSink, StreamSource, Ts};
-use lk_agents_media::pool::{JobClass, MediaJob, MediaPool};
+use lk_agents_media::pool::{Job, JobClass, MediaPool};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -96,7 +96,7 @@ impl Drop for Input {
 
 struct Output {
     events: mpsc::Receiver<VadOutput>,
-    worker: Option<MediaJob<Result<(), ProviderError>>>,
+    worker: Option<Job<Result<(), ProviderError>>>,
     cancelled: CancellationToken,
     clock: Arc<dyn Clock>,
 }
@@ -128,7 +128,7 @@ impl StreamSource<VadOutput> for Output {
             self.cancelled.cancel();
             self.events.close();
             let Some(mut worker) = self.worker.take() else { return Closed::Clean };
-            // A timed-out receipt transfers to MediaJob's supervisor; its permit remains held
+            // A timed-out receipt transfers to Job's supervisor; its permit remains held
             // until a native model that ignored cancellation actually returns.
             let deadline =
                 deadline.min(self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));

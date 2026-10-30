@@ -108,7 +108,7 @@ async fn media_never_block_measurements() {
                "runtime": "current_thread", "features": ["media-images", "media-ffmpeg"],
                "budget": manifest["interfaces"]["media"]})
     );
-    let media_pool = lk_agents_runtime::process::media_pool().unwrap();
+    let media_pool = lk_agents_media::pool::media_pool();
     let mut admission = Vec::new();
     let mut ceilings = serde_json::Map::new();
     for class in [JobClass::Decoder, JobClass::Recording, JobClass::Image] {

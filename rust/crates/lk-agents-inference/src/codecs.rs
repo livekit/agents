@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_media::decoder::DecodeLimits;
-use lk_agents_media::pool::{JobClass, MediaJob, MediaPool, MediaPoolError};
+use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::{AudioFormat, CodecError, StreamBuffer};
 use tokio::sync::Notify;
@@ -173,7 +173,7 @@ impl Shared {
 /// One admitted decoder. EOF follows native completion and delivery of all decoded PCM.
 pub struct AudioDecoder {
     shared: Arc<Shared>,
-    worker: Option<MediaJob<Result<(), DecoderError>>>,
+    worker: Option<Job<Result<(), DecoderError>>>,
 }
 
 impl AudioDecoder {
@@ -393,13 +393,12 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
     type Env = ProcessEnv;
 
     fn new(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         mime: String,
         sample_rate: Option<u32>,
         num_channels: u16,
     ) -> Result<Self, CodecFailure> {
-        let media_pool =
-            (env.media_pool)().map(lk_agents_media::pool::MediaPool::from).map_err(failure)?;
+        let media_pool = lk_agents_media::pool::media_pool();
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
         let (output, input) =
             AudioDecoder::open_stream(&media_pool, &mime, sample_rate, num_channels, limits)

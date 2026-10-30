@@ -8,7 +8,7 @@ use lk_agents_media::pool::JobClass;
 
 #[tokio::test]
 async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
-    let media_pool = lk_agents_runtime::process::media_pool().unwrap();
+    let media_pool = lk_agents_media::pool::media_pool();
     let mut image_permits = Vec::new();
     while let Ok(permit) = media_pool.try_admit(JobClass::Image) {
         image_permits.push(permit);

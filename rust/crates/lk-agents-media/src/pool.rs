@@ -1,20 +1,64 @@
-//! Admitted native workers for codec, recording, image and model work: a bounded pool
-//! of plain threads, no async runtime. Callers that must not block their loop hand work here and
-//! await its [`MediaJob`]. Admission refuses overload synchronously; a running job keeps its
-//! capacity until it settles, so a caller dropping its receipt never frees capacity early.
+//! Admitted worker threads: a bounded pool of plain threads, no async runtime. Callers that must
+//! not block their loop hand work here and await its [`Job`]. Admission refuses overload
+//! synchronously; a running job keeps its capacity until it settles, so a caller dropping its
+//! receipt never frees capacity early.
+//!
+//! A process has two pools: the media pool ([`media_pool`]: codec, recording, image and model
+//! work) and the blocking I/O pool (`lk_agents_net::blocking_io`: name resolution, files and
+//! process sampling). Tokio's blocking pool is not used.
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-pub use lk_agents_abi::media::pool::{JobClass, MediaExecutor, MediaPoolError};
-
 /// An idle thread waits this long for its next job before it exits.
 const IDLE_KEEPALIVE: Duration = Duration::from_secs(10);
+
+/// A kind of job with its own ceiling inside a pool's total.
+pub trait Class: Copy + Debug + Send + Sync + 'static {
+    fn index(self) -> usize;
+}
+
+/// A pool with one class: only the total bounds it.
+impl Class for () {
+    fn index(self) -> usize {
+        0
+    }
+}
+
+/// The media pool's classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobClass {
+    Decoder,
+    Recording,
+    Image,
+    Formatting,
+    EotModel,
+    VadModel,
+}
+
+impl Class for JobClass {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PoolError<C: Class> {
+    #[error("worker limits must be positive and each class must fit the total ceiling")]
+    InvalidLimits,
+    #[error("worker capacity exhausted for {0:?}")]
+    Exhausted(C),
+}
+
+pub type MediaPool = Pool<JobClass>;
+pub type MediaPoolError = PoolError<JobClass>;
 
 /// Per-class ceilings bound long-lived resources independently of short jobs.
 #[derive(Debug, Clone, Copy)]
@@ -42,37 +86,69 @@ impl Default for MediaPoolLimits {
     }
 }
 
-impl MediaPoolLimits {
-    fn of(&self, class: JobClass) -> usize {
-        match class {
-            JobClass::Decoder => self.decoders,
-            JobClass::Recording => self.recordings,
-            JobClass::Image => self.images,
-            JobClass::Formatting => self.formatting,
-            JobClass::EotModel => self.eot_models,
-            JobClass::VadModel => self.vad_models,
+impl MediaPool {
+    pub fn new(limits: MediaPoolLimits) -> Result<Self, MediaPoolError> {
+        let classes = [
+            limits.decoders,
+            limits.recordings,
+            limits.images,
+            limits.formatting,
+            limits.eot_models,
+            limits.vad_models,
+        ];
+        Pool::with_limits("lk-media-worker", limits.total, &classes)
+    }
+}
+
+/// The process's media pool, started on first use.
+pub fn media_pool() -> MediaPool {
+    static POOL: PerProcess<MediaPool> =
+        PerProcess::new(|| MediaPool::new(MediaPoolLimits::default()).expect("default limits"));
+    POOL.get()
+}
+
+/// A process-wide value made on first use in each process: a forked child, whose copy has no
+/// threads and may hold state its parent's threads owned, makes its own. The parent's copy is
+/// abandoned, never dropped.
+pub struct PerProcess<T> {
+    slot: Mutex<Option<(u32, T)>>,
+    make: fn() -> T,
+}
+
+impl<T: Clone> PerProcess<T> {
+    pub const fn new(make: fn() -> T) -> Self {
+        Self { slot: Mutex::new(None), make }
+    }
+
+    pub fn get(&self) -> T {
+        let pid = std::process::id();
+        let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
+        match &*slot {
+            Some((owner, value)) if *owner == pid => value.clone(),
+            _ => {
+                std::mem::forget(slot.take());
+                let value = (self.make)();
+                *slot = Some((pid, value.clone()));
+                value
+            }
         }
     }
 }
 
-const CLASSES: usize = 6;
-
-fn index(class: JobClass) -> usize {
-    class as usize
-}
-
-type Job = Box<dyn FnOnce() + Send>;
+type Task = Box<dyn FnOnce() + Send>;
 
 struct State {
-    used: [usize; CLASSES],
+    used: Box<[usize]>,
     total: usize,
-    jobs: VecDeque<Job>,
+    tasks: VecDeque<Task>,
     idle: usize,
     capacity_waiters: Vec<Waker>,
 }
 
 struct Shared {
-    limits: MediaPoolLimits,
+    thread_name: &'static str,
+    total: usize,
+    limits: Box<[usize]>,
     state: Mutex<State>,
     work: Condvar,
 }
@@ -82,90 +158,65 @@ impl Shared {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn fits(&self, state: &State, class: JobClass) -> bool {
-        state.used[index(class)] < self.limits.of(class) && state.total < self.limits.total
-    }
-}
-
-/// The pool's threads and admission state.
-struct Pool(Arc<Shared>);
-
-impl MediaExecutor for Pool {
-    fn admit(&self, class: JobClass) -> Result<(), MediaPoolError> {
-        let mut state = self.0.lock();
-        if !self.0.fits(&state, class) {
-            return Err(MediaPoolError::Exhausted(class));
-        }
-        state.used[index(class)] += 1;
-        state.total += 1;
-        Ok(())
+    fn fits(&self, state: &State, class: usize) -> bool {
+        state.used[class] < self.limits[class] && state.total < self.total
     }
 
-    fn release(&self, class: JobClass) {
+    fn release(&self, class: usize) {
         let waiters = {
-            let mut state = self.0.lock();
-            state.used[index(class)] -= 1;
+            let mut state = self.lock();
+            state.used[class] -= 1;
             state.total -= 1;
             std::mem::take(&mut state.capacity_waiters)
         };
         waiters.into_iter().for_each(Waker::wake);
     }
 
-    fn poll_capacity(&self, class: JobClass, cx: &mut Context<'_>) -> Poll<()> {
-        let mut state = self.0.lock();
-        if self.0.fits(&state, class) {
-            return Poll::Ready(());
-        }
-        state.capacity_waiters.push(cx.waker().clone());
-        Poll::Pending
-    }
-
-    fn run(&self, job: Job) {
-        let mut state = self.0.lock();
-        state.jobs.push_back(job);
-        if state.jobs.len() <= state.idle {
-            self.0.work.notify_one();
+    fn run(self: &Arc<Self>, task: Task) {
+        let mut state = self.lock();
+        state.tasks.push_back(task);
+        if state.tasks.len() <= state.idle {
+            self.work.notify_one();
         } else {
             // One thread per queued job beyond the idle ones, so no job waits behind a long-lived
             // one; every job holds a permit, so threads never outnumber the total ceiling.
-            let shared = self.0.clone();
+            let shared = self.clone();
             std::thread::Builder::new()
-                .name("lk-media-worker".into())
-                .spawn(move || run(shared))
-                .expect("spawning a media worker thread");
+                .name(self.thread_name.into())
+                .spawn(move || work(shared))
+                .expect("spawning a pool thread");
         }
     }
 }
 
-/// The process's admission pool. Clones share the same class and total capacity.
-#[derive(Clone)]
-pub struct MediaPool {
-    pool: Arc<dyn MediaExecutor>,
+/// A bounded pool of threads. Clones share the same class and total capacity.
+pub struct Pool<C> {
+    shared: Arc<Shared>,
+    class: PhantomData<fn(C)>,
 }
 
-/// The typed face of a lent pool.
-impl From<Arc<dyn MediaExecutor>> for MediaPool {
-    fn from(pool: Arc<dyn MediaExecutor>) -> Self {
-        Self { pool }
+impl<C> Clone for Pool<C> {
+    fn clone(&self) -> Self {
+        Self { shared: self.shared.clone(), class: PhantomData }
     }
 }
 
-/// A class reservation. Native jobs retain it until they settle; dropping it releases the slot
-/// and wakes capacity waiters.
-pub struct MediaPermit {
-    pool: Arc<dyn MediaExecutor>,
-    class: JobClass,
+/// A class reservation. Jobs retain it until they settle; dropping it releases the slot and
+/// wakes capacity waiters.
+pub struct Permit<C: Class> {
+    shared: Arc<Shared>,
+    class: C,
 }
 
-impl Drop for MediaPermit {
+impl<C: Class> Drop for Permit<C> {
     fn drop(&mut self) {
-        self.pool.release(self.class);
+        self.shared.release(self.class.index());
     }
 }
 
 /// The job panicked; its capacity was released when it unwound.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("media worker job panicked")]
+#[error("worker job panicked")]
 pub struct JobPanicked;
 
 struct Slot<T> {
@@ -175,11 +226,11 @@ struct Slot<T> {
 
 /// The completion of one admitted job. Awaiting it observes the result; dropping it leaves the
 /// job running with its capacity.
-pub struct MediaJob<T> {
+pub struct Job<T> {
     slot: Arc<(Mutex<Slot<T>>, Condvar)>,
 }
 
-impl<T> Future for MediaJob<T> {
+impl<T> Future for Job<T> {
     type Output = Result<T, JobPanicked>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -194,8 +245,8 @@ impl<T> Future for MediaJob<T> {
     }
 }
 
-impl<T> MediaJob<T> {
-    /// Observe settlement from another native worker or a synchronous caller.
+impl<T> Job<T> {
+    /// Observe settlement from another worker or a synchronous caller.
     /// Async callers must await the receipt instead of blocking their executor.
     pub fn wait(self) -> Result<T, JobPanicked> {
         let (slot, ready) = &*self.slot;
@@ -209,84 +260,104 @@ impl<T> MediaJob<T> {
     }
 }
 
-/// Resolves once `class` could be admitted; it reserves nothing.
+/// Resolves once a class could be admitted; it reserves nothing.
 pub struct CapacityAvailable {
-    pool: Arc<dyn MediaExecutor>,
-    class: JobClass,
+    shared: Arc<Shared>,
+    class: usize,
 }
 
 impl Future for CapacityAvailable {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.pool.poll_capacity(self.class, cx)
+        let mut state = self.shared.lock();
+        if self.shared.fits(&state, self.class) {
+            return Poll::Ready(());
+        }
+        state.capacity_waiters.push(cx.waker().clone());
+        Poll::Pending
     }
 }
 
-impl MediaPool {
-    pub fn new(limits: MediaPoolLimits) -> Result<Self, MediaPoolError> {
-        let classes = [
-            limits.decoders,
-            limits.recordings,
-            limits.images,
-            limits.formatting,
-            limits.eot_models,
-            limits.vad_models,
-        ];
-        if limits.total == 0 || classes.into_iter().any(|limit| limit == 0 || limit > limits.total)
-        {
-            return Err(MediaPoolError::InvalidLimits);
+impl<C: Class> Pool<C> {
+    /// A pool of at most `total` jobs, each class at most its entry of `limits` (by
+    /// [`Class::index`]), its threads named `thread_name`.
+    pub fn with_limits(
+        thread_name: &'static str,
+        total: usize,
+        limits: &[usize],
+    ) -> Result<Self, PoolError<C>> {
+        if total == 0 || limits.iter().any(|&limit| limit == 0 || limit > total) {
+            return Err(PoolError::InvalidLimits);
         }
+        let state = State {
+            used: vec![0; limits.len()].into(),
+            total: 0,
+            tasks: VecDeque::new(),
+            idle: 0,
+            capacity_waiters: Vec::new(),
+        };
         Ok(Self {
-            pool: Arc::new(Pool(Arc::new(Shared {
-                limits,
-                state: Mutex::new(State {
-                    used: [0; CLASSES],
-                    total: 0,
-                    jobs: VecDeque::new(),
-                    idle: 0,
-                    capacity_waiters: Vec::new(),
-                }),
+            shared: Arc::new(Shared {
+                thread_name,
+                total,
+                limits: limits.into(),
+                state: Mutex::new(state),
                 work: Condvar::new(),
-            }))),
+            }),
+            class: PhantomData,
         })
     }
 
-    /// The pool as the runtime lends it.
-    pub fn executor(&self) -> Arc<dyn MediaExecutor> {
-        self.pool.clone()
-    }
-
     /// Refuse overload synchronously without retaining a job or an admission waiter.
-    pub fn try_admit(&self, class: JobClass) -> Result<MediaPermit, MediaPoolError> {
-        self.pool.admit(class)?;
-        Ok(MediaPermit { pool: self.pool.clone(), class })
+    pub fn try_admit(&self, class: C) -> Result<Permit<C>, PoolError<C>> {
+        let mut state = self.shared.lock();
+        if !self.shared.fits(&state, class.index()) {
+            return Err(PoolError::Exhausted(class));
+        }
+        state.used[class.index()] += 1;
+        state.total += 1;
+        Ok(Permit { shared: self.shared.clone(), class })
     }
 
     /// Wait after refused admission without retaining work or reserving capacity.
-    pub fn wait_for_capacity(&self, class: JobClass) -> CapacityAvailable {
-        CapacityAvailable { pool: self.pool.clone(), class }
+    pub fn wait_for_capacity(&self, class: C) -> CapacityAvailable {
+        CapacityAvailable { shared: self.shared.clone(), class: class.index() }
     }
 
     /// Synchronous ingress refuses overload before retaining work. There is no admission queue.
     pub fn try_spawn<T: Send + 'static>(
         &self,
-        class: JobClass,
+        class: C,
         work: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<MediaJob<T>, MediaPoolError> {
+    ) -> Result<Job<T>, PoolError<C>> {
         Ok(self.spawn_admitted(self.try_admit(class)?, work))
+    }
+
+    /// Wait for capacity, then run `work` and await its result.
+    pub async fn run<T: Send + 'static>(
+        &self,
+        class: C,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, JobPanicked> {
+        loop {
+            match self.try_admit(class) {
+                Ok(permit) => return self.spawn_admitted(permit, work).await,
+                Err(_) => self.wait_for_capacity(class).await,
+            }
+        }
     }
 
     /// Run work under a reservation taken earlier, so callers can move owned state after
     /// admission.
     pub fn spawn_admitted<T: Send + 'static>(
         &self,
-        permit: MediaPermit,
+        permit: Permit<C>,
         work: impl FnOnce() -> T + Send + 'static,
-    ) -> MediaJob<T> {
+    ) -> Job<T> {
         let slot = Arc::new((Mutex::new(Slot { result: None, waker: None }), Condvar::new()));
         let settled = slot.clone();
-        let job: Job = Box::new(move || {
+        self.shared.run(Box::new(move || {
             let result = std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|_| JobPanicked);
             // Capacity is released by settlement, before the caller observes the result.
             drop(permit);
@@ -299,29 +370,28 @@ impl MediaPool {
             if let Some(waker) = waker {
                 waker.wake();
             }
-        });
-        self.pool.run(job);
-        MediaJob { slot }
+        }));
+        Job { slot }
     }
 }
 
-fn run(shared: Arc<Shared>) {
+fn work(shared: Arc<Shared>) {
     let mut state = shared.lock();
     loop {
-        if let Some(job) = state.jobs.pop_front() {
+        if let Some(task) = state.tasks.pop_front() {
             drop(state);
-            job();
+            task();
             state = shared.lock();
             continue;
         }
         state.idle += 1;
         let (next, timeout) = shared
             .work
-            .wait_timeout_while(state, IDLE_KEEPALIVE, |state| state.jobs.is_empty())
+            .wait_timeout_while(state, IDLE_KEEPALIVE, |state| state.tasks.is_empty())
             .unwrap_or_else(|p| p.into_inner());
         state = next;
         state.idle -= 1;
-        if timeout.timed_out() && state.jobs.is_empty() {
+        if timeout.timed_out() && state.tasks.is_empty() {
             return;
         }
     }

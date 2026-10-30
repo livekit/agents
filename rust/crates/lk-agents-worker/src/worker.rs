@@ -492,7 +492,7 @@ enum Completion {
     Decision { generation: u64, slot: Slot, decision: JobDecision },
     Launched { generation: u64, slot: Slot, result: Result<JobId, HostError> },
     Load(Option<f32>),
-    CpuSample(Result<(CpuMonitor, Option<f32>), tokio::task::JoinError>),
+    CpuSample(Result<(CpuMonitor, Option<f32>), lk_agents_net::blocking_io::JobPanicked>),
     Done,
     EndpointDone(u64),
 }
@@ -814,7 +814,7 @@ impl Worker {
             }
             Completion::Load(None) => {
                 let blocking_io = self.blocking_io.clone();
-                let permit = match blocking_io.try_admit() {
+                let permit = match blocking_io.try_admit(()) {
                     Ok(permit) => permit,
                     Err(error) => {
                         self.load_pending = false;
