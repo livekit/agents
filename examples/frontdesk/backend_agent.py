@@ -70,6 +70,7 @@ async def list_available_slots(
         if until
         else start + datetime.timedelta(days=14)
     )
+    await ctx.update("Checking the calendar.")
     slots = await ctx.deps.available(start, end)
     lines = []
     for slot in slots:
