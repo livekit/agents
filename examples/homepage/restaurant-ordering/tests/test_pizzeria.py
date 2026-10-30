@@ -407,3 +407,10 @@ async def test_the_page_gets_each_change_in_one_update():
     assert wings["size"] == "12" and wings["modifiers"] == ["hot sauce"]
     assert coke["was"] == "Large Sprite" and not coke["out"]
     assert sent["delivery"]["dueNow"] == 49.65
+    assert sent["delivery"]["changes"] == [
+        "large Sprite swapped for a large Coke, same price"
+    ]
+    await pos.cancel()
+    assert (
+        updates[2]["delivery"]["cancelled"] and updates[2]["delivery"]["changes"] == []
+    )

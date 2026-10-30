@@ -1004,6 +1004,7 @@ class Pizzeria:
         d = self.delivery
         if d is None:
             return None
+        cancelled = bool(self.order and self.order.cancelled)
         return {
             "driver": d.driver,
             "etaMinutes": d.eta_minutes,
@@ -1011,7 +1012,8 @@ class Pizzeria:
             "dueNow": float(self.due_now()),
             "balance": float(self.balance()),
             "note": self.fulfillment.driver_note,
-            "cancelled": bool(self.order and self.order.cancelled),
+            "cancelled": cancelled,
+            "changes": [] if cancelled else self.changes(),
             "endedEarly": ENDED_EARLY[d.ended_early] if d.ended_early else None,
             "readBack": d.read_back_revision == self.revision,
         }
