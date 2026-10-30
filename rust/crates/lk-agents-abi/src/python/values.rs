@@ -256,12 +256,30 @@ where
     type Error = PyErr;
 
     fn extract(ob: pyo3::Borrowed<'a, 'py, PyAny>) -> Result<Self, PyErr> {
-        // Compatibility for callers migrating to Maybe<Option<T>>: one extraction rule.
-        Ok(match crate::Maybe::<Option<T>>::extract(ob)? {
+        Ok(match Omittable::extract(ob)?.0 {
             crate::Maybe::NotGiven => MaybeNull::NotGiven,
-            crate::Maybe::Given(None) => MaybeNull::Null,
-            crate::Maybe::Given(Some(value)) => MaybeNull::Given(value),
+            crate::Maybe::Given(_) if ob.is_none() => MaybeNull::Null,
+            crate::Maybe::Given(_) => MaybeNull::Given(T::extract(ob).map_err(Into::into)?),
         })
+    }
+}
+
+/// A parameter whose omission (`NOT_GIVEN`, or left out) differs from every value, `None`
+/// included: the value is converted by the declared type's own rule.
+pub struct Omittable<'py>(pub crate::Maybe<Bound<'py, PyAny>>);
+
+impl<'py> Omittable<'py> {
+    pub const NOT_GIVEN: Self = Omittable(crate::Maybe::NotGiven);
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for Omittable<'py> {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> Result<Self, PyErr> {
+        Ok(Omittable(match is_not_given(&ob)? {
+            true => crate::Maybe::NotGiven,
+            false => crate::Maybe::Given(ob.to_owned()),
+        }))
     }
 }
 

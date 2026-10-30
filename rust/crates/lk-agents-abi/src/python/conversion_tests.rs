@@ -51,16 +51,18 @@ fn module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
 }
 
 #[test]
-fn presence_rejects_invalid_null_and_preserves_nullable_values() {
+fn omission_is_only_not_given_and_none_is_a_given_value() {
     attach(|py| {
-        let none = py.None().into_bound(py);
-        assert!(none.extract::<crate::Maybe<f64>>().is_err(), "null is not omission");
-        assert!(matches!(
-            none.extract::<crate::Maybe<Option<f64>>>().unwrap(),
-            crate::Maybe::Given(None)
-        ));
-        let zero = 0.0_f64.into_pyobject(py).unwrap().into_any();
-        assert!(matches!(zero.extract::<crate::Maybe<f64>>().unwrap(), crate::Maybe::Given(0.0)));
+        let read = |code: &str| {
+            let value = module(py, &format!("from livekit.agents.types import NotGiven\nvalue = {code}\n"))
+                .getattr("value")
+                .unwrap();
+            value.extract::<MaybeNull<f64>>().map(|v| v.into_core())
+        };
+        assert!(matches!(read("NotGiven()").unwrap(), crate::Maybe::NotGiven));
+        assert!(matches!(read("None").unwrap(), crate::Maybe::Given(None)));
+        assert!(matches!(read("0.0").unwrap(), crate::Maybe::Given(Some(0.0))));
+        assert!(read("'x'").is_err());
     });
 }
 
@@ -343,7 +345,7 @@ fn generated_collections_validate_typed_keys_and_nested_values_in_both_direction
 #[binding(extract, emit, from_items)]
 struct NullableUpdate {
     #[binding(default, skip_if_none)]
-    value: crate::Maybe<Option<String>>,
+    value: Option<String>,
 }
 
 #[test]

@@ -37,22 +37,3 @@ impl<T> std::fmt::Debug for Maybe<Option<T>> {
         })
     }
 }
-
-/// `NOT_GIVEN` is `NotGiven`; `None` is a *given* `None` when `T` reads one (`Maybe<Option<U>>`),
-/// otherwise null is invalid. Only `NOT_GIVEN` denotes omission.
-#[cfg(feature = "python")]
-impl<'a, 'py, T> pyo3::FromPyObject<'a, 'py> for Maybe<T>
-where
-    T: pyo3::FromPyObject<'a, 'py>,
-    T::Error: Into<pyo3::PyErr>,
-{
-    type Error = pyo3::PyErr;
-
-    fn extract(ob: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> Result<Self, pyo3::PyErr> {
-        use pyo3::types::PyAnyMethods as _;
-        if ob.is_instance(crate::python::not_given_type(ob.py())?)? {
-            return Ok(Maybe::NotGiven);
-        }
-        T::extract(ob).map(Maybe::Given).map_err(Into::into)
-    }
-}

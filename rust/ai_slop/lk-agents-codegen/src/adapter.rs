@@ -635,7 +635,7 @@ fn signature(params: &[Param]) -> String {
         }
         match &p.default {
             None if matches!(p.ty, Ty::Maybe(_)) => {
-                parts.push(format!("{} = ::lk_agents_abi::Maybe::NotGiven", p.name))
+                parts.push(format!("{} = ::lk_agents_abi::python::Omittable::NOT_GIVEN", p.name))
             }
             None => parts.push(p.name.clone()),
             Some(d) => parts.push(format!("{} = {}", p.name, rust_literal(d, &p.ty))),
@@ -672,7 +672,7 @@ fn native(ty: &Ty) -> bool {
             !matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs | HostForm::Converted(_))
         }
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Error(_) => true,
-        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) => native(t),
+        Ty::Optional(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
         Ty::Tuple(ts) => ts.iter().all(native),
         _ => false,
@@ -712,8 +712,8 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     }
     match &p.ty {
         Ty::Maybe(inner) => Ok((
-            "::lk_agents_abi::Maybe<Bound<'_, PyAny>>".into(),
-            Some(maybe_input(&p.name, inner, &path, at)?),
+            "::lk_agents_abi::python::Omittable<'_>".into(),
+            Some(maybe_input(&format!("{}.0", p.name), inner, &path, at)?),
         )),
         Ty::Optional(inner) => {
             if p.default.as_ref().is_some_and(|d| *d != Literal::None) {
@@ -768,7 +768,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Maybe(inner) => format!(
             "Ok({})",
             maybe_input(
-                &format!("{v}.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()?"),
+                &format!("{v}.extract::<::lk_agents_abi::python::Omittable<'_>>()?.0"),
                 inner,
                 path,
                 at

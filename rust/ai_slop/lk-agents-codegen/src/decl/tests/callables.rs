@@ -87,12 +87,9 @@ fn maybe_parameters_preserve_omission_null_and_given_values() {
     "#).expect("nullable omission is declared with the shared Maybe type");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
-    assert!(adapter.contains("scalar = ::lk_agents_abi::Maybe::NotGiven"), "{adapter}");
-    assert!(
-        adapter.contains("scalar: ::lk_agents_abi::Maybe<::std::option::Option<f64>>"),
-        "{adapter}"
-    );
-    assert!(adapter.contains("data: ::lk_agents_abi::Maybe<Bound<'_, PyAny>>"), "{adapter}");
+    assert!(adapter.contains("scalar = ::lk_agents_abi::python::Omittable::NOT_GIVEN"), "{adapter}");
+    assert!(adapter.contains("scalar: ::lk_agents_abi::python::Omittable<'_>"), "{adapter}");
+    assert!(adapter.contains("data: ::lk_agents_abi::python::Omittable<'_>"), "{adapter}");
     assert!(adapter.contains("Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven"), "{adapter}");
     assert!(adapter.contains("if value.is_none() { Ok(None) }"), "{adapter}");
     assert!(adapter.contains("value_from_py(&value"), "{adapter}");

@@ -218,40 +218,8 @@ fn _extract_exp_filter_new_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "alpha")
 }
 
-fn _extract_exp_filter_new_max_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?) })
-}
-
-fn _extract_exp_filter_new_min_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?) })
-}
-
-fn _extract_exp_filter_new_initial(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?) })
-}
-
-fn _extract_exp_filter_reset_alpha(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "alpha"))?) })
-}
-
-fn _extract_exp_filter_reset_initial(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?) })
-}
-
-fn _extract_exp_filter_reset_min_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?) })
-}
-
-fn _extract_exp_filter_reset_max_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?) })
-}
-
 fn _extract_exp_filter_apply_exp(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "exp")
-}
-
-fn _extract_exp_filter_apply_sample(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
-    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "sample"))?) })
 }
 
 fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
@@ -264,20 +232,28 @@ pub struct ExpFilter(pub(crate) ExpFilterImpl);
 #[pymethods]
 impl ExpFilter {
     #[new]
-    #[pyo3(signature = (alpha, max_val = ::lk_agents_abi::Maybe::NotGiven, min_val = ::lk_agents_abi::Maybe::NotGiven, initial = ::lk_agents_abi::Maybe::NotGiven))]
-    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_exp_filter_new_alpha)] alpha: f64, #[pyo3(from_py_with = _extract_exp_filter_new_max_val)] max_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_new_min_val)] min_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_new_initial)] initial: ::lk_agents_abi::Maybe<f64>) -> PyResult<ExpFilter> {
+    #[pyo3(signature = (alpha, max_val = ::lk_agents_abi::python::Omittable::NOT_GIVEN, min_val = ::lk_agents_abi::python::Omittable::NOT_GIVEN, initial = ::lk_agents_abi::python::Omittable::NOT_GIVEN))]
+    fn new(py: Python<'_>, #[pyo3(from_py_with = _extract_exp_filter_new_alpha)] alpha: f64, max_val: ::lk_agents_abi::python::Omittable<'_>, min_val: ::lk_agents_abi::python::Omittable<'_>, initial: ::lk_agents_abi::python::Omittable<'_>) -> PyResult<ExpFilter> {
+        let max_val = match max_val.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?) };
+        let min_val = match min_val.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?) };
+        let initial = match initial.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?) };
         let out = py.detach(|| <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::new(alpha, max_val, min_val, initial)).map_err(|e: ::lk_agents_abi::FilterError| <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(ExpFilter(out))
     }
 
-    #[pyo3(signature = (alpha = ::lk_agents_abi::Maybe::NotGiven, initial = ::lk_agents_abi::Maybe::NotGiven, min_val = ::lk_agents_abi::Maybe::NotGiven, max_val = ::lk_agents_abi::Maybe::NotGiven))]
-    fn reset(&mut self, #[pyo3(from_py_with = _extract_exp_filter_reset_alpha)] alpha: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_initial)] initial: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_min_val)] min_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_max_val)] max_val: ::lk_agents_abi::Maybe<f64>) -> PyResult<()> {
+    #[pyo3(signature = (alpha = ::lk_agents_abi::python::Omittable::NOT_GIVEN, initial = ::lk_agents_abi::python::Omittable::NOT_GIVEN, min_val = ::lk_agents_abi::python::Omittable::NOT_GIVEN, max_val = ::lk_agents_abi::python::Omittable::NOT_GIVEN))]
+    fn reset(&mut self, alpha: ::lk_agents_abi::python::Omittable<'_>, initial: ::lk_agents_abi::python::Omittable<'_>, min_val: ::lk_agents_abi::python::Omittable<'_>, max_val: ::lk_agents_abi::python::Omittable<'_>) -> PyResult<()> {
+        let alpha = match alpha.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "alpha"))?) };
+        let initial = match initial.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?) };
+        let min_val = match min_val.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?) };
+        let max_val = match max_val.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?) };
         <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
-    #[pyo3(signature = (exp, sample = ::lk_agents_abi::Maybe::NotGiven))]
-    fn apply(&mut self, #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64, #[pyo3(from_py_with = _extract_exp_filter_apply_sample)] sample: ::lk_agents_abi::Maybe<f64>) -> PyResult<f64> {
+    #[pyo3(signature = (exp, sample = ::lk_agents_abi::python::Omittable::NOT_GIVEN))]
+    fn apply(&mut self, #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64, sample: ::lk_agents_abi::python::Omittable<'_>) -> PyResult<f64> {
+        let sample = match sample.0 { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "sample"))?) };
         let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::apply(&mut self.0, exp, sample).map_err(|e: ::lk_agents_abi::FilterError| <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
