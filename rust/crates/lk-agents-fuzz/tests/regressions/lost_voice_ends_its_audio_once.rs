@@ -7,12 +7,12 @@ use lk_agents_voice::trace::{PlayoutStep, Step};
 // Catches: a synthesis failing after its audio played reported its segment as heard with no audio,
 // so the segment ended its audio leg a second time as an unvoiced one; the synchroniser paired the
 // next speech's words with that empty audio and showed them all before any of their audio played
-// (`transcript_follows_audio`, campaign seed 20655; seed 9914 draws the scenario since the fakes'
+// (`transcript_follows_audio`, campaign seed 20655; seed 6034 draws the scenario since the fakes'
 // delays are hand-set).
 #[test]
 fn the_next_speech_words_follow_its_own_audio() {
-    let setup = search::sample_setup(&mut fastrand::Rng::with_seed(9_914));
-    let case = search::explore(setup, 9_914, 3_000).case;
+    let setup = search::sample_setup(&mut fastrand::Rng::with_seed(6_034));
+    let case = search::explore(setup, 6_034, 3_000).case;
     let (outcome, journal) = simulate_with(case.schedule, async {
         let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
         for input in &case.inputs {

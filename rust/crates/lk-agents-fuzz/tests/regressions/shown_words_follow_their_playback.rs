@@ -6,11 +6,11 @@ use lk_agents_voice::trace::{PlayoutStep, Step};
 // Catches: after a sink reset the rest of a speech's audio plays as a segment of its own, whose
 // reports the speech's playout dropped as another key's: its played position stayed where the
 // reset left it, and the words that playback released were journalled against it, ahead of the
-// audio (`transcript_follows_audio`, campaign seed 13704; seed 167 draws the scenario since the
+// audio (`transcript_follows_audio`, campaign seed 13704; seed 717 draws the scenario since the
 // fakes' delays are hand-set).
 #[test]
 fn the_rest_after_a_sink_reset_is_the_speechs_playback() {
-    let (outcome, journal) = explored(167);
+    let (outcome, journal) = explored(717);
     let reset = journal
         .iter()
         .position(|step| matches!(step, Step::Playout(PlayoutStep::SinkReset { .. })))
@@ -29,10 +29,10 @@ fn the_rest_after_a_sink_reset_is_the_speechs_playback() {
 // Catches: a speech whose playback report was lost gave up on it; the report arriving later still
 // released its words, which the next speech's playout, the one listening by then, journalled as
 // its own with nothing of its audio played (`transcript_follows_audio`, campaign seed 15283; seed
-// 0 draws the scenario since the fakes' delays are hand-set).
+// 5 draws the scenario since the fakes' delays are hand-set).
 #[test]
 fn a_late_report_shows_no_words_for_the_next_speech() {
-    let (outcome, journal) = explored(0);
+    let (outcome, journal) = explored(5);
     assert!(
         journal.iter().any(|step| matches!(step, Step::Playout(PlayoutStep::FinishLost { .. }))),
         "the scenario: a playback report lost, then delivered late"

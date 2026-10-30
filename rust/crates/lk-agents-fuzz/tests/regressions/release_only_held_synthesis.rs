@@ -7,11 +7,11 @@ use lk_agents_fuzz::search;
 // Catches: the finish answered every live synthesis stream with a release, though a stream the
 // case never held produces on its own; one left open by a reply still waiting on authorization
 // made every round "work to release", so the run hit its budget instead of going quiet and having
-// its speeches judged (`session_settles`, survey seed 4743; seed 37 draws the scenario since the
+// its speeches judged (`session_settles`, survey seed 4743; seed 82 draws the scenario since the
 // fakes' delays are hand-set).
 #[test]
 fn a_synthesis_stream_the_case_never_held_lets_the_run_go_quiet() {
-    let seed = 37;
+    let seed = 82;
     let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
     let case = search::explore(setup, seed, 3_000).case;
     let held = |nth: u32| {
