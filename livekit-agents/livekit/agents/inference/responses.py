@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -74,6 +74,12 @@ _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "moderation_blocked": (400, False),
     "in_flight_response": (400, False),
 }
+
+
+def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
+    # quota denials a retry cannot clear (out of credits, project suspended);
+    # httpx and aiohttp header maps are both case-insensitive
+    return (headers or {}).get("X-Should-Retry", "").strip().lower() == "false"
 
 
 class ResponsesOptions(TypedDict, total=False):
@@ -483,7 +489,9 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
             if e.status == 429:
                 self._log_rate_limited(e)
             raise APIStatusError(
-                f"inference gateway refused the WebSocket: {e.message}", status_code=e.status
+                f"inference gateway refused the WebSocket: {e.message}",
+                status_code=e.status,
+                retryable=False if _terminal_denial(e.headers) else None,
             ) from e
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to inference gateway WebSocket") from e
@@ -500,6 +508,8 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type")
         if event_type == "gateway.error":
+            # the openai model allows extra fields, so category and should_retry
+            # reach _handle_error through model_extra
             return ResponseErrorEvent.model_validate(
                 {
                     "type": "error",
@@ -507,6 +517,8 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
                     "code": event.get("code"),
                     "message": event.get("message", "gateway error"),
                     "param": None,
+                    "category": event.get("category"),
+                    "should_retry": event.get("should_retry"),
                 }
             )
         if event_type in ("gateway.connected", "gateway.session_expiring", "gateway.keepalive"):
@@ -521,8 +533,14 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
             super()._handle_error(event)
             return
         status_code, retryable = mapped
+        extra = event.model_extra or {}
+        label = event.code
+        if extra.get("category"):
+            label = f"{event.code}, {extra['category']}"
+        if extra.get("should_retry") is False:
+            retryable = False  # absent on gateways older than should_retry: stays retryable
         raise APIStatusError(
-            f"{event.message} ({event.code})", status_code=status_code, retryable=retryable
+            f"{event.message} ({label})", status_code=status_code, retryable=retryable
         )
 
     async def _run_impl(self) -> None:
@@ -532,6 +550,8 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
             # the engine raises without `from`, so __context__ holds the openai error
             if e.status_code == 429 and isinstance(e.__context__, openai.APIStatusError):
                 self._log_rate_limited(e.__context__)
+                if _terminal_denial(e.__context__.response.headers):
+                    e.retryable = False
             raise
 
     def _log_rate_limited(self, e: openai.APIStatusError) -> None:
