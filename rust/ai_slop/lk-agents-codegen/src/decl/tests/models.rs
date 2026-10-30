@@ -90,6 +90,32 @@ fn a_record_constant_is_a_model_field_at_its_fixed_value() {
     assert!(!shell.contains("\"type\""), "{shell}");
 }
 
+// Catches: a total TypedDict's defaulted key written with a hand annotation but no
+// `NotRequired`, so the type demands a key the reader accepts missing.
+#[test]
+fn a_defaulted_typed_dict_key_is_not_required_whatever_its_annotation() {
+    let decls = read(
+        r#"#[crate::host(record(module = "session", typed_dict, extract))]
+        pub struct Dial {
+            pub number: String,
+            #[host(default = None, annotation = "str | None")]
+            pub token: Option<String>,
+            #[host(default = None)]
+            pub caller: Option<String>,
+        }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(
+        session.contains("class Dial(TypedDict):\n")
+            && session.contains("    number: str\n")
+            && session.contains("    token: NotRequired[str | None]\n")
+            && session.contains("    caller: NotRequired[str]\n"),
+        "{session}"
+    );
+}
+
 // Catches: a legacy union naming a record migrated to a declaration failing generation, the
 // union referencing its model before the module defines it, or the record not marked for the
 // legacy conversions (by-reference emit, union tag) its members owe.

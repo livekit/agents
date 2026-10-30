@@ -535,14 +535,14 @@ fn model(
                 };
                 let ann = match (&f.annotation, inner) {
                     (Some(text), _) => typing.annotation(text, &r.rust),
-                    (None, Some(inner)) if !total => {
-                        annotation(inner, module, own, out, false, typing)
-                    }
-                    (None, Some(inner)) => {
-                        runtime.add("typing", "NotRequired");
-                        format!("NotRequired[{}]", annotation(inner, module, own, out, false, typing))
-                    }
+                    (None, Some(inner)) => annotation(inner, module, own, out, false, typing),
                     (None, None) => annotation(&f.ty, module, own, out, false, typing),
+                };
+                let ann = if total && omittable(f) {
+                    runtime.add("typing", "NotRequired");
+                    format!("NotRequired[{ann}]")
+                } else {
+                    ann
                 };
                 s.push_str(&format!("    {}: {ann}\n", f.host_name()));
                 s.push_str(&docstring(&f.doc, "    "));

@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, NotRequired, TypeAlias
 
 from typing_extensions import TypedDict
 
@@ -56,8 +56,8 @@ class TwilioDial(TypedDict):
     from_number: str
     account_sid: str
     auth_token: str
-    call_token: str | None
-    original_caller_number: str | None
+    call_token: NotRequired[str | None]
+    original_caller_number: NotRequired[str | None]
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
