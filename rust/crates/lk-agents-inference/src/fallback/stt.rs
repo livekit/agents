@@ -757,6 +757,56 @@ mod preroll_tests {
         assert_eq!(tee.dropped_preroll_frames(), 2);
     }
 
+    /// A serving stream that pushes `rate + 1` back into the tee for each odd `rate`, as a host
+    /// sink re-entering through the GIL or a concurrent caller would.
+    struct Echo(Arc<Log>, std::sync::Weak<InputTee>);
+
+    impl StreamSink<AudioFrame> for Echo {
+        fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
+            self.0.got.lock().push(format!("push:{}", item.sample_rate));
+            match (item.sample_rate % 2, self.1.upgrade()) {
+                (1, Some(tee)) => TeeSink(tee).push(frame(item.sample_rate + 1)),
+                _ => Ok(()),
+            }
+        }
+        fn flush(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn end_input(&self) {}
+    }
+
+    /// Catches: the serving stream called under the tee's lock, so a stream that pushes again
+    /// deadlocks.
+    #[test]
+    fn a_stream_that_pushes_again_from_its_push_does_not_deadlock() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let tee = InputTee::new();
+            let rec = Arc::new(Log::default());
+            tee.set_main(Box::new(Echo(Arc::clone(&rec), Arc::downgrade(&tee))));
+            TeeSink(Arc::clone(&tee)).push(frame(1)).unwrap();
+            done.send(rec.got.lock().clone()).unwrap();
+        });
+        let got = finished.recv_timeout(std::time::Duration::from_secs(5)).expect("deadlocked");
+        assert_eq!(got, ["push:1", "push:2"]);
+    }
+
+    /// Catches: a frame pushed while the preroll is replayed lost (buffered after the drain, the
+    /// stream installed over it) or delivered ahead of the replay.
+    #[test]
+    fn a_push_during_the_replay_arrives_after_it_in_order() {
+        let tee = InputTee::new();
+        let sink = TeeSink(Arc::clone(&tee));
+        sink.push(frame(1)).unwrap();
+        sink.push(frame(4)).unwrap();
+
+        let rec = Arc::new(Log::default());
+        tee.set_main(Box::new(Echo(Arc::clone(&rec), Arc::downgrade(&tee))));
+        sink.push(frame(6)).unwrap();
+
+        assert_eq!(*rec.got.lock(), ["push:1", "push:4", "push:2", "push:6"]);
+    }
+
     /// Catches: buffering continuing after a stream is installed.
     #[test]
     fn nothing_is_buffered_while_a_stream_is_serving() {

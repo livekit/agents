@@ -424,3 +424,44 @@ async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappe
     assert!(error.message().contains("capacity exceeded"));
     assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
 }
+
+/// A sink calling back on each frame's sample rate, its identity in these tests.
+struct Hook<F>(F);
+
+impl<F: Fn(u32) -> Result<(), ProviderError> + Send + Sync> StreamSink<AudioFrame> for Hook<F> {
+    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        (self.0)(frame.sample_rate)
+    }
+    fn flush(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn end_input(&self) {}
+}
+
+fn frame(rate: u32) -> Pushed {
+    Pushed::Audio(AudioFrame::new(vec![0; 640], rate, 1, 320))
+}
+
+// Catches: an attempt's sink called under the input's lock, so a sink that pushes again (a host
+// sink re-entering through the GIL) deadlocks, in the replay or live.
+#[test]
+fn a_sink_that_pushes_again_from_its_push_does_not_deadlock() {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let input = Arc::new(Input::default());
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let (weak, log) = (Arc::downgrade(&input), Arc::clone(&heard));
+        input.send(frame(1)).unwrap();
+        input.install(Box::new(Hook(move |rate| {
+            log.lock().push(rate);
+            match (rate % 2, weak.upgrade()) {
+                (1, Some(input)) => input.send(frame(rate + 1)),
+                _ => Ok(()),
+            }
+        })));
+        input.send(frame(3)).unwrap();
+        done.send(heard.lock().clone()).unwrap();
+    });
+    let heard = finished.recv_timeout(std::time::Duration::from_secs(5)).expect("deadlocked");
+    assert_eq!(heard, [1, 2, 3, 4]);
+}
