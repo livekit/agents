@@ -31,7 +31,8 @@ impl Tracker {
         }
     }
 
-    /// A change no wait observes.
+    /// A change no wait observes: `change` must leave what `PlaybackSegments::settled` reads
+    /// (the finish count, the last event, the reset epoch) as it was, or a parked wait misses it.
     fn update<T>(&self, change: impl FnOnce(&mut PlaybackSegments) -> T) -> T {
         let mut out = None;
         self.segments.send_if_modified(|s| {
@@ -100,10 +101,6 @@ impl PlaybackTracker for Tracker {
     fn reset(&self) {
         self.segments.send_modify(PlaybackSegments::reset);
         self.on_playback_reset();
-    }
-
-    fn segments(&self) -> u64 {
-        self.segments.borrow().segments()
     }
 
     fn position(&self) -> Duration {
@@ -272,5 +269,40 @@ mod tests {
             panic!("reset must release a parked waiter");
         };
         assert!(finished.interrupted);
+    }
+
+    /// Fails on any event the tracker fans out for a segment that already finished.
+    struct NothingFor(PlaybackSegment);
+
+    impl PlaybackObserver for NothingFor {
+        fn on_playback_event(&self, ev: &PlaybackEvent) {
+            let segment = match ev {
+                PlaybackEvent::Started(e) => e.segment,
+                PlaybackEvent::Progressed(e) => e.segment,
+                PlaybackEvent::Finished { segment, .. } => *segment,
+            };
+            assert_ne!(segment, self.0, "a stale report reached the observers");
+        }
+    }
+
+    #[test]
+    fn a_stale_report_never_reaches_observers() {
+        let tracker = Tracker::new();
+        let old = PlaybackSegment { attachment: 4, segment: 1 };
+        let new = PlaybackSegment { attachment: 5, segment: 2 };
+        let finished =
+            PlaybackFinished { playback_position: Duration::from_millis(20), ..Default::default() };
+        assert!(tracker.begin_segment(old));
+        tracker.note_captured(Duration::from_millis(20));
+        PlaybackTracker::note_flush(&tracker);
+        assert!(tracker.playback_finished(old, finished.clone()));
+        tracker.observe(Arc::new(NothingFor(old)));
+        assert!(tracker.begin_segment(new));
+        tracker.note_captured(Duration::from_millis(20));
+        PlaybackTracker::note_flush(&tracker);
+        assert!(!tracker.playback_finished(old, finished.clone()));
+        assert!(!tracker.playback_started(old, Ts::ZERO));
+        assert!(!tracker.playback_progressed(old, Ts::ZERO, Duration::ZERO, Duration::from_millis(20)));
+        assert!(tracker.playback_finished(new, finished));
     }
 }

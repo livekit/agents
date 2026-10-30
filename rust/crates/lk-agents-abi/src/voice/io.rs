@@ -123,9 +123,6 @@ pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
     /// the open segment played.
     fn reset(&self);
 
-    /// How many segments were opened so far.
-    fn segments(&self) -> u64;
-
     /// What the sink reported played of the open segment, zero when none is open.
     fn position(&self) -> Duration;
 

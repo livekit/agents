@@ -10,7 +10,7 @@ async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_
     let speech =
         api.say_audio("Not confirmed heard.".into(), Box::new(frames), None, true, None).unwrap();
     settle().await;
-    assert_eq!(output.0.segments(), 1, "the output never accepted the segment");
+    assert!(output.1.get().is_some(), "the output never accepted the segment");
     // Ten milliseconds delivered, the transport's two-second allowance, then one clock tick.
     api.time().advance(Duration::from_millis(2011));
     settle().await;

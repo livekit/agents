@@ -120,11 +120,6 @@ impl PlaybackSegments {
         }
     }
 
-    /// How many segments were opened so far: the number of the one open or last closed.
-    pub fn segments(&self) -> u64 {
-        self.segments
-    }
-
     /// The playhead per segment: what the sink reported played of the open segment, zero when
     /// none is open. Never the previous segment's finish (a cut speech would truncate at it).
     pub fn position(&self) -> Duration {
