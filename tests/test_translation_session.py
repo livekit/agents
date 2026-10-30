@@ -36,10 +36,13 @@ from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 pytestmark = pytest.mark.unit
 
 
-def _frame(duration: float = 0.02, sample_rate: int = 16000) -> rtc.AudioFrame:
+def _frame(
+    duration: float = 0.02, sample_rate: int = 16000, *, silent: bool = False
+) -> rtc.AudioFrame:
+    """Speech by default: a provider's silence is told apart from it by level."""
     num_samples = int(sample_rate * duration)
     return rtc.AudioFrame(
-        data=b"\x00\x00" * num_samples,
+        data=(b"\x00\x00" if silent else b"\x00\x10") * num_samples,
         sample_rate=sample_rate,
         num_channels=1,
         samples_per_channel=num_samples,
@@ -227,10 +230,12 @@ async def test_both_transcripts_are_reported() -> None:
             "input_transcript", InputTranscript(text="hello", is_final=True, language="en")
         )
         model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        model_session.speak()
 
         assert heard == [("hello", True, "en")]
         # the language the model translates into stands in when it stamps none
         assert spoken == [("hola", True, "es")]
+        # published once its audio segment ends, which the text segment ends with
         await _wait_for(lambda: text_out._messages == ["hola"])
     finally:
         await session.aclose()
@@ -315,6 +320,8 @@ async def test_an_idle_model_still_ends_its_segment() -> None:
     # a provider that never reports where its speech ends
     model = _FakeTranslationModel()
     session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    # and never sends the transcript its segment would wait for
+    session._text_wait_timeout = 0.05
     played: list[float] = []
     audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
 
@@ -823,6 +830,7 @@ async def test_a_segment_is_finalized_on_the_track_that_carried_it() -> None:
         pending_text: str = "",
         track_id: str | None = None,
         sender_identity: str | None = None,
+        additional_attributes: dict[str, str] | None = None,
     ) -> None:
         flushed.append((track_id, sender_identity))
 
@@ -836,3 +844,781 @@ async def test_a_segment_is_finalized_on_the_track_that_carried_it() -> None:
     assert flushed == [("TR_a", "alice")]
     assert sink._pinned_track_id == "TR_b"
     await sink.aclose()
+
+
+# -- attributing the translation to the speaker, and naming its track --
+
+
+class _RecordingTaggedOutput(_RecordingTranscriptOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attributes: list[dict[str, str]] = []
+        self.captured: list[tuple[str, dict[str, str]]] = []
+
+    def set_attributes(self, attributes: dict[str, str]) -> None:
+        self.attributes.append(dict(attributes))
+
+    async def capture_text(self, text: str) -> None:
+        self.captured.append((text, self.attributes[-1] if self.attributes else {}))
+
+    def flush(self) -> None:
+        pass
+
+
+class _NamingAudioOutput:
+    def __init__(self) -> None:
+        self.names: list[str] = []
+        self.started = False
+
+    async def set_track_name(self, name: str) -> None:
+        self.names.append(name)
+
+    async def start(self) -> None:
+        self.started = True
+
+
+async def test_the_translation_stays_the_agents_and_carries_its_language() -> None:
+    room_io = _room_io()
+    _linked(room_io)
+    translation = _RecordingTaggedOutput()
+    room_io._output_tr_output = translation  # type: ignore[assignment]
+    alice = _FakeParticipant("alice")
+
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_a"), alice))  # type: ignore[arg-type]
+
+    # clients file a transcript under its sender: sent as Alice, the translation would read
+    # as her own words, so it stays the agent's, on the agent's track
+    assert translation.participants == []
+    assert translation.tracks == []
+    assert translation.attributes == [{"lk.transcription_language": "es"}]
+
+
+async def test_the_source_transcript_carries_the_language_heard() -> None:
+    room_io = _room_io()
+    heard = _RecordingTaggedOutput()
+    room_io._input_tr_output = heard  # type: ignore[assignment]
+    ch = utils.aio.Chan[tuple[str, bool, str | None]]()
+    task = asyncio.create_task(room_io._forward_input_transcript(ch))
+    try:
+        ch.send_nowait(("hello", False, "en"))
+        ch.send_nowait(("hello there", True, None))
+        ch.close()
+        await asyncio.wait_for(task, 1.0)
+    finally:
+        await utils.aio.cancel_and_wait(task)
+
+    assert heard.captured == [
+        ("hello", {"lk.transcription_language": "en"}),
+        # a model that does not say leaves it off rather than guess
+        ("hello there", {}),
+    ]
+
+
+async def test_the_translated_track_is_named_for_its_source_and_language() -> None:
+    room_io = _room_io(text_output=False, track="TR_a")
+    _linked(room_io)
+    audio_out = _NamingAudioOutput()
+    room_io._audio_output = audio_out  # type: ignore[assignment]
+    room_io._init_atask = asyncio.create_task(room_io._init_task())
+    room_io._room_connected_fut.set_result(None)
+    try:
+        room_io._on_track_published(
+            _FakePublication("TR_a"),  # type: ignore[arg-type]
+            _FakeParticipant("alice"),  # type: ignore[arg-type]
+        )
+        await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+    finally:
+        await utils.aio.cancel_and_wait(room_io._init_atask)
+
+    # named before the first publish, so it never goes out under the default
+    assert audio_out.names == ["TR_a-es"]
+    assert audio_out.started
+
+
+async def test_retargeting_or_relinking_renames_the_translated_track() -> None:
+    model = _FakeTranslationModel()
+    session = TranslationSession(model=model)
+    room_io = TranslationRoomIO(session, rtc.Room())
+    session._room_io = room_io
+    _linked(room_io)
+    translation = _RecordingTaggedOutput()
+    room_io._output_tr_output = translation  # type: ignore[assignment]
+    audio_out = _NamingAudioOutput()
+    room_io._audio_output = audio_out  # type: ignore[assignment]
+    done: asyncio.Future[None] = asyncio.Future()
+    done.set_result(None)
+    room_io._init_atask = done  # type: ignore[assignment]
+    alice = _FakeParticipant("alice")
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_a"), alice))  # type: ignore[arg-type]
+
+    session.set_target_language("fr")
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_b"), alice))  # type: ignore[arg-type]
+    await asyncio.gather(*room_io._tasks)
+
+    assert audio_out.names == ["TR_a-es", "TR_a-fr", "TR_b-fr"]
+    assert translation.attributes[-1] == {"lk.transcription_language": "fr"}
+
+
+async def test_a_track_name_given_outright_is_kept() -> None:
+    from livekit.agents.voice.room_io import AudioOutputOptions
+
+    room_io = _room_io(audio_output=AudioOutputOptions(track_name="translation"))
+    _linked(room_io)
+    audio_out = _NamingAudioOutput()
+    room_io._audio_output = audio_out  # type: ignore[assignment]
+    done: asyncio.Future[None] = asyncio.Future()
+    done.set_result(None)
+    room_io._init_atask = done  # type: ignore[assignment]
+
+    room_io._apply_link(
+        _LinkedTrack(_FakePublication("TR_a"), _FakeParticipant("alice"))  # type: ignore[arg-type]
+    )
+    await asyncio.gather(*room_io._tasks)
+
+    assert audio_out.names == []
+
+
+async def test_renaming_a_published_track_replaces_it() -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents.voice.room_io._output import _ParticipantAudioOutput
+
+    published: list[str] = []
+    unpublished: list[str] = []
+
+    async def _publish(track: rtc.LocalAudioTrack, _: object) -> object:
+        published.append(track.name)
+        return SimpleNamespace(sid=f"TR_{len(published)}")
+
+    async def _unpublish(sid: str) -> None:
+        unpublished.append(sid)
+
+    room = SimpleNamespace(
+        local_participant=SimpleNamespace(publish_track=_publish, unpublish_track=_unpublish)
+    )
+    output = _ParticipantAudioOutput(
+        room,  # type: ignore[arg-type]
+        sample_rate=24000,
+        num_channels=1,
+        track_publish_options=rtc.TrackPublishOptions(),
+    )
+    try:
+        # before publishing, only the name changes
+        await output.set_track_name("TR_a-es")
+        assert published == []
+
+        output._publication = await _publish(  # type: ignore[assignment]
+            rtc.LocalAudioTrack.create_audio_track("TR_a-es", output._audio_source), None
+        )
+        await output.set_track_name("TR_a-fr")
+        await output.set_track_name("TR_a-fr")
+
+        # a track's name is fixed once published, so the track itself is replaced, once
+        assert unpublished == ["TR_1"]
+        assert published == ["TR_a-es", "TR_a-fr"]
+        assert output.track_name == "TR_a-fr"
+    finally:
+        await output.aclose()
+
+
+# -- the label follows the language actually spoken, and segments close under their own --
+
+
+class _LabelRecorder:
+    def __init__(self) -> None:
+        self.languages: list[str] = []
+
+    def _on_output_language_changed(self, language: str) -> None:
+        self.languages.append(language)
+
+
+class _Counts:
+    def __init__(self, audio_out: FakeAudioOutput) -> None:
+        self.frames = 0
+        self.flushes = 0
+        capture, flush = audio_out.capture_frame, audio_out.flush
+
+        async def _capture(frame: rtc.AudioFrame) -> None:
+            self.frames += 1
+            await capture(frame)
+
+        def _flush() -> None:
+            self.flushes += 1
+            flush()
+
+        audio_out.capture_frame = _capture  # type: ignore[method-assign]
+        audio_out.flush = _flush  # type: ignore[method-assign]
+
+
+async def test_the_label_follows_the_language_the_speech_is_stamped_with() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, audio_out, _ = _session(model)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        model_session = model.sessions[0]
+        model_session._audio_ch.send_nowait(TranslatedAudioFrame(frame=_frame(), language="es"))
+        await _wait_for(lambda: counts.frames == 1)
+
+        session.set_target_language("fr")
+        # the provider has not applied it yet, so Spanish is still what is being spoken
+        model_session._audio_ch.send_nowait(TranslatedAudioFrame(frame=_frame(), language="es"))
+        await _wait_for(lambda: counts.frames == 2)
+        assert labels.languages == []
+
+        model_session._audio_ch.send_nowait(TranslatedAudioFrame(frame=_frame(), language="fr"))
+        await _wait_for(lambda: counts.frames == 3)
+        assert labels.languages == ["fr"]
+        # the Spanish segment ended before the French speech went into the next
+        assert counts.flushes >= 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_an_unstamped_provider_is_labelled_with_the_request() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, audio_out, _ = _session(model)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        model.sessions[0].speak()
+        await _wait_for(lambda: counts.frames == 1)
+
+        session.set_target_language("fr")
+        await _wait_for(lambda: labels.languages == ["fr"])
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_an_unstamped_retarget_ends_a_segment_that_never_pauses() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    # no pause in the speech is ever long enough to end the segment on its own
+    session, _, audio_out, _ = _session(model, output_segment_timeout=60)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        model.sessions[0].speak()
+        await _wait_for(lambda: counts.frames == 1)
+
+        session.set_target_language("fr")
+        await _wait_for(lambda: labels.languages == ["fr"])
+        # the Spanish segment ended, so its playout can finish and the label can land
+        assert counts.flushes == 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+def _record_stream_flushes(sink: object) -> list[tuple[str | None, dict[str, str] | None]]:
+    flushed: list[tuple[str | None, dict[str, str] | None]] = []
+
+    async def _record_flush(
+        writer: object = None,
+        extra_attributes: dict[str, str] | None = None,
+        pending_text: str = "",
+        track_id: str | None = None,
+        sender_identity: str | None = None,
+        additional_attributes: dict[str, str] | None = None,
+    ) -> None:
+        flushed.append((sender_identity, additional_attributes))
+
+    sink._flush_task = _record_flush  # type: ignore[attr-defined]
+    return flushed
+
+
+async def test_a_language_change_closes_the_open_translation_segment_under_the_old_one() -> None:
+    from livekit.agents.voice.room_io._output import _ParticipantStreamTranscriptionOutput
+
+    sink = _ParticipantStreamTranscriptionOutput(
+        rtc.Room(),
+        is_delta_stream=True,
+        participant="alice",
+        track="TR_a",
+        attributes={"lk.transcription_language": "es"},
+    )
+    flushed = _record_stream_flushes(sink)
+    try:
+        await sink.capture_text("hola")
+        sink.set_attributes({"lk.transcription_language": "fr"})
+        await asyncio.sleep(0)
+
+        # its header went out in Spanish, so it closes in Spanish and French opens anew
+        assert flushed == [("alice", {"lk.transcription_language": "es"})]
+        assert not sink._capturing
+    finally:
+        await sink.aclose()
+
+
+async def test_a_whole_text_segment_takes_a_new_language_without_closing() -> None:
+    from livekit.agents.voice.room_io._output import _ParticipantStreamTranscriptionOutput
+
+    sink = _ParticipantStreamTranscriptionOutput(
+        rtc.Room(), is_delta_stream=False, participant="alice", track="TR_a"
+    )
+    flushed = _record_stream_flushes(sink)
+    try:
+        await sink.capture_text("hello")
+        # a source transcript learns its language part way, and is republished whole anyway
+        sink.set_attributes({"lk.transcription_language": "en"})
+        await asyncio.sleep(0)
+        assert flushed == []
+
+        sink.flush()
+        sink.set_attributes({})
+        await asyncio.sleep(0)
+        # the final keeps the language it was flushed with, not the one set after
+        assert flushed == [("alice", {"lk.transcription_language": "en"})]
+    finally:
+        await sink.aclose()
+
+
+async def test_clearing_the_speaker_closes_their_open_segment_as_theirs() -> None:
+    from livekit.agents.voice.room_io._output import _ParticipantStreamTranscriptionOutput
+
+    sink = _ParticipantStreamTranscriptionOutput(
+        rtc.Room(), is_delta_stream=True, participant="alice", track="TR_a"
+    )
+    flushed = _record_stream_flushes(sink)
+    try:
+        await sink.capture_text("hola")
+        sink.set_participant(None)
+        await asyncio.sleep(0)
+
+        assert [identity for identity, _ in flushed] == ["alice"]
+    finally:
+        await sink.aclose()
+
+
+async def test_legacy_transcriptions_carry_the_language() -> None:
+    from livekit.agents.voice.room_io._output import _ParticipantLegacyTranscriptionOutput
+
+    sink = _ParticipantLegacyTranscriptionOutput(
+        rtc.Room(), is_delta_stream=True, participant="alice", track="TR_a"
+    )
+    published: list[tuple[str, bool, str]] = []
+
+    async def _record(
+        id: str, text: str, final: bool, *, language: str | None = None, **_: object
+    ) -> None:
+        published.append((text, final, language if language is not None else sink._language))
+
+    sink._publish_transcription = _record  # type: ignore[method-assign]
+    try:
+        sink.set_attributes({"lk.transcription_language": "es"})
+        await sink.capture_text("hola")
+        # a change closes the Spanish segment as Spanish
+        sink.set_attributes({"lk.transcription_language": "fr"})
+        await asyncio.sleep(0)
+        await sink.capture_text("bonjour")
+        sink.flush()
+        await asyncio.sleep(0)
+
+        assert published == [
+            ("hola", False, "es"),
+            ("hola", True, "es"),
+            ("bonjour", False, "fr"),
+            ("bonjour", True, "fr"),
+        ]
+    finally:
+        await sink.aclose()
+
+
+class _HeldSynchronizer:
+    """Stands in for a TranscriptSynchronizer whose old segment is still playing out."""
+
+    def __init__(self) -> None:
+        self.played: asyncio.Future[None] = asyncio.Future()
+        self.rotated: asyncio.Future[None] = asyncio.Future()
+
+        class _Audio:
+            async def wait_for_playout(_self) -> None:
+                await self.played
+
+        self.audio_output = _Audio()
+
+    async def barrier(self) -> None:
+        await self.rotated
+
+
+async def test_a_language_change_waits_for_the_old_language_to_play_out() -> None:
+    room_io = _room_io()
+    _linked(room_io)
+    translation = _RecordingTaggedOutput()
+    room_io._output_tr_output = translation  # type: ignore[assignment]
+    synchronizer = _HeldSynchronizer()
+    room_io._tr_synchronizer = synchronizer  # type: ignore[assignment]
+    room_io._apply_link(
+        _LinkedTrack(_FakePublication("TR_a"), _FakeParticipant("alice"))  # type: ignore[arg-type]
+    )
+
+    room_io._on_output_language_changed("fr")
+    await asyncio.sleep(0)
+    # Spanish words the synchronizer has yet to release must still go out as Spanish
+    assert translation.attributes[-1] == {"lk.transcription_language": "es"}
+
+    synchronizer.played.set_result(None)
+    await asyncio.sleep(0)
+    # played, but the synchronizer has not closed the Spanish segment yet
+    assert translation.attributes[-1] == {"lk.transcription_language": "es"}
+
+    synchronizer.rotated.set_result(None)
+    await asyncio.gather(*room_io._tasks)
+    assert translation.attributes[-1] == {"lk.transcription_language": "fr"}
+
+
+class _GatedTextRoom:
+    """A connected room whose text streams open only when the test lets them."""
+
+    def __init__(self) -> None:
+        self.open_gate: asyncio.Future[None] = asyncio.Future()
+        self.streams: list[dict[str, object]] = []
+        room = self
+
+        class _Writer:
+            def __init__(self, attributes: dict[str, str]) -> None:
+                self.record: dict[str, object] = {
+                    "header": dict(attributes),
+                    "text": [],
+                    "closed_with": None,
+                }
+                room.streams.append(self.record)
+
+            async def write(self, text: str) -> None:
+                self.record["text"].append(text)  # type: ignore[union-attr]
+
+            async def aclose(self, attributes: dict[str, str] | None = None) -> None:
+                self.record["closed_with"] = dict(attributes or {})
+
+        class _Local:
+            identity = "agent"
+
+            async def stream_text(self, *, attributes: dict[str, str], **_: object) -> _Writer:
+                header = dict(attributes)
+                await room.open_gate
+                return _Writer(header)
+
+        self.local_participant = _Local()
+
+    def isconnected(self) -> bool:
+        return True
+
+    def on(self, *_: object) -> None: ...
+
+    def off(self, *_: object) -> None: ...
+
+
+async def test_a_language_change_while_the_stream_opens_closes_it_as_the_old_language() -> None:
+    from livekit.agents.voice.room_io._output import _ParticipantStreamTranscriptionOutput
+
+    room = _GatedTextRoom()
+    sink = _ParticipantStreamTranscriptionOutput(
+        room,  # type: ignore[arg-type]
+        is_delta_stream=True,
+        participant="alice",
+        track="TR_a",
+        attributes={"lk.transcription_language": "es"},
+    )
+    try:
+        capture = asyncio.create_task(sink.capture_text("hola"))
+        await asyncio.sleep(0)
+        # the Spanish stream is still opening when French is set
+        sink.set_attributes({"lk.transcription_language": "fr"})
+        room.open_gate.set_result(None)
+        await capture
+
+        await sink.capture_text("bonjour")
+        sink.flush()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        spanish, french = room.streams
+        assert spanish["header"]["lk.transcription_language"] == "es"  # type: ignore[index]
+        assert spanish["text"] == ["hola"]
+        assert spanish["closed_with"]["lk.transcription_language"] == "es"  # type: ignore[index]
+        # French opened its own stream rather than reusing the Spanish one
+        assert french["header"]["lk.transcription_language"] == "fr"  # type: ignore[index]
+        assert french["text"] == ["bonjour"]
+    finally:
+        await sink.aclose()
+
+
+async def test_an_unstamped_retarget_before_any_audio_keeps_the_text_waiting_for_it() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        # the translation's text arrives ahead of its audio, which has not come yet
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+        session.set_target_language("fr")
+        await asyncio.sleep(0.01)
+
+        # ending the empty segment would rotate the synchronizer and drop "hola", and
+        # relabelling now would publish it as French
+        assert counts.flushes == 0
+        assert labels.languages == []
+
+        # "hola"'s audio comes and its segment ends; only then does the label change
+        model.sessions[0].speak()
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="", is_final=True))
+        await _wait_for(lambda: labels.languages == ["fr"])
+        assert counts.flushes == 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_an_unstamped_retarget_ends_speech_held_in_the_resampler() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    audio_out = FakeAudioOutput(sample_rate=48000)
+    session = TranslationSession(model=model, output_segment_timeout=60)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = audio_out
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        # a frame too short for the resampler to give anything back yet
+        model.sessions[0].speak(_frame(duration=0.001, sample_rate=16000))
+        await _wait_for(lambda: session._resampler is not None)
+        assert counts.frames == 0
+
+        session.set_target_language("fr")
+        await _wait_for(lambda: labels.languages == ["fr"])
+        # the held Spanish was drained into its own segment, which ended before the label
+        assert counts.flushes == 1
+        assert counts.frames >= 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_an_idle_unstamped_retarget_relabels_at_once() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        model.sessions[0].speak()
+        # the Spanish utterance ends, and the session goes quiet
+        await _wait_for(lambda: counts.flushes == 1)
+
+        session.set_target_language("fr")
+        # nothing of the old language is waiting, so the next utterance starts as French
+        await _wait_for(lambda: labels.languages == ["fr"])
+        assert counts.flushes == 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_a_deferred_label_does_not_outlive_its_session() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, _, _ = _session(model)
+    await session.start()
+    model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+    session.set_target_language("fr")
+    await _wait_for(lambda: session._relabel_at_segment_end == "fr")
+    await session.aclose()
+
+    # the run it was deferred for is over, so a restart starts clean
+    assert session._relabel_at_segment_end is None
+    session.set_target_language("de")
+    await session.start()
+    try:
+        assert session._relabel_at_segment_end is None
+        assert session._output_language == "de"
+    finally:
+        await session.aclose()
+
+
+async def test_the_translation_event_carries_all_of_it() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    spoken: list[tuple[str, bool]] = []
+    session.on("translation_transcribed", lambda ev: spoken.append((ev.transcript, ev.is_final)))
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        # pieces, then an empty final, as a provider that only sends deltas reports them
+        model_session.emit("output_transcript", OutputTranscript(text="hola ", is_final=False))
+        model_session.emit("output_transcript", OutputTranscript(text="mundo", is_final=False))
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        model_session.emit("output_transcript", OutputTranscript(text="adiós", is_final=True))
+
+        assert spoken == [
+            ("hola ", False),
+            ("hola mundo", False),
+            ("hola mundo", True),
+            ("adiós", True),
+        ]
+    finally:
+        await session.aclose()
+
+
+async def test_the_text_segment_ends_with_its_audio_segment() -> None:
+    model = _FakeTranslationModel()
+    # the transcript goes final well before the speech pauses
+    session, _, audio_out, text_out = _session(model, output_segment_timeout=0.1)
+    counts = _Counts(audio_out)
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        model_session.speak()
+        await asyncio.sleep(0.02)
+        # the text has not ended yet: its audio has not
+        assert text_out._messages == []
+
+        await _wait_for(lambda: counts.flushes == 1)
+        await _wait_for(lambda: text_out._messages == ["hola"])
+    finally:
+        await session.aclose()
+
+
+async def test_text_without_audio_ends_on_its_own_final() -> None:
+    model = _FakeTranslationModel()
+    session, _, _, text_out = _session(model)
+    session.output.audio = None
+    await session.start()
+    try:
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        await _wait_for(lambda: text_out._messages == ["hola"])
+    finally:
+        await session.aclose()
+
+
+async def test_paced_translation_text_survives_a_late_transcript_final() -> None:
+    from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
+
+    model = _FakeTranslationModel()
+    audio_sink, text_sink = FakeAudioOutput(), FakeTextOutput()
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=audio_sink, next_in_chain_text=text_sink
+    )
+    session = TranslationSession(model=model, output_segment_timeout=0.05)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = synchronizer.audio_output
+    session.output.transcription = synchronizer.text_output
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        # a provider that sends deltas, and marks the transcript final only after it goes quiet
+        model_session.emit("output_transcript", OutputTranscript(text="hola ", is_final=False))
+        model_session.emit("output_transcript", OutputTranscript(text="mundo", is_final=False))
+        for _ in range(5):
+            model_session.speak(_frame(duration=0.02, sample_rate=24000))
+
+        # the silence timer ends the audio segment, and it plays out before the late final
+        await asyncio.sleep(0.4)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+
+        await _wait_for(lambda: "".join(text_sink._messages).strip() == "hola mundo", timeout=3)
+    finally:
+        await session.aclose()
+        await synchronizer.aclose()
+
+
+async def test_a_quiet_segment_waits_for_text_that_trails_its_audio() -> None:
+    from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
+
+    model = _FakeTranslationModel()
+    audio_sink, text_sink = FakeAudioOutput(), FakeTextOutput()
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=audio_sink, next_in_chain_text=text_sink
+    )
+    session = TranslationSession(model=model, output_segment_timeout=0.05)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = synchronizer.audio_output
+    session.output.transcription = synchronizer.text_output
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.speak(_frame(duration=0.1, sample_rate=24000))
+        # the speech goes quiet before any of its transcript arrives
+        await asyncio.sleep(0.15)
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+        await asyncio.sleep(0.05)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+
+        await _wait_for(lambda: "".join(text_sink._messages).strip() == "hola", timeout=3)
+        # the next translation starts a segment of its own, rather than taking "hola" in
+        model_session.speak(_frame(duration=0.1, sample_rate=24000))
+        model_session.emit("output_transcript", OutputTranscript(text="adiós", is_final=True))
+        await _wait_for(lambda: text_sink._messages[-1:] == ["adiós"], timeout=3)
+    finally:
+        await session.aclose()
+        await synchronizer.aclose()
+
+
+async def test_speech_resuming_while_waiting_for_text_carries_the_segment_on() -> None:
+    model = _FakeTranslationModel()
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    counts = _Counts(audio_out)
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+        model_session.speak()
+        await asyncio.sleep(0.1)
+        # quiet, but its text is still going, so the segment holds
+        assert counts.flushes == 0
+        model_session.speak()
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        await _wait_for(lambda: counts.flushes == 1)
+    finally:
+        await session.aclose()
+
+
+async def test_a_provider_streaming_silence_still_ends_each_translation() -> None:
+    from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
+
+    model = _FakeTranslationModel()
+    audio_sink, text_sink = FakeAudioOutput(), FakeTextOutput()
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=audio_sink, next_in_chain_text=text_sink
+    )
+    session = TranslationSession(model=model, output_segment_timeout=0.1)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = synchronizer.audio_output
+    session.output.transcription = synchronizer.text_output
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+
+        async def _stream(duration: float, *, silent: bool) -> None:
+            # as gpt-realtime-translate does: a chunk every 50ms, speaking or not
+            for _ in range(int(duration / 0.05)):
+                model_session.speak(_frame(duration=0.05, sample_rate=24000, silent=silent))
+                await asyncio.sleep(0.05)
+
+        await _stream(0.2, silent=True)
+        model_session.emit("output_transcript", OutputTranscript(text="Hola.", is_final=False))
+        await _stream(0.2, silent=False)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        # the speaker pauses; the provider keeps streaming, now silence
+        await _stream(0.6, silent=True)
+        model_session.emit("output_transcript", OutputTranscript(text=" Adiós.", is_final=False))
+        await _stream(0.2, silent=False)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        await _stream(0.6, silent=True)
+
+        await _wait_for(lambda: len(text_sink._messages) == 2, timeout=3)
+        assert [m.strip() for m in text_sink._messages] == ["Hola.", "Adiós."]
+    finally:
+        await session.aclose()
+        await synchronizer.aclose()

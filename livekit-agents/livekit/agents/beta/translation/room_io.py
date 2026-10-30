@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -9,7 +10,12 @@ from livekit import rtc
 from ...job import DEFAULT_PARTICIPANT_KINDS
 from ...log import logger
 from ...telemetry import trace_types
-from ...types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
+from ...types import (
+    ATTRIBUTE_PUBLISH_ON_BEHALF,
+    ATTRIBUTE_TRANSCRIPTION_LANGUAGE,
+    NOT_GIVEN,
+    NotGivenOr,
+)
 from ...utils import aio, is_given, log_exceptions
 from ...voice.events import CloseReason
 from ...voice.io import AudioInput, AudioOutput, TextOutput
@@ -29,6 +35,15 @@ if TYPE_CHECKING:
     from .translation_session import TranslationSession
 
 
+def _translated_track_name(source_track_sid: str, language: str) -> str:
+    """The name the translation of a track is published under, unless one is given.
+
+    A track carries no attributes, only a name, so the name is what tells a listener whose
+    speech a translated track carries and in which language.
+    """
+    return f"{source_track_sid}-{language}"
+
+
 class _LinkedTrack(NamedTuple):
     publication: rtc.RemoteTrackPublication
     participant: rtc.RemoteParticipant
@@ -45,9 +60,17 @@ class TranslationRoomOptions:
     audio_input: AudioInputOptions | bool = True
     """The speech to translate. Pass ``False`` to feed the session audio yourself."""
     audio_output: AudioOutputOptions | bool = True
-    """The track the translation is spoken on. Pass ``False`` to take the audio yourself."""
+    """The track the translation is spoken on. Pass ``False`` to take the audio yourself.
+
+    Unless ``track_name`` is given, it is published as ``{source_track_sid}-{language}``,
+    and republished under the new name when the source track or the language changes."""
     text_output: TextOutputOptions | bool = True
-    """Transcripts published to the room: what was heard, and what was spoken back."""
+    """Transcripts published to the room: what was heard, and what was spoken back.
+
+    What was heard is the speaker's, on their track; the translation is the agent's, on the
+    translated track it transcribes, as a client expects of an agent's speech. Both carry
+    ``lk.transcription_language`` where it is known, and the translated track's name links
+    the translation back to the speaker's track."""
     track: NotGivenOr[str] = NOT_GIVEN
     """The sid of the audio track to translate. If not given, the first eligible one
     published. A track is the unit here rather than a participant: a participant can publish
@@ -116,9 +139,21 @@ class TranslationRoomIO:
         self._room_connected_fut = asyncio.Future[None]()
         self._ready_fut = asyncio.Future[None]()
         self._init_atask: asyncio.Task[None] | None = None
-        self._input_transcript_ch: aio.Chan[tuple[str, bool]] | None = None
+        self._input_transcript_ch: aio.Chan[tuple[str, bool, str | None]] | None = None
         self._input_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
+        # the track whose speech is being translated, once linked
+        self._source_track_sid: str | None = None
+        # the language the translation is labelled with; the session moves it once the model
+        # is actually speaking a new one, and it lands once the old one has played out
+        self._output_language: str | None = None
+        self._requested_output_language: str | None = None
+        self._relabel_atask: asyncio.Task[None] | None = None
+        # a name given outright is kept; otherwise it follows the source track and language
+        audio_output_options = self._options.get_audio_output_options()
+        self._fixed_track_name = audio_output_options is not None and is_given(
+            audio_output_options.track_name
+        )
 
     async def start(self) -> None:
         audio_input_options = self._options.get_audio_input_options()
@@ -167,7 +202,7 @@ class TranslationRoomIO:
         text_output_options = self._options.get_text_output_options()
         if text_output_options:
             # _input_tr_output is built in _init_task, once there is a track to stamp it with
-            self._input_transcript_ch = aio.Chan[tuple[str, bool]]()
+            self._input_transcript_ch = aio.Chan[tuple[str, bool, str | None]]()
             self._input_transcript_atask = asyncio.create_task(
                 self._forward_input_transcript(self._input_transcript_ch)
             )
@@ -336,9 +371,10 @@ class TranslationRoomIO:
             self._audio_input.set_track_sid(track_sid)
 
     def _apply_link(self, linked: _LinkedTrack) -> None:
-        """Point the input and the transcript at a linked track."""
+        """Point the input, both transcripts and the translated track at a linked track."""
         self._participant_identity = linked.participant.identity
         track_sid = linked.publication.sid
+        self._source_track_sid = track_sid
 
         if self._audio_input:
             # pinned before the participant, so set_participant's scan of existing
@@ -349,6 +385,14 @@ class TranslationRoomIO:
             self._input_tr_output.set_participant(self._participant_identity)
             # the transcript follows the track, or later speech keeps the old stamp
             self._input_tr_output.set_track(track_sid)
+        if self._output_tr_output:
+            # the translation stays the agent's, on its own track: clients file a transcript
+            # under its sender, so sent as the speaker it would read as their own words
+            self._output_tr_output.set_attributes(self._output_attributes())
+
+        if self._init_atask is not None and self._init_atask.done():
+            # startup names the track itself, ahead of publishing it
+            self._rename_output_track_soon()
 
         logger.info(
             "TranslationRoomIO linked to track",
@@ -363,6 +407,7 @@ class TranslationRoomIO:
         """Stop translating any track, leaving the session with nothing to hear."""
         self._track_sid = None
         self._participant_identity = None
+        self._source_track_sid = None
         if self._track_available_fut.done():
             # a pending one is kept: startup may still be waiting on it, and would wait on a
             # replaced one forever, never publishing the translation
@@ -373,6 +418,84 @@ class TranslationRoomIO:
         if self._input_tr_output:
             self._input_tr_output.set_participant(None)
             self._input_tr_output.set_track(None)
+
+    def _on_output_language_changed(self, language: str) -> None:
+        """Retag the translation with the language it is now spoken in, and rename its track.
+
+        With transcripts paced to the audio, the synchronizer still holds words of the old
+        language while its speech plays out, and releases them after. So the change lands only
+        once that speech has played and the synchronizer has closed its segment; until then
+        the old words, and the old audio, keep the old label.
+        """
+        if language == (self._requested_output_language or self._output_language):
+            return
+
+        self._requested_output_language = language
+        pending = self._relabel_atask is not None and not self._relabel_atask.done()
+        if self._tr_synchronizer is None and not pending:
+            # nothing holds text back, so what is published already is the old language's
+            self._apply_output_language(language)
+            return
+
+        self._relabel_atask = asyncio.create_task(
+            self._relabel_after_playout(language, self._relabel_atask)
+        )
+        self._tasks.add(self._relabel_atask)
+        self._relabel_atask.add_done_callback(self._tasks.discard)
+
+    @log_exceptions(logger=logger)
+    async def _relabel_after_playout(
+        self, language: str, previous: asyncio.Task[None] | None
+    ) -> None:
+        """Apply ``language`` once the speech captured so far has played out.
+
+        Waits for the change made before it, then for the synchronizer to release and close
+        the old language's words, so none of them go out under the new label.
+        """
+        if previous is not None:
+            # changes land in the order they were made
+            with contextlib.suppress(Exception):
+                await previous
+
+        if (synchronizer := self._tr_synchronizer) is not None:
+            await synchronizer.audio_output.wait_for_playout()
+            await synchronizer.barrier()
+
+        self._apply_output_language(language)
+
+    def _apply_output_language(self, language: str) -> None:
+        """Retag the translation transcript and rename its track for ``language``, now."""
+        self._output_language = language
+        if self._output_tr_output and self._source_track_sid is not None:
+            self._output_tr_output.set_attributes(self._output_attributes())
+
+        if self._init_atask is not None and self._init_atask.done():
+            self._rename_output_track_soon()
+
+    @property
+    def _language(self) -> str:
+        """The language the translation is labelled with in the room."""
+        return self._output_language or self._session.model.target_language
+
+    def _output_attributes(self) -> dict[str, str]:
+        """The attributes stamped on the translation transcript."""
+        return {ATTRIBUTE_TRANSCRIPTION_LANGUAGE: self._language}
+
+    def _output_track_name(self) -> str | None:
+        """The name the translated track should carry, or ``None`` to leave it as it is."""
+        if self._fixed_track_name or self._source_track_sid is None:
+            return None
+
+        return _translated_track_name(self._source_track_sid, self._language)
+
+    def _rename_output_track_soon(self) -> None:
+        """Republish the translated track under its current name, in the background."""
+        if self._audio_output is None or (name := self._output_track_name()) is None:
+            return
+
+        task = asyncio.create_task(self._audio_output.set_track_name(name))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     @log_exceptions(logger=logger)
     async def _init_task(self) -> None:
@@ -396,27 +519,38 @@ class TranslationRoomIO:
         self._apply_link(linked)
 
         if self._output_tr_output:
+            # stamped with the agent's own microphone track, which is the translated one, once
+            # it is published, and again whenever it is republished under a new name
             self._output_tr_output.set_participant(self._room.local_participant.identity)
 
         if self._audio_output:
+            if (name := self._output_track_name()) is not None:
+                # named before the first publish, so it never goes out under the default
+                await self._audio_output.set_track_name(name)
             await self._audio_output.start()
 
         if not self._ready_fut.done():
             self._ready_fut.set_result(None)
 
     @log_exceptions(logger=logger)
-    async def _forward_input_transcript(self, event_ch: aio.Chan[tuple[str, bool]]) -> None:
-        async for transcript, is_final in event_ch:
+    async def _forward_input_transcript(
+        self, event_ch: aio.Chan[tuple[str, bool, str | None]]
+    ) -> None:
+        async for transcript, is_final, language in event_ch:
             if self._input_tr_output is None:
                 continue
 
+            # each interim goes out whole, so the language it carries is always current
+            self._input_tr_output.set_attributes(
+                {ATTRIBUTE_TRANSCRIPTION_LANGUAGE: language} if language else {}
+            )
             await self._input_tr_output.capture_text(transcript)
             if is_final:
                 self._input_tr_output.flush()
 
     def _on_input_transcribed(self, ev: Any) -> None:
         if self._input_transcript_ch:
-            self._input_transcript_ch.send_nowait((ev.transcript, ev.is_final))
+            self._input_transcript_ch.send_nowait((ev.transcript, ev.is_final, ev.language))
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
