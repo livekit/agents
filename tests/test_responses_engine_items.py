@@ -163,7 +163,13 @@ class _ReplayResponsesWS:
     def __init__(self, frames: list[dict]) -> None:
         self._frames = frames
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
         frames = self._frames
 
         async def _replay():  # noqa: ANN202

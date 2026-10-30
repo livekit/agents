@@ -2,25 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+import aiohttp
 import httpx2 as httpx
 import openai
 from openai.types import Reasoning
 from openai.types.responses import (
+    ResponseErrorEvent,
     ResponseIncludable,
+    ResponseStreamEvent,
     ResponseTextConfigParam,
     response_create_params,
 )
 from openai.types.responses.response_create_params import PromptCacheOptions
 from openai.types.shared_params import Metadata
 from typing_extensions import TypedDict
+from yarl import URL
 
 from .. import llm
-from .._exceptions import APIStatusError
+from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice
-from ..llm._responses_engine import ResponsesLLMStream, ResponsesWebsocket
+from ..llm._responses_engine import (
+    _WS_HEARTBEAT,
+    ResponsesLLMStream,
+    ResponsesWebsocket,
+)
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
@@ -41,6 +51,28 @@ from ._utils import (
     resolve_credentials,
 )
 from .llm import LLMModels, supports_prompt_cache_breakpoints
+
+# the gateway closes a socket 60 minutes after the upgrade (WSConnectionMaxLifetime) and the
+# pool checks age only at get(), so leave room for a turn to finish before that
+_GATEWAY_WS_MAX_SESSION = 50 * 60
+
+# status and retryability per gateway.error code; agent-gateway's GatewayErrCode* constants.
+# upstream_timeout (the gateway's upstream stall bound, agent-gateway#1823) is not here:
+# _handle_error raises it as a retryable APITimeoutError instead of a status error
+_GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
+    "upstream_connect_failed": (502, True),
+    "quota_exceeded": (429, None),
+    "model_mismatch": (400, False),
+    "invalid_event": (400, False),
+    "tool_not_allowed": (400, False),  # hosted tools other than web search (agent-gateway#1790)
+    "unknown_model": (400, False),
+    "no_ws_deployments": (400, False),
+    "no_ws_tag_match": (400, False),
+    "no_hipaa_compliant_deployment": (400, False),
+    "engine_unsupported": (400, False),
+    "moderation_blocked": (400, False),
+    "in_flight_response": (400, False),
+}
 
 
 class ResponsesOptions(TypedDict, total=False):
@@ -76,7 +108,16 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
-    """Responses API LLM routed through the LiveKit inference gateway."""
+    """Responses API LLM routed through the LiveKit inference gateway.
+
+    With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled sockets, so
+    ``inference_class`` and the other upgrade headers are fixed per connection.
+
+    Each read waits ``conn_options.timeout`` for the next event. REST streams get gateway
+    keepalives while a model reasons silently; over WebSocket they are rolling out behind a
+    gateway flag, so until then raise ``conn_options.timeout`` for models that reason silently
+    for longer than it.
+    """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
 
@@ -91,6 +132,7 @@ class LLM(llm.LLM):
         inference_class: InferenceClass | None = None,
         extra_kwargs: ResponsesOptions | dict[str, Any] | None = None,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
+        use_websocket: bool = False,
     ) -> None:
         super().__init__()
 
@@ -104,14 +146,32 @@ class LLM(llm.LLM):
             inference_class=inference_class,
             extra_kwargs=extra_kwargs or {},
             prompt_cache_breakpoints=prompt_cache_breakpoints,
+            use_websocket=use_websocket,
         )
         self._ws: ResponsesWebsocket | None = None
+        # the gateway bounds upstream silence, so reads only need to outlast its keepalives
+        self._stream_idle_timeout: float | None = None
         self._active_streams: int = 0
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
         self._pending_tool_calls = set[str]()
-        self._client = self._make_client()
+        self._client: openai.AsyncClient | None = None
+        if use_websocket:
+            self._ws = _GatewayResponsesWebsocket(
+                base_url=self._opts.base_url,
+                model=self._opts.model,
+                api_key=self._opts.api_key,
+                api_secret=self._opts.api_secret,
+                provider=self._opts.provider,
+                inference_class=self._opts.inference_class,
+                extra_headers=lambda: dict(
+                    cast(dict[str, str], self._opts.extra_kwargs.get("extra_headers") or {})
+                ),
+                timeout=None,
+            )
+        else:
+            self._client = self._make_client()
 
     def _make_client(self) -> openai.AsyncClient:
         return openai.AsyncClient(
@@ -128,11 +188,15 @@ class LLM(llm.LLM):
         )
 
     async def _prewarm_impl(self) -> None:
-        await self._client.models.list()
+        if self._client is not None:
+            await self._client.models.list()
 
     async def aclose(self) -> None:
         await super().aclose()
-        await self._client.close()
+        if self._ws is not None:
+            await self._ws.aclose()
+        if self._client is not None:
+            await self._client.close()
 
     @property
     def model(self) -> str:
@@ -168,18 +232,37 @@ class LLM(llm.LLM):
         if oai_tool_choice is not None and tools:
             extra["tool_choice"] = oai_tool_choice
 
-        effective_inference_class = (
-            inference_class if is_given(inference_class) else self._opts.inference_class
-        )
-        headers = {
-            **extra.get("extra_headers", {}),
-            **get_inference_headers(inference_class=effective_inference_class),
-        }
-        if self._opts.provider:
-            headers[HEADER_INFERENCE_PROVIDER] = self._opts.provider
-        extra["extra_headers"] = headers
+        if self._client is not None:
+            effective_inference_class = (
+                inference_class if is_given(inference_class) else self._opts.inference_class
+            )
+            headers = {
+                **extra.get("extra_headers", {}),
+                **get_inference_headers(inference_class=effective_inference_class),
+            }
+            if self._opts.provider:
+                headers[HEADER_INFERENCE_PROVIDER] = self._opts.provider
+            extra["extra_headers"] = headers
+            self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
+        else:
+            # headers ride on the upgrade, so only the LLM's own extra_headers reach the
+            # gateway; the payload must not carry them
+            extra.pop("extra_headers", None)
+            if is_given(extra_kwargs) and "extra_headers" in extra_kwargs:
+                logger.warning(
+                    "extra_headers cannot change per request over WebSocket; "
+                    "using the LLM's extra_kwargs headers"
+                )
+            if is_given(inference_class) and inference_class != self._opts.inference_class:
+                logger.warning(
+                    "inference_class cannot change per request over WebSocket; "
+                    "using the LLM's value",
+                    extra={
+                        "requested": inference_class,
+                        "configured": self._opts.inference_class,
+                    },
+                )
 
-        self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         return _GatewayResponsesLLMStream(
             self,
             model=self._opts.model,
@@ -210,7 +293,94 @@ def _to_responses_tool_choice(tool_choice: Any) -> response_create_params.ToolCh
     return None
 
 
+class _GatewayResponsesWebsocket(ResponsesWebsocket):
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        api_secret: str,
+        provider: str | None,
+        inference_class: InferenceClass | None,
+        extra_headers: Callable[[], dict[str, str]],
+        timeout: float | None,
+    ) -> None:
+        super().__init__(
+            api_key="",
+            timeout=timeout,
+            model=model,
+            base_url=f"{base_url.rstrip('/')}/responses",
+            max_session_duration=_GATEWAY_WS_MAX_SESSION,
+        )
+        self._lk_api_key = api_key
+        self._lk_api_secret = api_secret
+        self._provider = provider
+        self._inference_class = inference_class
+        self._extra_headers = extra_headers
+
+    async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        token = create_access_token(self._lk_api_key, self._lk_api_secret)
+        headers = {
+            **self._extra_headers(),
+            **get_inference_headers(inference_class=self._inference_class),
+            "Authorization": f"Bearer {token}",
+        }
+        if self._provider:
+            headers[HEADER_INFERENCE_PROVIDER] = self._provider
+        try:
+            return await asyncio.wait_for(
+                self._ensure_http_session().ws_connect(
+                    self._base_url, headers=headers, heartbeat=_WS_HEARTBEAT
+                ),
+                timeout,
+            )
+        except aiohttp.WSServerHandshakeError as e:
+            if e.status == 429:
+                self._log_rate_limited(e)
+            raise APIStatusError(
+                f"inference gateway refused the WebSocket: {e.message}", status_code=e.status
+            ) from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError("failed to connect to inference gateway WebSocket") from e
+        except asyncio.TimeoutError as e:
+            raise APIConnectionError("timed out connecting to inference gateway WebSocket") from e
+
+    def _log_rate_limited(self, e: aiohttp.WSServerHandshakeError) -> None:
+        extra: dict[str, Any] = {"model": URL(self._base_url).query.get("model")}
+        extra.update(extract_quota_usage(e.headers or {}))
+        logger.warning("LLM request rate limited by inference gateway", extra=extra)
+
+
 class _GatewayResponsesLLMStream(ResponsesLLMStream):
+    def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
+        event_type = event.get("type")
+        if event_type == "gateway.error":
+            return ResponseErrorEvent.model_validate(
+                {
+                    "type": "error",
+                    "sequence_number": -1,
+                    "code": event.get("code"),
+                    "message": event.get("message", "gateway error"),
+                    "param": None,
+                }
+            )
+        if event_type in ("gateway.connected", "gateway.session_expiring", "gateway.keepalive"):
+            return None
+        return super()._parse_ws_event(event)
+
+    def _handle_error(self, event: ResponseErrorEvent) -> None:
+        if event.code == "upstream_timeout":
+            raise APITimeoutError(f"{event.message} ({event.code})", retryable=True)
+        mapped = _GATEWAY_ERROR_STATUS.get(event.code or "")
+        if mapped is None:
+            super()._handle_error(event)
+            return
+        status_code, retryable = mapped
+        raise APIStatusError(
+            f"{event.message} ({event.code})", status_code=status_code, retryable=retryable
+        )
+
     async def _run_impl(self) -> None:
         try:
             await super()._run_impl()

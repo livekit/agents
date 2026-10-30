@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol, cast
 
@@ -42,9 +43,20 @@ _WS_HEARTBEAT = 30.0
 _WS_SEND_MAX_ATTEMPTS = 6
 
 
+def check_idle_timeout(timeout: float | None) -> float | None:
+    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
+        raise ValueError("stream_idle_timeout must be a finite number greater than 0")
+    return timeout
+
+
 class ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
+        self,
+        api_key: str | None,
+        timeout: float | None,
+        model: str,
+        base_url: str | None = None,
+        max_session_duration: float = 3600,
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -63,7 +75,7 @@ class ResponsesWebsocket:
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,
+            max_session_duration=max_session_duration,
             connect_timeout=self._timeout,
         )
 
@@ -93,7 +105,13 @@ class ResponsesWebsocket:
     async def aclose(self) -> None:
         await self._pool.aclose()
 
-    async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
+    async def generate_response(
+        self,
+        msg: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
                 # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
@@ -116,11 +134,13 @@ class ResponsesWebsocket:
         except TypeError as e:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
-        ws = await self._acquire_and_send(data)
+        ws = await self._acquire_and_send(data, connect_timeout)
         completed = False
+        loop = asyncio.get_running_loop()
+        deadline = _next_deadline(loop, receive_timeout)
         try:
             while True:
-                raw_msg = await ws.receive()
+                raw_msg = await _receive_before(loop, ws, deadline)
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
                     exc = raw_msg.data
                     status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
@@ -142,6 +162,8 @@ class ResponsesWebsocket:
 
                 event = json.loads(raw_msg.data)
                 yield event
+                # restart once the consumer asks for more, so its own time doesn't count
+                deadline = _next_deadline(loop, receive_timeout)
                 if event["type"] in [
                     "response.completed",
                     "response.failed",
@@ -157,11 +179,15 @@ class ResponsesWebsocket:
             else:
                 self._pool.remove(ws)
 
-    async def _acquire_and_send(self, data: str) -> aiohttp.ClientWebSocketResponse:
+    async def _acquire_and_send(
+        self, data: str, connect_timeout: float | None = None
+    ) -> aiohttp.ClientWebSocketResponse:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
-            ws = await self._pool.get(timeout=self._timeout)
+            ws = await self._pool.get(
+                timeout=self._timeout if connect_timeout is None else connect_timeout
+            )
             reused = self._pool.last_connection_reused
             try:
                 await ws.send_str(data)
@@ -175,6 +201,25 @@ class ResponsesWebsocket:
                 self._pool.remove(ws)  # cancellation: discard the socket, don't leak it
                 raise
         raise APIConnectionError("failed to send request over WebSocket") from last_exc
+
+
+def _next_deadline(loop: asyncio.AbstractEventLoop, timeout: float | None) -> float | None:
+    return None if timeout is None else loop.time() + timeout
+
+
+async def _receive_before(
+    loop: asyncio.AbstractEventLoop,
+    ws: aiohttp.ClientWebSocketResponse,
+    deadline: float | None,
+) -> aiohttp.WSMessage:
+    # receive(timeout=...) restarts its timer on every frame, including the heartbeat
+    # pongs it consumes internally, so it can't bound the silence between events
+    if deadline is None:
+        return await ws.receive()
+    try:
+        return await asyncio.wait_for(ws.receive(), max(deadline - loop.time(), 0))
+    except asyncio.TimeoutError as e:
+        raise APITimeoutError("timed out waiting for a Responses WebSocket event") from e
 
 
 class _ResponsesOptions(Protocol):
@@ -193,6 +238,7 @@ class ResponsesLLMHost(Protocol):
     _prev_resp_id: str
     _prev_chat_ctx: ChatContext | None
     _pending_tool_calls: set[str]
+    _stream_idle_timeout: float | None
 
 
 class ResponsesLLMStream(llm.LLMStream):
@@ -224,6 +270,12 @@ class ResponsesLLMStream(llm.LLMStream):
         self._llm = cast(ResponsesLLMHost, llm)
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
+
+    def _idle_timeout(self) -> float:
+        # only text frames reset this; transport pings and pongs don't
+        if self._llm._stream_idle_timeout is not None:
+            return self._llm._stream_idle_timeout
+        return self._conn_options.timeout
 
     async def _run(self) -> None:
         if self._llm._active_streams > 0:
@@ -273,7 +325,11 @@ class ResponsesLLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.generate_response(payload):
+                async for raw_event in self._llm._ws.generate_response(
+                    payload,
+                    receive_timeout=self._idle_timeout(),
+                    connect_timeout=self._conn_options.timeout,
+                ):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)
                     if chunk is not None and chunk.has_response():
@@ -281,7 +337,9 @@ class ResponsesLLMStream(llm.LLMStream):
 
                 if not self._response_completed:
                     raise APIConnectionError(retryable=True)
-            except (APIConnectionError, APIStatusError, APITimeoutError):
+            except (APIConnectionError, APIStatusError, APITimeoutError) as e:
+                if not retryable:
+                    e.retryable = False  # text already reached the caller; a retry repeats it
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
@@ -297,7 +355,9 @@ class ResponsesLLMStream(llm.LLMStream):
                         tools=tool_schemas,
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
                         stream=True,
-                        timeout=httpx.Timeout(self._conn_options.timeout),
+                        timeout=httpx.Timeout(
+                            self._conn_options.timeout, read=self._idle_timeout()
+                        ),
                         **self._extra_kwargs,
                     ),
                 )
@@ -318,7 +378,9 @@ class ResponsesLLMStream(llm.LLMStream):
                     body=e.body,
                     retryable=retryable,
                 )
-            except (APIConnectionError, APIStatusError, APITimeoutError):
+            except (APIConnectionError, APIStatusError, APITimeoutError) as e:
+                if not retryable:
+                    e.retryable = False  # text already reached the caller; a retry repeats it
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
