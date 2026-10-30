@@ -15,7 +15,7 @@ use pyo3::prelude::*;
 
 pub struct RealtimeFallback(RealtimeFallbackModel);
 
-impl lk_agents_abi::llm::realtime::RealtimeFallbackModel for RealtimeFallback {
+impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallback {
     type Env = ProcessEnv;
 
     fn new(

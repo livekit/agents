@@ -59,6 +59,7 @@ pub trait Implementations: 'static {
     type DuplexRealtimeModel: ::lk_agents_abi::llm::duplex::DuplexRealtimeModel;
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
     type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts<Stream = Self::TtsStream>;
+    type RealtimeFallbackModel: ::lk_agents_abi::llm::fallback::RealtimeFallbackModel;
     type TtsTokenLog: ::lk_agents_abi::llm::fallback::TtsTokenLog;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
@@ -68,7 +69,6 @@ pub trait Implementations: 'static {
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
     type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
-    type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime::RealtimeFallbackModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
     type FrameReaderInstall: ::lk_agents_abi::media::images::FrameReaderInstall;
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
@@ -233,6 +233,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::FallbackLlm>()?;
     m.add_class::<llm::FallbackLlmChunks>()?;
     m.add_class::<llm::FallbackTts>()?;
+    m.add_class::<llm::RealtimeFallbackModel>()?;
     m.add_class::<llm::TtsTokenLog>()?;
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;
@@ -257,7 +258,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::inject_confirm_duplicate, m)?)?;
     m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::OpenAIRealtimeModel>()?;
-    m.add_class::<llm::RealtimeFallbackModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
     m.add_function(wrap_pyfunction!(media::_core_install_frame_reader, m)?)?;
     m.add_function(wrap_pyfunction!(media::encode_image, m)?)?;

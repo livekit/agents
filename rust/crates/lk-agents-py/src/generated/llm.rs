@@ -446,6 +446,70 @@ impl FallbackTts {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
+
+fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "cooldown")
+}
+
+fn _extract_realtime_fallback_model_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some) }
+}
+
+/// `llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
+/// provider objects use the shared bridge.
+#[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
+pub struct RealtimeFallbackModel(pub(crate) ::std::sync::Arc<RealtimeFallbackModelImpl>);
+
+#[pymethods]
+impl RealtimeFallbackModel {
+    #[new]
+    #[pyo3(signature = (models, *, cooldown = 10.0, attempt_timeout = None, regenerate_on_swap = true, on_availability = None))]
+    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_attempt_timeout)] attempt_timeout: ::std::option::Option<f64>, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
+        crate::host::check_pid()?;
+        let env = crate::process::env();
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn active_index(&self) -> PyResult<usize> {
+        crate::host::check_pid()?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::active_index(&self.0);
+        Ok(out)
+    }
+
+    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+        crate::host::check_pid()?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::capabilities(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (*, switch_model = false))]
+    fn restart<'py>(&self, py: Python<'py>, switch_model: bool) -> PyResult<Bound<'py, PyAny>> {
+        crate::host::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::restart(&this, switch_model)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
+        read: |obj| {
+            let this = obj.cast::<RealtimeFallbackModel>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
 type TtsTokenLogImpl = <crate::Selected as super::Implementations>::TtsTokenLog;
 
 /// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
@@ -997,69 +1061,6 @@ impl OpenAIRealtimeModel {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
         read: |obj| {
             let this = obj.cast::<OpenAIRealtimeModel>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
-        },
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
-type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
-
-fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "cooldown")
-}
-
-fn _extract_realtime_fallback_model_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some) }
-}
-
-/// The generated facade holds native resources; host provider objects use the shared bridge.
-#[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
-pub struct RealtimeFallbackModel(pub(crate) ::std::sync::Arc<RealtimeFallbackModelImpl>);
-
-#[pymethods]
-impl RealtimeFallbackModel {
-    #[new]
-    #[pyo3(signature = (models, *, cooldown = 10.0, attempt_timeout = None, regenerate_on_swap = true, on_availability = None))]
-    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_attempt_timeout)] attempt_timeout: ::std::option::Option<f64>, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
-        crate::host::check_pid()?;
-        let env = crate::process::env();
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
-    }
-
-    #[getter]
-    fn active_index(&self) -> PyResult<usize> {
-        crate::host::check_pid()?;
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::active_index(&self.0);
-        Ok(out)
-    }
-
-    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
-        crate::host::check_pid()?;
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::capabilities(&self.0);
-        Ok(out)
-    }
-
-    #[pyo3(signature = (*, switch_model = false))]
-    fn restart<'py>(&self, py: Python<'py>, switch_model: bool) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
-            let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::restart(&this, switch_model)
-                .await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-        })
-    }
-}
-
-// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        read: |obj| {
-            let this = obj.cast::<RealtimeFallbackModel>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },

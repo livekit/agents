@@ -2,7 +2,7 @@
 //! host reassembles; `generate_reply`'s future becomes a `req_id` correlated with the answer event.
 
 use crate::errors::{ApiError, HostError};
-use crate::{ApiConnectOptions, AudioFrame, HostRef, Maybe, ToolChoice, ToolSpec, Ts};
+use crate::{ApiConnectOptions, AudioFrame, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
 use lk_agents_host_derive::Host;
 
@@ -827,28 +827,4 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     fn update_options(&self, options: RealtimeOptions);
     #[host(call)]
     fn bind_identification(&self, headers: Vec<(String, String)>);
-}
-
-/// The generated facade holds native resources; host provider objects use the shared bridge.
-#[crate::host(class(name = "RealtimeFallbackModel", native = Realtime))]
-pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
-    /// What the hosting process lends the class.
-    #[host(env)]
-    type Env;
-
-    #[host(new)]
-    fn new(
-        env: &Self::Env,
-        models: Vec<HostRef>,
-        #[host(kw, default = 10.0)] cooldown: f64,
-        #[host(default = None)] attempt_timeout: Option<f64>,
-        #[host(default = true)] regenerate_on_swap: bool,
-        #[host(default = None)] on_availability: Option<HostRef>,
-    ) -> Result<Self, RealtimeConfigurationError>;
-    #[host(getter)]
-    fn active_index(&self) -> usize;
-    #[host(call)]
-    fn capabilities(&self) -> RealtimeCapabilities;
-    #[host(await)]
-    async fn restart(&self, #[host(kw, default = false)] switch_model: bool);
 }

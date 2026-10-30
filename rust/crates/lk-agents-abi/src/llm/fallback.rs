@@ -1,5 +1,5 @@
-//! The fallback adapters' availability records: `AvailabilityChangedEvent` (all three
-//! adapters) and the chain's report to its adapter.
+//! The fallback adapters: `AvailabilityChangedEvent` (all of them), the chain's report to its
+//! adapter, and the native LLM, TTS and realtime chains.
 
 /// `AvailabilityChangedEvent`, identical in all three fallback adapters: an entry, by position in
 /// the host's list, went unavailable or recovered. The host maps the index back to its instance.
@@ -104,6 +104,31 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
         #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
         #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
+}
+
+/// `llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
+/// provider objects use the shared bridge.
+#[crate::host(class(name = "RealtimeFallbackModel", native = crate::Realtime))]
+pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        models: Vec<crate::HostRef>,
+        #[host(kw, default = 10.0)] cooldown: f64,
+        #[host(default = None)] attempt_timeout: Option<f64>,
+        #[host(default = true)] regenerate_on_swap: bool,
+        #[host(default = None)] on_availability: Option<crate::HostRef>,
+    ) -> Result<Self, crate::llm::realtime::RealtimeConfigurationError>;
+    #[host(getter)]
+    fn active_index(&self) -> usize;
+    #[host(call)]
+    fn capabilities(&self) -> crate::llm::realtime::RealtimeCapabilities;
+    #[host(await)]
+    async fn restart(&self, #[host(kw, default = false)] switch_model: bool);
 }
 
 /// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text

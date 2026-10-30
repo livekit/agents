@@ -165,6 +165,24 @@ class FallbackTts:
         expressive: bool = False,
     ) -> TtsStream: ...
 
+class RealtimeFallbackModel:
+    """`llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
+    provider objects use the shared bridge.
+    """
+    def __init__(
+        self,
+        models: Sequence[object],
+        *,
+        cooldown: float = 10.0,
+        attempt_timeout: float | None = None,
+        regenerate_on_swap: bool = True,
+        on_availability: object | None = None,
+    ) -> None: ...
+    @property
+    def active_index(self) -> int: ...
+    def capabilities(self) -> dict[str, object]: ...
+    async def restart(self, *, switch_model: bool = False) -> None: ...
+
 class TtsTokenLog:
     """The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
     a recovering stream replays.
@@ -366,22 +384,6 @@ class OpenAIRealtimeModel:
     def capabilities(self) -> dict[str, object]: ...
     def update_options(self, options: RealtimeOptions) -> None: ...
     def bind_identification(self, headers: Sequence[tuple[str, str]]) -> None: ...
-
-class RealtimeFallbackModel:
-    """The generated facade holds native resources; host provider objects use the shared bridge."""
-    def __init__(
-        self,
-        models: Sequence[object],
-        *,
-        cooldown: float = 10.0,
-        attempt_timeout: float | None = None,
-        regenerate_on_swap: bool = True,
-        on_availability: object | None = None,
-    ) -> None: ...
-    @property
-    def active_index(self) -> int: ...
-    def capabilities(self) -> dict[str, object]: ...
-    async def restart(self, *, switch_model: bool = False) -> None: ...
 
 def chat_ctx_to_dict(
     items: Sequence[ChatItem],
